@@ -72,10 +72,20 @@ jobs:
           echo "Using apksigner: $APKSIGNER"
           "$APKSIGNER" verify --verbose --print-certs "${{ steps.locate.outputs.apk_path }}" || true
 
+      - name: Rename APK with build timestamp
+        id: rename
+        run: |
+          TIMESTAMP=$(date +"%Y%m%d-%H%M")
+          ORIGINAL="${{ steps.locate.outputs.apk_path }}"
+          DIR=$(dirname "$ORIGINAL")
+          NEW_NAME="工具箱-v1.1-${TIMESTAMP}-arm64-v8a-release.apk"
+          cp "$ORIGINAL" "${DIR}/${NEW_NAME}"
+          echo "apk_path=${DIR}/${NEW_NAME}" >> "$GITHUB_OUTPUT"
+
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: 工具箱-arm64-v8a-release
-          path: ${{ steps.locate.outputs.apk_path }}
+          path: ${{ steps.rename.outputs.apk_path }}
           if-no-files-found: error
           retention-days: 30
