@@ -44,6 +44,7 @@ sealed class Screen {
     object Security : Screen()
     object PermissionSettings : Screen()
     object SpecialPermissions : Screen()
+    object FileManager : Screen()
     object EncryptionHome : Screen()
     object VaultCreate : Screen()
     data class VaultOpen(val session: VaultSession) : Screen()
@@ -235,6 +236,11 @@ fun MainAppContainer() {
                 onBack = { navigateBack() }
             )
         }
+        is Screen.FileManager -> {
+            FileManagerScreen(
+                onBack = { navigateBack() }
+            )
+        }
     }
 }
 
@@ -304,6 +310,14 @@ fun HomeTab(onNavigate: (Screen) -> Unit) {
                 title = "加密",
                 subtitle = "常用加密 / 解密工具",
                 onTap = { onNavigate(Screen.EncryptionHome) }
+            )
+        }
+        item {
+            ToolTile(
+                icon = Icons.Default.Folder,
+                title = "文件管理器",
+                subtitle = "双面板文件浏览工具",
+                onTap = { onNavigate(Screen.FileManager) }
             )
         }
     }
