@@ -57,24 +57,59 @@ object DiagnosticLog {
     }
 
     /**
-     * 写崩溃报告到 `externalFilesDir/debug_logs/`，只包含 **当前会话** 的事件。
+     * 把 [error] + 当前 session 写到磁盘。同时尝试外部和内部目录，任意一个成功就返回。
+     * 优先返回外部路径（用户可见），失败时退回内部路径。
      */
     fun exportCrashReport(
         context: Context,
         error: Throwable?,
         extraContext: String? = null
     ): File? {
-        return try {
-            val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
-            val dir = File(baseDir, "debug_logs").apply { mkdirs() }
-            val file = File(dir, "crash_${fileTimeFmt.format(Date())}.txt")
-            file.writeText(buildReport(error, extraContext))
-            log("DiagnosticLog", "崩溃报告已写入: ${file.absolutePath}")
-            file
-        } catch (e: Exception) {
-            Log.e("DiagnosticLog", "写入崩溃报告失败", e)
-            null
+        val report = try {
+            buildReport(error, extraContext)
+        } catch (e: Throwable) {
+            Log.e("DiagnosticLog", "构建报告失败", e)
+            return null
         }
+        val timestamp = fileTimeFmt.format(Date())
+        val fileName = "crash_$timestamp.txt"
+
+        // 1) 写外部目录
+        var externalFile: File? = null
+        try {
+            val ext = context.getExternalFilesDir(null)
+            if (ext != null) {
+                val dir = File(ext, "debug_logs").apply { mkdirs() }
+                val f = File(dir, fileName)
+                f.writeText(report)
+                externalFile = f
+                Log.i("DiagnosticLog", "[external] 已写入: ${f.absolutePath}")
+            } else {
+                Log.w("DiagnosticLog", "[external] getExternalFilesDir 返回 null")
+            }
+        } catch (e: Throwable) {
+            Log.e("DiagnosticLog", "[external] 写入失败", e)
+        }
+
+        // 2) 写内部目录（始终写，作为兜底）
+        var internalFile: File? = null
+        try {
+            val dir = File(context.filesDir, "debug_logs").apply { mkdirs() }
+            val f = File(dir, fileName)
+            f.writeText(report)
+            internalFile = f
+            Log.i("DiagnosticLog", "[internal] 已写入: ${f.absolutePath}")
+        } catch (e: Throwable) {
+            Log.e("DiagnosticLog", "[internal] 写入失败", e)
+        }
+
+        val result = externalFile ?: internalFile
+        if (result != null) {
+            log("DiagnosticLog", "崩溃报告就绪: ${result.absolutePath}")
+        } else {
+            log("DiagnosticLog", "崩溃报告写入完全失败（外部+内部都失败）")
+        }
+        return result
     }
 
     private fun buildReport(error: Throwable?, extra: String?): String {

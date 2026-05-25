@@ -19,9 +19,9 @@ import java.io.File
 
 /**
  * 统一报错弹窗。
- * - 弹出时显示原本简短的异常信息（类型 + 消息），便于用户直接看
- * - 同时自动把完整诊断（栈 + 事件追踪 + 全线程栈 + 设备信息）落盘到 filesDir/debug_logs/
- * - 提供 "Debug" 按钮：复制诊断文件路径到剪贴板，方便用户找到完整报告
+ * - 弹出时显示原本简短的异常信息（类型 + 消息）
+ * - 自动把完整诊断（栈 + 事件追踪 + 全线程栈 + 设备信息）落盘
+ * - 三个按钮都在 confirmButton 单一 Row 里，避免 M3 dismissButton 槽位窄被挤掉
  */
 @Composable
 fun ErrorDialog(
@@ -30,16 +30,23 @@ fun ErrorDialog(
 ) {
     val context = LocalContext.current
     var savedFile by remember(error) { mutableStateOf<File?>(null) }
+    var saveAttempted by remember(error) { mutableStateOf(false) }
 
-    // 错误第一次出现时自动落盘
     LaunchedEffect(error) {
-        if (error != null && savedFile == null) {
+        if (error != null && !saveAttempted) {
+            saveAttempted = true
             DiagnosticLog.log("ErrorDialog", "捕获错误: ${error.javaClass.simpleName}: ${error.message}")
-            savedFile = DiagnosticLog.exportCrashReport(
+            val f = DiagnosticLog.exportCrashReport(
                 context,
                 error,
                 extraContext = "来源: ErrorDialog (UI 流程异常)"
             )
+            savedFile = f
+            if (f != null) {
+                Toast.makeText(context, "Debug 已保存: ${f.parent}", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(context, "Debug 文件保存失败（看 logcat）", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -72,10 +79,16 @@ fun ErrorDialog(
                         val f = savedFile
                         if (f != null) {
                             Text(
-                                text = "Debug 报告已保存:\n${f.absolutePath}",
+                                text = "Debug 报告:\n${f.absolutePath}",
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.primary
+                            )
+                        } else if (saveAttempted) {
+                            Text(
+                                text = "(Debug 报告写入失败，请看 logcat)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
                             )
                         } else {
                             Text(
@@ -87,26 +100,26 @@ fun ErrorDialog(
                     }
                 }
             },
+            // 所有按钮都放 confirmButton 里的一个 Row，避免 M3 dismissButton 槽位过窄
             confirmButton = {
-                TextButton(onClick = {
-                    try {
-                        val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        cb.setPrimaryClip(ClipData.newPlainText("Error Info", buildShortErrorText(error)))
-                        Toast.makeText(context, "错误信息已复制", Toast.LENGTH_SHORT).show()
-                    } catch (_: Exception) {}
-                }) {
-                    Text("复制")
-                }
-            },
-            dismissButton = {
-                Row {
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    TextButton(onClick = {
+                        try {
+                            val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            cb.setPrimaryClip(ClipData.newPlainText("Error Info", buildShortErrorText(error)))
+                            Toast.makeText(context, "错误信息已复制", Toast.LENGTH_SHORT).show()
+                        } catch (_: Exception) {}
+                    }) {
+                        Text("复制")
+                    }
+                    Spacer(Modifier.width(4.dp))
                     TextButton(onClick = {
                         val f = savedFile
                         if (f != null) {
                             try {
                                 val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                                 cb.setPrimaryClip(ClipData.newPlainText("Debug Path", f.absolutePath))
-                                Toast.makeText(context, "Debug 路径已复制: ${f.name}", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, "Debug 路径已复制", Toast.LENGTH_LONG).show()
                             } catch (_: Exception) {}
                         } else {
                             Toast.makeText(context, "诊断尚未写入完成", Toast.LENGTH_SHORT).show()
@@ -124,7 +137,6 @@ fun ErrorDialog(
     }
 }
 
-/** 报错弹窗上只显示这些 —— 类型 + 消息，简短。完整内容在落盘的 txt 里。 */
 private fun buildShortErrorText(error: Throwable): String {
     val sb = StringBuilder()
     sb.appendLine("异常类型: ${error.javaClass.name}")

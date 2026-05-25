@@ -88,7 +88,8 @@ fun MainAppContainer() {
         scr is Screen.EncryptionHome ||
         scr is Screen.VaultCreate ||
         scr is Screen.VaultOpen ||
-        scr is Screen.VaultChangePassword
+        scr is Screen.VaultChangePassword ||
+        scr is Screen.FileManager
     }
 
     LaunchedEffect(Unit) {
@@ -119,48 +120,7 @@ fun MainAppContainer() {
     }
 
     if (encryptionError != null) {
-        AlertDialog(
-            onDismissRequest = { encryptionError = null },
-            title = {
-                Text(
-                    text = "报错信息",
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.error
-                )
-            },
-            text = {
-                val scrollState = rememberScrollState()
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 300.dp)
-                        .verticalScroll(scrollState)
-                ) {
-                    Text(
-                        text = encryptionError!!.stackTraceToString(),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = { encryptionError = null }) {
-                    Text("关闭")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    try {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        val clip = android.content.ClipData.newPlainText("Error Info", encryptionError!!.stackTraceToString())
-                        clipboard.setPrimaryClip(clip)
-                        Toast.makeText(context, "错误信息已复制到剪贴板", Toast.LENGTH_SHORT).show()
-                    } catch (ex: Exception) {}
-                }) {
-                    Text("复制")
-                }
-            }
-        )
+        ErrorDialog(error = encryptionError, onDismiss = { encryptionError = null })
     }
 
     var backPressedTime by remember { mutableStateOf(0L) }
