@@ -1,0 +1,20 @@
+package com.whmdg.mczj.tools.encryption.data
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+
+/**
+ * 加密箱在全局数据库（`vault_db.json`）中的元信息记录。
+ */
+@Serializable
+data class VaultRecord(
+    val id: Int,
+    val name: String,
+    val location: StorageLocation,
+    val relativePath: String,
+    @SerialName("encrypt_filename") val encryptFilename: Boolean,
+    @SerialName("encrypt_metadata") val encryptMetadata: Boolean,
+    @SerialName("custom_encryption") val customEncryption: Boolean,
+    val algorithm: String = "AES-256-GCM",
+    val createdAt: String // 存 ISO8601 字符串
+)

@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">工具箱</string>
+    <string name="device_admin_description">高级设备管理特权服务，提供更深层的系统控制与安全机制。</string>
+    <string name="accessibility_description">无障碍交互支持服务，辅助实现更高级的系统级辅助操作。</string>
+</resources>
