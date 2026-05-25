@@ -5,6 +5,9 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import android.webkit.MimeTypeMap
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -23,12 +26,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import java.io.File
 
 enum class FocusedPanel { LEFT, RIGHT }
 
 data class FileEntry(
-    val file: File,
+    val path: String,
     val name: String,
     val isDirectory: Boolean
 )
@@ -52,36 +56,143 @@ fun FileManagerScreen(onBack: () -> Unit) {
     var showSettingsMenu by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<Throwable?>(null) }
 
-    fun loadDirectory(path: String, showHidden: Boolean): List<FileEntry> {
-        val dir = File(path.trimEnd('/'))
-        val children = dir.listFiles() ?: return emptyList()
-        val visible = children.filter { showHidden || !it.name.startsWith(".") }
-        return visible
-            .map { FileEntry(it, it.name, it.isDirectory) }
-            .sortedWith(
-                compareByDescending<FileEntry> { it.isDirectory }
-                    .thenBy { it.name.lowercase() }
-            ).let { entries ->
-                val normalizedPath = path.trimEnd('/')
-                val parentPath = normalizedPath.substringBeforeLast('/')
-                val parent = if (parentPath.isNotEmpty()) File(parentPath) else null
-                if (parent != null && normalizedPath != "/" &&
-                    parent.listFiles()?.isNotEmpty() == true) {
-                    listOf(FileEntry(parent, "..", isDirectory = true)) + entries
-                } else {
-                    entries
-                }
-            }
+    // 引擎选择：Root or POSIX
+    val sp = remember { context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE) }
+    val permissionLevel = sp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+    val isRootEngine = remember {
+        permissionLevel == "ROOT" && SpecialPermissionVerifier.isRootAvailable()
     }
 
-    fun openFile(context: Context, file: File) {
+    // ── POSIX 引擎：用 Os.opendir/readdir 逐项读取 ──
+    fun listWithPosix(path: String, showHidden: Boolean): List<FileEntry> {
+        val entries = mutableListOf<FileEntry>()
+        val normalizedPath = path.trimEnd('/')
+
+        val dirStream = try {
+            Os.opendir(normalizedPath)
+        } catch (e: ErrnoException) {
+            loadError = RuntimeException("无法打开目录: ${e.message}")
+            return emptyList()
+        }
+
+        try {
+            while (true) {
+                val dirent = try {
+                    Os.readdir(dirStream)
+                } catch (e: ErrnoException) {
+                    if (e.errno == OsConstants.EACCES) continue
+                    else throw e
+                }
+                if (dirent == null) break
+
+                val name = dirent.d_name
+                if (name == "." || name == "..") continue
+                if (!showHidden && name.startsWith(".")) continue
+
+                val isDir = when (dirent.d_type) {
+                    OsConstants.DT_DIR -> true
+                    OsConstants.DT_LNK, OsConstants.DT_UNKNOWN -> {
+                        try {
+                            OsConstants.S_ISDIR(Os.stat("$normalizedPath/$name").st_mode)
+                        } catch (_: ErrnoException) { false }
+                    }
+                    else -> false
+                }
+
+                entries.add(FileEntry("$normalizedPath/$name", name, isDir))
+            }
+        } finally {
+            try { Os.closedir(dirStream) } catch (_: Exception) {}
+        }
+
+        // 添加 ".." 父目录（仅当父目录可访问）
+        val parentPath = normalizedPath.substringBeforeLast('/')
+        if (parentPath.isNotEmpty() && normalizedPath != parentPath) {
+            val parentAccessible = try {
+                val ps = Os.opendir(parentPath)
+                Os.closedir(ps)
+                true
+            } catch (_: ErrnoException) { false }
+            if (parentAccessible) {
+                entries.add(0, FileEntry(parentPath, "..", true))
+            }
+        }
+
+        entries.sortWith(
+            compareByDescending<FileEntry> { it.isDirectory }
+                .thenBy { it.name.lowercase() }
+        )
+        return entries
+    }
+
+    // ── Root 引擎：su -c ls ──
+    fun listWithRoot(path: String, showHidden: Boolean): List<FileEntry> {
+        val entries = mutableListOf<FileEntry>()
+        val normalizedPath = path.trimEnd('/')
+        val escapedPath = normalizedPath.replace("'", "'\\''")
+
+        try {
+            val command = """
+ls -1a '${escapedPath}' | while IFS= read -r f; do
+    if [ "$$f" != "." ] && [ "$$f" != ".." ]; then
+        if [ -d '${escapedPath}/$$f' ]; then echo "DIR|$$f"; else echo "FIL|$$f"; fi
+    fi
+done
+""".trimIndent()
+            val output = SpecialPermissionVerifier.executeRootCommand(command)
+            val lines = output.lines().filter { it.isNotBlank() }
+
+            for (line in lines) {
+                val sep = line.indexOf('|')
+                if (sep < 0) continue
+                val type = line.substring(0, sep)
+                val name = line.substring(sep + 1)
+                if (!showHidden && name.startsWith(".")) continue
+                entries.add(FileEntry("$normalizedPath/$name", name, type == "DIR"))
+            }
+        } catch (e: Exception) {
+            loadError = e
+            return emptyList()
+        }
+
+        // 父目录（Root 模式不做边界限制）
+        val parentPath = normalizedPath.substringBeforeLast('/')
+        if (parentPath.isNotEmpty() && normalizedPath != parentPath) {
+            entries.add(0, FileEntry(parentPath, "..", true))
+        }
+
+        entries.sortWith(
+            compareByDescending<FileEntry> { it.isDirectory }
+                .thenBy { it.name.lowercase() }
+        )
+        return entries
+    }
+
+    // ── 统一入口 ──
+    fun listDirectory(path: String): List<FileEntry> {
+        loadError = null
+        val entries = if (isRootEngine) {
+            listWithRoot(path, showHiddenFiles)
+        } else {
+            listWithPosix(path, showHiddenFiles)
+        }
+        // POSIX 失败时自动尝试 Root 兜底
+        if (entries.isEmpty() && loadError != null && !isRootEngine && SpecialPermissionVerifier.isRootAvailable()) {
+            loadError = null
+            return listWithRoot(path, showHiddenFiles)
+        }
+        return entries
+    }
+
+    fun openFile(context: Context, entry: FileEntry) {
+        val file = File(entry.path)
         try {
             val uri: Uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
                 file
             )
-            val extension = file.extension.lowercase()
+            val extension = entry.name.substringAfterLast('.', "").lowercase()
             val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
                 ?: "*/*"
             val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -99,43 +210,21 @@ fun FileManagerScreen(onBack: () -> Unit) {
         }
     }
 
-    fun safeLoadDirectory(path: String, showHidden: Boolean): List<FileEntry> {
-        val dir = File(path.trimEnd('/'))
-        if (!dir.isDirectory) {
-            loadError = RuntimeException("目录不存在: ${path.trimEnd('/')}")
-            return emptyList()
-        }
-        val children = try {
-            dir.listFiles()
-        } catch (e: Exception) {
-            loadError = e
-            return emptyList()
-        }
-        if (children == null) {
-            loadError = RuntimeException("无法读取目录内容: ${path.trimEnd('/')}")
-            return emptyList()
-        }
-        return loadDirectory(path, showHidden)
-    }
-
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { _ ->
         hasStoragePermission = Environment.isExternalStorageManager()
         if (hasStoragePermission) {
-            loadError = null
-            leftEntries = safeLoadDirectory(leftPath, showHiddenFiles)
-            rightEntries = safeLoadDirectory(rightPath, showHiddenFiles)
+            leftEntries = listDirectory(leftPath)
+            rightEntries = listDirectory(rightPath)
         }
     }
 
     LaunchedEffect(leftPath, showHiddenFiles) {
-        loadError = null
-        leftEntries = safeLoadDirectory(leftPath, showHiddenFiles)
+        leftEntries = listDirectory(leftPath)
     }
     LaunchedEffect(rightPath, showHiddenFiles) {
-        loadError = null
-        rightEntries = safeLoadDirectory(rightPath, showHiddenFiles)
+        rightEntries = listDirectory(rightPath)
     }
 
     LaunchedEffect(Unit) {
@@ -234,13 +323,13 @@ fun FileManagerScreen(onBack: () -> Unit) {
                         entries = leftEntries,
                         isFocused = focusedPanel == FocusedPanel.LEFT,
                         onFocus = { focusedPanel = FocusedPanel.LEFT },
-                        onFolderClick = { folder ->
+                        onFolderClick = { entry ->
                             focusedPanel = FocusedPanel.LEFT
-                            leftPath = folder.absolutePath
+                            leftPath = entry.path
                         },
-                        onFileClick = { file ->
+                        onFileClick = { entry ->
                             focusedPanel = FocusedPanel.LEFT
-                            openFile(context, file)
+                            openFile(context, entry)
                         },
                         modifier = Modifier.weight(1f)
                     )
@@ -254,13 +343,13 @@ fun FileManagerScreen(onBack: () -> Unit) {
                         entries = rightEntries,
                         isFocused = focusedPanel == FocusedPanel.RIGHT,
                         onFocus = { focusedPanel = FocusedPanel.RIGHT },
-                        onFolderClick = { folder ->
+                        onFolderClick = { entry ->
                             focusedPanel = FocusedPanel.RIGHT
-                            rightPath = folder.absolutePath
+                            rightPath = entry.path
                         },
-                        onFileClick = { file ->
+                        onFileClick = { entry ->
                             focusedPanel = FocusedPanel.RIGHT
-                            openFile(context, file)
+                            openFile(context, entry)
                         },
                         modifier = Modifier.weight(1f)
                     )
@@ -277,8 +366,8 @@ private fun FileBrowserPanel(
     entries: List<FileEntry>,
     isFocused: Boolean,
     onFocus: () -> Unit,
-    onFolderClick: (File) -> Unit,
-    onFileClick: (File) -> Unit,
+    onFolderClick: (FileEntry) -> Unit,
+    onFileClick: (FileEntry) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -301,13 +390,13 @@ private fun FileBrowserPanel(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(vertical = 4.dp)
             ) {
-                items(entries, key = { it.file.absolutePath }) { entry ->
+                items(entries, key = { it.path }) { entry ->
                     FileEntryRow(
                         entry = entry,
                         isFocused = isFocused,
                         onClick = {
-                            if (entry.isDirectory) onFolderClick(entry.file)
-                            else onFileClick(entry.file)
+                            if (entry.isDirectory) onFolderClick(entry)
+                            else onFileClick(entry)
                         }
                     )
                 }
