@@ -332,7 +332,7 @@ private fun StartEllipsisText(
         style = MaterialTheme.typography.titleMedium,
         onTextLayout = { result ->
             if (result.hasVisualOverflow) {
-                val visible = result.getLineEnd(0, includeNewline = false)
+                val visible = result.getLineEnd(0)
                 if (visible > 0 && visible <= text.length) {
                     displayText = "…${text.takeLast(visible - 1)}"
                 }
