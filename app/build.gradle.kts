@@ -1,3 +1,5 @@
+import java.util.Calendar
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -17,9 +19,9 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = (System.currentTimeMillis() / 1000).toInt()
-        versionName = "1.1_" + String.format("%02d%02d",
-            java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY),
-            java.util.Calendar.getInstance().get(java.util.Calendar.MINUTE))
+        versionName = "1.1_%02d%02d".format(
+            Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
+            Calendar.getInstance().get(Calendar.MINUTE))
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
