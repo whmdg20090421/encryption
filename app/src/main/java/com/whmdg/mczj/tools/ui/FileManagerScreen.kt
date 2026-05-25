@@ -42,7 +42,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
         mutableStateOf(Environment.isExternalStorageManager())
     }
 
-    val defaultPath = "/storage/emulated/0/"
+    val defaultPath = "/storage/emulated/0"
     var leftPath by remember { mutableStateOf(defaultPath) }
     var rightPath by remember { mutableStateOf(defaultPath) }
     var leftEntries by remember { mutableStateOf(listOf<FileEntry>()) }
@@ -50,21 +50,23 @@ fun FileManagerScreen(onBack: () -> Unit) {
     var focusedPanel by remember { mutableStateOf(FocusedPanel.LEFT) }
     var showHiddenFiles by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<Throwable?>(null) }
 
     fun loadDirectory(path: String, showHidden: Boolean): List<FileEntry> {
-        val dir = File(path)
-        val rawFiles = try {
-            dir.listFiles()?.filter { showHidden || !it.name.startsWith(".") }
-        } catch (_: Exception) { null }
-        if (rawFiles == null) return emptyList()
-        return rawFiles
+        val dir = File(path.trimEnd('/'))
+        val children = dir.listFiles() ?: return emptyList()
+        val visible = children.filter { showHidden || !it.name.startsWith(".") }
+        return visible
             .map { FileEntry(it, it.name, it.isDirectory) }
             .sortedWith(
                 compareByDescending<FileEntry> { it.isDirectory }
                     .thenBy { it.name.lowercase() }
             ).let { entries ->
-                val parent = dir.parentFile
-                if (parent != null && path != "/" && parent.listFiles() != null) {
+                val normalizedPath = path.trimEnd('/')
+                val parentPath = normalizedPath.substringBeforeLast('/')
+                val parent = if (parentPath.isNotEmpty()) File(parentPath) else null
+                if (parent != null && normalizedPath != "/" &&
+                    parent.listFiles()?.isNotEmpty() == true) {
                     listOf(FileEntry(parent, "..", isDirectory = true)) + entries
                 } else {
                     entries
@@ -97,21 +99,43 @@ fun FileManagerScreen(onBack: () -> Unit) {
         }
     }
 
+    fun safeLoadDirectory(path: String, showHidden: Boolean): List<FileEntry> {
+        val dir = File(path.trimEnd('/'))
+        if (!dir.isDirectory) {
+            loadError = RuntimeException("目录不存在: ${path.trimEnd('/')}")
+            return emptyList()
+        }
+        val children = try {
+            dir.listFiles()
+        } catch (e: Exception) {
+            loadError = e
+            return emptyList()
+        }
+        if (children == null) {
+            loadError = RuntimeException("无法读取目录内容: ${path.trimEnd('/')}")
+            return emptyList()
+        }
+        return loadDirectory(path, showHidden)
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { _ ->
         hasStoragePermission = Environment.isExternalStorageManager()
         if (hasStoragePermission) {
-            leftEntries = loadDirectory(leftPath, showHiddenFiles)
-            rightEntries = loadDirectory(rightPath, showHiddenFiles)
+            loadError = null
+            leftEntries = safeLoadDirectory(leftPath, showHiddenFiles)
+            rightEntries = safeLoadDirectory(rightPath, showHiddenFiles)
         }
     }
 
     LaunchedEffect(leftPath, showHiddenFiles) {
-        leftEntries = loadDirectory(leftPath, showHiddenFiles)
+        loadError = null
+        leftEntries = safeLoadDirectory(leftPath, showHiddenFiles)
     }
     LaunchedEffect(rightPath, showHiddenFiles) {
-        rightEntries = loadDirectory(rightPath, showHiddenFiles)
+        loadError = null
+        rightEntries = safeLoadDirectory(rightPath, showHiddenFiles)
     }
 
     LaunchedEffect(Unit) {
@@ -244,6 +268,8 @@ fun FileManagerScreen(onBack: () -> Unit) {
             }
         }
     }
+
+    ErrorDialog(error = loadError, onDismiss = { loadError = null })
 }
 
 @Composable
