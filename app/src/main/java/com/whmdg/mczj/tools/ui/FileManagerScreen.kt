@@ -6,8 +6,7 @@ import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
 import android.system.ErrnoException
-import android.system.Os
-import android.system.OsConstants
+import android.system.Os  // 公开 API：stat() 等
 import android.webkit.MimeTypeMap
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -28,6 +27,46 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import java.io.File
+
+/**
+ * 通过反射调用被 @hide 标记的 POSIX 目录遍历 API（Os.opendir/readdir/closedir）。
+ * 这些 API 在 Android 运行时中实际存在（libcore），但被隐藏在 SDK 桩中。
+ */
+private object PosixDir {
+    private val osClass = Os::class.java
+    private val opendir = osClass.getMethod("opendir", String::class.java)
+    private val readdir = osClass.getMethod("readdir", java.io.FileDescriptor::class.java)
+    private val closedir = osClass.getMethod("closedir", java.io.FileDescriptor::class.java)
+
+    private val direntClass = Class.forName("android.system.StructDirent")
+    private val dNameField = direntClass.getField("d_name")
+    private val dTypeField = direntClass.getField("d_type")
+
+    val DT_DIR: Int
+    val DT_LNK: Int
+    val DT_UNKNOWN: Int
+
+    init {
+        val oc = Class.forName("android.system.OsConstants")
+        DT_DIR = oc.getField("DT_DIR").getInt(null)
+        DT_LNK = oc.getField("DT_LNK").getInt(null)
+        DT_UNKNOWN = oc.getField("DT_UNKNOWN").getInt(null)
+    }
+
+    fun opendir(path: String): java.io.FileDescriptor =
+        opendir.invoke(null, path) as java.io.FileDescriptor
+
+    fun readdir(fd: java.io.FileDescriptor): Any? {
+        val result = readdir.invoke(null, fd)
+        return result  // null = 目录遍历完毕
+    }
+
+    fun closedir(fd: java.io.FileDescriptor) =
+        closedir.invoke(null, fd)
+
+    fun dName(dirent: Any): String = dNameField.get(dirent) as String
+    fun dType(dirent: Any): Int = dTypeField.getInt(dirent)
+}
 
 enum class FocusedPanel { LEFT, RIGHT }
 
@@ -63,13 +102,13 @@ fun FileManagerScreen(onBack: () -> Unit) {
         permissionLevel == "ROOT" && SpecialPermissionVerifier.isRootAvailable()
     }
 
-    // ── POSIX 引擎：用 Os.opendir/readdir 逐项读取 ──
+    // ── POSIX 引擎：Op.opendir/readdir（通过反射调用）逐项读取 ──
     fun listWithPosix(path: String, showHidden: Boolean): List<FileEntry> {
         val entries = mutableListOf<FileEntry>()
         val normalizedPath = path.trimEnd('/')
 
         val dirStream = try {
-            Os.opendir(normalizedPath)
+            PosixDir.opendir(normalizedPath)
         } catch (e: ErrnoException) {
             loadError = RuntimeException("无法打开目录: ${e.message}")
             return emptyList()
@@ -78,22 +117,24 @@ fun FileManagerScreen(onBack: () -> Unit) {
         try {
             while (true) {
                 val dirent = try {
-                    Os.readdir(dirStream)
+                    PosixDir.readdir(dirStream)
                 } catch (e: ErrnoException) {
-                    if (e.errno == OsConstants.EACCES) continue
+                    if (e.errno == android.system.OsConstants.EACCES) continue
                     else throw e
                 }
                 if (dirent == null) break
 
-                val name = dirent.d_name
+                val name = PosixDir.dName(dirent)
                 if (name == "." || name == "..") continue
                 if (!showHidden && name.startsWith(".")) continue
 
-                val isDir = when (dirent.d_type) {
-                    OsConstants.DT_DIR -> true
-                    OsConstants.DT_LNK, OsConstants.DT_UNKNOWN -> {
+                val isDir = when (PosixDir.dType(dirent)) {
+                    PosixDir.DT_DIR -> true
+                    PosixDir.DT_LNK, PosixDir.DT_UNKNOWN -> {
                         try {
-                            OsConstants.S_ISDIR(Os.stat("$normalizedPath/$name").st_mode)
+                            android.system.OsConstants.S_ISDIR(
+                                Os.stat("$normalizedPath/$name").st_mode
+                            )
                         } catch (_: ErrnoException) { false }
                     }
                     else -> false
@@ -102,15 +143,14 @@ fun FileManagerScreen(onBack: () -> Unit) {
                 entries.add(FileEntry("$normalizedPath/$name", name, isDir))
             }
         } finally {
-            try { Os.closedir(dirStream) } catch (_: Exception) {}
+            try { PosixDir.closedir(dirStream) } catch (_: Exception) {}
         }
 
         // 添加 ".." 父目录（仅当父目录可访问）
         val parentPath = normalizedPath.substringBeforeLast('/')
         if (parentPath.isNotEmpty() && normalizedPath != parentPath) {
             val parentAccessible = try {
-                val ps = Os.opendir(parentPath)
-                Os.closedir(ps)
+                PosixDir.closedir(PosixDir.opendir(parentPath))
                 true
             } catch (_: ErrnoException) { false }
             if (parentAccessible) {
