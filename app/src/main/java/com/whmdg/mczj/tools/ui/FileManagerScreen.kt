@@ -51,16 +51,6 @@ fun FileManagerScreen(onBack: () -> Unit) {
     var showHiddenFiles by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { _ ->
-        hasStoragePermission = Environment.isExternalStorageManager()
-        if (hasStoragePermission) {
-            leftEntries = loadDirectory(leftPath, showHiddenFiles)
-            rightEntries = loadDirectory(rightPath, showHiddenFiles)
-        }
-    }
-
     fun loadDirectory(path: String, showHidden: Boolean): List<FileEntry> {
         val dir = File(path)
         val rawFiles = try {
@@ -104,6 +94,16 @@ fun FileManagerScreen(onBack: () -> Unit) {
             }
         } catch (e: Exception) {
             Toast.makeText(context, "无法打开文件: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { _ ->
+        hasStoragePermission = Environment.isExternalStorageManager()
+        if (hasStoragePermission) {
+            leftEntries = loadDirectory(leftPath, showHiddenFiles)
+            rightEntries = loadDirectory(rightPath, showHiddenFiles)
         }
     }
 
