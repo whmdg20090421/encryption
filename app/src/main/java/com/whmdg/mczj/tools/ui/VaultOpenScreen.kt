@@ -50,6 +50,7 @@ fun VaultOpenScreen(
     var currentPath by remember { mutableStateOf(session.vaultDir.absolutePath) }
     var entries by remember { mutableStateOf(listOf<DisplayEntry>()) }
     var loading by remember { mutableStateOf(true) }
+    var vaultOpenError by remember { mutableStateOf<Throwable?>(null) }
 
     val isRoot = currentPath == session.vaultDir.absolutePath
 
@@ -155,8 +156,6 @@ fun VaultOpenScreen(
     var moveOrCopySource by remember { mutableStateOf<File?>(null) }
     var moveOrCopyMode by remember { mutableStateOf<String?>(null) } // "MOVE" or "COPY"
     var moveOrCopyDisplayName by remember { mutableStateOf("") }
-
-    var vaultOpenError by remember { mutableStateOf<Throwable?>(null) }
 
     // ── SAF Multi-File Picker Launcher ──
     val fileLauncher = rememberLauncherForActivityResult(
