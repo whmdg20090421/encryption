@@ -131,7 +131,10 @@ fun FileManagerScreen(onBack: () -> Unit) {
                 val isDir = when (PosixDir.dType(dirent)) {
                     PosixDir.DT_DIR -> true
                     PosixDir.DT_LNK, PosixDir.DT_UNKNOWN -> {
-                        try {
+                        // .apk 文件跳过 Os.stat() 回退——部分系统会触发 APK 扫描
+                        if (name.endsWith(".apk", ignoreCase = true) || name.endsWith(".apex", ignoreCase = true)) {
+                            false
+                        } else try {
                             android.system.OsConstants.S_ISDIR(
                                 Os.stat("$normalizedPath/$name").st_mode
                             )
@@ -226,6 +229,13 @@ done
 
     fun openFile(context: Context, entry: FileEntry) {
         val file = File(entry.path)
+        // 阻止直接打开 .apk/.apex——系统会尝试加载为 APK 资源导致崩溃
+        if (entry.name.endsWith(".apk", ignoreCase = true) ||
+            entry.name.endsWith(".apex", ignoreCase = true)
+        ) {
+            Toast.makeText(context, "APK 文件请在应用管理器中安装", Toast.LENGTH_SHORT).show()
+            return
+        }
         try {
             val uri: Uri = FileProvider.getUriForFile(
                 context,
