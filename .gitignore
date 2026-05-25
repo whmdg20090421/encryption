@@ -1,0 +1,22 @@
+*.iml
+.gradle
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# === 签名密钥相关（绝不上传） ===
+*.jks
+*.keystore
+release-keystore.jks
+app/release-keystore.jks
+keystore.properties
+
+# === 个人凭据 ===
+.netrc
+.git-credentials
+.github_token
