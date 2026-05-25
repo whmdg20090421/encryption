@@ -200,6 +200,45 @@ object SpecialPermissionVerifier {
     }
 
     /**
+     * 以 Root 权限执行 shell 命令，并行读取 stdout 和 stderr，不抛错。
+     * 返回 (stdout, stderr, exitCode)
+     */
+    fun executeRootCommandFull(command: String): Triple<String, String, Int> {
+        val process = Runtime.getRuntime().exec("su")
+        val os = java.io.DataOutputStream(process.outputStream)
+        os.writeBytes("$command\n")
+        os.writeBytes("exit\n")
+        os.flush()
+
+        // 并发读 stdout 和 stderr，避免 pipe buffer 满导致 shell 阻塞
+        val stdoutBuf = StringBuilder()
+        val stderrBuf = StringBuilder()
+        val tOut = Thread {
+            try {
+                val r = java.io.BufferedReader(java.io.InputStreamReader(process.inputStream, Charsets.UTF_8))
+                r.useLines { lines -> lines.forEach { stdoutBuf.appendLine(it) } }
+            } catch (_: Exception) {}
+        }.apply { start() }
+        val tErr = Thread {
+            try {
+                val r = java.io.BufferedReader(java.io.InputStreamReader(process.errorStream, Charsets.UTF_8))
+                r.useLines { lines -> lines.forEach { stderrBuf.appendLine(it) } }
+            } catch (_: Exception) {}
+        }.apply { start() }
+
+        os.close()
+        process.waitFor()
+        tOut.join(2000)
+        tErr.join(2000)
+
+        return Triple(
+            stdoutBuf.toString().trimEnd(),
+            stderrBuf.toString().trimEnd(),
+            process.exitValue()
+        )
+    }
+
+    /**
      * 以 Root 权限执行 shell 命令，不关心输出，仅判断成功/失败
      */
     fun executeRootCommandSilent(command: String): Boolean {
