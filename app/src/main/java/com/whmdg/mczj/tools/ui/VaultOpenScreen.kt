@@ -27,6 +27,7 @@ import com.whmdg.mczj.tools.encryption.core.FileConstants
 import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import com.whmdg.mczj.tools.encryption.services.CryptoService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -63,9 +64,8 @@ fun VaultOpenScreen(
                 val rawFiles = (currentDir.listFiles() ?: emptyArray()).filter { f ->
                     val name = f.name
                     name != "vault_config.json" &&
-                    name != "vault_config.json.bak" &&
-                    name != "name_mapping.json" &&
-                    name != "name_mapping.json.bak"
+                    name != "vault_config.backup.json" &&
+                    name != "name_mappings.json"
                 }.toTypedArray()
 
                 // Sort directories first, then files alphabetically
@@ -338,8 +338,8 @@ fun VaultOpenScreen(
                                 Icon(Icons.Default.ArrowUpward, contentDescription = "返回上级")
                             }
                         }
-                        IconButton(onClick = { refresh() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                        IconButton(onClick = { /* TODO: 加密进度功能待开发 */ }) {
+                            Icon(Icons.Default.Shield, contentDescription = "加密进度")
                         }
                     }
                 }
@@ -455,7 +455,12 @@ fun VaultOpenScreen(
                     }
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                PullToRefreshBox(
+                    isRefreshing = loading,
+                    onRefresh = { refresh() },
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(entries) { entry ->
                         ListItem(
                             headlineContent = {
@@ -498,6 +503,7 @@ fun VaultOpenScreen(
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     }
                 }
+            }
             }
 
             // ── Progress Dialog ──
