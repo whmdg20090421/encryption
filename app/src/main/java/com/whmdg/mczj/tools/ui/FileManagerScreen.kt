@@ -61,6 +61,21 @@ fun FileManagerScreen(onBack: () -> Unit) {
         permissionLevel == "ROOT" && SpecialPermissionVerifier.isRootAvailable()
     }
 
+    // 计算可导航的父目录。返回 null 表示当前路径不应显示 ".."。
+    // 用户存储的逻辑根是 /storage/emulated/N，更上层（/storage/emulated、/storage）是 FUSE
+    // 中间虚拟目录，app 进程访问行为不稳定（canRead 时真时假），且就算进去也读不到内容。
+    fun computeNavigableParent(normalizedPath: String): String? {
+        if (normalizedPath == "/") return null
+        if (!normalizedPath.contains('/')) return null
+        // 用户存储逻辑根：不允许往上走
+        if (Regex("^/storage/emulated/\\d+$").matches(normalizedPath)) return null
+        val parent = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
+        if (parent == normalizedPath) return null
+        // 父目录指向 FUSE 中间虚拟目录：不允许
+        if (parent == "/storage/emulated" || parent == "/storage") return null
+        return parent
+    }
+
     // ── 普通引擎：File.listFiles（公开 API，无 hidden API 限制） ──
     fun listWithFile(path: String, showHidden: Boolean): List<FileEntry> {
         DiagnosticLog.log("FileEngine", "listFiles($path) showHidden=$showHidden")
@@ -197,21 +212,6 @@ fun FileManagerScreen(onBack: () -> Unit) {
                 .thenBy { it.name.lowercase() }
         )
         return entries
-    }
-
-    // 计算可导航的父目录。返回 null 表示当前路径不应显示 ".."。
-    // 用户存储的逻辑根是 /storage/emulated/N，更上层（/storage/emulated、/storage）是 FUSE
-    // 中间虚拟目录，app 进程访问行为不稳定（canRead 时真时假），且就算进去也读不到内容。
-    fun computeNavigableParent(normalizedPath: String): String? {
-        if (normalizedPath == "/") return null
-        if (!normalizedPath.contains('/')) return null
-        // 用户存储逻辑根：不允许往上走
-        if (Regex("^/storage/emulated/\\d+$").matches(normalizedPath)) return null
-        val parent = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
-        if (parent == normalizedPath) return null
-        // 父目录指向 FUSE 中间虚拟目录：不允许
-        if (parent == "/storage/emulated" || parent == "/storage") return null
-        return parent
     }
 
     // ── 路径分类辅助 ──
