@@ -138,25 +138,35 @@ fun FileManagerScreen(onBack: () -> Unit) {
         val escapedPath = normalizedPath.replace("'", "'\\''")
 
         try {
+            // 把路径赋给 shell 变量 P，再用双引号引用，确保 $f 能正常展开
             val command = """
-ls -1a '${escapedPath}' | while IFS= read -r f; do
+P='${escapedPath}'
+ls -1a "${'$'}P" | while IFS= read -r f; do
     if [ "${'$'}f" != "." ] && [ "${'$'}f" != ".." ]; then
-        if [ -d '${escapedPath}/${'$'}f' ]; then echo "DIR|${'$'}f"; else echo "FIL|${'$'}f"; fi
+        if [ -d "${'$'}P/${'$'}f" ]; then echo "DIR|${'$'}f"; else echo "FIL|${'$'}f"; fi
     fi
 done
 """.trimIndent()
+            DiagnosticLog.log("RootEngine", "su 命令:\n$command")
             val output = SpecialPermissionVerifier.executeRootCommand(command)
+            DiagnosticLog.log("RootEngine", "su 输出 ${output.length} 字符 (前 200): ${output.take(200)}")
             val lines = output.lines().filter { it.isNotBlank() }
 
+            var dirCount = 0
+            var fileCount = 0
             for (line in lines) {
                 val sep = line.indexOf('|')
                 if (sep < 0) continue
                 val type = line.substring(0, sep)
                 val name = line.substring(sep + 1)
                 if (!showHidden && name.startsWith(".")) continue
-                entries.add(FileEntry("$normalizedPath/$name", name, type == "DIR"))
+                val isDir = type == "DIR"
+                if (isDir) dirCount++ else fileCount++
+                entries.add(FileEntry("$normalizedPath/$name", name, isDir))
             }
+            DiagnosticLog.log("RootEngine", "解析结果: dirs=$dirCount, files=$fileCount")
         } catch (e: Exception) {
+            DiagnosticLog.log("RootEngine", "异常: ${e.javaClass.simpleName}: ${e.message}")
             loadError = e
             return emptyList()
         }
