@@ -19,7 +19,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = (System.currentTimeMillis() / 1000).toInt()
-        versionName = "1.1_%02d%02d".format(
+        versionName = "1.2_%02d%02d".format(
             Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
             Calendar.getInstance().get(Calendar.MINUTE))
 

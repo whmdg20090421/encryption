@@ -78,7 +78,7 @@ jobs:
           TIMESTAMP=$(date +"%Y%m%d-%H%M")
           ORIGINAL="${{ steps.locate.outputs.apk_path }}"
           DIR=$(dirname "$ORIGINAL")
-          NEW_NAME="工具箱-v1.1-${TIMESTAMP}-arm64-v8a-release.apk"
+          NEW_NAME="工具箱-v1.2-${TIMESTAMP}-arm64-v8a-release.apk"
           cp "$ORIGINAL" "${DIR}/${NEW_NAME}"
           echo "apk_path=${DIR}/${NEW_NAME}" >> "$GITHUB_OUTPUT"
 
