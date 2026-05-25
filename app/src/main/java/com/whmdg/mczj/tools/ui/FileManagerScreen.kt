@@ -5,10 +5,9 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
-import android.system.ErrnoException
-import android.system.Os  // 公开 API：stat() 等
 import android.webkit.MimeTypeMap
 import android.widget.Toast
+import com.whmdg.mczj.tools.util.DiagnosticLog
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -27,46 +26,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import java.io.File
-
-/**
- * 通过反射调用被 @hide 标记的 POSIX 目录遍历 API（Os.opendir/readdir/closedir）。
- * 这些 API 在 Android 运行时中实际存在（libcore），但被隐藏在 SDK 桩中。
- */
-private object PosixDir {
-    private val osClass = Os::class.java
-    private val opendir = osClass.getMethod("opendir", String::class.java)
-    private val readdir = osClass.getMethod("readdir", java.io.FileDescriptor::class.java)
-    private val closedir = osClass.getMethod("closedir", java.io.FileDescriptor::class.java)
-
-    private val direntClass = Class.forName("android.system.StructDirent")
-    private val dNameField = direntClass.getField("d_name")
-    private val dTypeField = direntClass.getField("d_type")
-
-    val DT_DIR: Int
-    val DT_LNK: Int
-    val DT_UNKNOWN: Int
-
-    init {
-        val oc = Class.forName("android.system.OsConstants")
-        DT_DIR = oc.getField("DT_DIR").getInt(null)
-        DT_LNK = oc.getField("DT_LNK").getInt(null)
-        DT_UNKNOWN = oc.getField("DT_UNKNOWN").getInt(null)
-    }
-
-    fun opendir(path: String): java.io.FileDescriptor =
-        opendir.invoke(null, path) as java.io.FileDescriptor
-
-    fun readdir(fd: java.io.FileDescriptor): Any? {
-        val result = readdir.invoke(null, fd)
-        return result  // null = 目录遍历完毕
-    }
-
-    fun closedir(fd: java.io.FileDescriptor) =
-        closedir.invoke(null, fd)
-
-    fun dName(dirent: Any): String = dNameField.get(dirent) as String
-    fun dType(dirent: Any): Int = dTypeField.getInt(dirent)
-}
 
 enum class FocusedPanel { LEFT, RIGHT }
 
@@ -102,62 +61,66 @@ fun FileManagerScreen(onBack: () -> Unit) {
         permissionLevel == "ROOT" && SpecialPermissionVerifier.isRootAvailable()
     }
 
-    // ── POSIX 引擎：Op.opendir/readdir（通过反射调用）逐项读取 ──
-    fun listWithPosix(path: String, showHidden: Boolean): List<FileEntry> {
-        val entries = mutableListOf<FileEntry>()
+    // ── 普通引擎：File.listFiles（公开 API，无 hidden API 限制） ──
+    fun listWithFile(path: String, showHidden: Boolean): List<FileEntry> {
+        DiagnosticLog.log("FileEngine", "listFiles($path) showHidden=$showHidden")
         val normalizedPath = path.trimEnd('/')
+        val dir = File(normalizedPath)
 
-        val dirStream = try {
-            PosixDir.opendir(normalizedPath)
-        } catch (e: ErrnoException) {
-            loadError = RuntimeException("无法打开目录: ${e.message}")
+        if (!dir.exists()) {
+            DiagnosticLog.log("FileEngine", "目录不存在: $normalizedPath")
+            loadError = RuntimeException("目录不存在: $normalizedPath")
+            return emptyList()
+        }
+        if (!dir.isDirectory) {
+            DiagnosticLog.log("FileEngine", "路径不是目录: $normalizedPath")
+            loadError = RuntimeException("路径不是目录: $normalizedPath")
             return emptyList()
         }
 
-        try {
-            while (true) {
-                val dirent = try {
-                    PosixDir.readdir(dirStream)
-                } catch (e: ErrnoException) {
-                    if (e.errno == android.system.OsConstants.EACCES) continue
-                    else throw e
-                }
-                if (dirent == null) break
-
-                val name = PosixDir.dName(dirent)
-                if (name == "." || name == "..") continue
-                if (!showHidden && name.startsWith(".")) continue
-
-                val isDir = when (PosixDir.dType(dirent)) {
-                    PosixDir.DT_DIR -> true
-                    PosixDir.DT_LNK, PosixDir.DT_UNKNOWN -> {
-                        // .apk 文件跳过 Os.stat() 回退——部分系统会触发 APK 扫描
-                        if (name.endsWith(".apk", ignoreCase = true) || name.endsWith(".apex", ignoreCase = true)) {
-                            false
-                        } else try {
-                            android.system.OsConstants.S_ISDIR(
-                                Os.stat("$normalizedPath/$name").st_mode
-                            )
-                        } catch (_: ErrnoException) { false }
-                    }
-                    else -> false
-                }
-
-                entries.add(FileEntry("$normalizedPath/$name", name, isDir))
-            }
-        } finally {
-            try { PosixDir.closedir(dirStream) } catch (_: Exception) {}
+        val children = try {
+            dir.listFiles()
+        } catch (e: SecurityException) {
+            DiagnosticLog.log("FileEngine", "listFiles SecurityException: ${e.message}")
+            loadError = e
+            return emptyList()
         }
+        if (children == null) {
+            DiagnosticLog.log("FileEngine", "listFiles 返回 null（权限不足或 I/O 错误）")
+            loadError = RuntimeException("无法列出目录（权限不足）: $normalizedPath")
+            return emptyList()
+        }
+        DiagnosticLog.log("FileEngine", "listFiles 返回 ${children.size} 项")
+
+        val entries = mutableListOf<FileEntry>()
+        var dirCount = 0
+        var fileCount = 0
+        var skipHidden = 0
+        for (child in children) {
+            val name = child.name
+            if (!showHidden && name.startsWith(".")) { skipHidden++; continue }
+            val isDir = try {
+                child.isDirectory
+            } catch (e: Exception) {
+                DiagnosticLog.log("FileEngine", "isDirectory 异常 $name: ${e.message}")
+                false
+            }
+            if (isDir) dirCount++ else fileCount++
+            entries.add(FileEntry(child.absolutePath, name, isDir))
+        }
+        DiagnosticLog.log("FileEngine", "统计: dirs=$dirCount, files=$fileCount, hidden 过滤=$skipHidden")
 
         // 添加 ".." 父目录（仅当父目录可访问）
         val parentPath = normalizedPath.substringBeforeLast('/')
         if (parentPath.isNotEmpty() && normalizedPath != parentPath) {
+            val parentFile = File(parentPath)
             val parentAccessible = try {
-                PosixDir.closedir(PosixDir.opendir(parentPath))
-                true
-            } catch (_: ErrnoException) { false }
+                parentFile.canRead()
+            } catch (_: Exception) { false }
             if (parentAccessible) {
                 entries.add(0, FileEntry(parentPath, "..", true))
+            } else {
+                DiagnosticLog.log("FileEngine", "父目录不可读: $parentPath")
             }
         }
 
@@ -213,14 +176,19 @@ done
 
     // ── 统一入口 ──
     fun listDirectory(path: String): List<FileEntry> {
+        DiagnosticLog.log("FileMgr", ">>> listDirectory START path=$path engine=${if (isRootEngine) "ROOT" else "FILE"}")
         loadError = null
+        val t0 = System.currentTimeMillis()
         val entries = if (isRootEngine) {
             listWithRoot(path, showHiddenFiles)
         } else {
-            listWithPosix(path, showHiddenFiles)
+            listWithFile(path, showHiddenFiles)
         }
-        // POSIX 失败时自动尝试 Root 兜底
+        val took = System.currentTimeMillis() - t0
+        DiagnosticLog.log("FileMgr", "<<< listDirectory END path=$path entries=${entries.size} took=${took}ms err=${loadError?.javaClass?.simpleName}")
+        // File 引擎失败时（典型：权限不足）自动尝试 Root 兜底
         if (entries.isEmpty() && loadError != null && !isRootEngine && SpecialPermissionVerifier.isRootAvailable()) {
+            DiagnosticLog.log("FileMgr", "File 引擎失败，回退到 ROOT 引擎")
             loadError = null
             return listWithRoot(path, showHiddenFiles)
         }
@@ -228,11 +196,12 @@ done
     }
 
     fun openFile(context: Context, entry: FileEntry) {
+        DiagnosticLog.log("OpenFile", "请求打开: ${entry.path}")
         val file = File(entry.path)
-        // 阻止直接打开 .apk/.apex——系统会尝试加载为 APK 资源导致崩溃
         if (entry.name.endsWith(".apk", ignoreCase = true) ||
             entry.name.endsWith(".apex", ignoreCase = true)
         ) {
+            DiagnosticLog.log("OpenFile", "拒绝打开 apk/apex: ${entry.name}")
             Toast.makeText(context, "APK 文件请在应用管理器中安装", Toast.LENGTH_SHORT).show()
             return
         }
@@ -245,17 +214,22 @@ done
             val extension = entry.name.substringAfterLast('.', "").lowercase()
             val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
                 ?: "*/*"
+            DiagnosticLog.log("OpenFile", "uri=$uri ext='$extension' mime=$mimeType")
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mimeType)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            if (intent.resolveActivity(context.packageManager) != null) {
+            val resolver = intent.resolveActivity(context.packageManager)
+            DiagnosticLog.log("OpenFile", "resolveActivity=${resolver?.flattenToString() ?: "(null)"}")
+            if (resolver != null) {
                 context.startActivity(intent)
+                DiagnosticLog.log("OpenFile", "startActivity 已调用")
             } else {
                 Toast.makeText(context, "没有应用可以打开此文件", Toast.LENGTH_SHORT).show()
             }
         } catch (e: Exception) {
+            DiagnosticLog.log("OpenFile", "异常: ${e.javaClass.simpleName}: ${e.message}")
             Toast.makeText(context, "无法打开文件: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
@@ -271,13 +245,19 @@ done
     }
 
     LaunchedEffect(leftPath, showHiddenFiles) {
+        DiagnosticLog.log("FileMgr", "LaunchedEffect[LEFT] 触发 path=$leftPath showHidden=$showHiddenFiles")
         leftEntries = listDirectory(leftPath)
+        DiagnosticLog.log("FileMgr", "LaunchedEffect[LEFT] 完成 entries=${leftEntries.size}")
     }
     LaunchedEffect(rightPath, showHiddenFiles) {
+        DiagnosticLog.log("FileMgr", "LaunchedEffect[RIGHT] 触发 path=$rightPath showHidden=$showHiddenFiles")
         rightEntries = listDirectory(rightPath)
+        DiagnosticLog.log("FileMgr", "LaunchedEffect[RIGHT] 完成 entries=${rightEntries.size}")
     }
 
     LaunchedEffect(Unit) {
+        DiagnosticLog.beginSession("进入 FileManagerScreen")
+        DiagnosticLog.log("FileMgr", "FileManagerScreen 启动 isRootEngine=$isRootEngine permissionLevel=$permissionLevel hasStoragePerm=$hasStoragePermission")
         if (!hasStoragePermission) {
             Toast.makeText(context, "需要存储权限才能浏览文件", Toast.LENGTH_LONG).show()
         }
@@ -374,10 +354,14 @@ done
                         isFocused = focusedPanel == FocusedPanel.LEFT,
                         onFocus = { focusedPanel = FocusedPanel.LEFT },
                         onFolderClick = { entry ->
+                            DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
+                            DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$leftPath")
                             focusedPanel = FocusedPanel.LEFT
                             leftPath = entry.path
                         },
                         onFileClick = { entry ->
+                            DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
+                            DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
                             focusedPanel = FocusedPanel.LEFT
                             openFile(context, entry)
                         },
@@ -394,10 +378,14 @@ done
                         isFocused = focusedPanel == FocusedPanel.RIGHT,
                         onFocus = { focusedPanel = FocusedPanel.RIGHT },
                         onFolderClick = { entry ->
+                            DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
+                            DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$rightPath")
                             focusedPanel = FocusedPanel.RIGHT
                             rightPath = entry.path
                         },
                         onFileClick = { entry ->
+                            DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
+                            DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
                             focusedPanel = FocusedPanel.RIGHT
                             openFile(context, entry)
                         },
@@ -408,7 +396,10 @@ done
         }
     }
 
-    ErrorDialog(error = loadError, onDismiss = { loadError = null })
+    ErrorDialog(error = loadError, onDismiss = {
+        DiagnosticLog.log("FileMgr", "关闭错误对话框")
+        loadError = null
+    })
 }
 
 @Composable

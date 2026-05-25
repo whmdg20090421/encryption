@@ -7,24 +7,46 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.whmdg.mczj.tools.ui.theme.工具箱Theme
 import com.whmdg.mczj.tools.ui.MainAppContainer
+import com.whmdg.mczj.tools.util.DiagnosticLog
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 捕获后台线程的系统级崩溃（如 ApkAssets 加载失败），防止应用整体崩溃
+        // 全局未捕获异常 → 写诊断报告到 filesDir/debug_logs/，再决定是否吞噬
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            val name = throwable.javaClass.name
-            val msg = throwable.message
-            // 只吞噬已知无害的系统框架层崩溃
-            if (name.contains("ApkAssets") || name.contains("nativeLoad")) {
-                Log.e("GlobalCrashHandler", "系统框架层异常: $name: $msg", throwable)
+            val msg = throwable.message ?: ""
+            val isApkAssetsCrash =
+                throwable.stackTrace.any {
+                    it.className == "android.content.res.ApkAssets" ||
+                            it.methodName == "nativeLoadFd" ||
+                            it.methodName == "nativeLoad"
+                } || msg.contains("Failed to load asset path") || msg.contains(".apk from fd")
+
+            val ctx = """
+                |线程名:       ${thread.name}
+                |线程 ID:      ${thread.id}
+                |线程组:       ${thread.threadGroup?.name}
+                |线程优先级:   ${thread.priority}
+                |线程类:       ${thread.javaClass.name}
+                |是否守护线程: ${thread.isDaemon}
+                |是否吞噬:     $isApkAssetsCrash
+            """.trimMargin()
+
+            // 后台线程崩溃可能没有任何 session（用户没主动点击）。这里独立给一段标识。
+            DiagnosticLog.log("GlobalCrash", "未捕获异常 thread='${thread.name}' type=${throwable.javaClass.simpleName} msg=$msg")
+            val file = DiagnosticLog.exportCrashReport(applicationContext, throwable, ctx)
+            Log.e("GlobalCrashHandler", "崩溃报告: ${file?.absolutePath ?: "(写入失败)"}", throwable)
+
+            if (isApkAssetsCrash) {
+                Log.w("GlobalCrashHandler", "已吞噬 ApkAssets 系统层崩溃")
             } else {
                 defaultHandler?.uncaughtException(thread, throwable)
                     ?: throw throwable
             }
         }
+        DiagnosticLog.log("MainActivity", "GlobalCrashHandler 已安装")
 
         enableEdgeToEdge()
         setContent {
