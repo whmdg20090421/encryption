@@ -134,8 +134,8 @@ fun FileManagerScreen(onBack: () -> Unit) {
         try {
             val command = """
 ls -1a '${escapedPath}' | while IFS= read -r f; do
-    if [ "$$f" != "." ] && [ "$$f" != ".." ]; then
-        if [ -d '${escapedPath}/$$f' ]; then echo "DIR|$$f"; else echo "FIL|$$f"; fi
+    if [ "${'$'}f" != "." ] && [ "${'$'}f" != ".." ]; then
+        if [ -d '${escapedPath}/${'$'}f' ]; then echo "DIR|${'$'}f"; else echo "FIL|${'$'}f"; fi
     fi
 done
 """.trimIndent()
