@@ -64,7 +64,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     .thenBy { it.name.lowercase() }
             ).let { entries ->
                 val parent = dir.parentFile
-                if (parent != null && path != "/") {
+                if (parent != null && path != "/" && parent.listFiles() != null) {
                     listOf(FileEntry(parent, "..", isDirectory = true)) + entries
                 } else {
                     entries
