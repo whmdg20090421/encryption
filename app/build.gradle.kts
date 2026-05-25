@@ -17,7 +17,9 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = (System.currentTimeMillis() / 1000).toInt()
-        versionName = "1.1_${java.text.SimpleDateFormat("HHmm", java.util.Locale.getDefault()).format(java.util.Date())}"
+        versionName = "1.1_" + String.format("%02d%02d",
+            java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY),
+            java.util.Calendar.getInstance().get(java.util.Calendar.MINUTE))
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
