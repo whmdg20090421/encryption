@@ -110,19 +110,16 @@ fun FileManagerScreen(onBack: () -> Unit) {
         }
         DiagnosticLog.log("FileEngine", "统计: dirs=$dirCount, files=$fileCount, hidden 过滤=$skipHidden")
 
-        // 添加 ".." 父目录（仅当不是根且父目录可访问）
-        if (normalizedPath != "/" && normalizedPath.contains('/')) {
-            val parentPath = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
-            if (parentPath != normalizedPath) {
-                val parentFile = File(parentPath)
-                val parentAccessible = try {
-                    parentFile.canRead()
-                } catch (_: Exception) { false }
-                if (parentAccessible) {
-                    entries.add(0, FileEntry(parentPath, "..", true))
-                } else {
-                    DiagnosticLog.log("FileEngine", "父目录不可读: $parentPath")
-                }
+        // 添加 ".." 父目录（用统一规则，避免 canRead 在 FUSE 边界返回不稳定）
+        val parentPath = computeNavigableParent(normalizedPath)
+        if (parentPath != null) {
+            val parentAccessible = try {
+                File(parentPath).canRead()
+            } catch (_: Exception) { false }
+            if (parentAccessible) {
+                entries.add(0, FileEntry(parentPath, "..", true))
+            } else {
+                DiagnosticLog.log("FileEngine", "父目录可访问性返回 false: $parentPath")
             }
         }
 
@@ -189,12 +186,10 @@ fun FileManagerScreen(onBack: () -> Unit) {
         }
         DiagnosticLog.log("RootEngine", "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
 
-        // 父目录（Root 模式不做边界限制）
-        if (normalizedPath != "/" && normalizedPath.contains('/')) {
-            val parentPath = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
-            if (parentPath != normalizedPath) {
-                entries.add(0, FileEntry(parentPath, "..", true))
-            }
+        // 父目录（统一规则）
+        val parentPath = computeNavigableParent(normalizedPath)
+        if (parentPath != null) {
+            entries.add(0, FileEntry(parentPath, "..", true))
         }
 
         entries.sortWith(
@@ -202,6 +197,21 @@ fun FileManagerScreen(onBack: () -> Unit) {
                 .thenBy { it.name.lowercase() }
         )
         return entries
+    }
+
+    // 计算可导航的父目录。返回 null 表示当前路径不应显示 ".."。
+    // 用户存储的逻辑根是 /storage/emulated/N，更上层（/storage/emulated、/storage）是 FUSE
+    // 中间虚拟目录，app 进程访问行为不稳定（canRead 时真时假），且就算进去也读不到内容。
+    fun computeNavigableParent(normalizedPath: String): String? {
+        if (normalizedPath == "/") return null
+        if (!normalizedPath.contains('/')) return null
+        // 用户存储逻辑根：不允许往上走
+        if (Regex("^/storage/emulated/\\d+$").matches(normalizedPath)) return null
+        val parent = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
+        if (parent == normalizedPath) return null
+        // 父目录指向 FUSE 中间虚拟目录：不允许
+        if (parent == "/storage/emulated" || parent == "/storage") return null
+        return parent
     }
 
     // ── 路径分类辅助 ──
@@ -248,9 +258,9 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     val rootEntries = listWithRoot(physical, showHiddenFiles)
                     if (rootEntries.isNotEmpty()) {
                         // 把 root 看到的 /data/media/N/... 重新展示为虚拟路径 /storage/emulated/N/...
+                        // ".." 也要一起映射，否则用户点回去看到的是物理路径
                         rootEntries.map { e ->
-                            if (e.name == "..") e
-                            else FileEntry(
+                            FileEntry(
                                 path = e.path.replace(Regex("^/data/media/(\\d+)"), "/storage/emulated/$1"),
                                 name = e.name,
                                 isDirectory = e.isDirectory
