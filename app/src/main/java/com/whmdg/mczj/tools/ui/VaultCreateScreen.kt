@@ -1,6 +1,11 @@
 package com.whmdg.mczj.tools.ui
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -69,6 +74,8 @@ fun VaultCreateScreen(
 
     var busy by remember { mutableStateOf(false) }
     var showAlgoDialog by remember { mutableStateOf(false) }
+    var vaultError by remember { mutableStateOf<Throwable?>(null) }
+    var showPermissionDialog by remember { mutableStateOf(false) }
 
     fun getAbsolutePathFromUri(context: Context, uri: android.net.Uri): String {
         if (uri.scheme == "file") {
@@ -158,25 +165,42 @@ fun VaultCreateScreen(
         }
     }
 
+    fun isExternalPath(path: String): Boolean {
+        return path.startsWith("/storage/") || path.startsWith(Environment.getExternalStorageDirectory().absolutePath)
+    }
+
+    fun checkOrRequestStoragePermission(): Boolean {
+        if (!isExternalPath(vaultPath)) return true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (Environment.isExternalStorageManager()) return true
+            showPermissionDialog = true
+            return false
+        }
+        // Android 10 以下不需要特殊申请
+        return true
+    }
+
     fun onSubmit() {
         val trimmedName = name.trim()
         if (vaultPath.isEmpty()) {
-            Toast.makeText(context, "请先选择保险箱存放目录", Toast.LENGTH_SHORT).show()
+            vaultError = Exception("请先选择保险箱存放目录")
             return
         }
         if (trimmedName.isEmpty() || pwd1.isEmpty() || pwd2.isEmpty()) {
-            Toast.makeText(context, "请先填齐所有必需选项", Toast.LENGTH_SHORT).show()
+            vaultError = Exception("请先填齐所有必需选项")
             return
         }
         if (pwd1 != pwd2) {
-            Toast.makeText(context, "两次输入密码不一致", Toast.LENGTH_SHORT).show()
+            vaultError = Exception("两次输入密码不一致")
             return
         }
         if (vaultService.isNameTaken(trimmedName)) {
-            Toast.makeText(context, "保险箱名称已存在", Toast.LENGTH_SHORT).show()
+            vaultError = Exception("保险箱名称已存在")
             return
         }
-        
+
+        if (!checkOrRequestStoragePermission()) return
+
         val finalParams = when (selectedPreset) {
             "LOW" -> Argon2Params.LOW
             "HIGH" -> Argon2Params.HIGH
@@ -194,7 +218,7 @@ fun VaultCreateScreen(
                 val isAbsolute = File(vaultPath).isAbsolute
                 val location = if (isAbsolute) StorageLocation.EXTERNAL else StorageLocation.INTERNAL
                 val relativePath = File(vaultPath, trimmedName).absolutePath
-                
+
                 vaultService.createVault(
                     name = trimmedName,
                     location = location,
@@ -213,7 +237,7 @@ fun VaultCreateScreen(
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "创建失败: ${e.message}", Toast.LENGTH_LONG).show()
+                    vaultError = e
                     busy = false
                 }
             }
@@ -534,6 +558,43 @@ fun VaultCreateScreen(
                     }
                 },
                 confirmButton = {}
+            )
+        }
+
+        ErrorDialog(error = vaultError, onDismiss = { vaultError = null })
+
+        if (showPermissionDialog) {
+            AlertDialog(
+                onDismissRequest = { showPermissionDialog = false },
+                title = { Text("需要存储权限") },
+                text = {
+                    Text("创建保险箱到外部存储需要「所有文件访问」权限。请在系统设置中开启。")
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        showPermissionDialog = false
+                        try {
+                            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            }
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            try {
+                                val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                                context.startActivity(intent)
+                            } catch (ex: Exception) {
+                                vaultError = Exception("无法跳转权限设置页面，请手动前往系统设置 -> 应用 -> 工具箱 -> 所有文件访问权限 开启")
+                            }
+                        }
+                    }) {
+                        Text("前往设置")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showPermissionDialog = false }) {
+                        Text("取消")
+                    }
+                }
             )
         }
     }

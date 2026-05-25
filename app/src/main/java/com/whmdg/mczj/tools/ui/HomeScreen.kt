@@ -1,7 +1,9 @@
 package com.whmdg.mczj.tools.ui
 
+import android.app.Activity
 import android.content.Context
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -160,6 +162,21 @@ fun MainAppContainer() {
         )
     }
 
+    var backPressedTime by remember { mutableStateOf(0L) }
+    BackHandler(enabled = true) {
+        if (backStack.size > 1) {
+            navigateBack()
+        } else {
+            val now = System.currentTimeMillis()
+            if (now - backPressedTime <= 2000) {
+                (context as? Activity)?.finish()
+            } else {
+                backPressedTime = now
+                Toast.makeText(context, "再滑一次退出应用", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     when (currentScreen) {
         is Screen.Dashboard -> {
             HomeScreen(
@@ -308,6 +325,7 @@ fun EncryptionHomeScreen(
     var importFolderUri by remember { mutableStateOf<String?>(null) }
     var importFolderName by remember { mutableStateOf("") }
     var importPassword by remember { mutableStateOf("") }
+    var encryptionError by remember { mutableStateOf<Throwable?>(null) }
 
     val folderPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -450,7 +468,7 @@ fun EncryptionHomeScreen(
                                 Toast.makeText(context, "导入成功", Toast.LENGTH_SHORT).show()
                                 showImportDialog = false
                             } catch (e: Exception) {
-                                Toast.makeText(context, "导入失败: ${e.message}", Toast.LENGTH_LONG).show()
+                                encryptionError = e
                             }
                         }) {
                             Text("验证并导入")
@@ -463,6 +481,8 @@ fun EncryptionHomeScreen(
                     }
                 )
             }
+
+            ErrorDialog(error = encryptionError, onDismiss = { encryptionError = null })
         }
     }
 }
@@ -486,6 +506,7 @@ fun VaultsListTab(
 
     var alsoDeleteFiles by remember { mutableStateOf(false) }
     var showWarningDialog by remember { mutableStateOf<Pair<VaultRecord, VaultConfig.VerifyResult>?>(null) }
+    var vaultListError by remember { mutableStateOf<Throwable?>(null) }
 
     fun openVault(vault: VaultRecord, pwd: String) {
         try {
@@ -495,7 +516,7 @@ fun VaultsListTab(
             }
             onNavigate(Screen.VaultOpen(session))
         } catch (e: Exception) {
-            Toast.makeText(context, "打开失败: ${e.message}", Toast.LENGTH_SHORT).show()
+            vaultListError = e
         }
     }
 
@@ -708,7 +729,7 @@ fun VaultsListTab(
                             vaultService.removeVault(vault.id, alsoDeleteFiles)
                             Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
                         } catch (e: Exception) {
-                            Toast.makeText(context, "删除失败: ${e.message}", Toast.LENGTH_LONG).show()
+                            vaultListError = e
                         }
                         activeVaultForDelete = null
                     },
@@ -724,6 +745,8 @@ fun VaultsListTab(
             }
         )
     }
+
+    ErrorDialog(error = vaultListError, onDismiss = { vaultListError = null })
 }
 
 @Composable

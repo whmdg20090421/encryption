@@ -102,7 +102,7 @@ fun VaultOpenScreen(
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "加载失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                    vaultOpenError = e
                     loading = false
                 }
             }
@@ -155,6 +155,8 @@ fun VaultOpenScreen(
     var moveOrCopySource by remember { mutableStateOf<File?>(null) }
     var moveOrCopyMode by remember { mutableStateOf<String?>(null) } // "MOVE" or "COPY"
     var moveOrCopyDisplayName by remember { mutableStateOf("") }
+
+    var vaultOpenError by remember { mutableStateOf<Throwable?>(null) }
 
     // ── SAF Multi-File Picker Launcher ──
     val fileLauncher = rememberLauncherForActivityResult(
@@ -219,7 +221,7 @@ fun VaultOpenScreen(
                     importDocumentTree(context, session, treeUri, relative)
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "导入文件夹失败: ${e.message}", Toast.LENGTH_LONG).show()
+                        vaultOpenError = e
                     }
                 }
 
@@ -264,7 +266,7 @@ fun VaultOpenScreen(
 
         // Prevent moving/copying into itself
         if (srcFile.isDirectory && destDir.absolutePath.startsWith(srcFile.absolutePath)) {
-            Toast.makeText(context, "无法将文件夹${if (mode == "MOVE") "移动" else "复制"}到自身内部", Toast.LENGTH_SHORT).show()
+            vaultOpenError = Exception("无法将文件夹${if (mode == "MOVE") "移动" else "复制"}到自身内部")
             return
         }
 
@@ -290,7 +292,7 @@ fun VaultOpenScreen(
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "操作失败: ${e.message}", Toast.LENGTH_LONG).show()
+                    vaultOpenError = e
                 }
             }
 
@@ -591,7 +593,7 @@ fun VaultOpenScreen(
                                     newFolderName = ""
                                     refresh()
                                 } catch (e: Exception) {
-                                    Toast.makeText(context, "创建失败: ${e.message}", Toast.LENGTH_LONG).show()
+                                    vaultOpenError = e
                                 }
                             }
                         }) {
@@ -744,9 +746,7 @@ fun VaultOpenScreen(
                                             refresh()
                                         }
                                     } catch (e: Exception) {
-                                        withContext(Dispatchers.Main) {
-                                            Toast.makeText(context, "重命名失败: ${e.message}", Toast.LENGTH_LONG).show()
-                                        }
+                                        withContext(Dispatchers.Main) { vaultOpenError = e }
                                     }
                                 }
                             }
@@ -795,9 +795,7 @@ fun VaultOpenScreen(
                                             refresh()
                                         }
                                     } catch (e: Exception) {
-                                        withContext(Dispatchers.Main) {
-                                            Toast.makeText(context, "删除失败: ${e.message}", Toast.LENGTH_LONG).show()
-                                        }
+                                        withContext(Dispatchers.Main) { vaultOpenError = e }
                                     }
                                 }
                             },
@@ -853,7 +851,7 @@ fun VaultOpenScreen(
                                 } catch (e: Exception) {
                                     withContext(Dispatchers.Main) {
                                         progressTitle = ""
-                                        Toast.makeText(context, "解密失败: ${e.message}", Toast.LENGTH_LONG).show()
+                                        vaultOpenError = e
                                     }
                                 }
                             }
@@ -868,6 +866,8 @@ fun VaultOpenScreen(
                     }
                 )
             }
+
+            ErrorDialog(error = vaultOpenError, onDismiss = { vaultOpenError = null })
         }
     }
 }
