@@ -16,8 +16,8 @@ android {
         applicationId = "com.whmdg.mczj.tools"
         minSdk = 24
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = (System.currentTimeMillis() / 1000).toInt()
+        versionName = "1.1_${java.text.SimpleDateFormat("HHmm", java.util.Locale.getDefault()).format(java.util.Date())}"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
