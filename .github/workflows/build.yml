@@ -72,15 +72,31 @@ jobs:
           echo "Using apksigner: $APKSIGNER"
           "$APKSIGNER" verify --verbose --print-certs "${{ steps.locate.outputs.apk_path }}" || true
 
-      - name: Rename APK with build timestamp
+      - name: Rename APK with dynamic version
         id: rename
         run: |
-          TIMESTAMP=$(date +"%Y%m%d-%H%M")
           ORIGINAL="${{ steps.locate.outputs.apk_path }}"
           DIR=$(dirname "$ORIGINAL")
-          NEW_NAME="工具箱-v1.2-${TIMESTAMP}-arm64-v8a-release.apk"
+
+          # Extract versionName directly from the APK manifest
+          BUILD_TOOLS_DIR=$(ls $ANDROID_HOME/build-tools | sort -V | tail -n 1)
+          AAPT2="$ANDROID_HOME/build-tools/$BUILD_TOOLS_DIR/aapt2"
+          FULL_VERSION=$("$AAPT2" dump badging "$ORIGINAL" 2>/dev/null \
+            | grep -o "versionName='[^']*'" | cut -d"'" -f2)
+
+          if [ -z "$FULL_VERSION" ]; then
+            echo "::warning::Could not extract versionName, falling back to 'unknown'"
+            FULL_VERSION="unknown"
+          fi
+
+          # Take only the major.minor part (e.g. "1.3.12345" → "1.3")
+          VERSION_MAJOR_MINOR=$(echo "$FULL_VERSION" | cut -d. -f1-2)
+
+          TIMESTAMP=$(date +"%Y%m%d-%H%M")
+          NEW_NAME="工具箱-v${VERSION_MAJOR_MINOR}-${TIMESTAMP}-arm64-v8a-release.apk"
           cp "$ORIGINAL" "${DIR}/${NEW_NAME}"
           echo "apk_path=${DIR}/${NEW_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION_MAJOR_MINOR} (full: ${FULL_VERSION})"
 
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4

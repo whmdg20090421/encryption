@@ -10,6 +10,10 @@ import android.widget.Toast
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -559,98 +563,104 @@ fun FileManagerScreen(onBack: () -> Unit) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            if (!hasStoragePermission) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        Icons.Default.Folder,
-                        contentDescription = null,
-                        modifier = Modifier.size(72.dp),
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Text("需要存储权限", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "文件管理器需要「管理所有文件」权限才能浏览设备文件。",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(24.dp))
-                    Button(onClick = {
-                        val intent = android.content.Intent(
-                            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION
-                        ).apply {
-                            data = android.net.Uri.parse("package:${context.packageName}")
+            Crossfade(targetState = hasStoragePermission) { granted ->
+                if (!granted) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Folder,
+                            contentDescription = null,
+                            modifier = Modifier.size(72.dp),
+                            tint = MaterialTheme.colorScheme.outline
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Text("需要存储权限", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "文件管理器需要「管理所有文件」权限才能浏览设备文件。",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(24.dp))
+                        Button(onClick = {
+                            val intent = android.content.Intent(
+                                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION
+                            ).apply {
+                                data = android.net.Uri.parse("package:${context.packageName}")
+                            }
+                            permissionLauncher.launch(intent)
+                        }) {
+                            Text("授予权限")
                         }
-                        permissionLauncher.launch(intent)
-                    }) {
-                        Text("授予权限")
                     }
-                }
-            } else {
-                Row(modifier = Modifier.fillMaxSize()) {
-                    FileBrowserPanel(
-                        entries = leftEntries,
-                        isFocused = focusedPanel == FocusedPanel.LEFT,
-                        onFocus = { focusedPanel = FocusedPanel.LEFT },
-                        onFolderClick = { entry ->
-                            DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
-                            DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$leftPath")
-                            focusedPanel = FocusedPanel.LEFT
-                            leftNavState = leftNavState.navigate(entry.path)
-                            leftPath = entry.path
-                        },
-                        onFileClick = { entry ->
-                            DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
-                            DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
-                            focusedPanel = FocusedPanel.LEFT
-                            openFile(context, entry)
-                        },
-                        onLongClick = { entry ->
-                            selectedEntry = entry
-                            focusedPanel = FocusedPanel.LEFT
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
+                } else {
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        FileBrowserPanel(
+                            entries = leftEntries,
+                            isFocused = focusedPanel == FocusedPanel.LEFT,
+                            onFocus = { focusedPanel = FocusedPanel.LEFT },
+                            onFolderClick = { entry ->
+                                DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
+                                DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$leftPath")
+                                focusedPanel = FocusedPanel.LEFT
+                                leftNavState = leftNavState.navigate(entry.path)
+                                leftPath = entry.path
+                            },
+                            onFileClick = { entry ->
+                                DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
+                                DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
+                                focusedPanel = FocusedPanel.LEFT
+                                openFile(context, entry)
+                            },
+                            onLongClick = { entry ->
+                                selectedEntry = entry
+                                focusedPanel = FocusedPanel.LEFT
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
 
-                    VerticalDivider(
-                        modifier = Modifier.fillMaxHeight(),
-                        thickness = 1.dp
-                    )
+                        VerticalDivider(
+                            modifier = Modifier.fillMaxHeight(),
+                            thickness = 1.dp
+                        )
 
-                    FileBrowserPanel(
-                        entries = rightEntries,
-                        isFocused = focusedPanel == FocusedPanel.RIGHT,
-                        onFocus = { focusedPanel = FocusedPanel.RIGHT },
-                        onFolderClick = { entry ->
-                            DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
-                            DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$rightPath")
-                            focusedPanel = FocusedPanel.RIGHT
-                            rightNavState = rightNavState.navigate(entry.path)
-                            rightPath = entry.path
-                        },
-                        onFileClick = { entry ->
-                            DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
-                            DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
-                            focusedPanel = FocusedPanel.RIGHT
-                            openFile(context, entry)
-                        },
-                        onLongClick = { entry ->
-                            selectedEntry = entry
-                            focusedPanel = FocusedPanel.RIGHT
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
+                        FileBrowserPanel(
+                            entries = rightEntries,
+                            isFocused = focusedPanel == FocusedPanel.RIGHT,
+                            onFocus = { focusedPanel = FocusedPanel.RIGHT },
+                            onFolderClick = { entry ->
+                                DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
+                                DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$rightPath")
+                                focusedPanel = FocusedPanel.RIGHT
+                                rightNavState = rightNavState.navigate(entry.path)
+                                rightPath = entry.path
+                            },
+                            onFileClick = { entry ->
+                                DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
+                                DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
+                                focusedPanel = FocusedPanel.RIGHT
+                                openFile(context, entry)
+                            },
+                            onLongClick = { entry ->
+                                selectedEntry = entry
+                                focusedPanel = FocusedPanel.RIGHT
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
 
-            // ── 长按工具栏悬浮窗 ──
-            if (selectedEntry != null) {
+            // ── 长按工具栏悬浮窗（带淡入淡出） ──
+            AnimatedVisibility(
+                visible = selectedEntry != null,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
                 val isToRight = focusedPanel == FocusedPanel.LEFT
 
                 Box(

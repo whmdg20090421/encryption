@@ -6,6 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -340,36 +345,42 @@ fun SpecialPermissionsScreen(onBack: () -> Unit) {
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // 非必要时不使用权限开关
-            if (activeType != PermissionType.NORMAL) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "非必要时不使用权限",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "开启时，优先以普通APP沙盒运行。仅在发生权限不足报错时，自动临时提权至所选的权限重新执行操作。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+            // 非必要时不使用权限开关（带展开动画）
+            AnimatedVisibility(
+                visible = activeType != PermissionType.NORMAL,
+                enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
+            ) {
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "非必要时不使用权限",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "开启时，优先以普通APP沙盒运行。仅在发生权限不足报错时，自动临时提权至所选的权限重新执行操作。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = useOnlyWhenNecessary,
+                            onCheckedChange = { checked ->
+                                useOnlyWhenNecessary = checked
+                                sp.edit().putBoolean("use_only_when_necessary", checked).apply()
+                            }
                         )
                     }
-                    Switch(
-                        checked = useOnlyWhenNecessary,
-                        onCheckedChange = { checked ->
-                            useOnlyWhenNecessary = checked
-                            sp.edit().putBoolean("use_only_when_necessary", checked).apply()
-                        }
-                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
-                Spacer(modifier = Modifier.height(8.dp))
             }
 
             // 校验 / 应用 操作按钮

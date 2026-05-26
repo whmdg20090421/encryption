@@ -1165,10 +1165,12 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
                 } else {
                     Toast.makeText(context, "保存图片失败", Toast.LENGTH_SHORT).show()
                 }
+                pendingBitmap?.recycle()
                 showCropDialog = false
                 pendingBitmap = null
             },
             onCancel = {
+                pendingBitmap?.recycle()
                 showCropDialog = false
                 pendingBitmap = null
             }
@@ -1303,8 +1305,9 @@ private fun processPickedImage(
         val imageRatio = bitmap.width.toFloat() / bitmap.height
 
         if (abs(imageRatio - screenRatio) > 0.05f) {
-            // 比例不匹配，需要裁剪
+            // 比例不匹配，需要裁剪——bitmap 交由裁剪流程管理，此处不再回收
             onNeedCrop(bitmap)
+            return
         } else {
             // 比例匹配，直接缩放保存
             val resized = Bitmap.createScaledBitmap(bitmap, screenWidthPx, screenHeightPx, true)
