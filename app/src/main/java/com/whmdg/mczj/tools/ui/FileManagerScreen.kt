@@ -20,10 +20,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import java.io.File
 
@@ -74,12 +78,20 @@ fun FileManagerScreen(onBack: () -> Unit) {
         mutableStateOf(Environment.isExternalStorageManager())
     }
 
-    // 引擎选择：Root or POSIX
-    val sp = remember { context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE) }
-    val permissionLevel = sp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+    // 引擎选择：Root or POSIX（security_prefs 管理，跨模块共享）
+    val secPrefs = remember { context.getSharedPreferences("security_prefs", Context.MODE_PRIVATE) }
+    // 向下兼容：旧版数据在 special_permissions 里，迁移过来
+    val legacySp = remember { context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE) }
+    val permissionLevel = remember {
+        secPrefs.getString("target_permission_level", null)
+            ?: legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+    }
     val isRootEngine = remember {
         permissionLevel == "ROOT" && SpecialPermissionVerifier.isRootAvailable()
     }
+
+    // 文件管理器专用设置（同一个界面的设置存在同一个 XML）
+    val fmPrefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE) }
 
     // 安全默认目录
     val safeDefault = "/storage/emulated/0"
@@ -92,12 +104,20 @@ fun FileManagerScreen(onBack: () -> Unit) {
         return saved
     }
 
-    // 左右主目录（默认用户级目录，后续可在设置中分别更改）
+    // 左右主目录 — 从 file_manager_prefs 读取，向下兼容旧版 special_permissions
     val leftHomeDirectory = remember {
-        resolveHome(sp.getString("left_home_directory", safeDefault) ?: safeDefault)
+        resolveHome(
+            fmPrefs.getString("left_home_directory", null)
+                ?: legacySp.getString("left_home_directory", safeDefault)
+                ?: safeDefault
+        )
     }
     val rightHomeDirectory = remember {
-        resolveHome(sp.getString("right_home_directory", safeDefault) ?: safeDefault)
+        resolveHome(
+            fmPrefs.getString("right_home_directory", null)
+                ?: legacySp.getString("right_home_directory", safeDefault)
+                ?: safeDefault
+        )
     }
 
     var leftPath by remember { mutableStateOf(leftHomeDirectory) }
@@ -107,7 +127,9 @@ fun FileManagerScreen(onBack: () -> Unit) {
     var leftNavState by remember { mutableStateOf(PanelNavState(paths = listOf(leftHomeDirectory), index = 0)) }
     var rightNavState by remember { mutableStateOf(PanelNavState(paths = listOf(rightHomeDirectory), index = 0)) }
     var focusedPanel by remember { mutableStateOf(FocusedPanel.LEFT) }
-    var showHiddenFiles by remember { mutableStateOf(false) }
+    var showHiddenFiles by remember {
+        mutableStateOf(fmPrefs.getBoolean("show_hidden_files", false))
+    }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<Throwable?>(null) }
     var showCreateTypeDialog by remember { mutableStateOf(false) }
@@ -351,6 +373,20 @@ fun FileManagerScreen(onBack: () -> Unit) {
         if (!hasStoragePermission) {
             Toast.makeText(context, "需要存储权限才能浏览文件", Toast.LENGTH_LONG).show()
         }
+
+        // ── 一次性旧数据迁移 ──
+        if (legacySp.contains("show_hidden_files") && !fmPrefs.contains("show_hidden_files")) {
+            fmPrefs.edit().putBoolean("show_hidden_files", legacySp.getBoolean("show_hidden_files", false)).apply()
+        }
+        if (legacySp.contains("left_home_directory") && !fmPrefs.contains("left_home_directory")) {
+            fmPrefs.edit().putString("left_home_directory", legacySp.getString("left_home_directory", null)).apply()
+        }
+        if (legacySp.contains("right_home_directory") && !fmPrefs.contains("right_home_directory")) {
+            fmPrefs.edit().putString("right_home_directory", legacySp.getString("right_home_directory", null)).apply()
+        }
+        if (legacySp.contains("target_permission_level") && !secPrefs.contains("target_permission_level")) {
+            secPrefs.edit().putString("target_permission_level", legacySp.getString("target_permission_level", null)).apply()
+        }
     }
 
     val currentPath = when (focusedPanel) {
@@ -390,6 +426,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                 },
                                 onClick = {
                                     showHiddenFiles = !showHiddenFiles
+                                    fmPrefs.edit().putBoolean("show_hidden_files", showHiddenFiles).apply()
                                     showSettingsMenu = false
                                 }
                             )
@@ -723,6 +760,16 @@ private fun FileBrowserPanel(
         modifier = modifier
             .fillMaxHeight()
             .clickable(onClick = onFocus)
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.type == PointerEventType.Press) {
+                            onFocus()
+                        }
+                    }
+                }
+            }
     ) {
         if (entries.isEmpty()) {
             Box(
