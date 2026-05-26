@@ -408,7 +408,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Start
+                    horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
                     // 后退按钮（约 1/6 宽度）
                     Box(
@@ -495,7 +495,15 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             Icon(Icons.Default.SwapHoriz, contentDescription = "同步路径")
                         }
                     }
-                    Spacer(Modifier.weight(1f))
+                    // 右侧预留 2 个图标位（各 1/6 = 共 1/3）
+                    Box(
+                        modifier = Modifier.fillMaxWidth(1f / 6f),
+                        contentAlignment = Alignment.Center
+                    ) { /* 预留 */ }
+                    Box(
+                        modifier = Modifier.fillMaxWidth(1f / 6f),
+                        contentAlignment = Alignment.Center
+                    ) { /* 预留 */ }
                 }
             }
         }
