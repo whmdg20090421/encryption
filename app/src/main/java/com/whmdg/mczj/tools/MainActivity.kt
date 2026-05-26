@@ -5,6 +5,13 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
+import com.whmdg.mczj.tools.ui.theme.LocalOnToggleTheme
 import com.whmdg.mczj.tools.ui.theme.工具箱Theme
 import com.whmdg.mczj.tools.ui.MainAppContainer
 import com.whmdg.mczj.tools.util.DiagnosticLog
@@ -50,8 +57,22 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         setContent {
-            工具箱Theme {
-                MainAppContainer()
+            val themePrefs = remember { getSharedPreferences("theme_prefs", MODE_PRIVATE) }
+            var isDarkMode by remember { mutableStateOf(themePrefs.getBoolean("is_dark_mode", true)) }
+            val onToggleTheme: (Boolean) -> Unit = remember {
+                { value ->
+                    themePrefs.edit().putBoolean("is_dark_mode", value).apply()
+                    isDarkMode = value
+                }
+            }
+
+            CompositionLocalProvider(
+                LocalIsDarkMode provides isDarkMode,
+                LocalOnToggleTheme provides onToggleTheme
+            ) {
+                工具箱Theme(darkTheme = isDarkMode) {
+                    MainAppContainer()
+                }
             }
         }
     }
