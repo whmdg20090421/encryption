@@ -49,13 +49,6 @@ object AppDataPaths {
         return dir
     }
 
-    /** 主题模块目录（自定义背景图等） */
-    fun theme(context: Context): File {
-        val dir = File(root(context), "主题")
-        if (!dir.exists()) dir.mkdirs()
-        return dir
-    }
-
     // ── SharedPreferences 名称常量 ──
 
     /** 文件管理器 SharedPreferences（同一个界面的设置存在同一个 XML） */

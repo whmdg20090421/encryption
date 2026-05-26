@@ -3,14 +3,12 @@ package com.whmdg.mczj.tools.ui
 import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -40,24 +38,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.encryption.data.StorageLocation
 import com.whmdg.mczj.tools.encryption.data.VaultConfig
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.encryption.services.VaultService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
-import com.whmdg.mczj.tools.ui.theme.LocalBgImageAlpha
-import com.whmdg.mczj.tools.ui.theme.LocalBgImagePath
-import com.whmdg.mczj.tools.ui.theme.LocalBgUiAlpha
-import com.whmdg.mczj.tools.ui.theme.LocalBgFillMode
-import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgFillMode
-import com.whmdg.mczj.tools.ui.theme.LocalCustomBgEnabled
-import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgImage
-import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgImageAlpha
-import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgUiAlpha
 import com.whmdg.mczj.tools.ui.theme.LocalOnSetCustomBg
-import java.io.File
-import java.io.FileOutputStream
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.animation.AnimatedVisibility
@@ -77,7 +63,6 @@ sealed class Screen {
     object PermissionSettings : Screen()
     object SpecialPermissions : Screen()
     object FileManager : Screen()
-    object ThemeSettings : Screen()
     object EncryptionHome : Screen()
     object VaultCreate : Screen()
     data class VaultOpen(val session: VaultSession) : Screen()
@@ -190,11 +175,6 @@ fun MainAppContainer() {
             SecurityScreen(
                 onBack = { navigateBack() },
                 onNavigate = { navigateTo(it) }
-            )
-        }
-        is Screen.ThemeSettings -> {
-            ThemeSettingsScreen(
-                onBack = { navigateBack() }
             )
         }
         is Screen.PermissionSettings -> {
@@ -945,256 +925,12 @@ fun SettingsTab(onNavigate: (Screen) -> Unit) {
     ) {
         item {
             ListItem(
-                headlineContent = { Text("主题") },
-                leadingContent = { Icon(Icons.Default.DarkMode, contentDescription = "主题") },
-                trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "进入") },
-                modifier = Modifier.clickable { onNavigate(Screen.ThemeSettings) }
-            )
-        }
-        item {
-            ListItem(
                 headlineContent = { Text("安全") },
                 leadingContent = { Icon(Icons.Default.Lock, contentDescription = "安全") },
                 trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "进入") },
                 modifier = Modifier.clickable { onNavigate(Screen.Security) }
             )
         }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ThemeSettingsScreen(onBack: () -> Unit) {
-    val context = LocalContext.current
-    val isDarkMode = com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode.current
-    val onToggleTheme = com.whmdg.mczj.tools.ui.theme.LocalOnToggleTheme.current
-    val customBgEnabled = LocalCustomBgEnabled.current
-    val bgImagePath = LocalBgImagePath.current
-    val bgImageAlpha = LocalBgImageAlpha.current
-    val bgUiAlpha = LocalBgUiAlpha.current
-    val onSetCustomBg = LocalOnSetCustomBg.current
-    val onSetBgImage = LocalOnSetBgImage.current
-    val onSetBgImageAlpha = LocalOnSetBgImageAlpha.current
-    val onSetBgUiAlpha = LocalOnSetBgUiAlpha.current
-    val bgFillMode = LocalBgFillMode.current
-    val onSetBgFillMode = LocalOnSetBgFillMode.current
-
-    // 图片选择器
-    val imagePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let {
-            savePickedImage(context, it,
-                onSaved = { path -> onSetBgImage(path) },
-                onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_LONG).show() }
-            )
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("主题") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                }
-            )
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                // ── 第一行：白天/黑夜 ──
-                item {
-                    Text(
-                        text = "背景主题",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp)
-                    )
-                }
-                item {
-                    ListItem(
-                        headlineContent = { Text(if (isDarkMode) "黑夜" else "白天") },
-                        supportingContent = {
-                            Text(if (isDarkMode) "深色背景，浅色文字" else "浅色背景，深色文字")
-                        },
-                        leadingContent = {
-                            Icon(
-                                if (isDarkMode) Icons.Default.DarkMode else Icons.Default.LightMode,
-                                contentDescription = null
-                            )
-                        },
-                        trailingContent = {
-                            Switch(
-                                checked = isDarkMode,
-                                onCheckedChange = { onToggleTheme(it) }
-                            )
-                        }
-                    )
-                }
-
-                // ── 第二行：自定义背景 ──
-                item {
-                    Text(
-                        text = "自定义背景",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp)
-                    )
-                }
-                item {
-                    ListItem(
-                        headlineContent = { Text("自定义背景") },
-                        supportingContent = {
-                            Text(if (customBgEnabled) "已开启" else "关闭")
-                        },
-                        leadingContent = {
-                            Icon(
-                                Icons.Default.Wallpaper,
-                                contentDescription = null
-                            )
-                        },
-                        trailingContent = {
-                            Switch(
-                                checked = customBgEnabled,
-                                onCheckedChange = { onSetCustomBg(it) }
-                            )
-                        }
-                    )
-                }
-
-                // ── 自定义背景展开的设置（丝滑展开/收起） ──
-                item {
-                    AnimatedVisibility(
-                        visible = customBgEnabled,
-                        enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                        exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
-                    ) {
-                        Column {
-                            // 选择图片
-                            ListItem(
-                                headlineContent = { Text("选择图片") },
-                                supportingContent = {
-                                    Text(bgImagePath?.let { "已选择" } ?: "未选择图片")
-                                },
-                                leadingContent = {
-                                    Icon(Icons.Default.Image, contentDescription = null)
-                                },
-                                trailingContent = {
-                                    FilledTonalButton(onClick = { imagePicker.launch("image/*") }) {
-                                        Text("选择")
-                                    }
-                                }
-                            )
-                            // 图片透明度
-                            val alphaSliderValue = remember(bgImageAlpha) { mutableFloatStateOf(bgImageAlpha) }
-                            ListItem(
-                                headlineContent = { Text("图片透明度") },
-                                supportingContent = {
-                                    Text("${(alphaSliderValue.floatValue * 100).roundToInt()}%")
-                                },
-                                leadingContent = {
-                                    Icon(Icons.Default.Photo, contentDescription = null)
-                                }
-                            )
-                            Slider(
-                                value = alphaSliderValue.floatValue,
-                                onValueChange = { alphaSliderValue.floatValue = it },
-                                onValueChangeFinished = { onSetBgImageAlpha(alphaSliderValue.floatValue) },
-                                valueRange = 0f..1f,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp)
-                            )
-                            // UI 透明度
-                            val uiSliderValue = remember(bgUiAlpha) { mutableFloatStateOf(bgUiAlpha) }
-                            ListItem(
-                                headlineContent = { Text("UI 透明度") },
-                                supportingContent = {
-                                    Text("${(uiSliderValue.floatValue * 100).roundToInt()}%")
-                                },
-                                leadingContent = {
-                                    Icon(Icons.Default.ViewCompact, contentDescription = null)
-                                }
-                            )
-                            Slider(
-                                value = uiSliderValue.floatValue,
-                                onValueChange = { uiSliderValue.floatValue = it },
-                                onValueChangeFinished = { onSetBgUiAlpha(uiSliderValue.floatValue) },
-                                valueRange = 0f..1f,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp)
-                            )
-                            // 填充模式
-                            ListItem(
-                                headlineContent = { Text("填充模式") },
-                                supportingContent = {
-                                    Text(if (bgFillMode == "stretch") "拉伸：去除黑边，适配屏幕" else "普通：保留黑边")
-                                },
-                                leadingContent = {
-                                    Icon(Icons.Default.AspectRatio, contentDescription = null)
-                                },
-                                trailingContent = {
-                                    Switch(
-                                        checked = bgFillMode == "stretch",
-                                        onCheckedChange = { onSetBgFillMode(if (it) "stretch" else "normal") }
-                                    )
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-}
-
-// ── 直接保存选中图片（不做裁剪） ──
-private fun savePickedImage(
-    context: Context,
-    uri: Uri,
-    onSaved: (String) -> Unit,
-    onError: (String) -> Unit
-) {
-    try {
-        val inputStream = context.contentResolver.openInputStream(uri)
-            ?: return onError("无法读取图片")
-        val bitmap = BitmapFactory.decodeStream(inputStream)
-        inputStream.close()
-
-        if (bitmap == null) return onError("无法解码图片")
-
-        val savedPath = saveBitmapToInternal(context, bitmap)
-        if (savedPath != null) {
-            onSaved(savedPath)
-        } else {
-            onError("保存图片失败")
-        }
-        bitmap.recycle()
-    } catch (e: Exception) {
-        onError("处理图片出错: ${e.message}")
-    }
-}
-
-// ── 保存 Bitmap 到统一数据目录（与各模块同级，后续备份自动纳入） ──
-private fun saveBitmapToInternal(context: Context, bitmap: Bitmap): String? {
-    return try {
-        val dir = AppDataPaths.theme(context)
-        val file = File(dir, "background.jpg")
-        FileOutputStream(file).use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
-        }
-        file.absolutePath
-    } catch (e: Exception) {
-        null
     }
 }
 

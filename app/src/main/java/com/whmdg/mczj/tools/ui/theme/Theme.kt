@@ -26,17 +26,6 @@ private val LightColorScheme = lightColorScheme(
 val LocalIsDarkMode = compositionLocalOf { true }
 val LocalOnToggleTheme = compositionLocalOf<((Boolean) -> Unit)> { {} }
 
-val LocalCustomBgEnabled = compositionLocalOf { false }
-val LocalBgImagePath = compositionLocalOf<String?> { null }
-val LocalBgImageAlpha = compositionLocalOf { 1f }
-val LocalBgUiAlpha = compositionLocalOf { 1f }
-val LocalOnSetCustomBg = compositionLocalOf<(Boolean) -> Unit> { {} }
-val LocalOnSetBgImage = compositionLocalOf<(String?) -> Unit> { {} }
-val LocalOnSetBgImageAlpha = compositionLocalOf<(Float) -> Unit> { {} }
-val LocalOnSetBgUiAlpha = compositionLocalOf<(Float) -> Unit> { {} }
-val LocalBgFillMode = compositionLocalOf { "normal" }
-val LocalOnSetBgFillMode = compositionLocalOf<(String) -> Unit> { {} }
-
 private val dynamicColor = true
 
 @Composable
