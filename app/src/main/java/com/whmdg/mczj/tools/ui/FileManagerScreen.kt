@@ -139,6 +139,12 @@ fun FileManagerScreen(onBack: () -> Unit) {
     var showNameDialog by remember { mutableStateOf(false) }
     var createName by remember { mutableStateOf("") }
     var selectedEntry by remember { mutableStateOf<FileEntry?>(null) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var renameText by remember { mutableStateOf("") }
+    var recycleBinEnabled by remember {
+        mutableStateOf(fmPrefs.getBoolean("recycle_bin_enabled", false))
+    }
 
     // ── 普通引擎：File.listFiles（公开 API，无 hidden API 限制） ──
     fun listWithFile(path: String, showHidden: Boolean, effectiveRoot: String): List<FileEntry> {
@@ -605,7 +611,10 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             focusedPanel = FocusedPanel.LEFT
                             openFile(context, entry)
                         },
-                        onLongClick = { entry -> selectedEntry = entry },
+                        onLongClick = { entry ->
+                            selectedEntry = entry
+                            focusedPanel = FocusedPanel.LEFT
+                        },
                         modifier = Modifier.weight(1f)
                     )
 
@@ -631,7 +640,10 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             focusedPanel = FocusedPanel.RIGHT
                             openFile(context, entry)
                         },
-                        onLongClick = { entry -> selectedEntry = entry },
+                        onLongClick = { entry ->
+                            selectedEntry = entry
+                            focusedPanel = FocusedPanel.RIGHT
+                        },
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -639,6 +651,8 @@ fun FileManagerScreen(onBack: () -> Unit) {
 
             // ── 长按工具栏悬浮窗 ──
             if (selectedEntry != null) {
+                val isToRight = focusedPanel == FocusedPanel.LEFT
+
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -658,49 +672,271 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             containerColor = MaterialTheme.colorScheme.surface
                         )
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .wrapContentHeight(),
-                            verticalAlignment = Alignment.CenterVertically
+                                .wrapContentHeight()
                         ) {
-                            // 左列：复制
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable {
-                                        // TODO: 复制操作
-                                        selectedEntry = null
-                                    }
-                                    .padding(vertical = 16.dp),
-                                contentAlignment = Alignment.Center
+                            // ── 第一行：复制 / 移动 ──
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "复制",
-                                    style = MaterialTheme.typography.bodyLarge
+                                // 左列：复制
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            val entry = selectedEntry ?: return@clickable
+                                            val source = File(entry.path)
+                                            val destDir = File(
+                                                if (isToRight) rightPath else leftPath
+                                            )
+                                            val dest = File(destDir, entry.name)
+                                            try {
+                                                if (source.isDirectory) {
+                                                    source.copyRecursively(dest, overwrite = false)
+                                                } else {
+                                                    source.copyTo(dest, overwrite = false)
+                                                }
+                                                Toast.makeText(context, "复制成功", Toast.LENGTH_SHORT).show()
+                                                leftEntries = listDirectory(leftPath)
+                                                rightEntries = listDirectory(rightPath)
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "复制失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            }
+                                            selectedEntry = null
+                                        }
+                                        .padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isToRight) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("复制", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(
+                                                Icons.Default.ArrowForward,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    } else {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.ArrowBack,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text("复制", style = MaterialTheme.typography.bodyLarge)
+                                        }
+                                    }
+                                }
+                                // 极淡的分割线
+                                VerticalDivider(
+                                    modifier = Modifier.height(24.dp),
+                                    thickness = 0.5.dp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
                                 )
+                                // 右列：移动
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            val entry = selectedEntry ?: return@clickable
+                                            val source = File(entry.path)
+                                            val destDir = File(
+                                                if (isToRight) rightPath else leftPath
+                                            )
+                                            val dest = File(destDir, entry.name)
+                                            try {
+                                                val moved = source.renameTo(dest)
+                                                if (!moved) {
+                                                    if (source.isDirectory) {
+                                                        source.copyRecursively(dest, overwrite = false)
+                                                        source.deleteRecursively()
+                                                    } else {
+                                                        source.copyTo(dest, overwrite = false)
+                                                        source.delete()
+                                                    }
+                                                }
+                                                Toast.makeText(context, "移动成功", Toast.LENGTH_SHORT).show()
+                                                leftEntries = listDirectory(leftPath)
+                                                rightEntries = listDirectory(rightPath)
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "移动失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            }
+                                            selectedEntry = null
+                                        }
+                                        .padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isToRight) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("移动", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(
+                                                Icons.Default.ArrowForward,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    } else {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.ArrowBack,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text("移动", style = MaterialTheme.typography.bodyLarge)
+                                        }
+                                    }
+                                }
                             }
-                            // 极淡的分割线
-                            VerticalDivider(
-                                modifier = Modifier.height(24.dp),
-                                thickness = 0.5.dp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-                            )
-                            // 右列：移动
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clickable {
-                                        // TODO: 移动操作
-                                        selectedEntry = null
-                                    }
-                                    .padding(vertical = 16.dp),
-                                contentAlignment = Alignment.Center
+                            // ── 第二行：重命名 / 删除 ──
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "移动",
-                                    style = MaterialTheme.typography.bodyLarge
+                                // 左列：重命名
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            val entry = selectedEntry ?: return@clickable
+                                            renameText = entry.name
+                                            showRenameDialog = true
+                                        }
+                                        .padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isToRight) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("重命名", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(
+                                                Icons.Default.Edit,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    } else {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.Edit,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text("重命名", style = MaterialTheme.typography.bodyLarge)
+                                        }
+                                    }
+                                }
+                                // 极淡的分割线
+                                VerticalDivider(
+                                    modifier = Modifier.height(24.dp),
+                                    thickness = 0.5.dp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
                                 )
+                                // 右列：删除
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            selectedEntry?.let { showDeleteDialog = true }
+                                        }
+                                        .padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isToRight) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("删除", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    } else {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text("删除", style = MaterialTheme.typography.bodyLarge)
+                                        }
+                                    }
+                                }
+                            }
+                            // ── 第三行：属性 / 分享 ──
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // 左列：属性
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            Toast.makeText(context, "属性", Toast.LENGTH_SHORT).show()
+                                            selectedEntry = null
+                                        }
+                                        .padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isToRight) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("属性", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(
+                                                Icons.Default.Info,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    } else {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.Info,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text("属性", style = MaterialTheme.typography.bodyLarge)
+                                        }
+                                    }
+                                }
+                                // 极淡的分割线
+                                VerticalDivider(
+                                    modifier = Modifier.height(24.dp),
+                                    thickness = 0.5.dp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                                )
+                                // 右列：分享
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            Toast.makeText(context, "分享", Toast.LENGTH_SHORT).show()
+                                            selectedEntry = null
+                                        }
+                                        .padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isToRight) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("分享", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(
+                                                Icons.Default.Share,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    } else {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.Share,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text("分享", style = MaterialTheme.typography.bodyLarge)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -815,6 +1051,124 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     showNameDialog = false
                     createName = ""
                 }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── 重命名对话框 ──
+    if (showRenameDialog && selectedEntry != null) {
+        AlertDialog(
+            onDismissRequest = {
+                showRenameDialog = false
+                renameText = ""
+            },
+            title = { Text("重命名") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            modifier = Modifier.heightIn(max = 200.dp),
+            confirmButton = {
+                TextButton(onClick = {
+                    val entry = selectedEntry ?: return@TextButton
+                    val newName = renameText.trim()
+                    if (newName.isBlank() || newName == entry.name) {
+                        showRenameDialog = false
+                        renameText = ""
+                        return@TextButton
+                    }
+                    val source = File(entry.path)
+                    val parent = source.parentFile ?: return@TextButton
+                    val dest = File(parent, newName)
+                    if (dest.exists()) {
+                        Toast.makeText(context, "已存在同名文件或文件夹", Toast.LENGTH_SHORT).show()
+                        return@TextButton
+                    }
+                    try {
+                        val success = source.renameTo(dest)
+                        if (success) {
+                            Toast.makeText(context, "重命名成功", Toast.LENGTH_SHORT).show()
+                            leftEntries = listDirectory(leftPath)
+                            rightEntries = listDirectory(rightPath)
+                        } else {
+                            Toast.makeText(context, "重命名失败", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "重命名失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                    showRenameDialog = false
+                    renameText = ""
+                    selectedEntry = null
+                }) {
+                    Text("确认")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showRenameDialog = false
+                    renameText = ""
+                }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── 删除确认对话框 ──
+    if (showDeleteDialog && selectedEntry != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("删除") },
+            text = {
+                Column {
+                    Text("确定要删除「${selectedEntry!!.name}」吗？")
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(start = 4.dp)
+                    ) {
+                        Checkbox(
+                            checked = recycleBinEnabled,
+                            onCheckedChange = null,
+                            enabled = false,
+                            colors = CheckboxDefaults.colors(
+                                disabledCheckmarkColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                                disabledBoxColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                            )
+                        )
+                        Text(
+                            "移动到回收站",
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val entry = selectedEntry ?: return@TextButton
+                    val file = File(entry.path)
+                    try {
+                        if (file.isDirectory) file.deleteRecursively() else file.delete()
+                        Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
+                        leftEntries = listDirectory(leftPath)
+                        rightEntries = listDirectory(rightPath)
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "删除失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                    showDeleteDialog = false
+                    selectedEntry = null
+                }) {
+                    Text("确定")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
                     Text("取消")
                 }
             }
