@@ -200,6 +200,40 @@ object SpecialPermissionVerifier {
     }
 
     /**
+     * 以普通 app 权限执行 shell 命令，并行读取 stdout 和 stderr，不抛错。
+     * 返回 (stdout, stderr, exitCode)。app 进程 SELinux 域允许 exec /system/bin/sh。
+     */
+    fun executeShellCommandFull(command: String): Triple<String, String, Int> {
+        val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
+        val stdoutBuf = StringBuilder()
+        val stderrBuf = StringBuilder()
+        val tOut = Thread {
+            try {
+                process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                    lines.forEach { stdoutBuf.appendLine(it) }
+                }
+            } catch (_: Exception) {}
+        }.apply { start() }
+        val tErr = Thread {
+            try {
+                process.errorStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                    lines.forEach { stderrBuf.appendLine(it) }
+                }
+            } catch (_: Exception) {}
+        }.apply { start() }
+
+        process.waitFor()
+        tOut.join(2000)
+        tErr.join(2000)
+
+        return Triple(
+            stdoutBuf.toString().trimEnd(),
+            stderrBuf.toString().trimEnd(),
+            process.exitValue()
+        )
+    }
+
+    /**
      * 以 Root 权限执行 shell 命令，并行读取 stdout 和 stderr，不抛错。
      * 返回 (stdout, stderr, exitCode)
      */

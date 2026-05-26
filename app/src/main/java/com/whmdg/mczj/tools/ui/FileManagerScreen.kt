@@ -61,21 +61,6 @@ fun FileManagerScreen(onBack: () -> Unit) {
         permissionLevel == "ROOT" && SpecialPermissionVerifier.isRootAvailable()
     }
 
-    // 计算可导航的父目录。返回 null 表示当前路径不应显示 ".."。
-    // 用户存储的逻辑根是 /storage/emulated/N，更上层（/storage/emulated、/storage）是 FUSE
-    // 中间虚拟目录，app 进程访问行为不稳定（canRead 时真时假），且就算进去也读不到内容。
-    fun computeNavigableParent(normalizedPath: String): String? {
-        if (normalizedPath == "/") return null
-        if (!normalizedPath.contains('/')) return null
-        // 用户存储逻辑根：不允许往上走
-        if (Regex("^/storage/emulated/\\d+$").matches(normalizedPath)) return null
-        val parent = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
-        if (parent == normalizedPath) return null
-        // 父目录指向 FUSE 中间虚拟目录：不允许
-        if (parent == "/storage/emulated" || parent == "/storage") return null
-        return parent
-    }
-
     // ── 普通引擎：File.listFiles（公开 API，无 hidden API 限制） ──
     fun listWithFile(path: String, showHidden: Boolean): List<FileEntry> {
         DiagnosticLog.log("FileEngine", "listFiles($path) showHidden=$showHidden")
@@ -125,16 +110,19 @@ fun FileManagerScreen(onBack: () -> Unit) {
         }
         DiagnosticLog.log("FileEngine", "统计: dirs=$dirCount, files=$fileCount, hidden 过滤=$skipHidden")
 
-        // 添加 ".." 父目录（用统一规则，避免 canRead 在 FUSE 边界返回不稳定）
-        val parentPath = computeNavigableParent(normalizedPath)
-        if (parentPath != null) {
-            val parentAccessible = try {
-                File(parentPath).canRead()
-            } catch (_: Exception) { false }
-            if (parentAccessible) {
-                entries.add(0, FileEntry(parentPath, "..", true))
-            } else {
-                DiagnosticLog.log("FileEngine", "父目录可访问性返回 false: $parentPath")
+        // 添加 ".." 父目录（仅当不是根且父目录可访问）
+        if (normalizedPath != "/" && normalizedPath.contains('/')) {
+            val parentPath = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
+            if (parentPath != normalizedPath) {
+                val parentFile = File(parentPath)
+                val parentAccessible = try {
+                    parentFile.canRead()
+                } catch (_: Exception) { false }
+                if (parentAccessible) {
+                    entries.add(0, FileEntry(parentPath, "..", true))
+                } else {
+                    DiagnosticLog.log("FileEngine", "父目录不可读: $parentPath")
+                }
             }
         }
 
@@ -145,20 +133,21 @@ fun FileManagerScreen(onBack: () -> Unit) {
         return entries
     }
 
-    // ── Root 引擎：su -c 'ls -1Ap' ──
-    // 使用 -p 让 ls 给目录加 '/' 后缀直接标记类型，不再用易出错的 pipe-while
-    fun listWithRoot(path: String, showHidden: Boolean): List<FileEntry> {
+    // ── ls 引擎：统一用 `ls -1Ap`，区别只是要不要 su ──
+    // useRoot=true → `su -c 'ls -1Ap …'`；false → 直接 `sh -c 'ls -1Ap …'`
+    // -1 单列, -A 显示隐藏但不含 . 和 .., -p 给目录加 '/' 后缀（无需另起 stat）
+    fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean): List<FileEntry> {
         val entries = mutableListOf<FileEntry>()
-        val normalizedPath = if (path == "/") "/" else path.trimEnd('/')
-        val pathForShell = if (normalizedPath.isEmpty()) "/" else normalizedPath
-        val escapedPath = pathForShell.replace("'", "'\\''")
-
-        // -1 单列, -A 显示隐藏但不含 . 和 .., -p 目录加 '/' 后缀
-        val command = "ls -1Ap '$escapedPath'"
-        DiagnosticLog.log("RootEngine", "su 命令: $command")
+        val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
+        val escapedPath = normalizedPath.replace("'", "'\\''")
+        val flags = if (showHidden) "-1Ap" else "-1p"
+        val command = "ls $flags '$escapedPath'"
+        val tag = if (useRoot) "LsRoot" else "LsShell"
+        DiagnosticLog.log(tag, "命令: $command")
 
         val (stdout, stderr, exitCode) = try {
-            SpecialPermissionVerifier.executeRootCommandFull(command)
+            if (useRoot) SpecialPermissionVerifier.executeRootCommandFull(command)
+            else SpecialPermissionVerifier.executeShellCommandFull(command)
         } catch (e: Throwable) {
             // 精确识别注入到我们进程的 ApkAssets hook 噪声（来自 Magisk/Zygisk/LSPosed 模块）
             val isApkAssetsNoise = e is java.io.IOException && (
@@ -167,22 +156,18 @@ fun FileManagerScreen(onBack: () -> Unit) {
                         (e.message?.contains(".apk from fd") == true)
             )
             if (isApkAssetsNoise) {
-                DiagnosticLog.log("RootEngine", "忽略 hook 注入的 ApkAssets 噪声: ${e.message}")
-                // 返回空但不设 loadError，让上层路由决定下一步
+                DiagnosticLog.log(tag, "忽略 hook 注入的 ApkAssets 噪声: ${e.message}")
                 return emptyList()
             }
-            DiagnosticLog.log("RootEngine", "executeRootCommandFull 抛错: ${e.javaClass.simpleName}: ${e.message}")
+            DiagnosticLog.log(tag, "execute 抛错: ${e.javaClass.simpleName}: ${e.message}")
             loadError = if (e is Exception) e else RuntimeException(e)
             return emptyList()
         }
-        DiagnosticLog.log("RootEngine", "exit=$exitCode stdout=${stdout.length}字符 stderr=${stderr.length}字符")
-        if (stderr.isNotBlank()) {
-            DiagnosticLog.log("RootEngine", "stderr 内容: ${stderr.take(500)}")
-        }
-        DiagnosticLog.log("RootEngine", "stdout 前 500 字符: ${stdout.take(500)}")
+        DiagnosticLog.log(tag, "exit=$exitCode stdout=${stdout.length}字符 stderr=${stderr.length}字符")
+        if (stderr.isNotBlank()) DiagnosticLog.log(tag, "stderr: ${stderr.take(500)}")
+        if (stdout.isNotBlank()) DiagnosticLog.log(tag, "stdout 前 500: ${stdout.take(500)}")
 
         if (exitCode != 0 && stdout.isBlank()) {
-            // 非零退出且无输出 → 真正失败
             loadError = SecurityException("ls 失败 (exit $exitCode): ${stderr.ifBlank { "(无 stderr)" }}")
             return emptyList()
         }
@@ -199,12 +184,14 @@ fun FileManagerScreen(onBack: () -> Unit) {
             val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
             entries.add(FileEntry(childPath, name, isDir))
         }
-        DiagnosticLog.log("RootEngine", "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
+        DiagnosticLog.log(tag, "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
 
-        // 父目录（统一规则）
-        val parentPath = computeNavigableParent(normalizedPath)
-        if (parentPath != null) {
-            entries.add(0, FileEntry(parentPath, "..", true))
+        // ".." 父目录：只要不是根 "/" 都显示
+        if (normalizedPath != "/" && normalizedPath.contains('/')) {
+            val parentPath = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
+            if (parentPath != normalizedPath) {
+                entries.add(0, FileEntry(parentPath, "..", true))
+            }
         }
 
         entries.sortWith(
@@ -214,79 +201,27 @@ fun FileManagerScreen(onBack: () -> Unit) {
         return entries
     }
 
-    // ── 路径分类辅助 ──
-    // 用户存储路径：永远用 File API（app 有 MANAGE_EXTERNAL_STORAGE，能看到完整 FUSE 视图；
-    //              而 su 进程在自己的 mount namespace 里看不到这些 FUSE 挂载）
-    fun isUserStoragePath(path: String): Boolean {
-        val p = path.trimStart()
-        return p.startsWith("/storage/") ||
-                p.startsWith("/sdcard") ||
-                p.startsWith("/mnt/sdcard") ||
-                p.startsWith("/mnt/user/") ||
-                p.startsWith("/mnt/runtime/")
-    }
-
-    // FUSE 重映射：/storage/emulated/N/X → /data/media/N/X
-    // 仅用于"用户存储 + File API 拒绝 + 有 root"的角落兜底（如别人 app 的 Android/data/<pkg>/）
-    fun toPhysicalRootPath(virtualPath: String): String? {
-        val m = Regex("^/storage/emulated/(\\d+)(/.*)?$").find(virtualPath) ?: return null
-        val userId = m.groupValues[1]
-        val rest = m.groupValues[2]
-        return "/data/media/$userId$rest"
-    }
-
-    // ── 统一入口（路径分类路由） ──
-    // - 用户存储：永远 File API；仅当 File 拒绝且有 root，才做 FUSE 重映射兜底
-    // - 系统区路径：先 File，失败再 root（这是 root 真正发挥的地方）
+    // ── 统一入口 ──
+    // - 有 root → `su -c ls`
+    // - 无 root → `sh -c ls`
+    // - ls 完全失败时，最后兜底 File.listFiles
     fun listDirectory(path: String): List<FileEntry> {
-        val isUserStorage = isUserStoragePath(path)
-        DiagnosticLog.log("FileMgr", ">>> listDirectory START path=$path 用户存储=$isUserStorage rootAllowed=$isRootEngine")
+        DiagnosticLog.log("FileMgr", ">>> listDirectory START path=$path useRoot=$isRootEngine")
         loadError = null
         val t0 = System.currentTimeMillis()
 
-        val entries: List<FileEntry>
-        if (isUserStorage) {
-            // 用户存储：File API 主路径
+        var entries = listWithLs(path, showHiddenFiles, useRoot = isRootEngine)
+
+        // 兜底：ls 完全没结果且报错 → 退到 File.listFiles
+        if (entries.isEmpty() && loadError != null) {
+            DiagnosticLog.log("FileMgr", "ls 失败，回退 File API")
+            val prevErr = loadError
+            loadError = null
             val fileEntries = listWithFile(path, showHiddenFiles)
-            entries = if (fileEntries.isEmpty() && loadError != null && isRootEngine) {
-                // File 拒绝 + root 可用 → FUSE 重映射兜底
-                val physical = toPhysicalRootPath(path)
-                if (physical != null) {
-                    DiagnosticLog.log("FileMgr", "用户存储 File 拒绝，FUSE 重映射兜底: $path → $physical")
-                    val prevErr = loadError
-                    loadError = null
-                    val rootEntries = listWithRoot(physical, showHiddenFiles)
-                    if (rootEntries.isNotEmpty()) {
-                        // 把 root 看到的 /data/media/N/... 重新展示为虚拟路径 /storage/emulated/N/...
-                        // ".." 也要一起映射，否则用户点回去看到的是物理路径
-                        rootEntries.map { e ->
-                            FileEntry(
-                                path = e.path.replace(Regex("^/data/media/(\\d+)"), "/storage/emulated/$1"),
-                                name = e.name,
-                                isDirectory = e.isDirectory
-                            )
-                        }
-                    } else {
-                        if (loadError == null) loadError = prevErr
-                        emptyList()
-                    }
-                } else {
-                    fileEntries
-                }
-            } else {
-                fileEntries
-            }
-        } else {
-            // 系统区：File 先试
-            val fileEntries = listWithFile(path, showHiddenFiles)
-            entries = if (fileEntries.isNotEmpty()) {
-                fileEntries
-            } else if (loadError != null && isRootEngine) {
-                DiagnosticLog.log("FileMgr", "系统路径 File 失败，root 兜底")
-                loadError = null
-                listWithRoot(path, showHiddenFiles)
-            } else {
-                fileEntries
+            if (fileEntries.isNotEmpty()) {
+                entries = fileEntries
+            } else if (loadError == null) {
+                loadError = prevErr
             }
         }
 
