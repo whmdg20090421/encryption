@@ -1,5 +1,3 @@
-import java.util.Calendar
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -18,10 +16,9 @@ android {
         applicationId = "com.whmdg.mczj.tools"
         minSdk = 24
         targetSdk = 36
-        versionCode = (System.currentTimeMillis() / 1000).toInt()
-        versionName = "1.2_%02d%02d".format(
-            Calendar.getInstance().get(Calendar.HOUR_OF_DAY),
-            Calendar.getInstance().get(Calendar.MINUTE))
+        val ts = System.currentTimeMillis() / 1000
+        versionCode = (1200000000L + ts % 100000000).toInt()
+        versionName = "1.3.%d".format(ts)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

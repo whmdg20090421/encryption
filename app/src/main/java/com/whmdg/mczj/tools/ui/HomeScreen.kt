@@ -2,16 +2,23 @@ package com.whmdg.mczj.tools.ui
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -24,19 +31,39 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.encryption.data.StorageLocation
 import com.whmdg.mczj.tools.encryption.data.VaultConfig
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.encryption.services.VaultService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
+import com.whmdg.mczj.tools.ui.theme.LocalBgImageAlpha
+import com.whmdg.mczj.tools.ui.theme.LocalBgImagePath
+import com.whmdg.mczj.tools.ui.theme.LocalBgUiAlpha
+import com.whmdg.mczj.tools.ui.theme.LocalCustomBgEnabled
+import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgImage
+import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgImageAlpha
+import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgUiAlpha
+import com.whmdg.mczj.tools.ui.theme.LocalOnSetCustomBg
 import java.io.File
+import java.io.FileOutputStream
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.text.font.FontWeight
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 sealed class Screen {
     object Dashboard : Screen()
@@ -933,8 +960,41 @@ fun SettingsTab(onNavigate: (Screen) -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ThemeSettingsScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
     val isDarkMode = com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode.current
     val onToggleTheme = com.whmdg.mczj.tools.ui.theme.LocalOnToggleTheme.current
+    val customBgEnabled = LocalCustomBgEnabled.current
+    val bgImagePath = LocalBgImagePath.current
+    val bgImageAlpha = LocalBgImageAlpha.current
+    val bgUiAlpha = LocalBgUiAlpha.current
+    val onSetCustomBg = LocalOnSetCustomBg.current
+    val onSetBgImage = LocalOnSetBgImage.current
+    val onSetBgImageAlpha = LocalOnSetBgImageAlpha.current
+    val onSetBgUiAlpha = LocalOnSetBgUiAlpha.current
+
+    var showCropDialog by remember { mutableStateOf(false) }
+    var pendingBitmap by remember { mutableStateOf<Bitmap?>(null) }
+
+    val density = LocalDensity.current
+    val screenWidthPx = with(density) {
+        context.resources.displayMetrics.widthPixels
+    }
+    val screenHeightPx = with(density) {
+        context.resources.displayMetrics.heightPixels
+    }
+
+    // 图片选择器
+    val imagePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            processPickedImage(context, it, screenWidthPx, screenHeightPx,
+                onNeedCrop = { bitmap -> pendingBitmap = bitmap; showCropDialog = true },
+                onSaved = { path -> onSetBgImage(path) },
+                onError = { msg -> Toast.makeText(context, msg, Toast.LENGTH_LONG).show() }
+            )
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -954,12 +1014,13 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
                 .padding(innerPadding)
         ) {
             LazyColumn(modifier = Modifier.fillMaxSize()) {
+                // ── 第一行：白天/黑夜 ──
                 item {
                     Text(
                         text = "背景主题",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp)
+                        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp)
                     )
                 }
                 item {
@@ -982,8 +1043,287 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
                         }
                     )
                 }
+
+                // ── 第二行：自定义背景 ──
+                item {
+                    Text(
+                        text = "自定义背景",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp)
+                    )
+                }
+                item {
+                    ListItem(
+                        headlineContent = { Text("自定义背景") },
+                        supportingContent = {
+                            Text(if (customBgEnabled) "已开启" else "关闭")
+                        },
+                        leadingContent = {
+                            Icon(
+                                Icons.Default.Wallpaper,
+                                contentDescription = null
+                            )
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = customBgEnabled,
+                                onCheckedChange = { onSetCustomBg(it) }
+                            )
+                        }
+                    )
+                }
+
+                // ── 自定义背景展开的设置 ──
+                if (customBgEnabled) {
+                    // 选择图片
+                    item {
+                        ListItem(
+                            headlineContent = { Text("选择图片") },
+                            supportingContent = {
+                                Text(bgImagePath?.let { "已选择" } ?: "未选择图片")
+                            },
+                            leadingContent = {
+                                Icon(Icons.Default.Image, contentDescription = null)
+                            },
+                            trailingContent = {
+                                FilledTonalButton(onClick = { imagePicker.launch("image/*") }) {
+                                    Text("选择")
+                                }
+                            }
+                        )
+                    }
+                    // 图片透明度
+                    item {
+                        val sliderValue = remember(bgImageAlpha) { mutableFloatStateOf(bgImageAlpha) }
+                        ListItem(
+                            headlineContent = { Text("图片透明度") },
+                            supportingContent = {
+                                Text("${(sliderValue.floatValue * 100).roundToInt()}%")
+                            },
+                            leadingContent = {
+                                Icon(Icons.Default.Photo, contentDescription = null)
+                            }
+                        )
+                        Slider(
+                            value = sliderValue.floatValue,
+                            onValueChange = { sliderValue.floatValue = it },
+                            onValueChangeFinished = { onSetBgImageAlpha(sliderValue.floatValue) },
+                            valueRange = 0f..1f,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                        )
+                    }
+                    // UI 透明度
+                    item {
+                        val sliderValue = remember(bgUiAlpha) { mutableFloatStateOf(bgUiAlpha) }
+                        ListItem(
+                            headlineContent = { Text("UI 透明度") },
+                            supportingContent = {
+                                Text("${(sliderValue.floatValue * 100).roundToInt()}%")
+                            },
+                            leadingContent = {
+                                Icon(Icons.Default.ViewCompact, contentDescription = null)
+                            }
+                        )
+                        Slider(
+                            value = sliderValue.floatValue,
+                            onValueChange = { sliderValue.floatValue = it },
+                            onValueChangeFinished = { onSetBgUiAlpha(sliderValue.floatValue) },
+                            valueRange = 0f..1f,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
+                        )
+                    }
+                }
             }
         }
+    }
+
+    // ── 裁剪对话框 ──
+    if (showCropDialog && pendingBitmap != null) {
+        CropDialog(
+            bitmap = pendingBitmap!!,
+            screenWidthPx = screenWidthPx,
+            screenHeightPx = screenHeightPx,
+            onCrop = { cropped ->
+                val savedPath = saveBitmapToInternal(context, cropped)
+                if (savedPath != null) {
+                    onSetBgImage(savedPath)
+                    Toast.makeText(context, "背景图片已设置", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "保存图片失败", Toast.LENGTH_SHORT).show()
+                }
+                showCropDialog = false
+                pendingBitmap = null
+            },
+            onCancel = {
+                showCropDialog = false
+                pendingBitmap = null
+            }
+        )
+    }
+}
+
+// ── 裁剪对话框 ──
+@Composable
+private fun CropDialog(
+    bitmap: Bitmap,
+    screenWidthPx: Int,
+    screenHeightPx: Int,
+    onCrop: (Bitmap) -> Unit,
+    onCancel: () -> Unit
+) {
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
+
+    val density = LocalDensity.current
+    val screenWidthDp = with(density) { screenWidthPx.toDp() }
+    val screenHeightDp = with(density) { screenHeightPx.toDp() }
+
+    // 计算缩放使图片至少填满裁剪区域
+    val scale = maxOf(
+        screenWidthPx.toFloat() / bitmap.width,
+        screenHeightPx.toFloat() / bitmap.height
+    )
+    val scaledW = (bitmap.width * scale).roundToInt()
+    val scaledH = (bitmap.height * scale).roundToInt()
+
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("裁剪图片") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 500.dp)
+            ) {
+                Text(
+                    "拖动图片调整位置，将保留中间区域为背景",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+
+                // 裁剪预览区域
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(screenHeightDp * 0.6f)
+                        .clipToBounds()
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    // 可拖动的图片
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "裁剪",
+                        modifier = Modifier
+                            .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                            .width((scaledW / density.density).dp)
+                            .height((scaledH / density.density).dp)
+                            .pointerInput(Unit) {
+                                detectDragGestures { change, dragAmount ->
+                                    change.consume()
+                                    offsetX = (offsetX + dragAmount.x).coerceIn(
+                                        -(scaledW - screenWidthPx).toFloat(),
+                                        0f
+                                    )
+                                    offsetY = (offsetY + dragAmount.y).coerceIn(
+                                        -(scaledH - screenHeightPx).toFloat(),
+                                        0f
+                                    )
+                                }
+                            },
+                        contentScale = ContentScale.Fit
+                    )
+
+                    // 裁剪框边框
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight()
+                            .border(2.dp, Color.White)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                // 裁剪中心区域
+                val cropX = ((-offsetX) / scale).roundToInt().coerceIn(0, bitmap.width - screenWidthPx)
+                val cropY = ((-offsetY) / scale).roundToInt().coerceIn(0, bitmap.height - screenHeightPx)
+                val cropW = (screenWidthPx / scale).roundToInt().coerceAtMost(bitmap.width - cropX)
+                val cropH = (screenHeightPx / scale).roundToInt().coerceAtMost(bitmap.height - cropY)
+                val cropped = Bitmap.createBitmap(bitmap, cropX, cropY, cropW, cropH)
+                onCrop(cropped)
+            }) {
+                Text("确认裁剪")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+// ── 处理选中图片（检测尺寸 → 裁剪或直接保存） ──
+private fun processPickedImage(
+    context: Context,
+    uri: Uri,
+    screenWidthPx: Int,
+    screenHeightPx: Int,
+    onNeedCrop: (Bitmap) -> Unit,
+    onSaved: (String) -> Unit,
+    onError: (String) -> Unit
+) {
+    try {
+        val inputStream = context.contentResolver.openInputStream(uri)
+            ?: return onError("无法读取图片")
+        val bitmap = BitmapFactory.decodeStream(inputStream)
+        inputStream.close()
+
+        if (bitmap == null) return onError("无法解码图片")
+
+        // 检查比例是否匹配
+        val screenRatio = screenWidthPx.toFloat() / screenHeightPx
+        val imageRatio = bitmap.width.toFloat() / bitmap.height
+
+        if (abs(imageRatio - screenRatio) > 0.05f) {
+            // 比例不匹配，需要裁剪
+            onNeedCrop(bitmap)
+        } else {
+            // 比例匹配，直接缩放保存
+            val resized = Bitmap.createScaledBitmap(bitmap, screenWidthPx, screenHeightPx, true)
+            val savedPath = saveBitmapToInternal(context, resized)
+            if (savedPath != null) {
+                if (resized !== bitmap) resized.recycle()
+                onSaved(savedPath)
+            } else {
+                onError("保存图片失败")
+            }
+        }
+        if (bitmap.isRecycled.not()) bitmap.recycle()
+    } catch (e: Exception) {
+        onError("处理图片出错: ${e.message}")
+    }
+}
+
+// ── 保存 Bitmap 到统一数据目录（与各模块同级，后续备份自动纳入） ──
+private fun saveBitmapToInternal(context: Context, bitmap: Bitmap): String? {
+    return try {
+        val dir = AppDataPaths.theme(context)
+        val file = File(dir, "background.jpg")
+        FileOutputStream(file).use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+        }
+        file.absolutePath
+    } catch (e: Exception) {
+        null
     }
 }
 

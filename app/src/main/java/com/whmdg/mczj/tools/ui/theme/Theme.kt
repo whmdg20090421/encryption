@@ -1,6 +1,5 @@
 package com.whmdg.mczj.tools.ui.theme
 
-import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -9,7 +8,6 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.platform.LocalContext
 
@@ -27,6 +25,15 @@ private val LightColorScheme = lightColorScheme(
 
 val LocalIsDarkMode = compositionLocalOf { true }
 val LocalOnToggleTheme = compositionLocalOf<((Boolean) -> Unit)> { {} }
+
+val LocalCustomBgEnabled = compositionLocalOf { false }
+val LocalBgImagePath = compositionLocalOf<String?> { null }
+val LocalBgImageAlpha = compositionLocalOf { 1f }
+val LocalBgUiAlpha = compositionLocalOf { 1f }
+val LocalOnSetCustomBg = compositionLocalOf<(Boolean) -> Unit> { {} }
+val LocalOnSetBgImage = compositionLocalOf<(String?) -> Unit> { {} }
+val LocalOnSetBgImageAlpha = compositionLocalOf<(Float) -> Unit> { {} }
+val LocalOnSetBgUiAlpha = compositionLocalOf<(Float) -> Unit> { {} }
 
 private val dynamicColor = true
 
