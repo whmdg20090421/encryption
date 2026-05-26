@@ -11,6 +11,8 @@ import com.whmdg.mczj.tools.util.DiagnosticLog
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -136,6 +138,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
     var createMode by remember { mutableStateOf(CreateMode.FILE) }
     var showNameDialog by remember { mutableStateOf(false) }
     var createName by remember { mutableStateOf("") }
+    var selectedEntry by remember { mutableStateOf<FileEntry?>(null) }
 
     // ── 普通引擎：File.listFiles（公开 API，无 hidden API 限制） ──
     fun listWithFile(path: String, showHidden: Boolean, effectiveRoot: String): List<FileEntry> {
@@ -602,6 +605,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             focusedPanel = FocusedPanel.LEFT
                             openFile(context, entry)
                         },
+                        onLongClick = { entry -> selectedEntry = entry },
                         modifier = Modifier.weight(1f)
                     )
 
@@ -627,8 +631,79 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             focusedPanel = FocusedPanel.RIGHT
                             openFile(context, entry)
                         },
+                        onLongClick = { entry -> selectedEntry = entry },
                         modifier = Modifier.weight(1f)
                     )
+                }
+            }
+
+            // ── 长按工具栏悬浮窗 ──
+            if (selectedEntry != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = { selectedEntry = null }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Card(
+                        modifier = Modifier
+                            .width(220.dp)
+                            .wrapContentHeight(),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .wrapContentHeight(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 左列：复制
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable {
+                                        // TODO: 复制操作
+                                        selectedEntry = null
+                                    }
+                                    .padding(vertical = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "复制",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            }
+                            // 极淡的分割线
+                            VerticalDivider(
+                                modifier = Modifier.height(24.dp),
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                            )
+                            // 右列：移动
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable {
+                                        // TODO: 移动操作
+                                        selectedEntry = null
+                                    }
+                                    .padding(vertical = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "移动",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -754,6 +829,7 @@ private fun FileBrowserPanel(
     onFocus: () -> Unit,
     onFolderClick: (FileEntry) -> Unit,
     onFileClick: (FileEntry) -> Unit,
+    onLongClick: (FileEntry) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -793,7 +869,8 @@ private fun FileBrowserPanel(
                         onClick = {
                             if (entry.isDirectory) onFolderClick(entry)
                             else onFileClick(entry)
-                        }
+                        },
+                        onLongClick = { onLongClick(entry) }
                     )
                 }
             }
@@ -805,7 +882,8 @@ private fun FileBrowserPanel(
 private fun FileEntryRow(
     entry: FileEntry,
     isFocused: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
 ) {
     ListItem(
         headlineContent = {
@@ -823,7 +901,10 @@ private fun FileEntryRow(
                        else MaterialTheme.colorScheme.onSurfaceVariant
             )
         },
-        modifier = Modifier.clickable(onClick = onClick)
+        modifier = Modifier.combinedClickable(
+            onClick = onClick,
+            onLongClick = onLongClick
+        )
     )
 }
 
