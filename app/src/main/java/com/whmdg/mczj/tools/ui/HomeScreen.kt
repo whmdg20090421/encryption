@@ -62,6 +62,11 @@ import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.Dispatchers
@@ -1076,68 +1081,70 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
                     )
                 }
 
-                // ── 自定义背景展开的设置 ──
-                if (customBgEnabled) {
-                    // 选择图片
-                    item {
-                        ListItem(
-                            headlineContent = { Text("选择图片") },
-                            supportingContent = {
-                                Text(bgImagePath?.let { "已选择" } ?: "未选择图片")
-                            },
-                            leadingContent = {
-                                Icon(Icons.Default.Image, contentDescription = null)
-                            },
-                            trailingContent = {
-                                FilledTonalButton(onClick = { imagePicker.launch("image/*") }) {
-                                    Text("选择")
+                // ── 自定义背景展开的设置（丝滑展开/收起） ──
+                item {
+                    AnimatedVisibility(
+                        visible = customBgEnabled,
+                        enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+                        exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
+                    ) {
+                        Column {
+                            // 选择图片
+                            ListItem(
+                                headlineContent = { Text("选择图片") },
+                                supportingContent = {
+                                    Text(bgImagePath?.let { "已选择" } ?: "未选择图片")
+                                },
+                                leadingContent = {
+                                    Icon(Icons.Default.Image, contentDescription = null)
+                                },
+                                trailingContent = {
+                                    FilledTonalButton(onClick = { imagePicker.launch("image/*") }) {
+                                        Text("选择")
+                                    }
                                 }
-                            }
-                        )
-                    }
-                    // 图片透明度
-                    item {
-                        val sliderValue = remember(bgImageAlpha) { mutableFloatStateOf(bgImageAlpha) }
-                        ListItem(
-                            headlineContent = { Text("图片透明度") },
-                            supportingContent = {
-                                Text("${(sliderValue.floatValue * 100).roundToInt()}%")
-                            },
-                            leadingContent = {
-                                Icon(Icons.Default.Photo, contentDescription = null)
-                            }
-                        )
-                        Slider(
-                            value = sliderValue.floatValue,
-                            onValueChange = { sliderValue.floatValue = it },
-                            onValueChangeFinished = { onSetBgImageAlpha(sliderValue.floatValue) },
-                            valueRange = 0f..1f,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
-                        )
-                    }
-                    // UI 透明度
-                    item {
-                        val sliderValue = remember(bgUiAlpha) { mutableFloatStateOf(bgUiAlpha) }
-                        ListItem(
-                            headlineContent = { Text("UI 透明度") },
-                            supportingContent = {
-                                Text("${(sliderValue.floatValue * 100).roundToInt()}%")
-                            },
-                            leadingContent = {
-                                Icon(Icons.Default.ViewCompact, contentDescription = null)
-                            }
-                        )
-                        Slider(
-                            value = sliderValue.floatValue,
-                            onValueChange = { sliderValue.floatValue = it },
-                            onValueChangeFinished = { onSetBgUiAlpha(sliderValue.floatValue) },
-                            valueRange = 0f..1f,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp)
-                        )
+                            )
+                            // 图片透明度
+                            val alphaSliderValue = remember(bgImageAlpha) { mutableFloatStateOf(bgImageAlpha) }
+                            ListItem(
+                                headlineContent = { Text("图片透明度") },
+                                supportingContent = {
+                                    Text("${(alphaSliderValue.floatValue * 100).roundToInt()}%")
+                                },
+                                leadingContent = {
+                                    Icon(Icons.Default.Photo, contentDescription = null)
+                                }
+                            )
+                            Slider(
+                                value = alphaSliderValue.floatValue,
+                                onValueChange = { alphaSliderValue.floatValue = it },
+                                onValueChangeFinished = { onSetBgImageAlpha(alphaSliderValue.floatValue) },
+                                valueRange = 0f..1f,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp)
+                            )
+                            // UI 透明度
+                            val uiSliderValue = remember(bgUiAlpha) { mutableFloatStateOf(bgUiAlpha) }
+                            ListItem(
+                                headlineContent = { Text("UI 透明度") },
+                                supportingContent = {
+                                    Text("${(uiSliderValue.floatValue * 100).roundToInt()}%")
+                                },
+                                leadingContent = {
+                                    Icon(Icons.Default.ViewCompact, contentDescription = null)
+                                }
+                            )
+                            Slider(
+                                value = uiSliderValue.floatValue,
+                                onValueChange = { uiSliderValue.floatValue = it },
+                                onValueChangeFinished = { onSetBgUiAlpha(uiSliderValue.floatValue) },
+                                valueRange = 0f..1f,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp)
+                            )
+                        }
                     }
                 }
             }
