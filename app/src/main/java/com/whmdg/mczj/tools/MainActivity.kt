@@ -104,8 +104,9 @@ class MainActivity : ComponentActivity() {
                         is Boolean -> putBoolean(key, value)
                         is String -> putString(key, value)
                         is Float -> putFloat(key, value)
-                    }.apply()
-                }
+                        else -> {}
+                    }
+                }.apply()
             } }
 
             CompositionLocalProvider(
