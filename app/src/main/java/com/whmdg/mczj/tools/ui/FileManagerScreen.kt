@@ -1136,11 +1136,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                         Checkbox(
                             checked = recycleBinEnabled,
                             onCheckedChange = null,
-                            enabled = false,
-                            colors = CheckboxDefaults.colors(
-                                disabledCheckmarkColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                                disabledBoxColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-                            )
+                            enabled = false
                         )
                         Text(
                             "移动到回收站",
