@@ -46,7 +46,7 @@ jobs:
           KEY_ALIAS:         ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
         run: |
-          ./gradlew :app:assembleRelease --no-daemon --stacktrace
+          ./gradlew clean :app:assembleRelease --no-daemon --stacktrace
 
       - name: Locate APK
         id: locate
