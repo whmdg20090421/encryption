@@ -28,12 +28,42 @@ import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import java.io.File
 
 enum class FocusedPanel { LEFT, RIGHT }
+enum class CreateMode { FILE, FOLDER }
 
 data class FileEntry(
     val path: String,
     val name: String,
     val isDirectory: Boolean
 )
+
+/**
+ * 面板导航历史状态（不可变，每次操作返回新实例）
+ */
+data class PanelNavState(
+    val paths: List<String> = emptyList(),
+    val index: Int = -1
+) {
+    val canGoBack: Boolean get() = index > 0
+    val canGoForward: Boolean get() = index < paths.size - 1
+
+    /** 访问新目录：截断前进历史，追加路径并前进到末尾 */
+    fun navigate(path: String): PanelNavState {
+        val newPaths = if (index < paths.size - 1) {
+            paths.take(index + 1) + path
+        } else {
+            paths + path
+        }
+        return copy(paths = newPaths, index = newPaths.size - 1)
+    }
+
+    /** 后退一步 */
+    fun back(): PanelNavState? = if (canGoBack) copy(index = index - 1) else null
+
+    /** 前进一步 */
+    fun forward(): PanelNavState? = if (canGoForward) copy(index = index + 1) else null
+
+    val current: String get() = paths[index]
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,16 +74,6 @@ fun FileManagerScreen(onBack: () -> Unit) {
         mutableStateOf(Environment.isExternalStorageManager())
     }
 
-    val defaultPath = "/storage/emulated/0"
-    var leftPath by remember { mutableStateOf(defaultPath) }
-    var rightPath by remember { mutableStateOf(defaultPath) }
-    var leftEntries by remember { mutableStateOf(listOf<FileEntry>()) }
-    var rightEntries by remember { mutableStateOf(listOf<FileEntry>()) }
-    var focusedPanel by remember { mutableStateOf(FocusedPanel.LEFT) }
-    var showHiddenFiles by remember { mutableStateOf(false) }
-    var showSettingsMenu by remember { mutableStateOf(false) }
-    var loadError by remember { mutableStateOf<Throwable?>(null) }
-
     // 引擎选择：Root or POSIX
     val sp = remember { context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE) }
     val permissionLevel = sp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
@@ -61,8 +81,42 @@ fun FileManagerScreen(onBack: () -> Unit) {
         permissionLevel == "ROOT" && SpecialPermissionVerifier.isRootAvailable()
     }
 
+    // 安全默认目录
+    val safeDefault = "/storage/emulated/0"
+
+    // 校验目录是否可访问，不可用时回退到安全默认
+    fun resolveHome(saved: String): String {
+        val dir = File(saved)
+        if (!dir.exists() || !dir.isDirectory) return safeDefault
+        if (!isRootEngine && !dir.canRead()) return safeDefault
+        return saved
+    }
+
+    // 左右主目录（默认用户级目录，后续可在设置中分别更改）
+    val leftHomeDirectory = remember {
+        resolveHome(sp.getString("left_home_directory", safeDefault) ?: safeDefault)
+    }
+    val rightHomeDirectory = remember {
+        resolveHome(sp.getString("right_home_directory", safeDefault) ?: safeDefault)
+    }
+
+    var leftPath by remember { mutableStateOf(leftHomeDirectory) }
+    var rightPath by remember { mutableStateOf(rightHomeDirectory) }
+    var leftEntries by remember { mutableStateOf(listOf<FileEntry>()) }
+    var rightEntries by remember { mutableStateOf(listOf<FileEntry>()) }
+    var leftNavState by remember { mutableStateOf(PanelNavState(paths = listOf(leftHomeDirectory), index = 0)) }
+    var rightNavState by remember { mutableStateOf(PanelNavState(paths = listOf(rightHomeDirectory), index = 0)) }
+    var focusedPanel by remember { mutableStateOf(FocusedPanel.LEFT) }
+    var showHiddenFiles by remember { mutableStateOf(false) }
+    var showSettingsMenu by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<Throwable?>(null) }
+    var showCreateTypeDialog by remember { mutableStateOf(false) }
+    var createMode by remember { mutableStateOf(CreateMode.FILE) }
+    var showNameDialog by remember { mutableStateOf(false) }
+    var createName by remember { mutableStateOf("") }
+
     // ── 普通引擎：File.listFiles（公开 API，无 hidden API 限制） ──
-    fun listWithFile(path: String, showHidden: Boolean): List<FileEntry> {
+    fun listWithFile(path: String, showHidden: Boolean, effectiveRoot: String): List<FileEntry> {
         DiagnosticLog.log("FileEngine", "listFiles($path) showHidden=$showHidden")
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
         val dir = File(normalizedPath)
@@ -110,8 +164,8 @@ fun FileManagerScreen(onBack: () -> Unit) {
         }
         DiagnosticLog.log("FileEngine", "统计: dirs=$dirCount, files=$fileCount, hidden 过滤=$skipHidden")
 
-        // 添加 ".." 父目录（仅当不是根且父目录可访问）
-        if (normalizedPath != "/" && normalizedPath.contains('/')) {
+        // 添加 ".." 父目录（仅当不在根目录且父目录可访问）
+        if (normalizedPath != effectiveRoot && normalizedPath.contains('/')) {
             val parentPath = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
             if (parentPath != normalizedPath) {
                 val parentFile = File(parentPath)
@@ -136,7 +190,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
     // ── ls 引擎：统一用 `ls -1Ap`，区别只是要不要 su ──
     // useRoot=true → `su -c 'ls -1Ap …'`；false → 直接 `sh -c 'ls -1Ap …'`
     // -1 单列, -A 显示隐藏但不含 . 和 .., -p 给目录加 '/' 后缀（无需另起 stat）
-    fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean): List<FileEntry> {
+    fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean, effectiveRoot: String): List<FileEntry> {
         val entries = mutableListOf<FileEntry>()
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
         val escapedPath = normalizedPath.replace("'", "'\\''")
@@ -187,7 +241,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
         DiagnosticLog.log(tag, "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
 
         // ".." 父目录：只要不是根 "/" 都显示
-        if (normalizedPath != "/" && normalizedPath.contains('/')) {
+        if (normalizedPath != effectiveRoot && normalizedPath.contains('/')) {
             val parentPath = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
             if (parentPath != normalizedPath) {
                 entries.add(0, FileEntry(parentPath, "..", true))
@@ -209,15 +263,16 @@ fun FileManagerScreen(onBack: () -> Unit) {
         DiagnosticLog.log("FileMgr", ">>> listDirectory START path=$path useRoot=$isRootEngine")
         loadError = null
         val t0 = System.currentTimeMillis()
+        val effectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
 
-        var entries = listWithLs(path, showHiddenFiles, useRoot = isRootEngine)
+        var entries = listWithLs(path, showHiddenFiles, useRoot = isRootEngine, effectiveRoot = effectiveRoot)
 
         // 兜底：ls 完全没结果且报错 → 退到 File.listFiles
         if (entries.isEmpty() && loadError != null) {
             DiagnosticLog.log("FileMgr", "ls 失败，回退 File API")
             val prevErr = loadError
             loadError = null
-            val fileEntries = listWithFile(path, showHiddenFiles)
+            val fileEntries = listWithFile(path, showHiddenFiles, effectiveRoot)
             if (fileEntries.isNotEmpty()) {
                 entries = fileEntries
             } else if (loadError == null) {
@@ -342,6 +397,107 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     }
                 }
             )
+        },
+        bottomBar = {
+            BottomAppBar(
+                modifier = Modifier.fillMaxWidth(),
+                tonalElevation = 0.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Start
+                ) {
+                    // 后退按钮（约 1/6 宽度）
+                    Box(
+                        modifier = Modifier.fillMaxWidth(1f / 6f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconButton(
+                            onClick = {
+                                val nav = when (focusedPanel) {
+                                    FocusedPanel.LEFT -> leftNavState
+                                    FocusedPanel.RIGHT -> rightNavState
+                                }
+                                val back = nav.back()
+                                if (back != null) {
+                                    when (focusedPanel) {
+                                        FocusedPanel.LEFT -> { leftNavState = back; leftPath = back.current }
+                                        FocusedPanel.RIGHT -> { rightNavState = back; rightPath = back.current }
+                                    }
+                                }
+                            },
+                            enabled = when (focusedPanel) {
+                                FocusedPanel.LEFT -> leftNavState.canGoBack
+                                FocusedPanel.RIGHT -> rightNavState.canGoBack
+                            }
+                        ) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "后退")
+                        }
+                    }
+                    // 前进按钮（约 1/6 宽度）
+                    Box(
+                        modifier = Modifier.fillMaxWidth(1f / 6f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconButton(
+                            onClick = {
+                                val nav = when (focusedPanel) {
+                                    FocusedPanel.LEFT -> leftNavState
+                                    FocusedPanel.RIGHT -> rightNavState
+                                }
+                                val fwd = nav.forward()
+                                if (fwd != null) {
+                                    when (focusedPanel) {
+                                        FocusedPanel.LEFT -> { leftNavState = fwd; leftPath = fwd.current }
+                                        FocusedPanel.RIGHT -> { rightNavState = fwd; rightPath = fwd.current }
+                                    }
+                                }
+                            },
+                            enabled = when (focusedPanel) {
+                                FocusedPanel.LEFT -> leftNavState.canGoForward
+                                FocusedPanel.RIGHT -> rightNavState.canGoForward
+                            }
+                        ) {
+                            Icon(Icons.Default.ArrowForward, contentDescription = "前进")
+                        }
+                    }
+                    // 新建按钮（约 1/6 宽度）
+                    Box(
+                        modifier = Modifier.fillMaxWidth(1f / 6f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconButton(onClick = { showCreateTypeDialog = true }) {
+                            Icon(Icons.Default.Add, contentDescription = "新建")
+                        }
+                    }
+                    // 同步按钮（约 1/6 宽度）
+                    Box(
+                        modifier = Modifier.fillMaxWidth(1f / 6f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconButton(onClick = {
+                            when (focusedPanel) {
+                                FocusedPanel.LEFT -> {
+                                    rightPath = leftPath
+                                    rightNavState = rightNavState.navigate(leftPath)
+                                    rightEntries = listDirectory(rightPath)
+                                }
+                                FocusedPanel.RIGHT -> {
+                                    leftPath = rightPath
+                                    leftNavState = leftNavState.navigate(rightPath)
+                                    leftEntries = listDirectory(leftPath)
+                                }
+                            }
+                        }) {
+                            Icon(Icons.Default.SwapHoriz, contentDescription = "同步路径")
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                }
+            }
         }
     ) { innerPadding ->
         Box(
@@ -392,6 +548,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
                             DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$leftPath")
                             focusedPanel = FocusedPanel.LEFT
+                            leftNavState = leftNavState.navigate(entry.path)
                             leftPath = entry.path
                         },
                         onFileClick = { entry ->
@@ -416,6 +573,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
                             DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$rightPath")
                             focusedPanel = FocusedPanel.RIGHT
+                            rightNavState = rightNavState.navigate(entry.path)
                             rightPath = entry.path
                         },
                         onFileClick = { entry ->
@@ -435,6 +593,113 @@ fun FileManagerScreen(onBack: () -> Unit) {
         DiagnosticLog.log("FileMgr", "关闭错误对话框")
         loadError = null
     })
+
+    // ── 新建类型选择对话框 ──
+    if (showCreateTypeDialog) {
+        AlertDialog(
+            onDismissRequest = { showCreateTypeDialog = false },
+            title = { Text("新建") },
+            text = {
+                Column {
+                    TextButton(
+                        onClick = {
+                            createMode = CreateMode.FILE
+                            showCreateTypeDialog = false
+                            createName = ""
+                            showNameDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("创建文件")
+                    }
+                    TextButton(
+                        onClick = {
+                            createMode = CreateMode.FOLDER
+                            showCreateTypeDialog = false
+                            createName = ""
+                            showNameDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("创建文件夹")
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showCreateTypeDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── 名称输入对话框 ──
+    if (showNameDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showNameDialog = false
+                createName = ""
+            },
+            title = { Text(if (createMode == CreateMode.FILE) "创建文件" else "创建文件夹") },
+            text = {
+                OutlinedTextField(
+                    value = createName,
+                    onValueChange = { createName = it },
+                    label = { Text("名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val name = createName.trim()
+                        if (name.isBlank()) return@TextButton
+                        val currentPath = when (focusedPanel) {
+                            FocusedPanel.LEFT -> leftPath
+                            FocusedPanel.RIGHT -> rightPath
+                        }
+                        val target = File(currentPath, name)
+                        if (target.exists()) {
+                            Toast.makeText(context, "已存在同名文件或文件夹", Toast.LENGTH_SHORT).show()
+                            return@TextButton
+                        }
+                        val success = try {
+                            if (createMode == CreateMode.FOLDER) target.mkdir()
+                            else target.createNewFile()
+                        } catch (e: Exception) {
+                            DiagnosticLog.log("FileMgr", "创建失败: ${e.message}")
+                            Toast.makeText(context, "创建失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                            null
+                        }
+                        if (success == true) {
+                            Toast.makeText(context, "创建成功", Toast.LENGTH_SHORT).show()
+                            when (focusedPanel) {
+                                FocusedPanel.LEFT -> leftEntries = listDirectory(leftPath)
+                                FocusedPanel.RIGHT -> rightEntries = listDirectory(rightPath)
+                            }
+                        } else if (success == false) {
+                            Toast.makeText(context, "创建失败", Toast.LENGTH_SHORT).show()
+                        }
+                        showNameDialog = false
+                        createName = ""
+                    },
+                    enabled = createName.isNotBlank()
+                ) {
+                    Text("确定")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showNameDialog = false
+                    createName = ""
+                }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 }
 
 @Composable
