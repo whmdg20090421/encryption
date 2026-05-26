@@ -29,6 +29,8 @@ import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgImageAlpha
 import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgUiAlpha
 import com.whmdg.mczj.tools.ui.theme.LocalOnSetCustomBg
 import com.whmdg.mczj.tools.ui.theme.LocalOnToggleTheme
+import com.whmdg.mczj.tools.ui.theme.LocalBgFillMode
+import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgFillMode
 import com.whmdg.mczj.tools.ui.theme.工具箱Theme
 import com.whmdg.mczj.tools.ui.MainAppContainer
 import com.whmdg.mczj.tools.util.DiagnosticLog
@@ -98,6 +100,9 @@ class MainActivity : ComponentActivity() {
             var bgUiAlpha by remember {
                 mutableFloatStateOf(themePrefs.getFloat("bg_ui_alpha", 0.85f))
             }
+            var bgFillMode by remember {
+                mutableStateOf(themePrefs.getString("bg_fill_mode", "normal") ?: "normal")
+            }
             val savePref: (String, Any) -> Unit = remember { { key, value ->
                 themePrefs.edit().apply {
                     when (value) {
@@ -135,6 +140,11 @@ class MainActivity : ComponentActivity() {
                 LocalOnSetBgUiAlpha provides { value ->
                     bgUiAlpha = value
                     savePref("bg_ui_alpha", value)
+                },
+                LocalBgFillMode provides bgFillMode,
+                LocalOnSetBgFillMode provides { value ->
+                    bgFillMode = value
+                    savePref("bg_fill_mode", value)
                 }
             ) {
                 val hasBgImage = !bgImagePath.isNullOrEmpty()
@@ -151,7 +161,7 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier
                                 .fillMaxSize()
                                 .alpha(bgImageAlpha),
-                            contentScale = ContentScale.Crop
+                            contentScale = if (bgFillMode == "stretch") ContentScale.FillBounds else ContentScale.Crop
                         )
                     }
 

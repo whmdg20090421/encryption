@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Rect
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -16,6 +18,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -53,6 +56,8 @@ import com.whmdg.mczj.tools.encryption.services.VaultSession
 import com.whmdg.mczj.tools.ui.theme.LocalBgImageAlpha
 import com.whmdg.mczj.tools.ui.theme.LocalBgImagePath
 import com.whmdg.mczj.tools.ui.theme.LocalBgUiAlpha
+import com.whmdg.mczj.tools.ui.theme.LocalBgFillMode
+import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgFillMode
 import com.whmdg.mczj.tools.ui.theme.LocalCustomBgEnabled
 import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgImage
 import com.whmdg.mczj.tools.ui.theme.LocalOnSetBgImageAlpha
@@ -978,6 +983,8 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
     val onSetBgImage = LocalOnSetBgImage.current
     val onSetBgImageAlpha = LocalOnSetBgImageAlpha.current
     val onSetBgUiAlpha = LocalOnSetBgUiAlpha.current
+    val bgFillMode = LocalBgFillMode.current
+    val onSetBgFillMode = LocalOnSetBgFillMode.current
 
     var showCropDialog by remember { mutableStateOf(false) }
     var pendingBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -1144,6 +1151,22 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
                                     .fillMaxWidth()
                                     .padding(horizontal = 16.dp)
                             )
+                            // 填充模式
+                            ListItem(
+                                headlineContent = { Text("填充模式") },
+                                supportingContent = {
+                                    Text(if (bgFillMode == "stretch") "拉伸：去除黑边，适配屏幕" else "普通：保留黑边")
+                                },
+                                leadingContent = {
+                                    Icon(Icons.Default.AspectRatio, contentDescription = null)
+                                },
+                                trailingContent = {
+                                    Switch(
+                                        checked = bgFillMode == "stretch",
+                                        onCheckedChange = { onSetBgFillMode(if (it) "stretch" else "normal") }
+                                    )
+                                }
+                            )
                         }
                     }
                 }
@@ -1158,13 +1181,20 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
             screenWidthPx = screenWidthPx,
             screenHeightPx = screenHeightPx,
             onCrop = { cropped ->
-                val savedPath = saveBitmapToInternal(context, cropped)
+                val finalBitmap = if (bgFillMode == "stretch") {
+                    // 拉伸模式：裁掉黑边，拉伸到屏幕尺寸
+                    trimBlackAndStretch(cropped, screenWidthPx, screenHeightPx)
+                } else {
+                    cropped
+                }
+                val savedPath = saveBitmapToInternal(context, finalBitmap)
                 if (savedPath != null) {
                     onSetBgImage(savedPath)
                     Toast.makeText(context, "背景图片已设置", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "保存图片失败", Toast.LENGTH_SHORT).show()
                 }
+                if (finalBitmap !== cropped) finalBitmap.recycle()
                 pendingBitmap?.recycle()
                 showCropDialog = false
                 pendingBitmap = null
@@ -1189,18 +1219,19 @@ private fun CropDialog(
 ) {
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
+    var userScale by remember { mutableFloatStateOf(1f) }
 
     val density = LocalDensity.current
     val screenWidthDp = with(density) { screenWidthPx.toDp() }
     val screenHeightDp = with(density) { screenHeightPx.toDp() }
 
-    // 计算缩放使图片至少填满裁剪区域
-    val scale = maxOf(
+    // 基础缩放使图片至少填满裁剪区域
+    val baseScale = maxOf(
         screenWidthPx.toFloat() / bitmap.width,
         screenHeightPx.toFloat() / bitmap.height
     )
-    val scaledW = (bitmap.width * scale).roundToInt()
-    val scaledH = (bitmap.height * scale).roundToInt()
+    val scaledW = (bitmap.width * baseScale * userScale).roundToInt()
+    val scaledH = (bitmap.height * baseScale * userScale).roundToInt()
 
     AlertDialog(
         onDismissRequest = onCancel,
@@ -1212,7 +1243,7 @@ private fun CropDialog(
                     .heightIn(max = 500.dp)
             ) {
                 Text(
-                    "拖动图片调整位置，将保留中间区域为背景",
+                    "拖动图片调整位置，双指缩放，将保留中间区域为背景",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1227,7 +1258,7 @@ private fun CropDialog(
                         .background(Color.Black),
                     contentAlignment = Alignment.Center
                 ) {
-                    // 可拖动的图片
+                    // 可拖动+缩放的图片
                     Image(
                         bitmap = bitmap.asImageBitmap(),
                         contentDescription = "裁剪",
@@ -1236,16 +1267,20 @@ private fun CropDialog(
                             .width((scaledW / density.density).dp)
                             .height((scaledH / density.density).dp)
                             .pointerInput(Unit) {
-                                detectDragGestures { change, dragAmount ->
-                                    change.consume()
-                                    offsetX = (offsetX + dragAmount.x).coerceIn(
-                                        -(scaledW - screenWidthPx).toFloat(),
-                                        0f
+                                detectTransformGestures { _, pan, zoom, _ ->
+                                    userScale = (userScale * zoom).coerceIn(
+                                        maxOf(screenWidthPx.toFloat() / bitmap.width, screenHeightPx.toFloat() / bitmap.height) / baseScale,
+                                        5f
                                     )
-                                    offsetY = (offsetY + dragAmount.y).coerceIn(
-                                        -(scaledH - screenHeightPx).toFloat(),
-                                        0f
-                                    )
+                                    val newScaledW = (bitmap.width * baseScale * userScale).roundToInt()
+                                    val newScaledH = (bitmap.height * baseScale * userScale).roundToInt()
+                                    // 在缩放后的尺寸大于裁剪区域时才允许拖动
+                                    val maxOffsetX = if (newScaledW > screenWidthPx) 0f else 0f
+                                    val minOffsetX = if (newScaledW > screenWidthPx) -(newScaledW - screenWidthPx).toFloat() else 0f
+                                    val maxOffsetY = if (newScaledH > screenHeightPx) 0f else 0f
+                                    val minOffsetY = if (newScaledH > screenHeightPx) -(newScaledH - screenHeightPx).toFloat() else 0f
+                                    offsetX = (offsetX + pan.x).coerceIn(minOffsetX, maxOffsetX)
+                                    offsetY = (offsetY + pan.y).coerceIn(minOffsetY, maxOffsetY)
                                 }
                             },
                         contentScale = ContentScale.Fit
@@ -1263,12 +1298,35 @@ private fun CropDialog(
         },
         confirmButton = {
             Button(onClick = {
-                // 裁剪中心区域
-                val cropX = ((-offsetX) / scale).roundToInt().coerceIn(0, bitmap.width - screenWidthPx)
-                val cropY = ((-offsetY) / scale).roundToInt().coerceIn(0, bitmap.height - screenHeightPx)
-                val cropW = (screenWidthPx / scale).roundToInt().coerceAtMost(bitmap.width - cropX)
-                val cropH = (screenHeightPx / scale).roundToInt().coerceAtMost(bitmap.height - cropY)
-                val cropped = Bitmap.createBitmap(bitmap, cropX, cropY, cropW, cropH)
+                // 裁剪中心区域（超出原图部分自动填充黑色）
+                val desiredCropX = ((-offsetX) / (baseScale * userScale)).roundToInt()
+                val desiredCropY = ((-offsetY) / (baseScale * userScale)).roundToInt()
+                val desiredCropW = (screenWidthPx / (baseScale * userScale)).roundToInt().coerceAtLeast(1)
+                val desiredCropH = (screenHeightPx / (baseScale * userScale)).roundToInt().coerceAtLeast(1)
+
+                // 创建目标画布，黑色填充
+                val cropped = Bitmap.createBitmap(desiredCropW, desiredCropH, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(cropped)
+                canvas.drawColor(android.graphics.Color.BLACK)
+
+                // 计算原图中实际可绘制区域
+                val srcX = desiredCropX.coerceIn(0, bitmap.width)
+                val srcY = desiredCropY.coerceIn(0, bitmap.height)
+                val srcRight = (desiredCropX + desiredCropW).coerceIn(0, bitmap.width)
+                val srcBottom = (desiredCropY + desiredCropH).coerceIn(0, bitmap.height)
+
+                // 对应到输出画布上的位置
+                val dstX = (srcX - desiredCropX).coerceAtLeast(0)
+                val dstY = (srcY - desiredCropY).coerceAtLeast(0)
+
+                if (srcRight > srcX && srcBottom > srcY) {
+                    canvas.drawBitmap(
+                        bitmap,
+                        Rect(srcX, srcY, srcRight, srcBottom),
+                        Rect(dstX, dstY, dstX + (srcRight - srcX), dstY + (srcBottom - srcY)),
+                        null
+                    )
+                }
                 onCrop(cropped)
             }) {
                 Text("确认裁剪")
@@ -1280,6 +1338,38 @@ private fun CropDialog(
             }
         }
     )
+}
+
+// ── 裁掉黑边并拉伸到目标尺寸 ──
+private fun trimBlackAndStretch(src: Bitmap, targetW: Int, targetH: Int): Bitmap {
+    // 扫描找到非黑色像素的边界
+    val pixels = IntArray(src.width * src.height)
+    src.getPixels(pixels, 0, src.width, 0, 0, src.width, src.height)
+
+    var top = src.height; var bottom = 0; var left = src.width; var right = 0
+    for (y in 0 until src.height) {
+        for (x in 0 until src.width) {
+            val pixel = pixels[y * src.width + x]
+            // 非黑色（允许微小误差）
+            if ((pixel and 0x00FFFFFF) != 0 && (pixel ushr 24) > 0) {
+                if (y < top) top = y
+                if (y > bottom) bottom = y
+                if (x < left) left = x
+                if (x > right) right = x
+            }
+        }
+    }
+
+    // 如果全是黑色，返回原图的拉伸版本
+    if (top >= bottom || left >= right) {
+        return Bitmap.createScaledBitmap(src, targetW, targetH, true)
+    }
+
+    // 裁掉黑边，然后拉伸到目标尺寸
+    val trimmed = Bitmap.createBitmap(src, left, top, right - left + 1, bottom - top + 1)
+    val result = Bitmap.createScaledBitmap(trimmed, targetW, targetH, true)
+    if (trimmed !== src) trimmed.recycle()
+    return result
 }
 
 // ── 处理选中图片（检测尺寸 → 裁剪或直接保存） ──

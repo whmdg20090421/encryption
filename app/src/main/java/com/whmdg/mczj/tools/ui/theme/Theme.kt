@@ -34,6 +34,8 @@ val LocalOnSetCustomBg = compositionLocalOf<(Boolean) -> Unit> { {} }
 val LocalOnSetBgImage = compositionLocalOf<(String?) -> Unit> { {} }
 val LocalOnSetBgImageAlpha = compositionLocalOf<(Float) -> Unit> { {} }
 val LocalOnSetBgUiAlpha = compositionLocalOf<(Float) -> Unit> { {} }
+val LocalBgFillMode = compositionLocalOf { "normal" }
+val LocalOnSetBgFillMode = compositionLocalOf<(String) -> Unit> { {} }
 
 private val dynamicColor = true
 
