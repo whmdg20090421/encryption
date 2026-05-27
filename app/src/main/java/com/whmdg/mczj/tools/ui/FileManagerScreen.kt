@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+import android.system.Os
 import java.io.File
 
 enum class FocusedPanel { LEFT, RIGHT }
@@ -44,7 +45,9 @@ enum class CreateMode { FILE, FOLDER }
 data class FileEntry(
     val path: String,
     val name: String,
-    val isDirectory: Boolean
+    val isDirectory: Boolean,
+    val permission: String = "",
+    val size: Long = 0
 )
 
 /**
@@ -196,7 +199,9 @@ fun FileManagerScreen(onBack: () -> Unit) {
                 false
             }
             if (isDir) dirCount++ else fileCount++
-            entries.add(FileEntry(child.absolutePath, name, isDir))
+            val perm = try { formatPermission(Os.stat(child.absolutePath).stMode) } catch (_: Exception) { "" }
+            val sz = if (isDir) 0L else try { child.length() } catch (_: Exception) { 0L }
+            entries.add(FileEntry(child.absolutePath, name, isDir, perm, sz))
         }
         DiagnosticLog.log("FileEngine", "统计: dirs=$dirCount, files=$fileCount, hidden 过滤=$skipHidden")
 
@@ -272,7 +277,9 @@ fun FileManagerScreen(onBack: () -> Unit) {
             if (!showHidden && name.startsWith(".")) continue
             if (isDir) dirCount++ else fileCount++
             val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-            entries.add(FileEntry(childPath, name, isDir))
+            val perm = try { formatPermission(Os.stat(childPath).stMode) } catch (_: Exception) { "" }
+            val sz = if (isDir) 0L else try { File(childPath).length() } catch (_: Exception) { 0L }
+            entries.add(FileEntry(childPath, name, isDir, perm, sz))
         }
         DiagnosticLog.log(tag, "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
 
@@ -1282,8 +1289,62 @@ private fun FileEntryRow(
                     modifier = Modifier.fillMaxWidth()
                 )
             }
-            Spacer(modifier = Modifier.weight(0.5f))
+            // Section 3: permission + size (files only)
+            if (!entry.isDirectory && entry.permission.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .weight(0.5f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = entry.permission,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = compactSize(entry.size),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                Spacer(modifier = Modifier.weight(0.5f))
+            }
         }
+    }
+}
+
+private fun formatPermission(mode: Int): String {
+    val type = when (mode and 0xF000) {
+        0x4000 -> 'd'  // directory
+        0x8000 -> '-'  // regular file
+        0xA000 -> 'l'  // symlink
+        0x6000 -> 'b'  // block device
+        0x2000 -> 'c'  // char device
+        0x1000 -> 'p'  // pipe
+        0xC000 -> 's'  // socket
+        else -> '?'
+    }
+    val rwx = charArrayOf('r', 'w', 'x')
+    val sb = StringBuilder(10)
+    sb.append(type)
+    for (shift in 8 downTo 0) {
+        sb.append(if ((mode shr shift) and 1 != 0) rwx[2 - shift % 3] else '-')
+    }
+    return sb.toString()
+}
+
+private fun compactSize(bytes: Long): String {
+    if (bytes <= 0) return ""
+    val v = bytes.toDouble()
+    return when {
+        v < 1024 -> "%.0f B".format(v)
+        v < 1024 * 1024 -> "%.1f K".format(v / 1024)
+        v < 1024 * 1024 * 1024 -> "%.1f M".format(v / (1024 * 1024))
+        else -> "%.1f G".format(v / (1024 * 1024 * 1024))
     }
 }
 
