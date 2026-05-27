@@ -312,17 +312,27 @@ fun isPermissionGranted(context: Context, androidName: String): Boolean {
                 }
             }
             "WRITE_SECURE_SETTINGS" -> {
-                // 签名级权限，checkSelfPermission 不可靠，通过实际写入 Secure 设置检测
+                // 签名级权限，优先通过 PackageManager 检查
+                val granted = try {
+                    val pkgInfo = context.packageManager.getPackageInfo(
+                        context.packageName,
+                        PackageManager.GET_PERMISSIONS
+                    )
+                    val idx = pkgInfo.requestedPermissions?.indexOf(
+                        "android.permission.WRITE_SECURE_SETTINGS"
+                    ) ?: -1
+                    idx >= 0 && (pkgInfo.requestedPermissionsFlags!![idx] and
+                            PackageManager.REQUESTED_PERMISSION_GRANTED) != 0
+                } catch (_: Exception) { false }
+                if (granted) return true
+                // 降级：通过写入检测
                 val key = "toolbox_wss_check"
                 try {
                     Settings.Secure.putString(context.contentResolver, key, "1")
                     val result = Settings.Secure.getString(context.contentResolver, key)
-                    // 写入后立即清理
                     Settings.Secure.putString(context.contentResolver, key, null)
                     result == "1"
-                } catch (_: SecurityException) {
-                    false
-                }
+                } catch (_: SecurityException) { false }
             }
             "WRITE_EXTERNAL_STORAGE" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

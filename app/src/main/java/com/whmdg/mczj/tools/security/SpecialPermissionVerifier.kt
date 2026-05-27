@@ -38,9 +38,26 @@ object SpecialPermissionVerifier {
      * 2. 或者检测 Shizuku 是否运行且已对本应用授权（无感方式）
      */
     fun isAdbEnabled(context: Context): Boolean {
-        // 签名级权限，checkSelfPermission 不可靠，通过实际写入检测
-        val key = "toolbox_wss_check"
+        // 1. 通过 PackageManager 检查 WRITE_SECURE_SETTINGS 是否已授予
         val hasSecureSettings = try {
+            val pkgInfo = context.packageManager.getPackageInfo(
+                context.packageName,
+                PackageManager.GET_PERMISSIONS
+            )
+            val idx = pkgInfo.requestedPermissions?.indexOf(
+                android.Manifest.permission.WRITE_SECURE_SETTINGS
+            ) ?: -1
+            idx >= 0 && (pkgInfo.requestedPermissionsFlags!![idx] and
+                    PackageManager.REQUESTED_PERMISSION_GRANTED) != 0
+        } catch (_: Exception) {
+            false
+        }
+
+        if (hasSecureSettings) return true
+
+        // 2. 降级：通过写入 Settings.Secure 检测（部分设备有效）
+        val key = "toolbox_wss_check"
+        val writeTest = try {
             Settings.Secure.putString(context.contentResolver, key, "1")
             val result = Settings.Secure.getString(context.contentResolver, key)
             Settings.Secure.putString(context.contentResolver, key, null)
@@ -49,7 +66,7 @@ object SpecialPermissionVerifier {
             false
         }
 
-        if (hasSecureSettings) return true
+        if (writeTest) return true
 
         return isShizukuAuthorized(context)
     }
