@@ -67,6 +67,9 @@ sealed class Screen {
     object AppPermissions : Screen()
     object PermissionManagementConfig : Screen()
     object FileManager : Screen()
+    object BatchDownloader : Screen()
+    object FADownloader : Screen()
+    object FALogin : Screen()
     object ThemeSettings : Screen()
     object EncryptionHome : Screen()
     object VaultCreate : Screen()
@@ -239,6 +242,29 @@ fun MainAppContainer() {
                 onBack = { navigateBack() }
             )
         }
+        is Screen.BatchDownloader -> {
+            com.whmdg.mczj.tools.ui.download.BatchDownloaderScreen(
+                onBack = { navigateBack() },
+                onNavigate = { navigateTo(it) }
+            )
+        }
+        is Screen.FADownloader -> {
+            com.whmdg.mczj.tools.ui.download.FADownloaderScreen(
+                onBack = { navigateBack() },
+                onLogin = { navigateTo(Screen.FALogin) }
+            )
+        }
+        is Screen.FALogin -> {
+            com.whmdg.mczj.tools.ui.download.FALoginScreen(
+                onBack = { navigateBack() },
+                onLoginSuccess = { cookie ->
+                    com.whmdg.mczj.tools.ui.download.FADownloaderViewModel.saveCookieStatic(
+                        context, cookie
+                    )
+                    navigateBack()
+                }
+            )
+        }
     }
 }
 
@@ -325,6 +351,12 @@ fun HomeTab(onNavigate: (Screen) -> Unit) {
                 subtitle = "查看和管理应用权限",
                 icon = Icons.Default.Security,
                 onClick = { onNavigate(Screen.AppPermissions) }
+            )
+            CompactSettingsItem(
+                title = "批量下载器",
+                subtitle = "FA 图片批量下载等工具",
+                icon = Icons.Default.Download,
+                onClick = { onNavigate(Screen.BatchDownloader) }
             )
         }
     }
