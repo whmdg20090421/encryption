@@ -31,6 +31,7 @@ data class FAUiState(
     val skipExisting: Boolean = true,
     val useCache: Boolean = true,
     val isLoggedIn: Boolean = false,
+    val cookieExpired: Boolean = false,
     val isDownloading: Boolean = false,
     val logs: List<DownloadLog> = emptyList(),
     val downloadedCount: Int = 0,
@@ -80,7 +81,12 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     fun saveCookie(cookie: String) {
         prefs.edit().putString("cookie", cookie).apply()
-        _uiState.update { it.copy(isLoggedIn = cookie.contains("a=")) }
+        _uiState.update { it.copy(isLoggedIn = cookie.contains("a="), cookieExpired = false) }
+    }
+
+    fun clearCookie() {
+        prefs.edit().remove("cookie").apply()
+        _uiState.update { it.copy(isLoggedIn = false, cookieExpired = false) }
     }
 
     fun loadCookie(): String = prefs.getString("cookie", "") ?: ""
@@ -142,6 +148,14 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                     // Check if login required
                     if (html.contains("available to registered users only")) {
                         addLog("该作者的作品仅对注册用户可见，请先登录")
+                        _uiState.update { it.copy(cookieExpired = true) }
+                        break
+                    }
+
+                    // Check if cookie expired (redirected to login)
+                    if (html.contains("id=\"login-form\"") && state.isLoggedIn) {
+                        addLog("Cookie 已失效，请重新登录")
+                        _uiState.update { it.copy(cookieExpired = true) }
                         break
                     }
 

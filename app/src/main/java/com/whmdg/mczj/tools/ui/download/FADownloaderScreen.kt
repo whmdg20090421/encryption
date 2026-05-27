@@ -93,6 +93,31 @@ fun FADownloaderScreen(
                             Text("登录")
                         }
                     }
+
+                    // Cookie expired dialog
+                    if (state.cookieExpired) {
+                        AlertDialog(
+                            onDismissRequest = { viewModel.clearCookie() },
+                            icon = {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            },
+                            title = { Text("Cookie 已失效") },
+                            text = { Text("FA 登录凭证已过期，请重新登录以继续使用。") },
+                            confirmButton = {
+                                Button(onClick = {
+                                    viewModel.clearCookie()
+                                    onLogin()
+                                }) { Text("重新登录") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { viewModel.clearCookie() }) { Text("取消") }
+                            }
+                        )
+                    }
                 }
             )
         }
