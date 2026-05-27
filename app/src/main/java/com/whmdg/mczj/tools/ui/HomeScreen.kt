@@ -285,24 +285,27 @@ fun HomeScreen(
 
 @Composable
 fun HomeTab(onNavigate: (Screen) -> Unit) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 12.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        item {
-            ToolTile(
-                icon = Icons.Default.Lock,
+        SettingsSection(
+            title = "工具",
+            icon = Icons.Default.Build
+        ) {
+            CompactSettingsItem(
                 title = "加密",
                 subtitle = "常用加密 / 解密工具",
-                onTap = { onNavigate(Screen.EncryptionHome) }
+                icon = Icons.Default.Lock,
+                onClick = { onNavigate(Screen.EncryptionHome) }
             )
-        }
-        item {
-            ToolTile(
-                icon = Icons.Default.Folder,
+            CompactSettingsItem(
                 title = "文件管理器",
                 subtitle = "双面板文件浏览工具",
-                onTap = { onNavigate(Screen.FileManager) }
+                icon = Icons.Default.Folder,
+                onClick = { onNavigate(Screen.FileManager) }
             )
         }
     }
@@ -535,32 +538,17 @@ fun VaultsListTab(
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
                     )
                 ) {
-                    ListItem(
-                        headlineContent = { 
-                            Text(
-                                text = vault.name,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            ) 
-                        },
-                        leadingContent = {
-                            Icon(
-                                imageVector = Icons.Default.Lock, 
-                                contentDescription = null, 
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        },
-                        colors = ListItemDefaults.colors(
-                            containerColor = androidx.compose.ui.graphics.Color.Transparent
-                        ),
-                        modifier = Modifier.combinedClickable(
-                            onClick = {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .combinedClickable(
+                                onClick = {
                                 // 第一步：三副本校验
                                 val vaultDir = File(vault.relativePath)
                                 val verifyResult = try {
@@ -613,8 +601,39 @@ fun VaultsListTab(
                             onLongClick = {
                                 activeVaultForMenu = vault
                             }
+                            ),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
                         )
-                    )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = vault.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = if (vault.location == StorageLocation.INTERNAL) "内部存储" else "外部存储",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
             }
         }
@@ -823,64 +842,50 @@ fun EncryptionSettingsTab(settings: EncryptionSettings) {
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            item {
-                Text(
-                    text = "加密偏好",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            SettingsSection(
+                title = "加密偏好",
+                icon = Icons.Default.Check
+            ) {
+                CompactSettingsToggle(
+                    title = "解密前二次确认",
+                    subtitle = "点击解密按钮时弹窗确认，避免误操作",
+                    icon = Icons.Default.Check,
+                    checked = settings.confirmBeforeDecrypt,
+                    onCheckedChange = { settings.setConfirmBeforeDecrypt(it) }
                 )
             }
-            item {
-                ListItem(
-                    headlineContent = { Text("解密前二次确认") },
-                    supportingContent = { Text("点击解密按钮时弹窗确认，避免误操作") },
-                    leadingContent = { Icon(Icons.Default.Check, contentDescription = null) },
-                    trailingContent = {
-                        Switch(
-                            checked = settings.confirmBeforeDecrypt,
-                            onCheckedChange = { settings.setConfirmBeforeDecrypt(it) }
-                        )
+
+            SettingsSection(
+                title = "安全增强",
+                icon = Icons.Default.Lock
+            ) {
+                CompactSettingsToggle(
+                    title = "启用 TEE 快速解锁",
+                    subtitle = "生物认证即可代替每次输入密码，解锁 token 存放于 Android Keystore (TEE)",
+                    icon = Icons.Default.Lock,
+                    checked = settings.enableTeeQuickUnlock,
+                    onCheckedChange = { checked ->
+                        if (checked) {
+                            triggerEnableTeeQuickUnlock()
+                        } else {
+                            triggerDisableTeeQuickUnlock()
+                        }
                     }
                 )
             }
-            item {
-                Text(
-                    text = "安全增强",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 8.dp)
-                )
-            }
-            item {
-                ListItem(
-                    headlineContent = { Text("启用 TEE 快速解锁") },
-                    supportingContent = { Text("生物认证即可代替每次输入密码，解锁 token 存放于 Android Keystore (TEE)") },
-                    leadingContent = { Icon(Icons.Default.Lock, contentDescription = null) },
-                    trailingContent = {
-                        Switch(
-                            checked = settings.enableTeeQuickUnlock,
-                            onCheckedChange = { checked ->
-                                if (checked) {
-                                    triggerEnableTeeQuickUnlock()
-                                } else {
-                                    // 先验证指纹，成功后再弹警告
-                                    triggerDisableTeeQuickUnlock()
-                                }
-                            }
-                        )
-                    }
-                )
-            }
-            item {
-                Text(
-                    text = "以上设置仅对\"加密\"模块生效，会立即写入设备本地 SharedPreferences，下次启动 App 自动恢复。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(16.dp)
-                )
-            }
+
+            Text(
+                text = "以上设置仅对\"加密\"模块生效，会立即写入设备本地 SharedPreferences，下次启动 App 自动恢复。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(top = 8.dp)
+            )
         }
 
         // 设备未录入指纹警告弹窗
@@ -1095,6 +1100,52 @@ private fun CompactSettingsItem(
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(16.dp)
+        )
+    }
+}
+
+@Composable
+private fun CompactSettingsToggle(
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.padding(start = 8.dp)
         )
     }
 }
