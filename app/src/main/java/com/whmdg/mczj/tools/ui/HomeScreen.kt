@@ -63,6 +63,7 @@ sealed class Screen {
     object PermissionSettings : Screen()
     object SpecialPermissions : Screen()
     object FileManager : Screen()
+    object ThemeSettings : Screen()
     object EncryptionHome : Screen()
     object VaultCreate : Screen()
     data class VaultOpen(val session: VaultSession) : Screen()
@@ -179,6 +180,11 @@ fun MainAppContainer() {
         }
         is Screen.PermissionSettings -> {
             PermissionSettingsScreen(
+                onBack = { navigateBack() }
+            )
+        }
+        is Screen.ThemeSettings -> {
+            ThemeSettingsScreen(
                 onBack = { navigateBack() }
             )
         }
@@ -917,6 +923,61 @@ fun EncryptionSettingsTab(settings: EncryptionSettings) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ThemeSettingsScreen(onBack: () -> Unit) {
+    val isDarkMode = com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode.current
+    val onToggleTheme = com.whmdg.mczj.tools.ui.theme.LocalOnToggleTheme.current
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("主题") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            item {
+                Text(
+                    text = "背景主题",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp)
+                )
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text(if (isDarkMode) "黑夜" else "白天") },
+                    supportingContent = {
+                        Text(if (isDarkMode) "深色背景，浅色文字" else "浅色背景，深色文字")
+                    },
+                    leadingContent = {
+                        Icon(
+                            if (isDarkMode) Icons.Default.DarkMode else Icons.Default.LightMode,
+                            contentDescription = null
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = isDarkMode,
+                            onCheckedChange = { onToggleTheme(it) }
+                        )
+                    }
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun SettingsTab(onNavigate: (Screen) -> Unit) {
     LazyColumn(
@@ -924,13 +985,60 @@ fun SettingsTab(onNavigate: (Screen) -> Unit) {
         contentPadding = PaddingValues(vertical = 12.dp)
     ) {
         item {
-            ListItem(
-                headlineContent = { Text("安全") },
-                leadingContent = { Icon(Icons.Default.Lock, contentDescription = "安全") },
-                trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "进入") },
-                modifier = Modifier.clickable { onNavigate(Screen.Security) }
-            )
+            FrostedGlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .clickable { onNavigate(Screen.ThemeSettings) }
+            ) {
+                ListItem(
+                    headlineContent = { Text("主题") },
+                    leadingContent = { Icon(Icons.Default.DarkMode, contentDescription = "主题") },
+                    trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "进入") },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                )
+            }
         }
+        item {
+            FrostedGlassCard(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .clickable { onNavigate(Screen.Security) }
+            ) {
+                ListItem(
+                    headlineContent = { Text("安全") },
+                    leadingContent = { Icon(Icons.Default.Lock, contentDescription = "安全") },
+                    trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "进入") },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun FrostedGlassCard(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+        tonalElevation = 2.dp,
+        shadowElevation = 4.dp,
+        border = androidx.compose.foundation.BorderStroke(
+            width = 0.5.dp,
+            brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                colors = listOf(
+                    Color.White.copy(alpha = 0.5f),
+                    Color.White.copy(alpha = 0.15f)
+                )
+            )
+        )
+    ) {
+        content()
     }
 }
 
