@@ -567,12 +567,15 @@ fun VaultOpenScreen(
                                 }
                                 // Bottom 1/3: file size (files only)
                                 if (!entry.isDirectory) {
-                                    Box(
+                                    Row(
                                         modifier = Modifier
                                             .weight(0.5f)
-                                            .fillMaxWidth(),
-                                        contentAlignment = Alignment.Center
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 4.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        Spacer(modifier = Modifier)
                                         Text(
                                             text = compactSize(entry.file.length()),
                                             style = MaterialTheme.typography.bodySmall,

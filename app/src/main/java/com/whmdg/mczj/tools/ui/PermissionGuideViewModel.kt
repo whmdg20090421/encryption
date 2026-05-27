@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+data class PermissionStatus(val name: String, val isGranted: Boolean)
+
 class PermissionGuideViewModel : ViewModel() {
 
     enum class Step {
@@ -33,7 +35,9 @@ class PermissionGuideViewModel : ViewModel() {
         val hasLocationPermission: Boolean = false,
         val allBasicPermissionsGranted: Boolean = false,
         val selectedPermissionLevel: AndroidPermissionLevel? = null,
-        val isCompleted: Boolean = false
+        val isCompleted: Boolean = false,
+        val validationError: String? = null,
+        val showStatusPage: Boolean = false
     )
 
     private val _uiState = MutableStateFlow(UiState())
@@ -84,15 +88,43 @@ class PermissionGuideViewModel : ViewModel() {
     }
 
     fun selectPermissionLevel(level: AndroidPermissionLevel) {
-        _uiState.update { it.copy(selectedPermissionLevel = level) }
+        _uiState.update { it.copy(selectedPermissionLevel = level, validationError = null) }
     }
 
     fun savePermissionLevel(context: Context) {
         val level = _uiState.value.selectedPermissionLevel ?: return
+
+        // 校验权限是否可用
+        if (!validatePermissionLevel(context, level)) {
+            _uiState.update {
+                it.copy(validationError = getValidationErrorMessage(level))
+            }
+            return
+        }
+
         viewModelScope.launch {
             val sp = context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE)
-            sp.edit().putString("target_permission_level", level.name).apply()
+            sp.edit()
+                .putString("target_permission_level", level.name)
+                .putBoolean("has_completed_guide", true)
+                .apply()
             _uiState.update { it.copy(isCompleted = true) }
+        }
+    }
+
+    fun clearValidationError() {
+        _uiState.update { it.copy(validationError = null) }
+    }
+
+    fun enterStatusPage() {
+        _uiState.update { it.copy(showStatusPage = true) }
+    }
+
+    fun resetGuide(context: Context) {
+        val sp = context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE)
+        sp.edit().remove("has_completed_guide").apply()
+        _uiState.update {
+            UiState() // 重置为初始状态
         }
     }
 
@@ -106,6 +138,86 @@ class PermissionGuideViewModel : ViewModel() {
                             newState.hasLocationPermission
                 )
             }
+        }
+    }
+
+    companion object {
+        /** 检查引导是否已完成 */
+        fun isGuideCompleted(context: Context): Boolean {
+            val sp = context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE)
+            return sp.getBoolean("has_completed_guide", false)
+        }
+
+        /** 获取当前已保存的权限级别 */
+        fun getSavedLevel(context: Context): AndroidPermissionLevel? {
+            val sp = context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE)
+            val levelStr = sp.getString("target_permission_level", null) ?: return null
+            return try {
+                AndroidPermissionLevel.valueOf(levelStr)
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        /** 校验指定权限级别是否可用 */
+        fun validatePermissionLevel(context: Context, level: AndroidPermissionLevel): Boolean {
+            return when (level) {
+                AndroidPermissionLevel.STANDARD -> true
+                AndroidPermissionLevel.ACCESSIBILITY -> SpecialPermissionVerifier.isAccessibilityEnabled(context)
+                AndroidPermissionLevel.ADB -> SpecialPermissionVerifier.isAdbEnabled(context)
+                AndroidPermissionLevel.ADMIN -> SpecialPermissionVerifier.isDeviceAdminActive(context)
+                AndroidPermissionLevel.ROOT -> SpecialPermissionVerifier.isRootAvailable()
+            }
+        }
+
+        /** 获取校验失败的错误信息 */
+        fun getValidationErrorMessage(level: AndroidPermissionLevel): String {
+            return when (level) {
+                AndroidPermissionLevel.STANDARD -> ""
+                AndroidPermissionLevel.ACCESSIBILITY -> "无障碍服务未启用。请前往系统设置 → 无障碍 中启用本应用的无障碍服务。"
+                AndroidPermissionLevel.ADB -> "ADB 权限不可用。请通过 Shizuku 授权或 USB 调试授予 WRITE_SECURE_SETTINGS 权限。"
+                AndroidPermissionLevel.ADMIN -> "设备管理器未激活。请在特殊权限中激活设备管理器。"
+                AndroidPermissionLevel.ROOT -> "Root 权限不可用。请确保已通过 Root 管理器（如 Magisk）授予本应用 su 授权。"
+            }
+        }
+
+        /** 获取指定级别的所有权限状态 */
+        fun getPermissionStatusForLevel(context: Context, level: AndroidPermissionLevel): List<PermissionStatus> {
+            val baseStatuses = listOf(
+                PermissionStatus("存储权限", isGranted = checkStoragePermission(context)),
+                PermissionStatus("悬浮窗权限", isGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Settings.canDrawOverlays(context) else true),
+                PermissionStatus("电池优化豁免", isGranted = checkBatteryOptimization(context)),
+                PermissionStatus("位置权限", isGranted = checkLocationPermission(context))
+            )
+            return when (level) {
+                AndroidPermissionLevel.STANDARD -> baseStatuses
+                AndroidPermissionLevel.ACCESSIBILITY -> baseStatuses + PermissionStatus("无障碍服务", isGranted = SpecialPermissionVerifier.isAccessibilityEnabled(context))
+                AndroidPermissionLevel.ADB -> baseStatuses + PermissionStatus("ADB/Shizuku", isGranted = SpecialPermissionVerifier.isAdbEnabled(context))
+                AndroidPermissionLevel.ADMIN -> baseStatuses + PermissionStatus("设备管理器", isGranted = SpecialPermissionVerifier.isDeviceAdminActive(context))
+                AndroidPermissionLevel.ROOT -> baseStatuses + PermissionStatus("Root 权限", isGranted = SpecialPermissionVerifier.isRootAvailable())
+            }
+        }
+
+        private fun checkStoragePermission(context: Context): Boolean {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Environment.isExternalStorageManager()
+            } else {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+
+        private fun checkBatteryOptimization(context: Context): Boolean {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                pm.isIgnoringBatteryOptimizations(context.packageName)
+            } else {
+                true
+            }
+        }
+
+        private fun checkLocationPermission(context: Context): Boolean {
+            return ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.whmdg.mczj.tools.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -20,8 +21,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -30,7 +33,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -39,7 +41,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.security.AndroidPermissionLevel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val INTRO_PAGES_COUNT = 3
@@ -57,6 +58,47 @@ fun SpecialPermissionsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val uiState by viewModel.uiState.collectAsState()
+
+    // 引导是否已完成
+    var guideCompleted by remember { mutableStateOf(PermissionGuideViewModel.isGuideCompleted(context)) }
+
+    // 引导完成或 isCompleted 变为 true 时切换到状态页
+    LaunchedEffect(uiState.isCompleted) {
+        if (uiState.isCompleted) {
+            guideCompleted = true
+        }
+    }
+
+    if (guideCompleted) {
+        PermissionStatusPage(
+            onBack = onBack,
+            onReconfigure = {
+                viewModel.resetGuide(context)
+                guideCompleted = false
+            }
+        )
+    } else {
+        PermissionGuideWizard(
+            onBack = onBack,
+            viewModel = viewModel,
+            uiState = uiState
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 引导向导（首次使用）
+// ═══════════════════════════════════════════════════════════════
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun PermissionGuideWizard(
+    onBack: () -> Unit,
+    viewModel: PermissionGuideViewModel,
+    uiState: PermissionGuideViewModel.UiState
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val pagerState = rememberPagerState(pageCount = { TOTAL_PAGES_COUNT })
     var showPermissionWarning by remember { mutableStateOf(false) }
 
@@ -88,11 +130,19 @@ fun SpecialPermissionsScreen(
         }
     }
 
-    LaunchedEffect(uiState.isCompleted) {
-        if (uiState.isCompleted) {
-            delay(500)
-            onBack()
-        }
+    // 校验失败弹窗
+    if (uiState.validationError != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.clearValidationError() },
+            icon = {
+                Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+            },
+            title = { Text("权限不足") },
+            text = { Text(uiState.validationError!!) },
+            confirmButton = {
+                Button(onClick = { viewModel.clearValidationError() }) { Text("确定") }
+            }
+        )
     }
 
     if (showPermissionWarning) {
@@ -297,6 +347,329 @@ fun SpecialPermissionsScreen(
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 权限状态页面（引导完成后显示）
+// ═══════════════════════════════════════════════════════════════
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PermissionStatusPage(
+    onBack: () -> Unit,
+    onReconfigure: () -> Unit
+) {
+    val context = LocalContext.current
+    val savedLevel = PermissionGuideViewModel.getSavedLevel(context) ?: AndroidPermissionLevel.STANDARD
+    var viewingLevel by remember { mutableStateOf(savedLevel) }
+    var showSetDialog by remember { mutableStateOf(false) }
+    var showErrorDialog by remember { mutableStateOf<String?>(null) }
+
+    val levels = AndroidPermissionLevel.entries
+
+    // 刷新权限状态
+    var permissionStatuses by remember {
+        mutableStateOf(PermissionGuideViewModel.getPermissionStatusForLevel(context, viewingLevel))
+    }
+    LaunchedEffect(viewingLevel) {
+        permissionStatuses = PermissionGuideViewModel.getPermissionStatusForLevel(context, viewingLevel)
+    }
+
+    // 设为当前级别确认弹窗
+    if (showSetDialog) {
+        AlertDialog(
+            onDismissRequest = { showSetDialog = false },
+            icon = {
+                Icon(Icons.Default.AdminPanelSettings, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            },
+            title = { Text("切换权限级别") },
+            text = { Text("确定将权限级别切换为「${getLevelDisplayName(viewingLevel)}」？") },
+            confirmButton = {
+                Button(onClick = {
+                    showSetDialog = false
+                    if (PermissionGuideViewModel.validatePermissionLevel(context, viewingLevel)) {
+                        val sp = context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE)
+                        sp.edit().putString("target_permission_level", viewingLevel.name).apply()
+                        permissionStatuses = PermissionGuideViewModel.getPermissionStatusForLevel(context, viewingLevel)
+                    } else {
+                        showErrorDialog = PermissionGuideViewModel.getValidationErrorMessage(viewingLevel)
+                    }
+                }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSetDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // 校验失败弹窗
+    if (showErrorDialog != null) {
+        AlertDialog(
+            onDismissRequest = { showErrorDialog = null },
+            icon = {
+                Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+            },
+            title = { Text("权限不足") },
+            text = { Text(showErrorDialog!!) },
+            confirmButton = {
+                Button(onClick = { showErrorDialog = null }) { Text("确定") }
+            }
+        )
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("特殊权限状态") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = {
+                        permissionStatuses = PermissionGuideViewModel.getPermissionStatusForLevel(context, viewingLevel)
+                    }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+        ) {
+            // 顶部当前级别卡片
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Shield,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                "当前权限级别",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                            )
+                            Text(
+                                getLevelDisplayName(savedLevel),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                        val allGranted = permissionStatuses.all { it.isGranted } && viewingLevel == savedLevel
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (allGranted) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                            else MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                if (allGranted) "已激活" else "未完全激活",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = if (allGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 级别切换 TabRow
+            ScrollableTabRow(
+                selectedTabIndex = levels.indexOf(viewingLevel).coerceAtLeast(0),
+                modifier = Modifier.fillMaxWidth(),
+                edgePadding = 16.dp,
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.primary
+            ) {
+                levels.forEach { level ->
+                    Tab(
+                        selected = viewingLevel == level,
+                        onClick = { viewingLevel = level },
+                        text = {
+                            Text(
+                                getLevelDisplayName(level),
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    )
+                }
+            }
+
+            // 级别描述
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Text(
+                    getLevelDescription(viewingLevel),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(16.dp)
+                )
+            }
+
+            // 权限状态列表
+            Text(
+                "权限状态",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+            ) {
+                Column(modifier = Modifier.padding(8.dp)) {
+                    permissionStatuses.forEachIndexed { index, status ->
+                        PermissionStatusRow(status)
+                        if (index < permissionStatuses.lastIndex) {
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // 底部操作按钮
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (viewingLevel == savedLevel) {
+                    // 当前正在使用
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "当前正在使用",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                } else {
+                    // 设为当前级别
+                    Button(
+                        onClick = { showSetDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Shield, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("设为当前级别")
+                    }
+                }
+
+                // 重新配置
+                OutlinedButton(
+                    onClick = onReconfigure,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("重新配置")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+private fun PermissionStatusRow(status: PermissionStatus) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = if (status.isGranted) Icons.Default.CheckCircle else Icons.Default.Cancel,
+            contentDescription = null,
+            tint = if (status.isGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            status.name,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            if (status.isGranted) "已激活" else "未激活",
+            style = MaterialTheme.typography.labelMedium,
+            color = if (status.isGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+        )
+    }
+}
+
+private fun getLevelDisplayName(level: AndroidPermissionLevel): String {
+    return when (level) {
+        AndroidPermissionLevel.STANDARD -> "普通权限"
+        AndroidPermissionLevel.ACCESSIBILITY -> "无障碍权限"
+        AndroidPermissionLevel.ADB -> "ADB 权限"
+        AndroidPermissionLevel.ADMIN -> "管理员权限"
+        AndroidPermissionLevel.ROOT -> "Root 权限"
+    }
+}
+
+private fun getLevelDescription(level: AndroidPermissionLevel): String {
+    return when (level) {
+        AndroidPermissionLevel.STANDARD -> "使用标准 Android 应用权限，受系统沙盒保护。适用于一般文件管理和基础工具功能。"
+        AndroidPermissionLevel.ACCESSIBILITY -> "通过无障碍服务模拟屏幕手势操作，无需 Root。可实现自动化操作、辅助功能等高级特性。"
+        AndroidPermissionLevel.ADB -> "通过 ADB 调试授权或 Shizuku 获得高级系统权限。可修改系统设置、管理应用操作等。"
+        AndroidPermissionLevel.ADMIN -> "激活设备管理器获得系统级权限。可执行设备锁定、密码策略、远程擦除等管理操作。"
+        AndroidPermissionLevel.ROOT -> "获取最高级超级用户权限，解除一切系统沙箱限制。可直接访问系统文件、修改受保护配置。"
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 引导向导子页面（保留原有 UI）
+// ═══════════════════════════════════════════════════════════════
 
 @Composable
 private fun IntroductionPage(title: String, description: String, pageIndex: Int) {
