@@ -47,6 +47,7 @@ fun FALoginScreen(
                     WebView(context).apply {
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
+                        settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
                         settings.userAgentString =
                             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36"
 
