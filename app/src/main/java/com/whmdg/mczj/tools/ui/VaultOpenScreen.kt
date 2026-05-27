@@ -18,7 +18,6 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -541,29 +540,26 @@ fun VaultOpenScreen(
                                     .weight(1f)
                                     .fillMaxHeight()
                             ) {
-                                var lineCount by remember { mutableIntStateOf(1) }
-                                val infoWeight = if (lineCount <= 1) 1f else 0.5f
-                                // Section 1-2: filename area
+                                // Top 2/3: filename, always centered
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .fillMaxWidth()
+                                        .fillMaxWidth(),
+                                    contentAlignment = Alignment.Center
                                 ) {
                                     Text(
                                         text = entry.displayName,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                         textAlign = TextAlign.Center,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        modifier = Modifier.fillMaxWidth().wrapContentHeight(Alignment.CenterVertically),
-                                        onTextLayout = { lineCount = it.lineCount }
+                                        style = MaterialTheme.typography.bodyMedium
                                     )
                                 }
-                                // Section 3: file size (files only)
+                                // Bottom 1/3: file size (files only)
                                 if (!entry.isDirectory) {
                                     Box(
                                         modifier = Modifier
-                                            .weight(infoWeight)
+                                            .weight(0.5f)
                                             .fillMaxWidth(),
                                         contentAlignment = Alignment.Center
                                     ) {
@@ -574,7 +570,7 @@ fun VaultOpenScreen(
                                         )
                                     }
                                 } else {
-                                    Spacer(modifier = Modifier.weight(infoWeight))
+                                    Spacer(modifier = Modifier.weight(0.5f))
                                 }
                             }
                             // Trailing decrypt button (files only)
