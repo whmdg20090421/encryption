@@ -64,6 +64,7 @@ sealed class Screen {
     object Security : Screen()
     object PermissionSettings : Screen()
     object SpecialPermissions : Screen()
+    object AppPermissions : Screen()
     object FileManager : Screen()
     object ThemeSettings : Screen()
     object EncryptionHome : Screen()
@@ -222,6 +223,11 @@ fun MainAppContainer() {
                 onBack = { navigateBack() }
             )
         }
+        is Screen.AppPermissions -> {
+            AppPermissionsScreen(
+                onBack = { navigateBack() }
+            )
+        }
         is Screen.FileManager -> {
             FileManagerScreen(
                 onBack = { navigateBack() }
@@ -307,6 +313,12 @@ fun HomeTab(onNavigate: (Screen) -> Unit) {
                 subtitle = "双面板文件浏览工具",
                 icon = Icons.Default.Folder,
                 onClick = { onNavigate(Screen.FileManager) }
+            )
+            CompactSettingsItem(
+                title = "应用权限管理",
+                subtitle = "查看和管理应用权限",
+                icon = Icons.Default.Security,
+                onClick = { onNavigate(Screen.AppPermissions) }
             )
         }
     }

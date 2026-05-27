@@ -1,159 +1,119 @@
 package com.whmdg.mczj.tools.ui
 
-import android.app.admin.DevicePolicyManager
-import android.content.ComponentName
-import android.content.Context
+import android.Manifest
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.whmdg.mczj.tools.security.MyDeviceAdminReceiver
-import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.whmdg.mczj.tools.security.AndroidPermissionLevel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
-enum class PermissionType(val displayName: String, val key: String, val desc: String) {
-    NORMAL("普通权限", "NORMAL", "标准应用权限，受系统沙盒保护限制较多。"),
-    ACCESSIBILITY("无障碍", "ACCESSIBILITY", "无障碍辅助功能，允许模拟屏幕手势操作。"),
-    ADB("ADB权限", "ADB", "高级调试授权，可通过计算机运行 ADB 命令授予。"),
-    ADMIN("管理员", "ADMIN", "系统级设备管理器，提供强制锁定及防护特权。"),
-    ROOT("Root权限", "ROOT", "最高级超级用户控制权限，解除一切系统沙箱约束。")
-}
+private const val INTRO_PAGES_COUNT = 3
+private const val WELCOME_PAGE_INDEX = INTRO_PAGES_COUNT
+private const val BASIC_PERMISSIONS_PAGE_INDEX = INTRO_PAGES_COUNT + 1
+private const val PERMISSION_LEVEL_PAGE_INDEX = INTRO_PAGES_COUNT + 2
+private const val TOTAL_PAGES_COUNT = INTRO_PAGES_COUNT + 3
 
-data class MatrixRow(
-    val description: String,
-    val supportMap: Map<PermissionType, Boolean>
-)
-
-val capabilityMatrix = listOf(
-    MatrixRow(
-        "运行普通工具 (如文件保险箱等)",
-        mapOf(
-            PermissionType.NORMAL to true,
-            PermissionType.ACCESSIBILITY to true,
-            PermissionType.ADB to true,
-            PermissionType.ADMIN to true,
-            PermissionType.ROOT to true
-        )
-    ),
-    MatrixRow(
-        "模拟全局手势 (实现免Root屏幕辅助)",
-        mapOf(
-            PermissionType.NORMAL to false,
-            PermissionType.ACCESSIBILITY to true,
-            PermissionType.ADB to true,
-            PermissionType.ADMIN to false,
-            PermissionType.ROOT to true
-        )
-    ),
-    MatrixRow(
-        "读取全局系统日志 (Logcat 监控)",
-        mapOf(
-            PermissionType.NORMAL to false,
-            PermissionType.ACCESSIBILITY to false,
-            PermissionType.ADB to true,
-            PermissionType.ADMIN to false,
-            PermissionType.ROOT to true
-        )
-    ),
-    MatrixRow(
-        "修改安全系统配置 (Secure Settings)",
-        mapOf(
-            PermissionType.NORMAL to false,
-            PermissionType.ACCESSIBILITY to false,
-            PermissionType.ADB to true,
-            PermissionType.ADMIN to false,
-            PermissionType.ROOT to true
-        )
-    ),
-    MatrixRow(
-        "强制锁定屏幕及擦除数据 (防盗防丢)",
-        mapOf(
-            PermissionType.NORMAL to false,
-            PermissionType.ACCESSIBILITY to false,
-            PermissionType.ADB to false,
-            PermissionType.ADMIN to true,
-            PermissionType.ROOT to true
-        )
-    ),
-    MatrixRow(
-        "修改任意系统底层文件 (深度定制)",
-        mapOf(
-            PermissionType.NORMAL to false,
-            PermissionType.ACCESSIBILITY to false,
-            PermissionType.ADB to false,
-            PermissionType.ADMIN to false,
-            PermissionType.ROOT to true
-        )
-    )
-)
-
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun SpecialPermissionsScreen(onBack: () -> Unit) {
+fun SpecialPermissionsScreen(
+    onBack: () -> Unit,
+    viewModel: PermissionGuideViewModel = viewModel()
+) {
     val context = LocalContext.current
-    val sp = remember { context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE) }
+    val scope = rememberCoroutineScope()
+    val uiState by viewModel.uiState.collectAsState()
+    val pagerState = rememberPagerState(pageCount = { TOTAL_PAGES_COUNT })
+    var showPermissionWarning by remember { mutableStateOf(false) }
 
-    var activeType by remember { mutableStateOf(PermissionType.NORMAL) }
-    var verificationStatus by remember { mutableStateOf(false) }
-    var appliedPermission by remember { mutableStateOf(sp.getString("target_permission_level", "NORMAL") ?: "NORMAL") }
+    LaunchedEffect(Unit) { viewModel.checkPermissions(context) }
 
-    var showGuideDialog by remember { mutableStateOf(false) }
-    var useOnlyWhenNecessary by remember { mutableStateOf(sp.getBoolean("use_only_when_necessary", false)) }
-
-    // 当切换选中的权限时，重置校验状态
-    LaunchedEffect(activeType) {
-        verificationStatus = false
-    }
-
-    fun verifySelectedPermission() {
-        val possessed = when (activeType) {
-            PermissionType.NORMAL -> true
-            PermissionType.ACCESSIBILITY -> SpecialPermissionVerifier.isAccessibilityEnabled(context)
-            PermissionType.ADB -> SpecialPermissionVerifier.isAdbEnabled(context)
-            PermissionType.ADMIN -> SpecialPermissionVerifier.isDeviceAdminActive(context)
-            PermissionType.ROOT -> SpecialPermissionVerifier.isRootAvailable()
-        }
-
-        if (possessed) {
-            Toast.makeText(context, "【${activeType.displayName}】校验成功！已可应用该特权。", Toast.LENGTH_SHORT).show()
-            verificationStatus = true
-        } else {
-            Toast.makeText(context, "未检测到【${activeType.displayName}】，请先进行授权。", Toast.LENGTH_SHORT).show()
-            showGuideDialog = true
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            val readGranted = permissions[Manifest.permission.READ_EXTERNAL_STORAGE] ?: false
+            val writeGranted = permissions[Manifest.permission.WRITE_EXTERNAL_STORAGE] ?: false
+            if (readGranted && writeGranted) viewModel.checkPermissions(context)
         }
     }
 
-    fun applySelectedPermission() {
-        sp.edit().putString("target_permission_level", activeType.key).apply()
-        appliedPermission = activeType.key
-        Toast.makeText(context, "已成功应用特权模式：${activeType.displayName}", Toast.LENGTH_SHORT).show()
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+        val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
+        if (fineGranted || coarseGranted) viewModel.updateLocationPermission(true)
+    }
+
+    LaunchedEffect(pagerState.currentPage) {
+        when (pagerState.currentPage) {
+            in 0..WELCOME_PAGE_INDEX -> viewModel.setCurrentStep(PermissionGuideViewModel.Step.WELCOME)
+            BASIC_PERMISSIONS_PAGE_INDEX -> viewModel.setCurrentStep(PermissionGuideViewModel.Step.BASIC_PERMISSIONS)
+            PERMISSION_LEVEL_PAGE_INDEX -> viewModel.setCurrentStep(PermissionGuideViewModel.Step.PERMISSION_LEVEL)
+        }
+    }
+
+    LaunchedEffect(uiState.isCompleted) {
+        if (uiState.isCompleted) {
+            delay(500)
+            onBack()
+        }
+    }
+
+    if (showPermissionWarning) {
+        AlertDialog(
+            onDismissRequest = { showPermissionWarning = false },
+            icon = {
+                Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+            },
+            title = { Text("权限未全部授予", style = MaterialTheme.typography.titleMedium) },
+            text = { Text("部分基础权限尚未授予，某些功能可能受限。是否继续？", style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                Button(onClick = {
+                    showPermissionWarning = false
+                    scope.launch { pagerState.animateScrollToPage(PERMISSION_LEVEL_PAGE_INDEX) }
+                }) { Text("继续") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermissionWarning = false }) { Text("返回") }
+            }
+        )
     }
 
     Scaffold(
@@ -172,345 +132,422 @@ fun SpecialPermissionsScreen(onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 当前生效的特权显示
-            Card(
+            LinearProgressIndicator(
+                progress = { (pagerState.currentPage + 1).toFloat() / pagerState.pageCount },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Default.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(32.dp)
+                    .padding(vertical = 8.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                userScrollEnabled = false
+            ) { page ->
+                when (page) {
+                    0 -> IntroductionPage("欢迎使用工具箱", "本工具箱需要一些系统权限来提供完整功能体验。接下来我们将引导您完成权限配置。", 0)
+                    1 -> IntroductionPage("权限说明", "工具箱支持多种权限级别，从普通权限到 Root 权限。不同权限级别解锁不同的系统交互能力。", 1)
+                    2 -> IntroductionPage("开始配置", "让我们先检查一些基础权限，然后选择适合您的权限级别。", 2)
+                    WELCOME_PAGE_INDEX -> WelcomePage()
+                    BASIC_PERMISSIONS_PAGE_INDEX -> BasicPermissionsPage(
+                        hasStoragePermission = uiState.hasStoragePermission,
+                        hasOverlayPermission = uiState.hasOverlayPermission,
+                        hasBatteryOptimizationExemption = uiState.hasBatteryOptimizationExemption,
+                        hasLocationPermission = uiState.hasLocationPermission,
+                        onStoragePermissionClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                try {
+                                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                        data = Uri.parse("package:${context.packageName}")
+                                    }
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {
+                                    try {
+                                        context.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                                    } catch (_: Exception) {
+                                        Toast.makeText(context, "无法打开存储权限设置", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            } else {
+                                storagePermissionLauncher.launch(arrayOf(
+                                    Manifest.permission.READ_EXTERNAL_STORAGE,
+                                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                                ))
+                            }
+                        },
+                        onOverlayPermissionClick = {
+                            try {
+                                context.startActivity(Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                ))
+                            } catch (_: Exception) {
+                                Toast.makeText(context, "无法打开悬浮窗权限设置", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onBatteryOptimizationClick = {
+                            try {
+                                context.startActivity(Intent(
+                                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                                ).apply { data = Uri.parse("package:${context.packageName}") })
+                            } catch (_: Exception) {
+                                try {
+                                    context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                } catch (_: Exception) {
+                                    Toast.makeText(context, "无法打开电池优化设置", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        onLocationPermissionClick = {
+                            locationPermissionLauncher.launch(arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            ))
+                        },
+                        onRefresh = { viewModel.checkPermissions(context) }
                     )
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column {
-                        Text(
-                            text = "当前应用特权模式",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                        )
-                        val activeDisplayName = PermissionType.values().find { it.key == appliedPermission }?.displayName ?: "未知"
-                        Text(
-                            text = activeDisplayName,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
+                    PERMISSION_LEVEL_PAGE_INDEX -> PermissionLevelPage(
+                        selectedLevel = uiState.selectedPermissionLevel,
+                        onLevelSelected = { viewModel.selectPermissionLevel(it) },
+                        onConfirm = { viewModel.savePermissionLevel(context) }
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // 五个气泡式切换按钮
+            // 底部导航按钮
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                PermissionType.values().forEach { type ->
-                    val isSelected = activeType == type
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(
-                                if (isSelected) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.surfaceVariant
-                            )
-                            .border(
-                                width = 1.dp,
-                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
-                                shape = RoundedCornerShape(20.dp)
-                            )
-                            .clickable { activeType = type }
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = type.displayName,
-                            color = if (isSelected) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                }
-            }
-
-            // 当前选中权限描述
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
-                )
-            ) {
-                Text(
-                    text = activeType.desc,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.padding(16.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // 表头栏
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
-                    .padding(vertical = 12.dp, horizontal = 16.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Box(modifier = Modifier.width(48.dp), contentAlignment = Alignment.Center) {
+                    IconButton(
+                        onClick = { scope.launch { if (pagerState.currentPage > 0) pagerState.animateScrollToPage(pagerState.currentPage - 1) } },
+                        enabled = pagerState.currentPage > 0
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "上一步",
+                            tint = if (pagerState.currentPage > 0) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                        )
+                    }
+                }
+
                 Text(
-                    text = "系统交互与操作能力对比",
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "当前支持",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = when (pagerState.currentPage) {
+                        in 0 until INTRO_PAGES_COUNT -> "介绍 ${pagerState.currentPage + 1}/$INTRO_PAGES_COUNT"
+                        WELCOME_PAGE_INDEX -> "欢迎"
+                        BASIC_PERMISSIONS_PAGE_INDEX -> "基础权限"
+                        PERMISSION_LEVEL_PAGE_INDEX -> "权限级别"
+                        else -> ""
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.width(72.dp)
+                    modifier = Modifier.weight(1f)
                 )
-            }
 
-            // 矩阵对比表
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .border(
-                        1.dp,
-                        MaterialTheme.colorScheme.outlineVariant,
-                        RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)
-                    )
-            ) {
-                items(capabilityMatrix) { row ->
-                    val supported = row.supportMap[activeType] ?: false
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 14.dp, horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = row.description,
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Box(
-                            modifier = Modifier.width(72.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (supported) {
-                                Icon(
-                                    Icons.Default.Check,
-                                    contentDescription = "支持",
-                                    tint = Color(0xFF2E7D32),
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "不支持",
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(24.dp)
-                                )
+                Box(modifier = Modifier.width(48.dp), contentAlignment = Alignment.Center) {
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                when {
+                                    pagerState.currentPage == PERMISSION_LEVEL_PAGE_INDEX &&
+                                            uiState.selectedPermissionLevel != null -> {
+                                        viewModel.savePermissionLevel(context)
+                                    }
+                                    pagerState.currentPage == BASIC_PERMISSIONS_PAGE_INDEX &&
+                                            !uiState.allBasicPermissionsGranted -> {
+                                        showPermissionWarning = true
+                                    }
+                                    pagerState.currentPage < pagerState.pageCount - 1 -> {
+                                        pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                                    }
+                                }
                             }
+                        },
+                        enabled = when (pagerState.currentPage) {
+                            in 0..WELCOME_PAGE_INDEX -> true
+                            BASIC_PERMISSIONS_PAGE_INDEX -> true
+                            PERMISSION_LEVEL_PAGE_INDEX -> uiState.selectedPermissionLevel != null
+                            else -> false
                         }
-                    }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // 非必要时不使用权限开关（带展开动画）
-            AnimatedVisibility(
-                visible = activeType != PermissionType.NORMAL,
-                enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
-                exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
-            ) {
-                Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "非必要时不使用权限",
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "开启时，优先以普通APP沙盒运行。仅在发生权限不足报错时，自动临时提权至所选的权限重新执行操作。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = useOnlyWhenNecessary,
-                            onCheckedChange = { checked ->
-                                useOnlyWhenNecessary = checked
-                                sp.edit().putBoolean("use_only_when_necessary", checked).apply()
+                        Icon(
+                            imageVector = if (pagerState.currentPage == PERMISSION_LEVEL_PAGE_INDEX) Icons.Default.Check
+                            else Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = if (pagerState.currentPage == PERMISSION_LEVEL_PAGE_INDEX) "完成" else "下一步",
+                            tint = when {
+                                pagerState.currentPage < BASIC_PERMISSIONS_PAGE_INDEX -> MaterialTheme.colorScheme.primary
+                                pagerState.currentPage == BASIC_PERMISSIONS_PAGE_INDEX -> MaterialTheme.colorScheme.primary
+                                pagerState.currentPage == PERMISSION_LEVEL_PAGE_INDEX && uiState.selectedPermissionLevel != null ->
+                                    MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
                             }
                         )
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-            }
-
-            // 校验 / 应用 操作按钮
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 16.dp),
-                horizontalArrangement = Arrangement.End
-            ) {
-                if (verificationStatus) {
-                    Button(
-                        onClick = { applySelectedPermission() },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF2E7D32)
-                        ),
-                        modifier = Modifier.width(120.dp)
-                    ) {
-                        Text("应用", fontWeight = FontWeight.Bold, color = Color.White)
-                    }
-                } else {
-                    Button(
-                        onClick = { verifySelectedPermission() },
-                        modifier = Modifier.width(120.dp)
-                    ) {
-                        Text("校验", fontWeight = FontWeight.Bold)
                     }
                 }
             }
         }
     }
+}
 
-    // 授权引导弹窗
-    if (showGuideDialog) {
-        AlertDialog(
-            onDismissRequest = { showGuideDialog = false },
-            title = { Text("如何获取【${activeType.displayName}】？") },
-            text = {
-                Column {
-                    when (activeType) {
-                        PermissionType.ACCESSIBILITY -> {
-                            Text("1. 点击下方“前往设置”按钮，系统将跳转至「无障碍服务」列表。")
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("2. 在已下载的服务/软件列表中找到「艨艟战舰无障碍服务」。")
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("3. 开启服务开关即可成功授权。")
-                        }
-                        PermissionType.ADMIN -> {
-                            Text("需要激活应用高级管理器权限。")
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("激活后本软件将拥有防盗锁屏、数据隔离保障等高级功能。")
-                        }
-                        PermissionType.ADB -> {
-                            Text("ADB 调试特权可以通过电脑或 Shizuku 应用进行授权：")
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("【方法一：使用 Shizuku (推荐)】")
-                            Text("如果您已安装并激活了 Shizuku，点击下方“启动 Shizuku”按钮，进入 Shizuku 客户端中对「工具箱」应用开启授权开关，即可完成免数据线无感 ADB 授权。")
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("【方法二：使用 USB 数据线连接电脑】")
-                            Text("请连接电脑，开启手机 USB 调试，并在命令行终端运行以下指令：")
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                Text(
-                                    text = "adb shell pm grant ${context.packageName} android.permission.WRITE_SECURE_SETTINGS",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                    modifier = Modifier.padding(12.dp),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                        PermissionType.ROOT -> {
-                            Text("本软件通过超级用户 su 接口校验 Root 权限。")
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("请确保您的设备已经解锁并成功刷入 Magisk 或 Kitsune Mask。")
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text("在校验时，超级用户管理器会弹出授权提示，请点击「允许」以授予 Root 访问权限。")
-                        }
-                        else -> {
-                            Text("无特殊获取要求。")
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                if (activeType == PermissionType.ACCESSIBILITY || activeType == PermissionType.ADMIN || activeType == PermissionType.ADB) {
-                    Button(onClick = {
-                        showGuideDialog = false
-                        try {
-                            if (activeType == PermissionType.ACCESSIBILITY) {
-                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                context.startActivity(intent)
-                            } else if (activeType == PermissionType.ADMIN) {
-                                val adminComponent = ComponentName(context, MyDeviceAdminReceiver::class.java)
-                                val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-                                    putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
-                                    putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "激活高级设备管理特权，提供更安全的防卸载及数据保障方案。")
-                                }
-                                context.startActivity(intent)
-                            } else if (activeType == PermissionType.ADB) {
-                                val intent = context.packageManager.getLaunchIntentForPackage("rikka.shizuku")
-                                if (intent != null) {
-                                    context.startActivity(intent)
-                                } else {
-                                    Toast.makeText(context, "未检测到 Shizuku 应用，请先前往应用商店或官网下载并安装。", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "无法跳转，请手动开启设置。", Toast.LENGTH_SHORT).show()
-                        }
-                    }) {
-                        Text(if (activeType == PermissionType.ADB) "启动 Shizuku" else "前往设置")
-                    }
-                } else {
-                    Button(onClick = { showGuideDialog = false }) {
-                        Text("知道了")
-                    }
-                }
-            },
-            dismissButton = {
-                if (activeType == PermissionType.ACCESSIBILITY || activeType == PermissionType.ADMIN || activeType == PermissionType.ADB) {
-                    TextButton(onClick = { showGuideDialog = false }) {
-                        Text("取消")
-                    }
+@Composable
+private fun IntroductionPage(title: String, description: String, pageIndex: Int) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(80.dp)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), CircleShape)
+                .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "#${pageIndex + 1}",
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Spacer(modifier = Modifier.height(32.dp))
+        Text(text = title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary, textAlign = TextAlign.Center)
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(text = description, style = MaterialTheme.typography.bodyLarge,
+            textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+@Composable
+private fun WelcomePage() {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(text = "权限配置向导", style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(text = "接下来我们将引导您完成基础权限检查和权限级别选择。",
+            style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurface)
+        Spacer(modifier = Modifier.height(32.dp))
+        Text(text = "请按下一步继续", style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+    }
+}
+
+@Composable
+private fun BasicPermissionsPage(
+    hasStoragePermission: Boolean,
+    hasOverlayPermission: Boolean,
+    hasBatteryOptimizationExemption: Boolean,
+    hasLocationPermission: Boolean,
+    onStoragePermissionClick: () -> Unit,
+    onOverlayPermissionClick: () -> Unit,
+    onBatteryOptimizationClick: () -> Unit,
+    onLocationPermissionClick: () -> Unit,
+    onRefresh: () -> Unit
+) {
+    var refreshRotation by remember { mutableStateOf(0f) }
+    val rotationAngle by animateFloatAsState(targetValue = refreshRotation, animationSpec = tween(500), label = "rotation")
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(text = "基础权限", style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(text = "以下权限用于保障工具箱的基本功能正常运行",
+            style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                PermissionItemRow("存储权限", "访问设备文件系统", hasStoragePermission, onStoragePermissionClick)
+                HorizontalDivider()
+                PermissionItemRow("悬浮窗权限", "显示悬浮窗和快捷操作", hasOverlayPermission, onOverlayPermissionClick)
+                HorizontalDivider()
+                PermissionItemRow("电池优化豁免", "后台持续运行服务", hasBatteryOptimizationExemption, onBatteryOptimizationClick)
+                HorizontalDivider()
+                PermissionItemRow("位置权限", "获取设备位置信息", hasLocationPermission, onLocationPermissionClick)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        OutlinedButton(onClick = {
+            refreshRotation += 360f
+            onRefresh()
+        }) {
+            Icon(Icons.Default.Refresh, contentDescription = null,
+                modifier = Modifier.size(16.dp).graphicsLayer { rotationZ = rotationAngle })
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("重新检查")
+        }
+
+        val allGranted = hasStoragePermission && hasOverlayPermission &&
+                hasBatteryOptimizationExemption && hasLocationPermission
+
+        AnimatedVisibility(visible = allGranted, enter = fadeIn(), exit = fadeOut()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                    .padding(12.dp)
+            ) {
+                Icon(Icons.Default.CheckCircle, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("所有基础权限已授予", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionItemRow(title: String, description: String, isGranted: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+            Text(text = description, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+        }
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .background(
+                    if (isGranted) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                    else MaterialTheme.colorScheme.error.copy(alpha = 0.1f),
+                    CircleShape
+                )
+                .border(1.dp,
+                    if (isGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = if (isGranted) Icons.Default.Check else Icons.Default.Close,
+                contentDescription = if (isGranted) "已授予" else "未授予",
+                tint = if (isGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(16.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun PermissionLevelPage(
+    selectedLevel: AndroidPermissionLevel?,
+    onLevelSelected: (AndroidPermissionLevel) -> Unit,
+    onConfirm: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(text = "选择权限级别", style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(text = "选择适合您设备状态的权限级别，不同级别解锁不同功能",
+            style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            PermissionLevelItem(AndroidPermissionLevel.STANDARD, "普通权限", "标准应用权限，受系统沙盒保护",
+                selectedLevel == AndroidPermissionLevel.STANDARD) { onLevelSelected(AndroidPermissionLevel.STANDARD) }
+            PermissionLevelItem(AndroidPermissionLevel.ACCESSIBILITY, "无障碍权限", "允许模拟屏幕手势操作，免 Root 辅助",
+                selectedLevel == AndroidPermissionLevel.ACCESSIBILITY) { onLevelSelected(AndroidPermissionLevel.ACCESSIBILITY) }
+            PermissionLevelItem(AndroidPermissionLevel.ADB, "ADB 权限", "高级调试授权，可通过 Shizuku 或 USB 调试授予",
+                selectedLevel == AndroidPermissionLevel.ADB) { onLevelSelected(AndroidPermissionLevel.ADB) }
+            PermissionLevelItem(AndroidPermissionLevel.ADMIN, "管理员权限", "系统级设备管理器，提供强制锁定及防护特权",
+                selectedLevel == AndroidPermissionLevel.ADMIN) { onLevelSelected(AndroidPermissionLevel.ADMIN) }
+            PermissionLevelItem(AndroidPermissionLevel.ROOT, "Root 权限", "最高级超级用户控制权限，解除一切系统沙箱约束",
+                selectedLevel == AndroidPermissionLevel.ROOT) { onLevelSelected(AndroidPermissionLevel.ROOT) }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Button(
+            onClick = onConfirm,
+            enabled = selectedLevel != null,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp)
+        ) {
+            Text("确认并应用", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(text = "可随时在安全设置中更改权限级别",
+            style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+    }
+}
+
+@Composable
+private fun PermissionLevelItem(
+    level: AndroidPermissionLevel,
+    title: String,
+    description: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(8.dp),
+        color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surface,
+        border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(20.dp)
+                    .background(
+                        if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                        CircleShape
+                    )
+                    .border(1.dp,
+                        if (isSelected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isSelected) {
+                    Icon(Icons.Default.Check, contentDescription = "已选择",
+                        tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(12.dp))
                 }
             }
-        )
+            Spacer(modifier = Modifier.width(16.dp))
+            Column {
+                Text(text = title, style = MaterialTheme.typography.titleSmall,
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                Text(text = description, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+            }
+        }
     }
 }
