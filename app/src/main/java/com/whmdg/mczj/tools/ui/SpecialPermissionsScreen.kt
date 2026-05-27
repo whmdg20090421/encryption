@@ -38,7 +38,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.whmdg.mczj.tools.security.AndroidPermissionLevel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -49,11 +48,11 @@ private const val BASIC_PERMISSIONS_PAGE_INDEX = INTRO_PAGES_COUNT + 1
 private const val PERMISSION_LEVEL_PAGE_INDEX = INTRO_PAGES_COUNT + 2
 private const val TOTAL_PAGES_COUNT = INTRO_PAGES_COUNT + 3
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun SpecialPermissionsScreen(
     onBack: () -> Unit,
-    viewModel: PermissionGuideViewModel = viewModel()
+    viewModel: PermissionGuideViewModel = remember { PermissionGuideViewModel() }
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
