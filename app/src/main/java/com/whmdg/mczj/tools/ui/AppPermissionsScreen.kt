@@ -578,7 +578,11 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
                                         }
                                         showOpsSheet = false
                                     } else {
-                                        errorMessage = "设置失败，请检查权限是否充足"
+                                        errorMessage = if (!SpecialPermissionVerifier.isRootAvailable()) {
+                                            "设置失败：AppOps 操作需要 Root 或 Shizuku 权限才能执行。\n\n请通过 Root 管理器（如 Magisk）授予 su 授权，或启动 Shizuku 并授权本应用，或切换到普通模式。"
+                                        } else {
+                                            "设置失败：命令执行出错，请重试"
+                                        }
                                         showError = true
                                     }
                                 }
@@ -968,7 +972,12 @@ private suspend fun getAppPermissions(packageName: String, context: Context): Li
 private suspend fun readAppOpsState(packageName: String, context: Context): Map<String, String> = withContext(Dispatchers.IO) {
     val result = mutableMapOf<String, String>()
     try {
-        val output = SpecialPermissionVerifier.executeShellCommandFull("appops get $packageName")
+        val cmd = "appops get $packageName"
+        val output = when {
+            SpecialPermissionVerifier.isRootAvailable() -> SpecialPermissionVerifier.executeRootCommandFull(cmd)
+            SpecialPermissionVerifier.isShizukuAuthorized(context) -> SpecialPermissionVerifier.executeShizukuCommand(cmd)
+            else -> SpecialPermissionVerifier.executeShellCommandFull(cmd)
+        }
         val lines = output.first.split("\n")
         for (line in lines) {
             val trimmed = line.trim()
@@ -995,7 +1004,12 @@ private suspend fun readAppOpsState(packageName: String, context: Context): Map<
 /** 读取单个 op 的状态 */
 private suspend fun readSingleOpState(packageName: String, opName: String, context: Context): String = withContext(Dispatchers.IO) {
     try {
-        val output = SpecialPermissionVerifier.executeShellCommandFull("appops get $packageName $opName")
+        val cmd = "appops get $packageName $opName"
+        val output = when {
+            SpecialPermissionVerifier.isRootAvailable() -> SpecialPermissionVerifier.executeRootCommandFull(cmd)
+            SpecialPermissionVerifier.isShizukuAuthorized(context) -> SpecialPermissionVerifier.executeShizukuCommand(cmd)
+            else -> SpecialPermissionVerifier.executeShellCommandFull(cmd)
+        }
         val text = output.first.trim()
         when {
             text.contains("allow") -> "allow"
@@ -1012,10 +1026,13 @@ private suspend fun readSingleOpState(packageName: String, opName: String, conte
 private suspend fun setAppOpsMode(packageName: String, opName: String, mode: String, useRoot: Boolean): Boolean = withContext(Dispatchers.IO) {
     try {
         val cmd = "appops set $packageName $opName $mode"
-        val result = if (useRoot) {
-            SpecialPermissionVerifier.executeRootCommandFull(cmd)
-        } else {
-            SpecialPermissionVerifier.executeShellCommandFull(cmd)
+        // appops 命令需要 root 或 shell(Shizuku) 权限，自动检测并优先使用 root
+        val shizukuAvailable = com.whmdg.mczj.tools.security.ShizukuAuthorizer.isShizukuServiceRunning() &&
+                com.whmdg.mczj.tools.security.ShizukuAuthorizer.hasShizukuPermission()
+        val result = when {
+            useRoot || SpecialPermissionVerifier.isRootAvailable() -> SpecialPermissionVerifier.executeRootCommandFull(cmd)
+            shizukuAvailable -> SpecialPermissionVerifier.executeShizukuCommand(cmd)
+            else -> SpecialPermissionVerifier.executeShellCommandFull(cmd)
         }
         result.third == 0
     } catch (_: Exception) { false }

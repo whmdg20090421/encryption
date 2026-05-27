@@ -1,9 +1,6 @@
 package com.whmdg.mczj.tools.ui
 
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.provider.Settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -30,12 +27,12 @@ data class PermissionMode(
 fun checkModeAvailability(context: Context, mode: String): Boolean {
     val sp = context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE)
     val savedLevel = sp.getString("target_permission_level", "STANDARD") ?: "STANDARD"
+    val hasRoot = SpecialPermissionVerifier.isRootAvailable() || savedLevel == "ROOT"
+    val hasShizuku = SpecialPermissionVerifier.isShizukuAuthorized(context) || savedLevel == "ADB"
     return when (mode) {
         "NORMAL" -> true
-        "APPOPS" -> SpecialPermissionVerifier.isAdbEnabled(context)
-                    || savedLevel == "ADB" || savedLevel == "ROOT"
-        "PERMISSION_CONTROLLER" -> SpecialPermissionVerifier.isRootAvailable()
-                    || savedLevel == "ROOT"
+        "APPOPS" -> hasRoot || hasShizuku
+        "PERMISSION_CONTROLLER" -> hasRoot
         else -> false
     }
 }
@@ -59,8 +56,8 @@ fun PermissionManagementConfigScreen(onBack: () -> Unit) {
         PermissionMode(
             key = "APPOPS",
             title = "AppOps 模式",
-            description = "通过应用操作管理（AppOps）细粒度控制权限，支持「允许」「忽略」「拒绝」「仅前台」等状态。需要「修改系统设置」权限或 Shizuku 授权。",
-            requiredPermission = "需要：修改系统设置权限 / Shizuku / ADB",
+            description = "通过应用操作管理（AppOps）细粒度控制权限，支持「允许」「忽略」「拒绝」「仅前台」等状态。需要 Root 或 Shizuku 权限执行 appops 命令。",
+            requiredPermission = "需要：Root 或 Shizuku 权限",
             icon = { Icon(Icons.Default.Tune, contentDescription = null, tint = MaterialTheme.colorScheme.secondary) }
         ),
         PermissionMode(
@@ -81,33 +78,15 @@ fun PermissionManagementConfigScreen(onBack: () -> Unit) {
             text = {
                 Text(
                     when (mode) {
-                        "APPOPS" -> "AppOps 模式需要「修改系统设置」权限或 Shizuku 授权才能生效。\n\n部分手机可在系统设置的特殊权限中手动开启。"
+                        "APPOPS" -> "AppOps 模式需要 Root 或 Shizuku 权限才能执行 appops 命令。\n\n请通过 Root 管理器（如 Magisk）授予 su 授权，或启动 Shizuku 并授权本应用。"
                         "PERMISSION_CONTROLLER" -> "高级权限管理模式需要 Root 权限才能生效。\n\n请先通过 Root 管理器（如 Magisk）授予本应用 su 授权。"
                         else -> ""
                     }
                 )
             },
             confirmButton = {
-                if (mode == "APPOPS") {
-                    Button(onClick = {
-                        showErrorDialog = null
-                        try {
-                            val intent = Intent(
-                                Settings.ACTION_MANAGE_WRITE_SETTINGS,
-                                Uri.parse("package:${context.packageName}")
-                            )
-                            context.startActivity(intent)
-                        } catch (_: Exception) {
-                            android.widget.Toast.makeText(context, "无法打开设置，请使用 ADB 命令授予", android.widget.Toast.LENGTH_LONG).show()
-                        }
-                    }) { Text("打开设置") }
-                } else {
-                    Button(onClick = { showErrorDialog = null }) { Text("确定") }
-                }
-            },
-            dismissButton = if (mode == "APPOPS") {
-                { TextButton(onClick = { showErrorDialog = null }) { Text("取消") } }
-            } else null
+                Button(onClick = { showErrorDialog = null }) { Text("确定") }
+            }
         )
     }
 
@@ -243,7 +222,7 @@ fun PermissionManagementConfigScreen(onBack: () -> Unit) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             "• 普通模式：无需额外权限，使用系统标准授权开关\n" +
-                            "• AppOps 模式：需「修改系统设置」权限，可在特殊权限中授予\n" +
+                            "• AppOps 模式：需 Root 或 Shizuku 权限，支持细粒度的权限状态控制\n" +
                             "• 高级模式：需 Root 权限，支持最细粒度的权限控制",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant

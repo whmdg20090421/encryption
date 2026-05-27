@@ -243,12 +243,16 @@ private fun PermissionGuideWizard(
                         },
                         onBatteryOptimizationClick = {
                             try {
-                                context.startActivity(Intent(
-                                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
-                                ).apply { data = Uri.parse("package:${context.packageName}") })
-                            } catch (_: Exception) {
+                                // 直接请求忽略电池优化，无需用户搜索应用
+                                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                                    .apply { data = Uri.parse("package:${context.packageName}") }
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                // 如果直接请求失败，尝试打开电池优化设置页面
                                 try {
-                                    context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                    context.startActivity(intent)
+                                    Toast.makeText(context, "请在列表中找到本应用并关闭电池优化", Toast.LENGTH_LONG).show()
                                 } catch (_: Exception) {
                                     Toast.makeText(context, "无法打开电池优化设置", Toast.LENGTH_SHORT).show()
                                 }
@@ -651,8 +655,8 @@ private fun getLevelDisplayName(level: AndroidPermissionLevel): String {
     return when (level) {
         AndroidPermissionLevel.STANDARD -> "普通权限"
         AndroidPermissionLevel.ACCESSIBILITY -> "无障碍权限"
-        AndroidPermissionLevel.ADB -> "ADB 权限"
-        AndroidPermissionLevel.DEBUGGER -> "调试权限"
+        AndroidPermissionLevel.ADB -> "Shizuku 权限"
+        AndroidPermissionLevel.DEBUGGER -> "ADB 权限"
         AndroidPermissionLevel.ADMIN -> "管理员权限"
         AndroidPermissionLevel.ROOT -> "Root 权限"
     }
@@ -662,8 +666,8 @@ private fun getLevelDescription(level: AndroidPermissionLevel): String {
     return when (level) {
         AndroidPermissionLevel.STANDARD -> "使用标准 Android 应用权限，受系统沙盒保护。适用于一般文件管理和基础工具功能。"
         AndroidPermissionLevel.ACCESSIBILITY -> "通过无障碍服务模拟屏幕手势操作，无需 Root。可实现自动化操作、辅助功能等高级特性。"
-        AndroidPermissionLevel.ADB -> "通过 ADB 调试授权或 Shizuku 获得高级系统权限。可修改系统设置、管理应用操作等。"
-        AndroidPermissionLevel.DEBUGGER -> "通过 USB 调试获得调试级别权限。可用于开发调试和部分系统级操作。"
+        AndroidPermissionLevel.ADB -> "通过 Shizuku 获得 shell 级别权限。可执行 appops 等系统命令，管理应用权限设置。需安装并启动 Shizuku。"
+        AndroidPermissionLevel.DEBUGGER -> "通过 ADB 调试授权获得 WRITE_SECURE_SETTINGS 权限。可修改系统设置数据库，需 USB 调试连接。"
         AndroidPermissionLevel.ADMIN -> "激活设备管理器获得系统级权限。可执行设备锁定、密码策略、远程擦除等管理操作。"
         AndroidPermissionLevel.ROOT -> "获取最高级超级用户权限，解除一切系统沙箱限制。可直接访问系统文件、修改受保护配置。"
     }
@@ -853,8 +857,10 @@ private fun PermissionLevelPage(
                 selectedLevel == AndroidPermissionLevel.STANDARD) { onLevelSelected(AndroidPermissionLevel.STANDARD) }
             PermissionLevelItem(AndroidPermissionLevel.ACCESSIBILITY, "无障碍权限", "允许模拟屏幕手势操作，免 Root 辅助",
                 selectedLevel == AndroidPermissionLevel.ACCESSIBILITY) { onLevelSelected(AndroidPermissionLevel.ACCESSIBILITY) }
-            PermissionLevelItem(AndroidPermissionLevel.ADB, "ADB 权限", "高级调试授权，可通过 Shizuku 或 USB 调试授予",
+            PermissionLevelItem(AndroidPermissionLevel.ADB, "Shizuku 权限", "通过 Shizuku 获得 shell 级别权限，可执行 appops 等系统命令",
                 selectedLevel == AndroidPermissionLevel.ADB) { onLevelSelected(AndroidPermissionLevel.ADB) }
+            PermissionLevelItem(AndroidPermissionLevel.DEBUGGER, "ADB 权限", "通过 USB 调试授予 WRITE_SECURE_SETTINGS，可修改系统设置",
+                selectedLevel == AndroidPermissionLevel.DEBUGGER) { onLevelSelected(AndroidPermissionLevel.DEBUGGER) }
             PermissionLevelItem(AndroidPermissionLevel.ADMIN, "管理员权限", "系统级设备管理器，提供强制锁定及防护特权",
                 selectedLevel == AndroidPermissionLevel.ADMIN) { onLevelSelected(AndroidPermissionLevel.ADMIN) }
             PermissionLevelItem(AndroidPermissionLevel.ROOT, "Root 权限", "最高级超级用户控制权限，解除一切系统沙箱约束",

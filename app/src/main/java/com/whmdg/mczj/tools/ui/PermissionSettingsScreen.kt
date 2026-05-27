@@ -119,6 +119,21 @@ fun PermissionSettingsScreen(onBack: () -> Unit) {
             "WRITE_SECURE_SETTINGS" -> {
                 showWriteSecureSettingsDialog = true
             }
+            "IGNORE_BATTERY_OPTIMIZATIONS" -> {
+                try {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                        .apply { data = Uri.parse("package:${context.packageName}") }
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    try {
+                        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        context.startActivity(intent)
+                        Toast.makeText(context, "请在列表中找到本应用并关闭电池优化", Toast.LENGTH_LONG).show()
+                    } catch (_: Exception) {
+                        openAppSettings(context)
+                    }
+                }
+            }
             "WRITE_EXTERNAL_STORAGE" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     requestPermission("MANAGE_EXTERNAL_STORAGE")
@@ -279,7 +294,9 @@ fun checkAllPermissions(context: Context): List<PermissionEntry> {
         Triple("蓝牙扫描", "BLUETOOTH_SCAN", "🔍"),
         // ── 传感器 ──
         Triple("身体传感器", "BODY_SENSORS", "🏃"),
-        Triple("活动识别", "ACTIVITY_RECOGNITION", "🚶")
+        Triple("活动识别", "ACTIVITY_RECOGNITION", "🚶"),
+        // ── 电池优化 ──
+        Triple("电池优化豁免", "IGNORE_BATTERY_OPTIMIZATIONS", "🔋")
     )
 
     return all.map { (name, androidName, icon) ->
@@ -307,6 +324,14 @@ fun isPermissionGranted(context: Context, androidName: String): Boolean {
             "REQUEST_INSTALL_PACKAGES" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.packageManager.canRequestPackageInstalls()
+                } else {
+                    true
+                }
+            }
+            "IGNORE_BATTERY_OPTIMIZATIONS" -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                    pm.isIgnoringBatteryOptimizations(context.packageName)
                 } else {
                     true
                 }

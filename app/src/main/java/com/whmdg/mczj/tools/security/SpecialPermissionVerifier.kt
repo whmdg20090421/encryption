@@ -33,12 +33,10 @@ object SpecialPermissionVerifier {
     }
 
     /**
-     * 检测 ADB 权限是否授予
-     * 1. 检查是否持有 WRITE_SECURE_SETTINGS 权限（传统方式）
-     * 2. 或者检测 Shizuku 是否运行且已对本应用授权（无感方式）
+     * 检测 ADB 权限（WRITE_SECURE_SETTINGS）是否授予
      */
     fun isAdbEnabled(context: Context): Boolean {
-        // 1. 通过 PackageManager 检查 WRITE_SECURE_SETTINGS 是否已授予
+        // 通过 PackageManager 检查 WRITE_SECURE_SETTINGS
         val hasSecureSettings = try {
             val pkgInfo = context.packageManager.getPackageInfo(
                 context.packageName,
@@ -52,50 +50,23 @@ object SpecialPermissionVerifier {
         } catch (_: Exception) {
             false
         }
-
-        if (hasSecureSettings) return true
-
-        // 2. 降级：通过写入 Settings.Secure 检测（部分设备有效）
-        val key = "toolbox_wss_check"
-        val writeTest = try {
-            Settings.Secure.putString(context.contentResolver, key, "1")
-            val result = Settings.Secure.getString(context.contentResolver, key)
-            Settings.Secure.putString(context.contentResolver, key, null)
-            result == "1"
-        } catch (_: SecurityException) {
-            false
-        }
-
-        if (writeTest) return true
-
-        return isShizukuAuthorized(context)
+        return hasSecureSettings
     }
 
     /**
-     * 检测 Shizuku 是否已启动并授予本应用权限
+     * 检测 Shizuku 是否已启动且已授权本应用（使用 Shizuku SDK）
      */
     fun isShizukuAuthorized(context: Context): Boolean {
-        return try {
-            val uri = android.net.Uri.parse("content://rikka.shizuku.provider")
-            val bundle = context.contentResolver.call(uri, "checkPermission", null, null)
-            val code = bundle?.getInt("result", -1) ?: -1
-            code == 0 // 0 表示 PackageManager.PERMISSION_GRANTED
-        } catch (e: Exception) {
-            false
-        }
+        ShizukuAuthorizer.initialize()
+        return ShizukuAuthorizer.isShizukuServiceRunning() && ShizukuAuthorizer.hasShizukuPermission()
     }
 
     /**
      * 检测 Shizuku 服务是否在运行
      */
     fun isShizukuRunning(context: Context): Boolean {
-        return try {
-            val uri = android.net.Uri.parse("content://rikka.shizuku.provider")
-            val bundle = context.contentResolver.call(uri, "isRun", null, null)
-            bundle?.getBoolean("isRun", false) == true
-        } catch (e: Exception) {
-            false
-        }
+        ShizukuAuthorizer.initialize()
+        return ShizukuAuthorizer.isShizukuServiceRunning()
     }
 
 
@@ -254,6 +225,13 @@ object SpecialPermissionVerifier {
             stderrBuf.toString().trimEnd(),
             process.exitValue()
         )
+    }
+
+    /**
+     * 通过 Shizuku 执行 shell 命令（以 shell UID 运行，拥有 MANAGE_APP_OPS_MODES 等权限）
+     */
+    fun executeShizukuCommand(command: String): Triple<String, String, Int> {
+        return ShizukuAuthorizer.executeCommand(command)
     }
 
     /**

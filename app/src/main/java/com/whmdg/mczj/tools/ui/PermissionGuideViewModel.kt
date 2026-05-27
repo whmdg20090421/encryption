@@ -164,7 +164,7 @@ class PermissionGuideViewModel : ViewModel() {
             return when (level) {
                 AndroidPermissionLevel.STANDARD -> true
                 AndroidPermissionLevel.ACCESSIBILITY -> SpecialPermissionVerifier.isAccessibilityEnabled(context)
-                AndroidPermissionLevel.ADB -> SpecialPermissionVerifier.isAdbEnabled(context)
+                AndroidPermissionLevel.ADB -> SpecialPermissionVerifier.isShizukuAuthorized(context)
                 AndroidPermissionLevel.DEBUGGER -> SpecialPermissionVerifier.isAdbEnabled(context)
                 AndroidPermissionLevel.ADMIN -> SpecialPermissionVerifier.isDeviceAdminActive(context)
                 AndroidPermissionLevel.ROOT -> SpecialPermissionVerifier.isRootAvailable()
@@ -176,8 +176,8 @@ class PermissionGuideViewModel : ViewModel() {
             return when (level) {
                 AndroidPermissionLevel.STANDARD -> ""
                 AndroidPermissionLevel.ACCESSIBILITY -> "无障碍服务未启用。请前往系统设置 → 无障碍 中启用本应用的无障碍服务。"
-                AndroidPermissionLevel.ADB -> "ADB 权限不可用。请通过 Shizuku 授权或 USB 调试授予 WRITE_SECURE_SETTINGS 权限。"
-                AndroidPermissionLevel.DEBUGGER -> "调试权限不可用。请通过 USB 调试或 Shizuku 授权。"
+                AndroidPermissionLevel.ADB -> "Shizuku 未授权。请先安装并启动 Shizuku，然后在弹出的授权对话框中允许本应用使用。"
+                AndroidPermissionLevel.DEBUGGER -> "ADB 权限不可用。请通过 USB 调试授予 WRITE_SECURE_SETTINGS 权限。"
                 AndroidPermissionLevel.ADMIN -> "设备管理器未激活。请在特殊权限中激活设备管理器。"
                 AndroidPermissionLevel.ROOT -> "Root 权限不可用。请确保已通过 Root 管理器（如 Magisk）授予本应用 su 授权。"
             }
@@ -194,8 +194,8 @@ class PermissionGuideViewModel : ViewModel() {
             return when (level) {
                 AndroidPermissionLevel.STANDARD -> baseStatuses
                 AndroidPermissionLevel.ACCESSIBILITY -> baseStatuses + PermissionStatus("无障碍服务", isGranted = SpecialPermissionVerifier.isAccessibilityEnabled(context))
-                AndroidPermissionLevel.ADB -> baseStatuses + PermissionStatus("ADB/Shizuku", isGranted = SpecialPermissionVerifier.isAdbEnabled(context))
-                AndroidPermissionLevel.DEBUGGER -> baseStatuses + PermissionStatus("调试权限", isGranted = SpecialPermissionVerifier.isAdbEnabled(context))
+                AndroidPermissionLevel.ADB -> baseStatuses + PermissionStatus("Shizuku 权限", isGranted = SpecialPermissionVerifier.isShizukuAuthorized(context))
+                AndroidPermissionLevel.DEBUGGER -> baseStatuses + PermissionStatus("ADB 权限", isGranted = SpecialPermissionVerifier.isAdbEnabled(context))
                 AndroidPermissionLevel.ADMIN -> baseStatuses + PermissionStatus("设备管理器", isGranted = SpecialPermissionVerifier.isDeviceAdminActive(context))
                 AndroidPermissionLevel.ROOT -> baseStatuses + PermissionStatus("Root 权限", isGranted = SpecialPermissionVerifier.isRootAvailable())
             }
