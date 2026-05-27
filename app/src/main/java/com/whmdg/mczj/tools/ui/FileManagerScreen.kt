@@ -1277,8 +1277,7 @@ private fun FileEntryRow(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
             ) {
                 Text(
                     text = entry.name,
@@ -1286,7 +1285,7 @@ private fun FileEntryRow(
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().wrapContentHeight(Alignment.CenterVertically)
                 )
             }
             // Section 3: permission + size (files only)
