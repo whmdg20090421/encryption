@@ -8,6 +8,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -51,6 +52,14 @@ fun SecurityScreen(
                     leadingContent = { Icon(Icons.Default.Lock, contentDescription = "特殊权限") },
                     trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "进入") },
                     modifier = Modifier.clickable { onNavigate(Screen.SpecialPermissions) }
+                )
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("应用权限管理配置") },
+                    leadingContent = { Icon(Icons.Default.Settings, contentDescription = "应用权限管理配置") },
+                    trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "进入") },
+                    modifier = Modifier.clickable { onNavigate(Screen.PermissionManagementConfig) }
                 )
             }
         }

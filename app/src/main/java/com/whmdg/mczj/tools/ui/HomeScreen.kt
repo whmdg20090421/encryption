@@ -65,6 +65,7 @@ sealed class Screen {
     object PermissionSettings : Screen()
     object SpecialPermissions : Screen()
     object AppPermissions : Screen()
+    object PermissionManagementConfig : Screen()
     object FileManager : Screen()
     object ThemeSettings : Screen()
     object EncryptionHome : Screen()
@@ -225,6 +226,11 @@ fun MainAppContainer() {
         }
         is Screen.AppPermissions -> {
             AppPermissionsScreen(
+                onBack = { navigateBack() }
+            )
+        }
+        is Screen.PermissionManagementConfig -> {
+            PermissionManagementConfigScreen(
                 onBack = { navigateBack() }
             )
         }

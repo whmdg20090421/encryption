@@ -48,6 +48,7 @@ fun PermissionSettingsScreen(onBack: () -> Unit) {
     }
 
     var selectedPermissionToRequest by remember { mutableStateOf<String?>(null) }
+    var showWriteSecureSettingsDialog by remember { mutableStateOf(false) }
 
     val normalLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -114,6 +115,9 @@ fun PermissionSettingsScreen(onBack: () -> Unit) {
                     }
                 }
             }
+            "WRITE_SECURE_SETTINGS" -> {
+                showWriteSecureSettingsDialog = true
+            }
             "WRITE_EXTERNAL_STORAGE" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     requestPermission("MANAGE_EXTERNAL_STORAGE")
@@ -133,6 +137,34 @@ fun PermissionSettingsScreen(onBack: () -> Unit) {
                 }
             }
         }
+    }
+
+    if (showWriteSecureSettingsDialog) {
+        AlertDialog(
+            onDismissRequest = { showWriteSecureSettingsDialog = false },
+            icon = { Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text("授予修改系统设置权限") },
+            text = {
+                Text("请在特殊权限设置中找到「修改系统设置」并为本应用开启。\n\n如无法找到该选项，可通过 ADB 命令授予：\nadb shell pm grant ${context.packageName} android.permission.WRITE_SECURE_SETTINGS")
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showWriteSecureSettingsDialog = false
+                    try {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                            Uri.parse("package:${context.packageName}")
+                        )
+                        context.startActivity(intent)
+                    } catch (_: Exception) {
+                        Toast.makeText(context, "无法打开设置，请手动开启或使用 ADB 命令", Toast.LENGTH_LONG).show()
+                    }
+                }) { Text("打开设置") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showWriteSecureSettingsDialog = false }) { Text("取消") }
+            }
+        )
     }
 
     Scaffold(
@@ -240,6 +272,7 @@ fun checkAllPermissions(context: Context): List<PermissionEntry> {
         // ── 特殊权限 ──
         Triple("悬浮窗", "SYSTEM_ALERT_WINDOW", "🪟"),
         Triple("安装未知应用", "REQUEST_INSTALL_PACKAGES", "📦"),
+        Triple("修改系统设置", "WRITE_SECURE_SETTINGS", "⚙️"),
         // ── 蓝牙 ──
         Triple("蓝牙连接", "BLUETOOTH_CONNECT", "🔵"),
         Triple("蓝牙扫描", "BLUETOOTH_SCAN", "🔍"),
@@ -276,6 +309,12 @@ fun isPermissionGranted(context: Context, androidName: String): Boolean {
                 } else {
                     true
                 }
+            }
+            "WRITE_SECURE_SETTINGS" -> {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    "android.permission.WRITE_SECURE_SETTINGS"
+                ) == PackageManager.PERMISSION_GRANTED
             }
             "WRITE_EXTERNAL_STORAGE" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

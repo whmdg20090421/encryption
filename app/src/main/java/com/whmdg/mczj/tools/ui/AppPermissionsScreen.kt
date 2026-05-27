@@ -53,7 +53,40 @@ data class PermissionInfo(
     val granted: Boolean,
     val dangerous: Boolean,
     val group: String,
-    val rawName: String
+    val rawName: String,
+    val appOpsMode: String = "" // AppOps 模式下的当前状态：allow/ignore/deny/default/foreground
+)
+
+data class PermOpMapping(
+    val opName: String,
+    val displayName: String,
+    val description: String
+)
+
+val permToOpMap = mapOf(
+    "android.permission.CAMERA" to PermOpMapping("android:camera", "相机", "控制应用能否使用摄像头拍照或录像"),
+    "android.permission.READ_CONTACTS" to PermOpMapping("android:read_contacts", "读取联系人", "控制应用能否读取通讯录中的联系人信息"),
+    "android.permission.WRITE_CONTACTS" to PermOpMapping("android:write_contacts", "写入联系人", "控制应用能否新增、修改或删除联系人"),
+    "android.permission.ACCESS_FINE_LOCATION" to PermOpMapping("android:fine_location", "精确位置", "控制应用能否通过 GPS 获取精确地理位置"),
+    "android.permission.ACCESS_COARSE_LOCATION" to PermOpMapping("android:coarse_location", "粗略位置", "控制应用能否通过基站或 Wi-Fi 获取大致位置"),
+    "android.permission.READ_PHONE_STATE" to PermOpMapping("android:read_phone_state", "读取手机状态", "控制应用能否读取设备标识、通话状态等信息"),
+    "android.permission.CALL_PHONE" to PermOpMapping("android:call_phone", "拨打电话", "控制应用能否直接拨出电话（无需用户确认）"),
+    "android.permission.READ_SMS" to PermOpMapping("android:read_sms", "读取短信", "控制应用能否读取收到的短信内容"),
+    "android.permission.SEND_SMS" to PermOpMapping("android:send_sms", "发送短信", "控制应用能否发送短信"),
+    "android.permission.RECORD_AUDIO" to PermOpMapping("android:record_audio", "录音", "控制应用能否使用麦克风录制音频"),
+    "android.permission.READ_CALENDAR" to PermOpMapping("android:read_calendar", "读取日历", "控制应用能否读取日历事件和提醒"),
+    "android.permission.WRITE_CALENDAR" to PermOpMapping("android:write_calendar", "写入日历", "控制应用能否新增、修改或删除日历事件"),
+    "android.permission.READ_EXTERNAL_STORAGE" to PermOpMapping("android:read_external_storage", "读取存储", "控制应用能否读取外部存储中的文件"),
+    "android.permission.WRITE_EXTERNAL_STORAGE" to PermOpMapping("android:write_external_storage", "写入存储", "控制应用能否在外部存储中创建或修改文件"),
+    "android.permission.READ_MEDIA_IMAGES" to PermOpMapping("android:read_media_images", "读取图片", "控制应用能否访问设备上的图片文件"),
+    "android.permission.READ_MEDIA_VIDEO" to PermOpMapping("android:read_media_video", "读取视频", "控制应用能否访问设备上的视频文件"),
+    "android.permission.READ_MEDIA_AUDIO" to PermOpMapping("android:read_media_audio", "读取音频", "控制应用能否访问设备上的音频文件"),
+    "android.permission.BODY_SENSORS" to PermOpMapping("android:body_sensors", "身体传感器", "控制应用能否读取心率、血氧等身体传感器数据"),
+    "android.permission.ACTIVITY_RECOGNITION" to PermOpMapping("android:activity_recognition", "活动识别", "控制应用能否检测用户的步行、跑步等运动状态"),
+    "android.permission.READ_CALL_LOG" to PermOpMapping("android:read_call_log", "读取通话记录", "控制应用能否读取通话历史记录"),
+    "android.permission.WRITE_CALL_LOG" to PermOpMapping("android:write_call_log", "写入通话记录", "控制应用能否修改或删除通话记录"),
+    "android.permission.READ_PHONE_NUMBERS" to PermOpMapping("android:read_phone_numbers", "读取手机号码", "控制应用能否读取本机电话号码"),
+    "android.permission.ANSWER_PHONE_CALLS" to PermOpMapping("android:answer_phone_calls", "接听电话", "控制应用能否代为接听来电")
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
@@ -71,6 +104,17 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
     var showSystemApps by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showError by remember { mutableStateOf(false) }
+
+    // 当前权限管理模式
+    val modePrefs = context.getSharedPreferences("permission_management_mode", Context.MODE_PRIVATE)
+    val currentMode by remember { mutableStateOf(modePrefs.getString("mode", "NORMAL") ?: "NORMAL") }
+    val isAppOpsMode = currentMode == "APPOPS" || currentMode == "PERMISSION_CONTROLLER"
+    val useRootForOps = currentMode == "PERMISSION_CONTROLLER"
+
+    // AppOps 底部弹窗状态
+    var showOpsSheet by remember { mutableStateOf(false) }
+    var opsSheetPermission by remember { mutableStateOf<PermissionInfo?>(null) }
+    val opsSheetState = rememberModalBottomSheetState()
 
     val groupedPermissions = remember(selectedAppPermissions) { selectedAppPermissions.groupBy { it.group } }
 
@@ -134,7 +178,20 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
         isPermissionLoading = true
         coroutineScope.launch {
             try {
-                selectedAppPermissions = getAppPermissions(packageName, context)
+                var perms = getAppPermissions(packageName, context)
+                if (isAppOpsMode) {
+                    val opsState = readAppOpsState(packageName, context)
+                    perms = perms.map { perm ->
+                        val opMapping = permToOpMap[perm.rawName]
+                        if (opMapping != null) {
+                            val opsMode = opsState[opMapping.opName] ?: "default"
+                            perm.copy(appOpsMode = opsMode)
+                        } else {
+                            perm
+                        }
+                    }
+                }
+                selectedAppPermissions = perms
             } catch (e: Exception) {
                 errorMessage = "获取权限失败: ${e.message}"
                 showError = true
@@ -388,23 +445,31 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
                                     itemsIndexed(items = permissions, key = { _, p -> p.rawName }) { _, permission ->
                                         PermissionToggleItem(
                                             permission = permission,
+                                            mode = currentMode,
                                             onToggle = {
-                                                coroutineScope.launch {
-                                                    val pkg = selectedApp?.packageName ?: return@launch
-                                                    val action = if (permission.granted) "revoke" else "grant"
-                                                    val result = withContext(Dispatchers.IO) {
-                                                        SpecialPermissionVerifier.executeRootCommandFull("pm $action $pkg ${permission.rawName}")
-                                                    }
-                                                    if (result.third == 0) {
-                                                        val updated = selectedAppPermissions.toMutableList()
-                                                        val idx = updated.indexOfFirst { it.rawName == permission.rawName }
-                                                        if (idx != -1) {
-                                                            updated[idx] = permission.copy(granted = !permission.granted)
-                                                            selectedAppPermissions = updated
+                                                if (isAppOpsMode) {
+                                                    // AppOps/PermissionController 模式：打开底部弹窗
+                                                    opsSheetPermission = permission
+                                                    showOpsSheet = true
+                                                } else {
+                                                    // 普通模式：pm grant/revoke
+                                                    coroutineScope.launch {
+                                                        val pkg = selectedApp?.packageName ?: return@launch
+                                                        val action = if (permission.granted) "revoke" else "grant"
+                                                        val result = withContext(Dispatchers.IO) {
+                                                            SpecialPermissionVerifier.executeRootCommandFull("pm $action $pkg ${permission.rawName}")
                                                         }
-                                                    } else {
-                                                        errorMessage = "修改失败: ${result.second}"
-                                                        showError = true
+                                                        if (result.third == 0) {
+                                                            val updated = selectedAppPermissions.toMutableList()
+                                                            val idx = updated.indexOfFirst { it.rawName == permission.rawName }
+                                                            if (idx != -1) {
+                                                                updated[idx] = permission.copy(granted = !permission.granted)
+                                                                selectedAppPermissions = updated
+                                                            }
+                                                        } else {
+                                                            errorMessage = "修改失败: ${result.second}"
+                                                            showError = true
+                                                        }
                                                     }
                                                 }
                                             },
@@ -435,6 +500,132 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
             confirmButton = { TextButton(onClick = { showError = false }) { Text("确定") } },
             shape = RoundedCornerShape(16.dp)
         )
+    }
+
+    // AppOps 模式底部弹窗
+    if (showOpsSheet && opsSheetPermission != null && selectedApp != null) {
+        val perm = opsSheetPermission!!
+        val pkg = selectedApp!!.packageName
+        val opMapping = permToOpMap[perm.rawName]
+
+        val appOpsStates = if (currentMode == "PERMISSION_CONTROLLER") {
+            listOf(
+                Triple("allow", "允许", "应用可以正常使用该权限"),
+                Triple("ignore", "忽略", "应用以为有权限但实际被静默拦截"),
+                Triple("deny", "拒绝", "应用使用该权限时会收到错误提示"),
+                Triple("default", "默认", "跟随系统默认策略"),
+                Triple("foreground", "仅前台", "仅当应用在前台时允许使用"),
+                Triple("one_time", "一次性允许", "应用进程结束后自动撤销"),
+                Triple("user_fixed", "用户固定拒绝", "用户手动拒绝且勾选了不再询问"),
+                Triple("policy_fixed", "策略固定", "由企业设备管理器锁定，无法更改")
+            )
+        } else {
+            listOf(
+                Triple("allow", "允许", "应用可以正常使用该权限"),
+                Triple("ignore", "忽略", "应用以为有权限但实际被静默拦截"),
+                Triple("deny", "拒绝", "应用使用该权限时会收到错误提示"),
+                Triple("default", "默认", "跟随系统默认策略"),
+                Triple("foreground", "仅前台", "仅当应用在前台时允许使用")
+            )
+        }
+
+        ModalBottomSheet(
+            onDismissRequest = { showOpsSheet = false },
+            sheetState = opsSheetState
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 32.dp)
+            ) {
+                Text(
+                    opMapping?.displayName ?: perm.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                if (opMapping != null) {
+                    Text(
+                        opMapping.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "当前状态：${appOpsModeToDisplayName(perm.appOpsMode)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                appOpsStates.forEach { (modeKey, modeName, modeDesc) ->
+                    val isCurrentMode = perm.appOpsMode == modeKey
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clickable {
+                                coroutineScope.launch {
+                                    val opName = opMapping?.opName ?: return@launch
+                                    val success = setAppOpsMode(pkg, opName, modeKey, useRootForOps)
+                                    if (success) {
+                                        val updated = selectedAppPermissions.toMutableList()
+                                        val idx = updated.indexOfFirst { it.rawName == perm.rawName }
+                                        if (idx != -1) {
+                                            updated[idx] = perm.copy(appOpsMode = modeKey)
+                                            selectedAppPermissions = updated
+                                        }
+                                        showOpsSheet = false
+                                    } else {
+                                        errorMessage = "设置失败，请检查权限是否充足"
+                                        showError = true
+                                    }
+                                }
+                            },
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isCurrentMode) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                        else MaterialTheme.colorScheme.surface
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (isCurrentMode) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.RadioButtonUnchecked,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    modeName,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = if (isCurrentMode) FontWeight.Medium else FontWeight.Normal
+                                )
+                                Text(
+                                    modeDesc,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -513,67 +704,110 @@ private fun AppItem(app: AppInfo, onClick: () -> Unit) {
 }
 
 @Composable
-private fun PermissionToggleItem(permission: PermissionInfo, onToggle: () -> Unit, groupColor: Color) {
+private fun PermissionToggleItem(permission: PermissionInfo, onToggle: () -> Unit, groupColor: Color, mode: String = "NORMAL") {
+    val isAppOpsMode = mode == "APPOPS" || mode == "PERMISSION_CONTROLLER"
     val animatedElevation by animateDpAsState(
-        targetValue = if (permission.granted) 2.dp else 0.dp, label = "elevation")
+        targetValue = if (permission.granted || isAppOpsMode) 2.dp else 0.dp, label = "elevation")
 
     Card(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp, horizontal = 2.dp)
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp, horizontal = 2.dp)
+            .then(if (isAppOpsMode) Modifier.clickable { onToggle() } else Modifier)
             .shadow(elevation = animatedElevation, shape = RoundedCornerShape(12.dp)),
         shape = RoundedCornerShape(12.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (permission.granted) MaterialTheme.colorScheme.surface
+            containerColor = if (permission.granted || isAppOpsMode) MaterialTheme.colorScheme.surface
             else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
     ) {
         Column {
             Box(modifier = Modifier.fillMaxWidth().height(4.dp)
-                .background(groupColor.copy(alpha = if (permission.granted) 0.9f else 0.4f)))
+                .background(groupColor.copy(alpha = if (permission.granted || isAppOpsMode) 0.9f else 0.4f)))
             Row(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     modifier = Modifier.size(40.dp).background(
-                        if (permission.granted) groupColor.copy(alpha = 0.2f)
+                        if (permission.granted || isAppOpsMode) groupColor.copy(alpha = 0.2f)
                         else MaterialTheme.colorScheme.surfaceVariant, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     if (permission.dangerous) {
                         Icon(Icons.Default.Warning, contentDescription = "危险权限",
-                            tint = if (permission.granted) Color(0xFFFF9800) else Color(0xFFFF9800).copy(alpha = 0.6f),
+                            tint = if (permission.granted || isAppOpsMode) Color(0xFFFF9800) else Color(0xFFFF9800).copy(alpha = 0.6f),
                             modifier = Modifier.size(24.dp))
                     } else {
                         Icon(
-                            imageVector = if (permission.granted) Icons.Default.Check else Icons.Default.Lock,
+                            imageVector = if (permission.granted || isAppOpsMode) Icons.Default.Check else Icons.Default.Lock,
                             contentDescription = if (permission.granted) "已授权" else "未授权",
-                            tint = if (permission.granted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                            tint = if (permission.granted || isAppOpsMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                             modifier = Modifier.size(24.dp))
                     }
                 }
                 Column(modifier = Modifier.weight(1f).padding(horizontal = 16.dp)) {
                     Text(permission.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium,
-                        color = if (permission.granted) MaterialTheme.colorScheme.onSurface
+                        color = if (permission.granted || isAppOpsMode) MaterialTheme.colorScheme.onSurface
                         else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f))
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(permission.description, style = MaterialTheme.typography.bodySmall,
-                        color = if (permission.granted) MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (permission.granted || isAppOpsMode) MaterialTheme.colorScheme.onSurfaceVariant
                         else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         lineHeight = 16.sp)
                 }
-                Switch(
-                    checked = permission.granted,
-                    onCheckedChange = { onToggle() },
-                    thumbContent = if (permission.granted) {
-                        { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(SwitchDefaults.IconSize)) }
-                    } else null,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = MaterialTheme.colorScheme.primary,
-                        checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
-                        uncheckedThumbColor = MaterialTheme.colorScheme.surfaceVariant,
-                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                if (isAppOpsMode) {
+                    // AppOps 模式：显示当前状态标签 + 箭头
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = when (permission.appOpsMode) {
+                            "allow" -> MaterialTheme.colorScheme.primaryContainer
+                            "ignore" -> Color(0xFFFF9800).copy(alpha = 0.2f)
+                            "deny" -> MaterialTheme.colorScheme.errorContainer
+                            "foreground" -> MaterialTheme.colorScheme.secondaryContainer
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                appOpsModeToDisplayName(permission.appOpsMode),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = when (permission.appOpsMode) {
+                                    "allow" -> MaterialTheme.colorScheme.onPrimaryContainer
+                                    "ignore" -> Color(0xFFE65100)
+                                    "deny" -> MaterialTheme.colorScheme.onErrorContainer
+                                    "foreground" -> MaterialTheme.colorScheme.onSecondaryContainer
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                Icons.Default.ArrowDropDown,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else {
+                    // 普通模式：Switch 开关
+                    Switch(
+                        checked = permission.granted,
+                        onCheckedChange = { onToggle() },
+                        thumbContent = if (permission.granted) {
+                            { Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(SwitchDefaults.IconSize)) }
+                        } else null,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = MaterialTheme.colorScheme.primary,
+                            checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
+                            uncheckedThumbColor = MaterialTheme.colorScheme.surfaceVariant,
+                            uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        )
                     )
-                )
+                }
             }
         }
     }
@@ -726,4 +960,83 @@ private suspend fun getAppPermissions(packageName: String, context: Context): Li
         { if (it.group == "undefined") 1 else 0 },
         { !it.granted }, { it.group }, { it.name }
     ))
+}
+
+// ── AppOps 模式函数 ──
+
+/** 读取单个应用的 AppOps 状态，返回 opName -> mode 的映射 */
+private suspend fun readAppOpsState(packageName: String, context: Context): Map<String, String> = withContext(Dispatchers.IO) {
+    val result = mutableMapOf<String, String>()
+    try {
+        val output = SpecialPermissionVerifier.executeShellCommandFull("appops get $packageName")
+        val lines = output.first.split("\n")
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (trimmed.isBlank()) continue
+            // 格式: "android:camera: mode=allow" 或 "android:camera: allow"
+            val colonIdx = trimmed.indexOf(":")
+            if (colonIdx < 0) continue
+            val opPart = trimmed.substring(0, colonIdx).trim()
+            val modePart = trimmed.substring(colonIdx + 1).trim()
+            val mode = when {
+                modePart.contains("allow") -> "allow"
+                modePart.contains("ignore") -> "ignore"
+                modePart.contains("deny") -> "deny"
+                modePart.contains("foreground") -> "foreground"
+                modePart.contains("default") -> "default"
+                else -> "default"
+            }
+            result[opPart] = mode
+        }
+    } catch (_: Exception) {}
+    result
+}
+
+/** 读取单个 op 的状态 */
+private suspend fun readSingleOpState(packageName: String, opName: String, context: Context): String = withContext(Dispatchers.IO) {
+    try {
+        val output = SpecialPermissionVerifier.executeShellCommandFull("appops get $packageName $opName")
+        val text = output.first.trim()
+        when {
+            text.contains("allow") -> "allow"
+            text.contains("ignore") -> "ignore"
+            text.contains("deny") -> "deny"
+            text.contains("foreground") -> "foreground"
+            text.contains("default") -> "default"
+            else -> "default"
+        }
+    } catch (_: Exception) { "default" }
+}
+
+/** 设置 AppOps 模式 */
+private suspend fun setAppOpsMode(packageName: String, opName: String, mode: String, useRoot: Boolean): Boolean = withContext(Dispatchers.IO) {
+    try {
+        val cmd = "appops set $packageName $opName $mode"
+        val result = if (useRoot) {
+            SpecialPermissionVerifier.executeRootCommandFull(cmd)
+        } else {
+            SpecialPermissionVerifier.executeShellCommandFull(cmd)
+        }
+        result.third == 0
+    } catch (_: Exception) { false }
+}
+
+/** AppOps 模式中文显示名 */
+fun appOpsModeToDisplayName(mode: String): String = when (mode) {
+    "allow" -> "允许"
+    "ignore" -> "忽略"
+    "deny" -> "拒绝"
+    "default" -> "默认"
+    "foreground" -> "仅前台"
+    else -> "未知"
+}
+
+/** AppOps 模式中文说明 */
+fun appOpsModeToDescription(mode: String): String = when (mode) {
+    "allow" -> "应用可以正常使用该权限"
+    "ignore" -> "应用以为有权限但实际被静默拦截"
+    "deny" -> "应用使用该权限时会收到错误提示"
+    "default" -> "跟随系统默认策略"
+    "foreground" -> "仅当应用在前台时允许使用"
+    else -> ""
 }
