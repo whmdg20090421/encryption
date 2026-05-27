@@ -347,7 +347,7 @@ fun isPermissionGranted(context: Context, androidName: String): Boolean {
                         "android.permission.WRITE_SECURE_SETTINGS"
                     ) ?: -1
                     idx >= 0 && (pkgInfo.requestedPermissionsFlags!![idx] and
-                            PackageManager.REQUESTED_PERMISSION_GRANTED) != 0
+                            android.content.pm.PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0
                 } catch (_: Exception) { false }
                 if (granted) return true
                 // 降级：通过写入检测

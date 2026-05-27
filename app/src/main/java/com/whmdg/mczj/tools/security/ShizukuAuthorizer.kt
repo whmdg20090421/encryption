@@ -128,9 +128,6 @@ object ShizukuAuthorizer {
                 return Triple("", "Shizuku 未授权", -1)
             }
 
-            val service = Shizuku.getSystemService() as? android.os.IInterface
-                ?: return Triple("", "Shizuku 服务不可用", -1)
-
             // 通过反射调用 newProcess（兼容 Shizuku AIDL 接口）
             val binder = Shizuku.getBinder()
             val iShizukuService = Class.forName("moe.shizuku.server.IShizukuService\$Stub")
