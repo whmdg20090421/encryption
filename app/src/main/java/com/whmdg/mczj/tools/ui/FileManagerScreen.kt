@@ -199,7 +199,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                 false
             }
             if (isDir) dirCount++ else fileCount++
-            val perm = try { formatPermission(Os.stat(child.absolutePath).stMode) } catch (_: Exception) { "" }
+            val perm = try { formatPermission(Os.stat(child.absolutePath).st_mode) } catch (_: Exception) { "" }
             val sz = if (isDir) 0L else try { child.length() } catch (_: Exception) { 0L }
             entries.add(FileEntry(child.absolutePath, name, isDir, perm, sz))
         }
@@ -277,7 +277,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
             if (!showHidden && name.startsWith(".")) continue
             if (isDir) dirCount++ else fileCount++
             val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-            val perm = try { formatPermission(Os.stat(childPath).stMode) } catch (_: Exception) { "" }
+            val perm = try { formatPermission(Os.stat(childPath).st_mode) } catch (_: Exception) { "" }
             val sz = if (isDir) 0L else try { File(childPath).length() } catch (_: Exception) { 0L }
             entries.add(FileEntry(childPath, name, isDir, perm, sz))
         }
