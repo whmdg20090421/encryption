@@ -1258,16 +1258,27 @@ private fun FileEntryRow(
             .fillMaxWidth()
             .height(60.dp)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 16.dp)
     ) {
-        Icon(
-            imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
-            contentDescription = null,
-            modifier = Modifier.size(22.dp),
-            tint = if (isFocused) MaterialTheme.colorScheme.primary
-                   else MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        // Icon aligned to top 2/3 (matching text center)
+        Column(
+            modifier = Modifier.fillMaxHeight(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                    contentDescription = null,
+                    modifier = Modifier.size(22.dp),
+                    tint = if (isFocused) MaterialTheme.colorScheme.primary
+                           else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.weight(0.5f))
+        }
         Spacer(modifier = Modifier.width(12.dp))
         Column(
             modifier = Modifier

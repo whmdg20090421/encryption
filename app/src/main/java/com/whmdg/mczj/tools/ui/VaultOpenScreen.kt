@@ -523,16 +523,26 @@ fun VaultOpenScreen(
                                     },
                                     onLongClick = { contextMenuEntry = entry }
                                 )
-                                .padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(horizontal = 16.dp)
                         ) {
-                            // Left icon (cube)
-                            Icon(
-                                imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.Shield,
-                                contentDescription = null,
-                                modifier = Modifier.size(22.dp),
-                                tint = if (entry.isDirectory) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
-                            )
+                            // Icon aligned to top 2/3 (matching text center)
+                            Column(
+                                modifier = Modifier.fillMaxHeight(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Box(
+                                    modifier = Modifier.weight(1f),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.Shield,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(22.dp),
+                                        tint = if (entry.isDirectory) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.weight(0.5f))
+                            }
                             Spacer(modifier = Modifier.width(12.dp))
                             // Right content: 3 sections
                             Column(
