@@ -980,40 +980,121 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
 
 @Composable
 fun SettingsTab(onNavigate: (Screen) -> Unit) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 12.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        item {
-            FrostedGlassCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-                    .clickable { onNavigate(Screen.ThemeSettings) }
-            ) {
-                ListItem(
-                    headlineContent = { Text("主题") },
-                    leadingContent = { Icon(Icons.Default.DarkMode, contentDescription = "主题") },
-                    trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "进入") },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-                )
-            }
+        SettingsSection(
+            title = "外观",
+            icon = Icons.Default.Palette
+        ) {
+            CompactSettingsItem(
+                title = "主题",
+                subtitle = "深色/浅色模式切换",
+                icon = Icons.Default.DarkMode,
+                onClick = { onNavigate(Screen.ThemeSettings) }
+            )
         }
-        item {
-            FrostedGlassCard(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-                    .clickable { onNavigate(Screen.Security) }
-            ) {
-                ListItem(
-                    headlineContent = { Text("安全") },
-                    leadingContent = { Icon(Icons.Default.Lock, contentDescription = "安全") },
-                    trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "进入") },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
-                )
-            }
+
+        SettingsSection(
+            title = "安全与权限",
+            icon = Icons.Default.Security
+        ) {
+            CompactSettingsItem(
+                title = "安全",
+                subtitle = "权限设置与特殊权限管理",
+                icon = Icons.Default.Lock,
+                onClick = { onNavigate(Screen.Security) }
+            )
         }
+    }
+}
+
+@Composable
+private fun SettingsSection(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(vertical = 6.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                content = content
+            )
+        }
+    }
+}
+
+@Composable
+private fun CompactSettingsItem(
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .clickable { onClick() }
+            .padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
+        Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp)
+        )
     }
 }
 
