@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -534,18 +535,19 @@ fun VaultOpenScreen(
                                 tint = if (entry.isDirectory) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
                             )
                             Spacer(modifier = Modifier.width(12.dp))
-                            // Right content: 3 equal sections
+                            // Right content: 3 sections
                             Column(
                                 modifier = Modifier
                                     .weight(1f)
                                     .fillMaxHeight()
                             ) {
-                                // Section 1-2: filename area (top 2/3)
+                                var lineCount by remember { mutableIntStateOf(1) }
+                                val infoWeight = if (lineCount <= 1) 1f else 0.5f
+                                // Section 1-2: filename area
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .fillMaxWidth(),
-                                    contentAlignment = Alignment.Center
+                                        .fillMaxWidth()
                                 ) {
                                     Text(
                                         text = entry.displayName,
@@ -553,11 +555,27 @@ fun VaultOpenScreen(
                                         overflow = TextOverflow.Ellipsis,
                                         textAlign = TextAlign.Center,
                                         style = MaterialTheme.typography.bodyMedium,
-                                        modifier = Modifier.fillMaxWidth()
+                                        modifier = Modifier.fillMaxWidth().wrapContentHeight(Alignment.CenterVertically),
+                                        onTextLayout = { lineCount = it.lineCount }
                                     )
                                 }
-                                // Section 3: placeholder (empty)
-                                Spacer(modifier = Modifier.weight(0.5f))
+                                // Section 3: file size (files only)
+                                if (!entry.isDirectory) {
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(infoWeight)
+                                            .fillMaxWidth(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = compactSize(entry.file.length()),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                } else {
+                                    Spacer(modifier = Modifier.weight(infoWeight))
+                                }
                             }
                             // Trailing decrypt button (files only)
                             if (!entry.isDirectory) {
@@ -971,6 +989,17 @@ fun humanSize(bytes: Long): String {
         return "${"%.1f".format(bytes / (1024.0 * 1024.0))} MiB"
     }
     return "${"%.2f".format(bytes / (1024.0 * 1024.0 * 1024.0))} GiB"
+}
+
+private fun compactSize(bytes: Long): String {
+    if (bytes <= 0) return ""
+    val v = bytes.toDouble()
+    return when {
+        v < 1024 -> "%.0f B".format(v)
+        v < 1024 * 1024 -> "%.1f K".format(v / 1024)
+        v < 1024 * 1024 * 1024 -> "%.1f M".format(v / (1024 * 1024))
+        else -> "%.1f G".format(v / (1024 * 1024 * 1024))
+    }
 }
 
 /**

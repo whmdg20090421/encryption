@@ -30,6 +30,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -1274,6 +1275,8 @@ private fun FileEntryRow(
                 .weight(1f)
                 .fillMaxHeight()
         ) {
+            var lineCount by remember { mutableIntStateOf(1) }
+            val infoWeight = if (lineCount <= 1) 1f else 0.5f
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -1285,14 +1288,15 @@ private fun FileEntryRow(
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.fillMaxWidth().wrapContentHeight(Alignment.CenterVertically)
+                    modifier = Modifier.fillMaxWidth().wrapContentHeight(Alignment.CenterVertically),
+                    onTextLayout = { lineCount = it.lineCount }
                 )
             }
             // Section 3: permission + size (files only)
             if (!entry.isDirectory && entry.permission.isNotEmpty()) {
                 Row(
                     modifier = Modifier
-                        .weight(0.5f)
+                        .weight(infoWeight)
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1310,7 +1314,7 @@ private fun FileEntryRow(
                     )
                 }
             } else {
-                Spacer(modifier = Modifier.weight(0.5f))
+                Spacer(modifier = Modifier.weight(infoWeight))
             }
         }
     }
