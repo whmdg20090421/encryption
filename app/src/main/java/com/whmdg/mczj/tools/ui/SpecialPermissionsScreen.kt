@@ -652,6 +652,7 @@ private fun getLevelDisplayName(level: AndroidPermissionLevel): String {
         AndroidPermissionLevel.STANDARD -> "普通权限"
         AndroidPermissionLevel.ACCESSIBILITY -> "无障碍权限"
         AndroidPermissionLevel.ADB -> "ADB 权限"
+        AndroidPermissionLevel.DEBUGGER -> "调试权限"
         AndroidPermissionLevel.ADMIN -> "管理员权限"
         AndroidPermissionLevel.ROOT -> "Root 权限"
     }
@@ -662,6 +663,7 @@ private fun getLevelDescription(level: AndroidPermissionLevel): String {
         AndroidPermissionLevel.STANDARD -> "使用标准 Android 应用权限，受系统沙盒保护。适用于一般文件管理和基础工具功能。"
         AndroidPermissionLevel.ACCESSIBILITY -> "通过无障碍服务模拟屏幕手势操作，无需 Root。可实现自动化操作、辅助功能等高级特性。"
         AndroidPermissionLevel.ADB -> "通过 ADB 调试授权或 Shizuku 获得高级系统权限。可修改系统设置、管理应用操作等。"
+        AndroidPermissionLevel.DEBUGGER -> "通过 USB 调试获得调试级别权限。可用于开发调试和部分系统级操作。"
         AndroidPermissionLevel.ADMIN -> "激活设备管理器获得系统级权限。可执行设备锁定、密码策略、远程擦除等管理操作。"
         AndroidPermissionLevel.ROOT -> "获取最高级超级用户权限，解除一切系统沙箱限制。可直接访问系统文件、修改受保护配置。"
     }
