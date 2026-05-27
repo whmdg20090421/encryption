@@ -312,10 +312,17 @@ fun isPermissionGranted(context: Context, androidName: String): Boolean {
                 }
             }
             "WRITE_SECURE_SETTINGS" -> {
-                ContextCompat.checkSelfPermission(
-                    context,
-                    "android.permission.WRITE_SECURE_SETTINGS"
-                ) == PackageManager.PERMISSION_GRANTED
+                // 签名级权限，checkSelfPermission 不可靠，通过实际写入 Secure 设置检测
+                val key = "toolbox_wss_check"
+                try {
+                    Settings.Secure.putString(context.contentResolver, key, "1")
+                    val result = Settings.Secure.getString(context.contentResolver, key)
+                    // 写入后立即清理
+                    Settings.Secure.putString(context.contentResolver, key, null)
+                    result == "1"
+                } catch (_: SecurityException) {
+                    false
+                }
             }
             "WRITE_EXTERNAL_STORAGE" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
