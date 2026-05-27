@@ -432,7 +432,8 @@ fun VaultOpenScreen(
                                 ) {
                                     Text("..  返回上级",
                                         textAlign = TextAlign.Center,
-                                        style = MaterialTheme.typography.bodyMedium)
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.fillMaxWidth())
                                 }
                                 Spacer(modifier = Modifier.weight(0.5f))
                             }
@@ -475,7 +476,8 @@ fun VaultOpenScreen(
                                         ) {
                                             Text(dir.name,
                                                 textAlign = TextAlign.Center,
-                                                style = MaterialTheme.typography.bodyMedium)
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                modifier = Modifier.fillMaxWidth())
                                         }
                                         Spacer(modifier = Modifier.weight(0.5f))
                                     }
@@ -550,7 +552,8 @@ fun VaultOpenScreen(
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                         textAlign = TextAlign.Center,
-                                        style = MaterialTheme.typography.bodyMedium
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.fillMaxWidth()
                                     )
                                 }
                                 // Section 3: placeholder (empty)
