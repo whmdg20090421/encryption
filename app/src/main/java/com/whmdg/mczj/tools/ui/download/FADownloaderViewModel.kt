@@ -322,7 +322,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     private fun checkFileExists(saveDir: Uri, fileName: String, type: String): Boolean {
         return try {
-            val context = getApplication<Application>().contentResolver
+            val resolver = getApplication<Application>().contentResolver
             val dirUri = if (type == "scraps") {
                 Uri.parse("$saveDir/scraps")
             } else {
@@ -331,7 +331,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             // Try to find the file
             val fileUri = Uri.parse("$dirUri/$fileName")
             try {
-                context.openInputStream(fileUri)?.close()
+                resolver.openInputStream(fileUri)?.close()
                 true
             } catch (_: Exception) {
                 false
@@ -360,17 +360,18 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 return@withContext false
             }
 
-            val context = getApplication<Application>().contentResolver
+            val app = getApplication<Application>()
+            val resolver = app.contentResolver
 
             // Create scraps subdirectory if needed
             val targetDir = if (type == "scraps") {
                 try {
                     val scrapsDir = Uri.parse("$saveDir/scraps")
                     // Try to create directory via DocumentFile
-                    val documentFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, scrapsDir)
+                    val documentFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, scrapsDir)
                     if (documentFile == null || !documentFile.exists()) {
                         // Create via parent
-                        val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, saveDir)
+                        val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, saveDir)
                         parentDoc?.createDirectory("scraps")
                     }
                     scrapsDir
@@ -383,13 +384,13 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
             val fileUri = Uri.parse("$targetDir/$fileName")
             val outputStream = try {
-                context.openOutputStream(fileUri)
+                resolver.openOutputStream(fileUri)
             } catch (_: Exception) {
                 // Try creating the file
                 try {
-                    val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, targetDir)
+                    val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, targetDir)
                     val newFile = parentDoc?.createFile("image/*", fileName)
-                    newFile?.uri?.let { context.openOutputStream(it) }
+                    newFile?.uri?.let { resolver.openOutputStream(it) }
                 } catch (_: Exception) {
                     null
                 }
