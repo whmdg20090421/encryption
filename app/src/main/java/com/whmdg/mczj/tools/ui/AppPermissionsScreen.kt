@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.ui
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateDpAsState
@@ -603,44 +604,17 @@ private suspend fun loadInstalledApps(packageManager: PackageManager): List<AppI
 private suspend fun getAppPermissions(packageName: String, context: Context): List<PermissionInfo> = withContext(Dispatchers.IO) {
     val permissions = mutableListOf<PermissionInfo>()
     try {
-        val packageInfoResult = SpecialPermissionVerifier.executeRootCommandFull("dumpsys package $packageName")
-        val output = packageInfoResult.first
-
-        val grantedPermsResult = SpecialPermissionVerifier.executeRootCommandFull(
-            "dumpsys package $packageName | grep -E \"granted=true|:granted=true\"")
-
-        val requestedPerms = mutableSetOf<String>()
-        val requestedSection = extractSectionContent(output, "requested permissions:")
-        if (requestedSection.isNotEmpty()) extractPermissionsFromSection(requestedSection, requestedPerms)
-        val installSection = extractSectionContent(output, "install permissions:")
-        if (installSection.isNotEmpty()) extractPermissionsFromSection(installSection, requestedPerms)
-        val runtimeSection = extractSectionContent(output, "runtime permissions:")
-        if (runtimeSection.isNotEmpty()) extractPermissionsFromSection(runtimeSection, requestedPerms)
-
-        if (requestedPerms.isEmpty()) {
-            val permRegex = "(android\\.permission\\.[\\w\\.]+|permission\\.[\\w\\.]+)".toRegex()
-            permRegex.findAll(output).forEach { match ->
-                if (!match.value.contains("uses-permission:")) requestedPerms.add(match.value)
-            }
-        }
+        val pkgInfo = context.packageManager.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS)
+        val requestedPermsArray = pkgInfo.requestedPermissions ?: emptyArray()
+        val requestedFlags = pkgInfo.requestedPermissionsFlags ?: IntArray(requestedPermsArray.size)
+        val requestedPerms = requestedPermsArray.toSet()
 
         val grantedPerms = mutableSetOf<String>()
-        for (line in grantedPermsResult.first.split("\n")) {
-            val permMatch = "(android\\.permission\\.[\\w\\.]+|permission\\.[\\w\\.]+)".toRegex().find(line)
-            permMatch?.value?.let { grantedPerms.add(it) }
-        }
-
-        val grantedSection = extractSectionContent(output, "grantedPermissions:")
-        if (grantedSection.isNotEmpty()) {
-            for (line in grantedSection.split("\n")) {
-                val trimmed = line.trim()
-                if (trimmed.startsWith("android.permission.") || trimmed.startsWith("permission.")) {
-                    grantedPerms.add(trimmed)
-                }
+        for (i in requestedPermsArray.indices) {
+            if ((requestedFlags[i] and PackageInfo.REQUESTED_PERMISSION_GRANTED) != 0) {
+                grantedPerms.add(requestedPermsArray[i])
             }
         }
-
-        if (requestedPerms.isEmpty() && grantedPerms.isNotEmpty()) requestedPerms.addAll(grantedPerms)
 
         val importantPermGroups = mapOf(
             "android.permission.CAMERA" to "CAMERA",
@@ -752,29 +726,4 @@ private suspend fun getAppPermissions(packageName: String, context: Context): Li
         { if (it.group == "undefined") 1 else 0 },
         { !it.granted }, { it.group }, { it.name }
     ))
-}
-
-private fun extractSectionContent(output: String, sectionHeader: String): String {
-    val startIndex = output.indexOf(sectionHeader)
-    if (startIndex == -1) return ""
-    val sectionStart = startIndex + sectionHeader.length
-    val possibleNextSections = listOf("grantedPermissions:", "runtime permissions:", "install permissions:",
-        "requested permissions:", "User 0:", "Package [")
-    var endIndex = output.length
-    for (nextSection in possibleNextSections) {
-        val nextIndex = output.indexOf(nextSection, sectionStart)
-        if (nextIndex != -1 && nextIndex < endIndex) endIndex = nextIndex
-    }
-    return output.substring(sectionStart, endIndex).trim()
-}
-
-private fun extractPermissionsFromSection(section: String, permissions: MutableSet<String>) {
-    for (line in section.split("\n")) {
-        val trimmed = line.trim()
-        if (trimmed.isEmpty()) continue
-        if (trimmed.startsWith("android.permission.") || trimmed.startsWith("permission.")) {
-            val permEnd = trimmed.indexOf(":")
-            permissions.add(if (permEnd > 0) trimmed.substring(0, permEnd).trim() else trimmed)
-        }
-    }
 }

@@ -1082,7 +1082,7 @@ private fun CompactSettingsItem(
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
             .clickable { onClick() }
-            .padding(8.dp),
+            .padding(vertical = 12.dp, horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
