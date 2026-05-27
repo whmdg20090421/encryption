@@ -1255,7 +1255,7 @@ private fun FileEntryRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
-            imageVector = if (entry.isDirectory) Icons.Default.Inventory2 else Icons.Default.InsertDriveFile,
+            imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
             contentDescription = null,
             modifier = Modifier.size(22.dp),
             tint = if (isFocused) MaterialTheme.colorScheme.primary

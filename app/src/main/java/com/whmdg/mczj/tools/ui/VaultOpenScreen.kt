@@ -459,7 +459,7 @@ fun VaultOpenScreen(
                                         .padding(horizontal = 16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(Icons.Default.Inventory2, contentDescription = null,
+                                    Icon(Icons.Default.Folder, contentDescription = null,
                                         modifier = Modifier.size(22.dp),
                                         tint = MaterialTheme.colorScheme.secondary)
                                     Spacer(modifier = Modifier.width(12.dp))
@@ -528,7 +528,7 @@ fun VaultOpenScreen(
                         ) {
                             // Left icon (cube)
                             Icon(
-                                imageVector = if (entry.isDirectory) Icons.Default.Inventory2 else Icons.Default.Shield,
+                                imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.Shield,
                                 contentDescription = null,
                                 modifier = Modifier.size(22.dp),
                                 tint = if (entry.isDirectory) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
