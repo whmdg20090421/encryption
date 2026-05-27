@@ -21,6 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.encryption.core.FileConstants
@@ -399,19 +400,43 @@ fun VaultOpenScreen(
 
                     // Up button (if not at vault root)
                     if (!destIsRoot) {
-                        ListItem(
-                            headlineContent = { Text("..  返回上级") },
-                            leadingContent = { Icon(Icons.Default.ArrowUpward, contentDescription = null) },
-                            modifier = Modifier.combinedClickable(
-                                onClick = {
-                                    val parent = destDir.parentFile
-                                    if (parent != null && parent.absolutePath.length >= session.vaultDir.absolutePath.length) {
-                                        destPickerPath = parent.absolutePath
-                                    }
-                                },
-                                onLongClick = {}
-                            )
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(60.dp)
+                                .combinedClickable(
+                                    onClick = {
+                                        val parent = destDir.parentFile
+                                        if (parent != null && parent.absolutePath.length >= session.vaultDir.absolutePath.length) {
+                                            destPickerPath = parent.absolutePath
+                                        }
+                                    },
+                                    onLongClick = {}
+                                )
+                                .padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.ArrowUpward, contentDescription = null,
+                                modifier = Modifier.size(22.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("..  返回上级",
+                                        textAlign = TextAlign.Center,
+                                        style = MaterialTheme.typography.bodyMedium)
+                                }
+                                Spacer(modifier = Modifier.weight(0.5f))
+                            }
+                        }
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     }
 
@@ -422,17 +447,39 @@ fun VaultOpenScreen(
                     } else {
                         LazyColumn(modifier = Modifier.fillMaxSize()) {
                             items(destSubDirs) { dir ->
-                                ListItem(
-                                    headlineContent = { Text(dir.name) },
-                                    leadingContent = {
-                                        Icon(Icons.Default.Folder, contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.secondary)
-                                    },
-                                    modifier = Modifier.combinedClickable(
-                                        onClick = { destPickerPath = dir.absolutePath },
-                                        onLongClick = {}
-                                    )
-                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(60.dp)
+                                        .combinedClickable(
+                                            onClick = { destPickerPath = dir.absolutePath },
+                                            onLongClick = {}
+                                        )
+                                        .padding(horizontal = 16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Inventory2, contentDescription = null,
+                                        modifier = Modifier.size(22.dp),
+                                        tint = MaterialTheme.colorScheme.secondary)
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxHeight()
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .fillMaxWidth(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(dir.name,
+                                                textAlign = TextAlign.Center,
+                                                style = MaterialTheme.typography.bodyMedium)
+                                        }
+                                        Spacer(modifier = Modifier.weight(0.5f))
+                                    }
+                                }
                                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                             }
                         }
@@ -462,44 +509,62 @@ fun VaultOpenScreen(
                 ) {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(entries) { entry ->
-                        ListItem(
-                            headlineContent = {
-                                Text(entry.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            },
-                            supportingContent = {
-                                if (!entry.isDirectory) {
-                                    val size = entry.file.length()
-                                    Text(humanSize(size))
-                                } else {
-                                    val count = (entry.file.listFiles() ?: emptyArray()).size
-                                    Text("$count 项")
-                                }
-                            },
-                            leadingContent = {
-                                Icon(
-                                    imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.Shield,
-                                    contentDescription = null,
-                                    tint = if (entry.isDirectory) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(60.dp)
+                                .combinedClickable(
+                                    onClick = {
+                                        if (entry.isDirectory) {
+                                            currentPath = entry.file.absolutePath
+                                        }
+                                    },
+                                    onLongClick = { contextMenuEntry = entry }
                                 )
-                            },
-                            trailingContent = {
-                                if (!entry.isDirectory) {
-                                    IconButton(onClick = { showDecryptDialog = entry.file }) {
-                                        Icon(Icons.Default.ArrowDownward, contentDescription = "解密到...")
-                                    }
-                                }
-                            },
-                            modifier = Modifier.combinedClickable(
-                                onClick = {
-                                    if (entry.isDirectory) {
-                                        currentPath = entry.file.absolutePath
-                                    }
-                                },
-                                onLongClick = {
-                                    contextMenuEntry = entry
-                                }
+                                .padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Left icon (cube)
+                            Icon(
+                                imageVector = if (entry.isDirectory) Icons.Default.Inventory2 else Icons.Default.Shield,
+                                contentDescription = null,
+                                modifier = Modifier.size(22.dp),
+                                tint = if (entry.isDirectory) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
                             )
-                        )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            // Right content: 3 equal sections
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                            ) {
+                                // Section 1-2: filename area (top 2/3)
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = entry.displayName,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                                // Section 3: placeholder (empty)
+                                Spacer(modifier = Modifier.weight(0.5f))
+                            }
+                            // Trailing decrypt button (files only)
+                            if (!entry.isDirectory) {
+                                IconButton(onClick = { showDecryptDialog = entry.file },
+                                    modifier = Modifier.size(36.dp)) {
+                                    Icon(Icons.Default.ArrowDownward, contentDescription = "解密到...",
+                                        modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
                         HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     }
                 }

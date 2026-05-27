@@ -1,4 +1,8 @@
-# CLAUDE.md — 艨艟战舰工具箱 Android 项目
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+# 艨艟战舰工具箱 Android 项目
 
 ## 项目概览
 
@@ -6,25 +10,30 @@
 **包名**：`com.whmdg.mczj.tools`  
 **语言**：Kotlin  
 **UI 框架**：Jetpack Compose + Material 3  
-**Min SDK**：24 | **Target SDK**：36  
+**Min SDK**：24 | **Target SDK**：36 | **Compile SDK**：36 (minorApiLevel=1)
 **AGP**：9.2.1 | **Kotlin**：2.2.10 | **Compose BOM**：2026.02.01
 
 ---
 
 ## 构建与运行
 
+> **注意**：本地无编译环境，不要运行 `./gradlew` 构建命令。修改代码后通过阅读源文件检查语法错误即可。
+
 ```bash
 # 调试包
 ./gradlew assembleDebug
 
-# 发布包
-./gradlew assembleRelease
+# 发布包（需设置签名环境变量，否则自动回退 debug 签名）
+KEYSTORE_PASSWORD=xxx KEY_ALIAS=xxx KEY_PASSWORD=xxx ./gradlew assembleRelease
 
 # 单元测试
 ./gradlew test
 
 # 仪器测试
 ./gradlew connectedAndroidTest
+
+# 仅构建 arm64-v8a（默认已配置 splits，无需额外参数）
+./gradlew :app:assembleRelease
 ```
 
 ---
@@ -33,12 +42,15 @@
 
 ```
 app/src/main/java/com/whmdg/mczj/tools/
+├── AppDataPaths.kt                    # 应用数据路径解析
 ├── MainActivity.kt                    # 入口，启用 Edge-to-Edge
+├── util/
+│   └── DiagnosticLog.kt               # 诊断日志工具
 ├── encryption/
 │   ├── core/                          # 密码学原语层
-│   │   ├── AesGcm256.kt               # AES-256-GCM 加密/解密
-│   │   ├── Argon2idKdf.kt             # Argon2id KDF（BouncyCastle）
-│   │   ├── Pbkdf2Kdf.kt               # PBKDF2-SHA256 KDF
+│   │   ├── AesGcm.kt                  # AES-256-GCM 加密/解密
+│   │   ├── Argon2id.kt                # Argon2id KDF（BouncyCastle）
+│   │   ├── Pbkdf2.kt                  # PBKDF2-SHA256 KDF
 │   │   ├── KeyDerivation.kt           # KDF 统一调度（Argon2id / PBKDF2）
 │   │   ├── FileCodec.kt               # 文件分块加密/解密（与 Python 工具二进制兼容）
 │   │   ├── FilenameCodec.kt           # 文件名 AES-GCM 加密（含 zlib 压缩回退 + SHA-256 映射）
@@ -139,13 +151,26 @@ app/src/main/java/com/whmdg/mczj/tools/
 
 ---
 
+## CI/CD
+
+GitHub Actions workflow `.github/workflows/build.yml`:
+- **触发**：push 到 `main`/`master`，或手动 `workflow_dispatch`
+- **环境**：JDK 21，Gradle cache disabled（确保干净构建）
+- **签名**：release 签名通过 secrets 注入（`KEYSTORE_B64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`），缺失时自动回退到 debug 签名
+- **ABI**：仅构建 `arm64-v8a`
+- **版本号**：`versionCode` 基于时间戳动态生成，`versionName` 格式 `1.3.<timestamp>`
+- **产物**：重命名为 `工具箱-v<版本>-<日期时间>-arm64-v8a-release.apk`，保留 30 天
+
+---
+
 ## 关键依赖
 
 | 库 | 版本 | 用途 |
 |----|------|------|
+| `core-ktx` | 1.18.0 | Android KTX 扩展 |
 | BouncyCastle `bcprov-jdk18on` | 1.80 | Argon2id KDF |
 | `kotlinx-serialization-json` | 1.8.0 | JSON 序列化 |
-| Compose BOM | 2026.02.01 | UI 全套 |
+| Compose BOM | 2026.02.01 | UI 全套（含 Material 3 + Icons Extended） |
 | `activity-compose` | 1.13.0 | ComponentActivity 集成 |
 | `lifecycle-runtime-ktx` | 2.10.0 | 生命周期 |
 
