@@ -15,3 +15,5 @@
 local.properties
 .claude/
 build-output/
+app/src/main/cpp/obf_key.h
+app/src/main/cpp/hashes.inc

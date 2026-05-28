@@ -1,21 +1,30 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# ── JNI native methods ──
+-keepclasseswithmembernames class com.whmdg.mczj.tools.auth.NativeAuth {
+    native <methods>;
+}
+-keep class com.whmdg.mczj.tools.auth.NativeAuth { *; }
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# ── Feature 枚举名稳定 (HMAC payload 使用 enum.name) ──
+-keepclassmembers enum com.whmdg.mczj.tools.auth.Feature { *; }
+-keep class com.whmdg.mczj.tools.auth.Feature { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# ── PermissionManager 单例 + AuthState ──
+-keep class com.whmdg.mczj.tools.auth.PermissionManager { *; }
+-keep class com.whmdg.mczj.tools.auth.PermissionManager$AuthState* { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# ── kotlinx.serialization ──
+-keepattributes *Annotation*, InnerClasses, Signature
+-keepclassmembers @kotlinx.serialization.Serializable class * { *; }
+
+# ── BouncyCastle ──
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**
+
+# ── Shizuku ──
+-keep class moe.shizuku.** { *; }
+-dontwarn moe.shizuku.**
+
+# ── WebView JS interface ──
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}

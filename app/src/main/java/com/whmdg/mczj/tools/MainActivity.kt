@@ -15,6 +15,7 @@ import com.whmdg.mczj.tools.ui.theme.LocalOnToggleTheme
 import com.whmdg.mczj.tools.ui.theme.工具箱Theme
 import com.whmdg.mczj.tools.ui.MainAppContainer
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import com.whmdg.mczj.tools.auth.PermissionManager
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,6 +55,8 @@ class MainActivity : ComponentActivity() {
             }
         }
         DiagnosticLog.log("MainActivity", "GlobalCrashHandler 已安装")
+
+        PermissionManager.init(applicationContext)
 
         enableEdgeToEdge()
         setContent {

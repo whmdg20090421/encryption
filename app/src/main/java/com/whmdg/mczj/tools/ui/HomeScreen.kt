@@ -56,7 +56,16 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.whmdg.mczj.tools.auth.Feature
+import com.whmdg.mczj.tools.auth.LocalPermissionGate
+import com.whmdg.mczj.tools.auth.NoPermissionDialog
+import com.whmdg.mczj.tools.auth.PasswordDialog
+import com.whmdg.mczj.tools.auth.PermissionManager
+import androidx.compose.ui.draw.alpha
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.graphics.vector.ImageVector
 
 sealed class Screen {
     object Dashboard : Screen()
@@ -75,6 +84,7 @@ sealed class Screen {
     object VaultCreate : Screen()
     data class VaultOpen(val session: VaultSession) : Screen()
     data class VaultChangePassword(val vault: VaultRecord) : Screen()
+    object AuthManagement : Screen()
 }
 
 @Composable
@@ -196,12 +206,14 @@ fun MainAppContainer() {
             )
         }
         is Screen.EncryptionHome -> {
-            EncryptionHomeScreen(
-                vaultService = vaultService,
-                settings = encryptionSettings,
-                onBack = { navigateBack() },
-                onNavigate = { navigateTo(it) }
-            )
+            CompositionLocalProvider(LocalPermissionGate provides PermissionManager.has(Feature.ENCRYPTION_VAULT)) {
+                EncryptionHomeScreen(
+                    vaultService = vaultService,
+                    settings = encryptionSettings,
+                    onBack = { navigateBack() },
+                    onNavigate = { navigateTo(it) }
+                )
+            }
         }
         is Screen.VaultCreate -> {
             VaultCreateScreen(
@@ -228,9 +240,11 @@ fun MainAppContainer() {
             )
         }
         is Screen.AppPermissions -> {
-            AppPermissionsScreen(
-                onBack = { navigateBack() }
-            )
+            CompositionLocalProvider(LocalPermissionGate provides PermissionManager.has(Feature.APP_PERMISSIONS)) {
+                AppPermissionsScreen(
+                    onBack = { navigateBack() }
+                )
+            }
         }
         is Screen.PermissionManagementConfig -> {
             PermissionManagementConfigScreen(
@@ -238,21 +252,27 @@ fun MainAppContainer() {
             )
         }
         is Screen.FileManager -> {
-            FileManagerScreen(
-                onBack = { navigateBack() }
-            )
+            CompositionLocalProvider(LocalPermissionGate provides PermissionManager.has(Feature.FILE_MANAGER)) {
+                FileManagerScreen(
+                    onBack = { navigateBack() }
+                )
+            }
         }
         is Screen.BatchDownloader -> {
-            com.whmdg.mczj.tools.ui.download.BatchDownloaderScreen(
-                onBack = { navigateBack() },
-                onNavigate = { navigateTo(it) }
-            )
+            CompositionLocalProvider(LocalPermissionGate provides PermissionManager.has(Feature.BATCH_DOWNLOADER)) {
+                com.whmdg.mczj.tools.ui.download.BatchDownloaderScreen(
+                    onBack = { navigateBack() },
+                    onNavigate = { navigateTo(it) }
+                )
+            }
         }
         is Screen.FADownloader -> {
-            com.whmdg.mczj.tools.ui.download.FADownloaderScreen(
-                onBack = { navigateBack() },
-                onLogin = { navigateTo(Screen.FALogin) }
-            )
+            CompositionLocalProvider(LocalPermissionGate provides PermissionManager.has(Feature.FA_DOWNLOADER)) {
+                com.whmdg.mczj.tools.ui.download.FADownloaderScreen(
+                    onBack = { navigateBack() },
+                    onLogin = { navigateTo(Screen.FALogin) }
+                )
+            }
         }
         is Screen.FALogin -> {
             com.whmdg.mczj.tools.ui.download.FALoginScreen(
@@ -263,6 +283,11 @@ fun MainAppContainer() {
                     )
                     navigateBack()
                 }
+            )
+        }
+        is Screen.AuthManagement -> {
+            AuthManagementScreen(
+                onBack = { navigateBack() }
             )
         }
     }
@@ -322,41 +347,107 @@ fun HomeScreen(
     }
 }
 
+private data class ModuleDef(
+    val title: String,
+    val subtitle: String,
+    val icon: ImageVector,
+    val feature: Feature,
+    val screen: Screen
+)
+
+private val HOME_MODULES = listOf(
+    ModuleDef("加密", "常用加密 / 解密工具", Icons.Default.Lock, Feature.ENCRYPTION_VAULT, Screen.EncryptionHome),
+    ModuleDef("文件管理器", "双面板文件浏览工具", Icons.Default.Folder, Feature.FILE_MANAGER, Screen.FileManager),
+    ModuleDef("应用权限管理", "查看和管理应用权限", Icons.Default.Security, Feature.APP_PERMISSIONS, Screen.AppPermissions),
+    ModuleDef("批量下载器", "FA 图片批量下载等工具", Icons.Default.Download, Feature.BATCH_DOWNLOADER, Screen.BatchDownloader)
+)
+
 @Composable
 fun HomeTab(onNavigate: (Screen) -> Unit) {
+    val authState by PermissionManager.state.collectAsState()
+    var lockedFeature by remember { mutableStateOf<Feature?>(null) }
+    val scope = rememberCoroutineScope()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
+        if (authState is PermissionManager.AuthState.Locked) {
+            Surface(
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+            ) {
+                Text(
+                    text = "点击任意模块输入密钥以解锁",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+            }
+        }
+
         SettingsSection(
             title = "工具",
             icon = Icons.Default.Build
         ) {
-            CompactSettingsItem(
-                title = "加密",
-                subtitle = "常用加密 / 解密工具",
-                icon = Icons.Default.Lock,
-                onClick = { onNavigate(Screen.EncryptionHome) }
+            HOME_MODULES.forEach { mod ->
+                CompactSettingsItem(
+                    title = mod.title,
+                    subtitle = mod.subtitle,
+                    icon = mod.icon,
+                    enabled = PermissionManager.has(mod.feature),
+                    onClick = { onNavigate(mod.screen) },
+                    onLockedClick = { lockedFeature = mod.feature }
+                )
+            }
+        }
+    }
+
+    lockedFeature?.let { feature ->
+        if (authState is PermissionManager.AuthState.Locked) {
+            val ctx = LocalContext.current
+            PasswordDialog(
+                onDismiss = { lockedFeature = null },
+                onResult = { pw ->
+                    scope.launch {
+                        val res = PermissionManager.tryAuthenticate(ctx, pw)
+                        if (res.isSuccess && PermissionManager.has(feature)) {
+                            lockedFeature = null
+                            val screen = when (feature) {
+                                Feature.ENCRYPTION_VAULT -> Screen.EncryptionHome
+                                Feature.FILE_MANAGER -> Screen.FileManager
+                                Feature.APP_PERMISSIONS -> Screen.AppPermissions
+                                Feature.BATCH_DOWNLOADER -> Screen.BatchDownloader
+                                Feature.FA_DOWNLOADER -> Screen.FADownloader
+                                Feature.SECURITY_SETTINGS -> Screen.Security
+                            }
+                            onNavigate(screen)
+                        } else {
+                            lockedFeature = null
+                        }
+                    }
+                }
             )
-            CompactSettingsItem(
-                title = "文件管理器",
-                subtitle = "双面板文件浏览工具",
-                icon = Icons.Default.Folder,
-                onClick = { onNavigate(Screen.FileManager) }
-            )
-            CompactSettingsItem(
-                title = "应用权限管理",
-                subtitle = "查看和管理应用权限",
-                icon = Icons.Default.Security,
-                onClick = { onNavigate(Screen.AppPermissions) }
-            )
-            CompactSettingsItem(
-                title = "批量下载器",
-                subtitle = "FA 图片批量下载等工具",
-                icon = Icons.Default.Download,
-                onClick = { onNavigate(Screen.BatchDownloader) }
+        } else if (!PermissionManager.has(feature)) {
+            NoPermissionDialog(
+                feature = feature,
+                onDismiss = { lockedFeature = null },
+                onEnter = {
+                    val screen = when (feature) {
+                        Feature.ENCRYPTION_VAULT -> Screen.EncryptionHome
+                        Feature.FILE_MANAGER -> Screen.FileManager
+                        Feature.APP_PERMISSIONS -> Screen.AppPermissions
+                        Feature.BATCH_DOWNLOADER -> Screen.BatchDownloader
+                        Feature.FA_DOWNLOADER -> Screen.FADownloader
+                        Feature.SECURITY_SETTINGS -> Screen.Security
+                    }
+                    lockedFeature = null
+                    onNavigate(screen)
+                }
             )
         }
     }
@@ -1065,6 +1156,12 @@ fun SettingsTab(onNavigate: (Screen) -> Unit) {
                 icon = Icons.Default.Lock,
                 onClick = { onNavigate(Screen.Security) }
             )
+            CompactSettingsItem(
+                title = "更改密钥授权",
+                subtitle = "切换或清除当前权限令牌",
+                icon = Icons.Default.VpnKey,
+                onClick = { onNavigate(Screen.AuthManagement) }
+            )
         }
     }
 }
@@ -1113,20 +1210,33 @@ private fun CompactSettingsItem(
     title: String,
     subtitle: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    onLockedClick: (() -> Unit)? = null
 ) {
+    val alpha = if (enabled) 1f else 0.5f
+    val iconTint = if (enabled) MaterialTheme.colorScheme.primary
+                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    val textColor = if (enabled) Color.Unspecified
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    val subtitleColor = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .clickable { onClick() }
+            .clickable {
+                if (enabled) onClick() else onLockedClick?.invoke()
+            }
+            .alpha(alpha)
             .padding(vertical = 12.dp, horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
+            tint = iconTint,
             modifier = Modifier.size(20.dp)
         )
         Spacer(modifier = Modifier.width(12.dp))
@@ -1135,13 +1245,14 @@ private fun CompactSettingsItem(
                 text = title,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
+                color = textColor,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = subtitleColor,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
@@ -1149,7 +1260,8 @@ private fun CompactSettingsItem(
         Icon(
             imageVector = Icons.Default.ChevronRight,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
+                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
             modifier = Modifier.size(16.dp)
         )
     }
