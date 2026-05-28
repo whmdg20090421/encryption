@@ -58,7 +58,7 @@ object TokenCodec {
         val inner = md.digest()
         md.update(opad)
         val result = md.digest(inner)
-        Arrays.fill(k, 0)
+        k.fill(0)
         return result
     }
 }

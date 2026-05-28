@@ -671,6 +671,7 @@ fun EncryptionHomeScreen(
         }
     }
 }
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -1244,7 +1245,6 @@ private fun SettingsSection(
             )
         }
     }
-}
 }
 
 @Composable
