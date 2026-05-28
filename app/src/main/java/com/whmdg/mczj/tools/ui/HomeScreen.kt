@@ -257,9 +257,9 @@ fun MainAppContainer() {
         is Screen.FALogin -> {
             com.whmdg.mczj.tools.ui.download.FALoginScreen(
                 onBack = { navigateBack() },
-                onLoginSuccess = { cookie ->
+                onLoginSuccess = { cookie, username ->
                     com.whmdg.mczj.tools.ui.download.FADownloaderViewModel.saveCookieStatic(
-                        context, cookie
+                        context, cookie, username
                     )
                     navigateBack()
                 }

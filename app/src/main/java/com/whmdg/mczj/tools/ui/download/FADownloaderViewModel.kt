@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,20 +30,35 @@ import kotlinx.coroutines.sync.withPermit
 
 data class DownloadLog(val message: String, val timestamp: Long = System.currentTimeMillis())
 
+/** 预览列表中的单个下载任务 */
+data class PreviewItem(
+    val seq: Int,
+    val fileName: String,
+    val imageUrl: String
+)
+
 data class FAUiState(
     val author: String = "",
-    val downloadType: String = "gallery", // gallery or scraps
+    val downloadType: String = "gallery",
     val saveDir: Uri? = null,
     val saveDirPath: String = "",
     val startPage: String = "1",
     val maxDownload: String = "0",
     val skipExisting: Boolean = true,
     val useCache: Boolean = true,
-    val namingMode: String = "original", // "original" or "sequential"
-    val downloadThreads: Int = 1, // 1~4
+    val namingMode: String = "original",
+    val downloadThreads: Int = 1,
     val isLoggedIn: Boolean = false,
+    val username: String = "",
     val cookieExpired: Boolean = false,
+    val cookieRefreshAttempts: Int = 0,
     val isDownloading: Boolean = false,
+    val isCollecting: Boolean = false,
+    val showPreview: Boolean = false,
+    val pendingTasks: List<PreviewItem> = emptyList(),
+    val collectionComplete: Boolean = false,
+    val collectionLoaded: Int = 0,
+    val collectionTotal: Int = 0,
     val logs: List<DownloadLog> = emptyList(),
     val downloadedCount: Int = 0,
     val skippedCount: Int = 0,
@@ -57,7 +73,11 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     val uiState: StateFlow<FAUiState> = _uiState.asStateFlow()
 
     private var downloadJob: Job? = null
+    private var collectJob: Job? = null
     private var isStopped = false
+
+    /** 收集→下载的生产者-消费者通道 */
+    private var downloadChannel: Channel<PreviewItem>? = null
 
     private val prefs = application.getSharedPreferences("fa_download_auth", Context.MODE_PRIVATE)
     private val cachePrefs = application.getSharedPreferences("fa_download_cache", Context.MODE_PRIVATE)
@@ -68,17 +88,26 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         private const val REFERER = "https://www.furaffinity.net"
         private const val CONNECT_TIMEOUT = 15000
         private const val READ_TIMEOUT = 30000
+        private const val MAX_COOKIE_REFRESH_ATTEMPTS = 3
 
-        fun saveCookieStatic(context: Context, cookie: String) {
+        fun saveCookieStatic(context: Context, cookie: String, username: String = "") {
             context.getSharedPreferences("fa_download_auth", Context.MODE_PRIVATE)
-                .edit().putString("cookie", cookie).apply()
+                .edit()
+                .putString("cookie", cookie)
+                .putString("username", username)
+                .apply()
         }
     }
 
     init {
-        // Load saved cookie
         val cookie = prefs.getString("cookie", "") ?: ""
-        _uiState.update { it.copy(isLoggedIn = cookie.isNotEmpty() && cookie.contains("a=")) }
+        val username = prefs.getString("username", "") ?: ""
+        _uiState.update {
+            it.copy(
+                isLoggedIn = cookie.isNotEmpty() && cookie.contains("a=") && cookie.contains("b=") && cookie.contains("cf_clearance="),
+                username = username
+            )
+        }
     }
 
     fun updateAuthor(author: String) = _uiState.update { it.copy(author = author) }
@@ -91,17 +120,70 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     fun updateNamingMode(mode: String) = _uiState.update { it.copy(namingMode = mode) }
     fun updateDownloadThreads(threads: Int) = _uiState.update { it.copy(downloadThreads = threads.coerceIn(1, 4)) }
 
-    fun saveCookie(cookie: String) {
-        prefs.edit().putString("cookie", cookie).apply()
-        _uiState.update { it.copy(isLoggedIn = cookie.contains("a="), cookieExpired = false) }
+    fun saveCookie(cookie: String, username: String = "") {
+        prefs.edit()
+            .putString("cookie", cookie)
+            .putString("username", username.ifEmpty { prefs.getString("username", "") ?: "" })
+            .apply()
+        _uiState.update {
+            it.copy(
+                isLoggedIn = cookie.contains("a=") && cookie.contains("b=") && cookie.contains("cf_clearance="),
+                cookieExpired = false,
+                cookieRefreshAttempts = 0,
+                username = username.ifEmpty { it.username }
+            )
+        }
     }
 
     fun clearCookie() {
         prefs.edit().remove("cookie").apply()
-        _uiState.update { it.copy(isLoggedIn = false, cookieExpired = false) }
+        _uiState.update {
+            it.copy(
+                isLoggedIn = false,
+                cookieExpired = false,
+                cookieRefreshAttempts = 0,
+                username = ""
+            )
+        }
     }
 
     fun loadCookie(): String = prefs.getString("cookie", "") ?: ""
+
+    fun markCookieExpired() {
+        val currentAttempts = _uiState.value.cookieRefreshAttempts
+        _uiState.update {
+            it.copy(
+                cookieExpired = true,
+                cookieRefreshAttempts = currentAttempts + 1
+            )
+        }
+    }
+
+    fun onCookieRefreshSuccess(cookie: String) {
+        saveCookie(cookie)
+        addLog("Cookie 已自动刷新")
+    }
+
+    fun onCookieRefreshFailed() {
+        val newAttempts = _uiState.value.cookieRefreshAttempts + 1
+        _uiState.update { it.copy(cookieRefreshAttempts = newAttempts) }
+        if (newAttempts >= MAX_COOKIE_REFRESH_ATTEMPTS) {
+            _uiState.update { it.copy(cookieExpired = true) }
+            addLog("Cookie 自动刷新失败 ${MAX_COOKIE_REFRESH_ATTEMPTS} 次，请重新登录")
+        } else {
+            addLog("Cookie 刷新失败，重试 ($newAttempts/$MAX_COOKIE_REFRESH_ATTEMPTS)")
+        }
+    }
+
+    fun shouldAttemptCookieRefresh(): Boolean {
+        return _uiState.value.cookieRefreshAttempts < MAX_COOKIE_REFRESH_ATTEMPTS
+    }
+
+    fun resetRefreshAttempts() {
+        _uiState.update { it.copy(cookieRefreshAttempts = 0) }
+    }
+
+    // ── Phase 1: Start collection, show preview immediately ──
 
     fun startDownload() {
         val state = _uiState.value
@@ -115,38 +197,33 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         }
 
         isStopped = false
-        downloadJob = viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isDownloading = true, downloadedCount = 0, skippedCount = 0, failedCount = 0, statusMessage = "正在下载...") }
-            addLog("开始下载 ${state.author} 的 ${state.downloadType}")
+        val channel = Channel<PreviewItem>(Channel.UNLIMITED)
+        downloadChannel = channel
 
+        _uiState.update {
+            it.copy(
+                isCollecting = true,
+                showPreview = true,
+                collectionComplete = false,
+                collectionLoaded = 0,
+                collectionTotal = 0,
+                pendingTasks = emptyList(),
+                statusMessage = "正在收集任务..."
+            )
+        }
+        addLog("正在收集 ${state.author} 的 ${state.downloadType}...")
+
+        collectJob = viewModelScope.launch(Dispatchers.IO) {
             val startPage = state.startPage.toIntOrNull() ?: 1
             val maxDownload = state.maxDownload.toIntOrNull() ?: 0
             val cookie = loadCookie()
-            val threadCount = state.downloadThreads
 
-            // Create author subdirectory
-            val authorDir = createSubdirectory(state.saveDir, state.author)
-            val targetDir = if (state.downloadType == "scraps") {
-                createSubdirectory(authorDir, "scraps")
-            } else {
-                authorDir
-            }
-            addLog("保存目录: ${state.author}/${if (state.downloadType == "scraps") "scraps/" else ""}")
-
-            // ── Phase 1: Collect all download tasks across pages ──
-            data class DownloadTask(
-                val seq: Int,
-                val imageUrl: String,
-                val fileName: String,
-                val pageId: String
-            )
-
-            val allTasks = mutableListOf<DownloadTask>()
+            val allTasks = mutableListOf<PreviewItem>()
             var currentPage = startPage
             var consecutiveEmpty = 0
             var globalSeq = 0
+            var firstPageCount = 0
 
-            addLog("正在收集下载任务...")
             try {
                 while (!isStopped) {
                     if (maxDownload > 0 && allTasks.size >= maxDownload) break
@@ -165,17 +242,22 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
                     if (html.contains("could not be found")) {
                         addLog("未找到作者「${state.author}」，请检查名称")
-                        _uiState.update { it.copy(isDownloading = false, statusMessage = "作者不存在") }
+                        _uiState.update { it.copy(isCollecting = false, statusMessage = "作者不存在") }
+                        channel.close()
                         return@launch
                     }
                     if (html.contains("available to registered users only")) {
                         addLog("该作者的作品仅对注册用户可见，请先登录")
-                        _uiState.update { it.copy(cookieExpired = true, isDownloading = false, statusMessage = "需要登录") }
+                        markCookieExpired()
+                        _uiState.update { it.copy(isCollecting = false, statusMessage = "需要登录") }
+                        channel.close()
                         return@launch
                     }
                     if (html.contains("id=\"login-form\"") && state.isLoggedIn) {
-                        addLog("Cookie 已失效，请重新登录")
-                        _uiState.update { it.copy(cookieExpired = true, isDownloading = false, statusMessage = "Cookie 失效") }
+                        addLog("Cookie 已失效")
+                        markCookieExpired()
+                        _uiState.update { it.copy(isCollecting = false, statusMessage = "Cookie 失效") }
+                        channel.close()
                         return@launch
                     }
 
@@ -187,6 +269,17 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                         continue
                     }
                     consecutiveEmpty = 0
+
+                    // First page done → estimate total
+                    if (currentPage == startPage) {
+                        firstPageCount = pages.size
+                        val estimatedTotal = if (maxDownload > 0) {
+                            minOf(firstPageCount * 20, maxDownload) // rough estimate
+                        } else {
+                            firstPageCount * 20 // assume ~20 pages as initial estimate
+                        }
+                        _uiState.update { it.copy(collectionTotal = estimatedTotal) }
+                    }
 
                     for (pageUrl in pages) {
                         if (isStopped) break
@@ -216,7 +309,6 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                             if (state.useCache) cacheUrl(pageId, imageUrl)
                         }
 
-                        // Determine save file name
                         val saveFileName = when (state.namingMode) {
                             "sequential" -> {
                                 globalSeq++
@@ -226,7 +318,29 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                             else -> fileName
                         }
 
-                        allTasks.add(DownloadTask(allTasks.size + 1, imageUrl, saveFileName, pageId))
+                        val task = PreviewItem(allTasks.size + 1, saveFileName, imageUrl)
+                        allTasks.add(task)
+                        channel.send(task)
+
+                        _uiState.update {
+                            it.copy(
+                                pendingTasks = it.pendingTasks + task,
+                                collectionLoaded = allTasks.size
+                            )
+                        }
+                    }
+
+                    // Update estimated total as we discover more pages
+                    if (firstPageCount > 0 && currentPage > startPage) {
+                        val pagesProcessed = currentPage - startPage + 1
+                        val refinedTotal = if (maxDownload > 0) {
+                            minOf(firstPageCount * pagesProcessed, maxDownload)
+                        } else {
+                            // If we've processed multiple pages, refine estimate
+                            val avgPerPage = allTasks.size.toDouble() / pagesProcessed
+                            (avgPerPage * pagesProcessed * 1.5).toInt().coerceAtLeast(allTasks.size)
+                        }
+                        _uiState.update { it.copy(collectionTotal = refinedTotal) }
                     }
 
                     addLog("第 $currentPage 页: 已收集 ${allTasks.size} 个任务")
@@ -236,38 +350,79 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 addLog("收集任务异常: ${e.message}")
             }
 
+            channel.close()
+            _uiState.update {
+                it.copy(
+                    isCollecting = false,
+                    collectionComplete = true,
+                    collectionTotal = allTasks.size,
+                    statusMessage = if (allTasks.isEmpty()) "无图片" else "收集完成 ${allTasks.size} 个任务"
+                )
+            }
             if (allTasks.isEmpty()) {
                 addLog("没有找到可下载的图片")
-                _uiState.update { it.copy(isDownloading = false, statusMessage = "无图片") }
-                return@launch
+            } else {
+                addLog("收集完成，共 ${allTasks.size} 个任务")
             }
+        }
+    }
 
-            addLog("共 ${allTasks.size} 个下载任务，${threadCount} 线程下载")
+    // ── Phase 2: Confirm and start download (can run parallel with collection) ──
 
-            // ── Phase 2: Multi-thread download + ordered save ──
-            var totalDownloaded = 0
-            var totalSkipped = 0
-            var totalFailed = 0
-            val totalTasks = allTasks.size
+    fun confirmDownload() {
+        val state = _uiState.value
+        val ch = downloadChannel ?: return
+
+        _uiState.update {
+            it.copy(
+                showPreview = false,
+                isDownloading = true,
+                downloadedCount = 0,
+                skippedCount = 0,
+                failedCount = 0,
+                statusMessage = "正在下载..."
+            )
+        }
+        addLog("开始下载，${state.downloadThreads} 线程")
+
+        isStopped = false
+        downloadJob = viewModelScope.launch(Dispatchers.IO) {
+            val cookie = loadCookie()
+            val threadCount = state.downloadThreads
+
+            val authorDir = createSubdirectory(state.saveDir!!, state.author)
+            val targetDir = if (state.downloadType == "scraps") {
+                createSubdirectory(authorDir, "scraps")
+            } else {
+                authorDir
+            }
+            addLog("保存目录: ${state.author}/${if (state.downloadType == "scraps") "scraps/" else ""}")
+
+            // Producer-consumer: read from channel, download in parallel, save in order
             val buffer = ConcurrentHashMap<Int, ByteArray?>()
             val fileNameMap = ConcurrentHashMap<Int, String>()
             val semaphore = Semaphore(threadCount)
+            var nextSeq = 1
+            var totalDownloaded = 0
+            var totalSkipped = 0
+            var totalFailed = 0
+            var totalReceived = 0
 
-            // Save original names for skip check
-            for (task in allTasks) {
-                fileNameMap[task.seq] = task.fileName
-            }
+            // Consume from channel: for each task, spawn a download coroutine
+            val dlJob = coroutineScope {
+                val jobs = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
 
-            // Launch download coroutines
-            val downloadJob = coroutineScope {
-                allTasks.map { task ->
-                    async {
+                for (task in ch) {
+                    if (isStopped) break
+                    totalReceived++
+                    fileNameMap[task.seq] = task.fileName
+
+                    val deferred = async {
                         semaphore.withPermit {
                             if (isStopped) return@async
-                            // Skip check: only in original naming mode
                             if (state.skipExisting && state.namingMode == "original") {
                                 if (checkFileExists(targetDir, task.fileName)) {
-                                    buffer[task.seq] = null // null = skipped
+                                    buffer[task.seq] = null // skipped
                                     return@async
                                 }
                             }
@@ -275,17 +430,21 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                             buffer[task.seq] = data
                         }
                     }
+                    jobs.add(deferred)
                 }
+
+                jobs
             }
 
-            // Ordered save loop
-            var saveSeq = 1
-            while (saveSeq <= totalTasks && !isStopped) {
-                if (buffer.containsKey(saveSeq)) {
-                    val data = buffer.remove(saveSeq)
-                    val fileName = fileNameMap[saveSeq] ?: "unknown"
+            // Wait for all downloads to finish
+            dlJob.awaitAll()
+
+            // Ordered save: drain buffer in sequence order
+            while (nextSeq <= totalReceived && !isStopped) {
+                if (buffer.containsKey(nextSeq)) {
+                    val data = buffer.remove(nextSeq)
+                    val fileName = fileNameMap[nextSeq] ?: "unknown"
                     if (data == null) {
-                        // Skipped
                         totalSkipped++
                         _uiState.update { it.copy(skippedCount = totalSkipped) }
                     } else if (saveToFile(targetDir, fileName, data)) {
@@ -297,22 +456,18 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                         addLog("  ✗ 保存失败: $fileName")
                         _uiState.update { it.copy(failedCount = totalFailed) }
                     }
-                    _uiState.update {
-                        it.copy(currentProgress = saveSeq.toFloat() / totalTasks)
-                    }
-                    saveSeq++
+                    _uiState.update { it.copy(currentProgress = nextSeq.toFloat() / totalReceived.coerceAtLeast(1)) }
+                    nextSeq++
                 } else {
                     delay(50)
                 }
             }
 
-            // Wait for any remaining downloads
-            downloadJob.awaitAll()
-
             addLog("下载完成 — 已下载: $totalDownloaded, 跳过: $totalSkipped, 失败: $totalFailed")
             _uiState.update {
                 it.copy(
                     isDownloading = false,
+                    pendingTasks = emptyList(),
                     statusMessage = "下载完成",
                     currentProgress = 1f
                 )
@@ -320,10 +475,39 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    fun cancelPreview() {
+        isStopped = true
+        collectJob?.cancel()
+        downloadJob?.cancel()
+        downloadChannel?.close()
+        downloadChannel = null
+        _uiState.update {
+            it.copy(
+                showPreview = false,
+                isCollecting = false,
+                isDownloading = false,
+                pendingTasks = emptyList(),
+                collectionComplete = false,
+                collectionLoaded = 0,
+                collectionTotal = 0,
+                statusMessage = "准备就绪"
+            )
+        }
+    }
+
     fun stopDownload() {
         isStopped = true
         downloadJob?.cancel()
-        _uiState.update { it.copy(isDownloading = false, statusMessage = "已停止") }
+        collectJob?.cancel()
+        downloadChannel?.close()
+        _uiState.update {
+            it.copy(
+                isDownloading = false,
+                isCollecting = false,
+                pendingTasks = emptyList(),
+                statusMessage = "已停止"
+            )
+        }
         addLog("用户停止下载")
     }
 
@@ -373,7 +557,6 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun parseImageUrl(html: String): String? {
-        // Match: href="...d.facdn.net/..."...>Download
         val pattern = Pattern.compile("""href="(//d\.facdn\.net/[^"]+)"[^>]*>\s*Download""")
         val matcher = pattern.matcher(html)
         return if (matcher.find()) "https:${matcher.group(1)}" else null
@@ -406,12 +589,10 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         val app = getApplication<Application>()
         val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, parentUri)
             ?: return parentUri
-        // Check if subdirectory already exists
         val existing = parentDoc.findFile(name)
         if (existing != null && existing.exists() && existing.isDirectory) {
             return existing.uri
         }
-        // Create new subdirectory
         val newDir = parentDoc.createDirectory(name)
         return newDir?.uri ?: parentUri
     }
@@ -465,11 +646,9 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             val resolver = app.contentResolver
             val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri)
 
-            // Delete existing file if present (for overwrite mode)
             val existing = dirDoc?.findFile(fileName)
             existing?.delete()
 
-            // Create new file
             val mimeType = when {
                 fileName.endsWith(".png", true) -> "image/png"
                 fileName.endsWith(".gif", true) -> "image/gif"

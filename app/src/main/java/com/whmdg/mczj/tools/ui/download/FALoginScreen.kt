@@ -6,24 +6,103 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FALoginScreen(
     onBack: () -> Unit,
-    onLoginSuccess: (String) -> Unit
+    onLoginSuccess: (String, String) -> Unit  // (cookie, username)
 ) {
     var isLoading by remember { mutableStateOf(true) }
     var statusText by remember { mutableStateOf("正在加载...") }
+    var showCookieDialog by remember { mutableStateOf(false) }
+    var extractedCookies by remember { mutableStateOf("") }
+    var extractedUsername by remember { mutableStateOf("") }
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var cookiesDetected by remember { mutableStateOf(false) }
+
+    // Cookie confirmation dialog
+    if (showCookieDialog) {
+        AlertDialog(
+            onDismissRequest = { showCookieDialog = false },
+            icon = {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            title = { Text("登录信息确认") },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        "检测到以下登录凭证：",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (extractedUsername.isNotEmpty()) {
+                        Text(
+                            "用户名: $extractedUsername",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    Text(
+                        "Cookie 信息:",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Text(
+                            extractedCookies,
+                            modifier = Modifier.padding(8.dp),
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showCookieDialog = false
+                    onLoginSuccess(extractedCookies, extractedUsername)
+                }) {
+                    Text("确认保存")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCookieDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -32,6 +111,39 @@ fun FALoginScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    // Confirm button - extract cookies and show dialog
+                    TextButton(
+                        onClick = {
+                            val cookieManager = CookieManager.getInstance()
+                            val cookies = cookieManager.getCookie("furaffinity.net")
+                            if (cookies != null && hasFACookies(cookies)) {
+                                extractedCookies = cookies
+                                // Try to extract username from WebView page
+                                webViewRef?.evaluateJavascript(
+                                    "(function() { " +
+                                        "var el = document.querySelector('.my-username, .username, a[href*=\"/user/\"]');" +
+                                        "return el ? el.textContent.trim() : '';" +
+                                        "})()"
+                                ) { result ->
+                                    extractedUsername = result.removeSurrounding("\"")
+                                    showCookieDialog = true
+                                }
+                            } else {
+                                statusText = "未检测到有效登录，请先完成登录"
+                                cookiesDetected = false
+                            }
+                        }
+                    ) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("确定")
                     }
                 }
             )
@@ -56,12 +168,12 @@ fun FALoginScreen(
                                 super.onPageFinished(view, url)
                                 isLoading = false
 
-                                // Check for FA session cookie
+                                // Check for FA session cookies (a + b)
                                 val cookieManager = CookieManager.getInstance()
                                 val cookies = cookieManager.getCookie("furaffinity.net")
-                                if (cookies != null && cookies.contains("a=")) {
-                                    // Login success — extract full cookie string
-                                    onLoginSuccess(cookies)
+                                if (cookies != null && hasFACookies(cookies)) {
+                                    cookiesDetected = true
+                                    statusText = "登录成功，请点击右上角「确定」保存"
                                 }
                             }
 
@@ -73,7 +185,9 @@ fun FALoginScreen(
                             }
                         }
 
-                        loadUrl("https://www.furaffinity.net/login/")
+                        webViewRef = this
+                        // Load FA homepage, not /login/ — homepage works whether logged in or not
+                        loadUrl("https://www.furaffinity.net")
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -99,4 +213,13 @@ fun FALoginScreen(
             }
         }
     }
+}
+
+/**
+ * Check if cookies contain FA authentication tokens.
+ * FA uses cookies 'a' and 'b' (both UUIDs) for session auth,
+ * plus 'cf_clearance' for Cloudflare bypass.
+ */
+private fun hasFACookies(cookies: String): Boolean {
+    return cookies.contains("a=") && cookies.contains("b=") && cookies.contains("cf_clearance=")
 }

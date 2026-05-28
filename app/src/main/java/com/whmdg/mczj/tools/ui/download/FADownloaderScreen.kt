@@ -1,5 +1,10 @@
 package com.whmdg.mczj.tools.ui.download
 
+import android.annotation.SuppressLint
+import android.webkit.CookieManager
+import android.webkit.WebResourceRequest
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -27,9 +32,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 
+@SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FADownloaderScreen(
@@ -42,10 +49,76 @@ fun FADownloaderScreen(
     val logListState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
+    // Silent cookie refresh WebView state
+    var showSilentRefresh by remember { mutableStateOf(false) }
+    var silentRefreshWebView by remember { mutableStateOf<WebView?>(null) }
+
     // Auto-scroll to latest log
     LaunchedEffect(state.logs.size) {
         if (state.logs.isNotEmpty()) {
             logListState.animateScrollToItem(state.logs.size - 1)
+        }
+    }
+
+    // Trigger silent cookie refresh when cookie is expired and attempts < 3
+    LaunchedEffect(state.cookieExpired, state.cookieRefreshAttempts) {
+        if (state.cookieExpired && viewModel.shouldAttemptCookieRefresh()) {
+            showSilentRefresh = true
+        }
+    }
+
+    // Hidden WebView for silent cookie refresh
+    if (showSilentRefresh) {
+        Box(modifier = Modifier.size(0.dp)) {
+            AndroidView(
+                factory = { context ->
+                    WebView(context).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+                        settings.userAgentString =
+                            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36"
+
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                super.onPageFinished(view, url)
+                                val currentUrl = url ?: ""
+
+                                // If redirected to login page, session is dead
+                                if (currentUrl.contains("/login")) {
+                                    showSilentRefresh = false
+                                    viewModel.onCookieRefreshFailed()
+                                    return
+                                }
+
+                                // Check for valid cookies
+                                val cookieManager = CookieManager.getInstance()
+                                val cookies = cookieManager.getCookie("furaffinity.net")
+                                if (cookies != null && cookies.contains("a=") && cookies.contains("b=") && cookies.contains("cf_clearance=")) {
+                                    // Cookie refreshed successfully
+                                    showSilentRefresh = false
+                                    viewModel.onCookieRefreshSuccess(cookies)
+                                } else {
+                                    // Cookies not yet available, wait and check again
+                                    // The page might still be loading/settling
+                                }
+                            }
+
+                            override fun shouldOverrideUrlLoading(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): Boolean {
+                                return false
+                            }
+                        }
+
+                        silentRefreshWebView = this
+                        // Load FA homepage to trigger cookie refresh
+                        loadUrl("https://www.furaffinity.net")
+                    }
+                },
+                modifier = Modifier.size(0.dp)
+            )
         }
     }
 
@@ -73,13 +146,19 @@ fun FADownloaderScreen(
                     }
                 },
                 actions = {
-                    // Login status indicator
+                    // Login status — show username when logged in, login button when not
                     if (state.isLoggedIn) {
-                        IconButton(onClick = onLogin) {
+                        TextButton(onClick = onLogin) {
                             Icon(
-                                Icons.Default.CheckCircle,
-                                contentDescription = "已登录",
+                                Icons.Default.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
                                 tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                state.username.ifEmpty { "已登录" },
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
                     } else {
@@ -94,8 +173,8 @@ fun FADownloaderScreen(
                         }
                     }
 
-                    // Cookie expired dialog
-                    if (state.cookieExpired) {
+                    // Cookie expired dialog — only show when refresh attempts exhausted
+                    if (state.cookieExpired && !viewModel.shouldAttemptCookieRefresh()) {
                         AlertDialog(
                             onDismissRequest = { viewModel.clearCookie() },
                             icon = {
@@ -105,16 +184,22 @@ fun FADownloaderScreen(
                                     tint = MaterialTheme.colorScheme.error
                                 )
                             },
-                            title = { Text("Cookie 已失效") },
-                            text = { Text("FA 登录凭证已过期，请重新登录以继续使用。") },
+                            title = { Text("登录已失效") },
+                            text = {
+                                Text("Cookie 自动刷新失败 ${state.cookieRefreshAttempts} 次，FA 登录凭证已过期，请重新登录以继续使用。")
+                            },
                             confirmButton = {
                                 Button(onClick = {
                                     viewModel.clearCookie()
+                                    viewModel.resetRefreshAttempts()
                                     onLogin()
                                 }) { Text("重新登录") }
                             },
                             dismissButton = {
-                                TextButton(onClick = { viewModel.clearCookie() }) { Text("取消") }
+                                TextButton(onClick = {
+                                    viewModel.clearCookie()
+                                    viewModel.resetRefreshAttempts()
+                                }) { Text("取消") }
                             }
                         )
                     }
@@ -395,16 +480,26 @@ fun FADownloaderScreen(
                     Button(
                         onClick = { viewModel.startDownload() },
                         modifier = Modifier.weight(1f),
-                        enabled = !state.isDownloading
+                        enabled = !state.isDownloading && !state.isCollecting
                     ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("开始下载")
+                        if (state.isCollecting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("收集...")
+                        } else {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("开始下载")
+                        }
                     }
                     OutlinedButton(
                         onClick = { viewModel.stopDownload() },
                         modifier = Modifier.weight(1f),
-                        enabled = state.isDownloading
+                        enabled = state.isDownloading || state.isCollecting
                     ) {
                         Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
@@ -499,6 +594,174 @@ fun FADownloaderScreen(
             // Bottom spacer
             item { Spacer(modifier = Modifier.height(16.dp)) }
         }
+    }
+
+    // ── Early confirm warning dialog ──
+    var showEarlyConfirmWarning by remember { mutableStateOf(false) }
+    if (showEarlyConfirmWarning) {
+        AlertDialog(
+            onDismissRequest = { showEarlyConfirmWarning = false },
+            icon = {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("图片未加载完毕") },
+            text = { Text("当前已加载 ${state.collectionLoaded} 个任务，预估共 ${state.collectionTotal} 个。是否等待加载完毕后继续下载？") },
+            confirmButton = {
+                Button(onClick = {
+                    showEarlyConfirmWarning = false
+                    viewModel.confirmDownload()
+                }) { Text("立即下载") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEarlyConfirmWarning = false }) {
+                    Text("等待加载")
+                }
+            }
+        )
+    }
+
+    // ── Download Preview Dialog ──
+    if (state.showPreview) {
+        val totalDisplay = state.collectionTotal.coerceAtLeast(1)
+        val progressValue = if (state.collectionComplete) {
+            1f
+        } else {
+            state.collectionLoaded.toFloat() / totalDisplay
+        }
+
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelPreview() },
+            icon = {
+                Icon(
+                    Icons.Default.Visibility,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            title = {
+                if (state.collectionComplete) {
+                    Text("下载预览 (${state.collectionLoaded} 个文件)")
+                } else {
+                    Text("正在收集 ${state.collectionLoaded}/${state.collectionTotal}")
+                }
+            },
+            text = {
+                Column {
+                    // Task list
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 360.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (state.pendingTasks.isEmpty() && !state.collectionComplete) {
+                            item {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(32.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            "正在搜索作品...",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        items(state.pendingTasks) { task ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                shape = MaterialTheme.shapes.small
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        "#${task.seq}  ${task.fileName}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        task.imageUrl,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Progress bar
+                    Column {
+                        LinearProgressIndicator(
+                            progress = { progressValue },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "${(progressValue * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "${state.collectionLoaded} / ${if (state.collectionComplete) state.collectionLoaded else state.collectionTotal}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (!state.collectionComplete) {
+                            showEarlyConfirmWarning = true
+                        } else {
+                            viewModel.confirmDownload()
+                        }
+                    },
+                    enabled = state.pendingTasks.isNotEmpty() || state.collectionComplete
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("确认下载")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.cancelPreview() }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 
