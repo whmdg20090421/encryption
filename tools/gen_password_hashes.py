@@ -82,8 +82,9 @@ def generate():
         )
         obf_hash = xor_bytes(raw_hash, obf_key)
         obf_keyid = xor_bytes(key_id.encode("utf-8"), obf_key)
+        obf_salt = xor_bytes(salt, obf_key)
 
-        salts.append(salt)
+        salts.append(obf_salt)
         obf_hashes.append(obf_hash)
         obf_keyids.append(obf_keyid)
 
