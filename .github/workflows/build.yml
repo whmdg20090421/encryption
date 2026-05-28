@@ -28,6 +28,11 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
+      - name: Generate NDK auth files
+        run: |
+          pip install argon2-cffi
+          python3 tools/gen_password_hashes.py
+
       - name: Decode Release Keystore
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
