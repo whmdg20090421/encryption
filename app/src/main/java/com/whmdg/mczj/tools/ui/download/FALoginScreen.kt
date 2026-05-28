@@ -114,8 +114,8 @@ fun FALoginScreen(
                     }
                 },
                 actions = {
-                    // Confirm button - extract cookies and show dialog
-                    TextButton(
+                    // Get Cookie button - extract cookies and show dialog
+                    IconButton(
                         onClick = {
                             val cookieManager = CookieManager.getInstance()
                             val cookies = cookieManager.getCookie("furaffinity.net")
@@ -139,11 +139,9 @@ fun FALoginScreen(
                     ) {
                         Icon(
                             Icons.Default.Check,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
+                            contentDescription = "获取Cookie",
+                            modifier = Modifier.size(24.dp)
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("确定")
                     }
                 }
             )
@@ -209,6 +207,59 @@ fun FALoginScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+            }
+
+            // Status bar at top - show cookie detection status
+            if (!isLoading) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter),
+                    color = if (cookiesDetected)
+                        MaterialTheme.colorScheme.primaryContainer
+                    else
+                        MaterialTheme.colorScheme.surfaceVariant,
+                    tonalElevation = 2.dp
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = if (cookiesDetected) "✓ 已检测到登录凭证" else "请在下方完成登录",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (cookiesDetected)
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (cookiesDetected) {
+                            TextButton(
+                                onClick = {
+                                    val cookieManager = CookieManager.getInstance()
+                                    val cookies = cookieManager.getCookie("furaffinity.net")
+                                    if (cookies != null && hasFACookies(cookies)) {
+                                        extractedCookies = cookies
+                                        webViewRef?.evaluateJavascript(
+                                            "(function() { " +
+                                                "var el = document.querySelector('.my-username, .username, a[href*=\"/user/\"]');" +
+                                                "return el ? el.textContent.trim() : '';" +
+                                                "})()"
+                                        ) { result ->
+                                            extractedUsername = result.removeSurrounding("\"")
+                                            showCookieDialog = true
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text("获取Cookie")
+                            }
+                        }
+                    }
                 }
             }
         }
