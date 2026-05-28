@@ -1245,6 +1245,7 @@ private fun SettingsSection(
         }
     }
 }
+}
 
 @Composable
 private fun CompactSettingsItem(
