@@ -14,10 +14,18 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 data class DownloadLog(val message: String, val timestamp: Long = System.currentTimeMillis())
 
@@ -30,6 +38,8 @@ data class FAUiState(
     val maxDownload: String = "0",
     val skipExisting: Boolean = true,
     val useCache: Boolean = true,
+    val namingMode: String = "original", // "original" or "sequential"
+    val downloadThreads: Int = 1, // 1~4
     val isLoggedIn: Boolean = false,
     val cookieExpired: Boolean = false,
     val isDownloading: Boolean = false,
@@ -78,6 +88,8 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     fun updateMaxDownload(max: String) = _uiState.update { it.copy(maxDownload = max) }
     fun updateSkipExisting(skip: Boolean) = _uiState.update { it.copy(skipExisting = skip) }
     fun updateUseCache(use: Boolean) = _uiState.update { it.copy(useCache = use) }
+    fun updateNamingMode(mode: String) = _uiState.update { it.copy(namingMode = mode) }
+    fun updateDownloadThreads(threads: Int) = _uiState.update { it.copy(downloadThreads = threads.coerceIn(1, 4)) }
 
     fun saveCookie(cookie: String) {
         prefs.edit().putString("cookie", cookie).apply()
@@ -110,58 +122,65 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             val startPage = state.startPage.toIntOrNull() ?: 1
             val maxDownload = state.maxDownload.toIntOrNull() ?: 0
             val cookie = loadCookie()
+            val threadCount = state.downloadThreads
 
+            // Create author subdirectory
+            val authorDir = createSubdirectory(state.saveDir, state.author)
+            val targetDir = if (state.downloadType == "scraps") {
+                createSubdirectory(authorDir, "scraps")
+            } else {
+                authorDir
+            }
+            addLog("保存目录: ${state.author}/${if (state.downloadType == "scraps") "scraps/" else ""}")
+
+            // ── Phase 1: Collect all download tasks across pages ──
+            data class DownloadTask(
+                val seq: Int,
+                val imageUrl: String,
+                val fileName: String,
+                val pageId: String
+            )
+
+            val allTasks = mutableListOf<DownloadTask>()
             var currentPage = startPage
-            var totalDownloaded = 0
-            var totalSkipped = 0
-            var totalFailed = 0
             var consecutiveEmpty = 0
+            var globalSeq = 0
 
+            addLog("正在收集下载任务...")
             try {
                 while (!isStopped) {
-                    if (maxDownload > 0 && totalDownloaded >= maxDownload) {
-                        addLog("已达到最大下载量 ($maxDownload)")
-                        break
-                    }
+                    if (maxDownload > 0 && allTasks.size >= maxDownload) break
 
                     val url = "$FA_BASE/${state.downloadType}/${state.author}/$currentPage"
-                    addLog("正在获取第 $currentPage 页...")
-
                     val html = fetchHtml(url, cookie)
                     if (html == null) {
-                        addLog("网络错误，无法获取页面")
                         consecutiveEmpty++
                         if (consecutiveEmpty >= 3) {
-                            addLog("连续 3 次失败，停止下载")
+                            addLog("连续 3 次失败，停止收集")
                             break
                         }
                         currentPage++
                         continue
                     }
 
-                    // Check if user exists
                     if (html.contains("could not be found")) {
                         addLog("未找到作者「${state.author}」，请检查名称")
-                        break
+                        _uiState.update { it.copy(isDownloading = false, statusMessage = "作者不存在") }
+                        return@launch
                     }
-
-                    // Check if login required
                     if (html.contains("available to registered users only")) {
                         addLog("该作者的作品仅对注册用户可见，请先登录")
-                        _uiState.update { it.copy(cookieExpired = true) }
-                        break
+                        _uiState.update { it.copy(cookieExpired = true, isDownloading = false, statusMessage = "需要登录") }
+                        return@launch
                     }
-
-                    // Check if cookie expired (redirected to login)
                     if (html.contains("id=\"login-form\"") && state.isLoggedIn) {
                         addLog("Cookie 已失效，请重新登录")
-                        _uiState.update { it.copy(cookieExpired = true) }
-                        break
+                        _uiState.update { it.copy(cookieExpired = true, isDownloading = false, statusMessage = "Cookie 失效") }
+                        return@launch
                     }
 
                     val pages = parseGalleryPages(html)
                     if (pages.isEmpty()) {
-                        addLog("第 $currentPage 页没有更多图片")
                         consecutiveEmpty++
                         if (consecutiveEmpty >= 2) break
                         currentPage++
@@ -169,84 +188,133 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                     }
                     consecutiveEmpty = 0
 
-                    addLog("第 $currentPage 页共 ${pages.size} 张图片")
-
-                    for ((index, pageUrl) in pages.withIndex()) {
+                    for (pageUrl in pages) {
                         if (isStopped) break
-                        if (maxDownload > 0 && totalDownloaded >= maxDownload) break
+                        if (maxDownload > 0 && allTasks.size >= maxDownload) break
 
                         val pageId = extractPageId(pageUrl)
+                        val imageUrl: String
                         val fileName: String
-                        val imageUrl: String?
 
-                        // Check cache
                         val cachedUrl = if (state.useCache) getCachedUrl(pageId) else null
                         if (cachedUrl != null) {
                             imageUrl = cachedUrl
                             fileName = extractFileName(cachedUrl)
                         } else {
-                            // Fetch detail page
                             val detailHtml = fetchHtml(pageUrl, cookie)
                             if (detailHtml == null) {
                                 addLog("  获取详情页失败: $pageUrl")
-                                totalFailed++
-                                _uiState.update { it.copy(failedCount = totalFailed) }
                                 continue
                             }
-
-                            imageUrl = parseImageUrl(detailHtml)
-                            if (imageUrl == null) {
-                                addLog("  无法解析图片地址")
-                                totalFailed++
-                                _uiState.update { it.copy(failedCount = totalFailed) }
+                            val parsedUrl = parseImageUrl(detailHtml)
+                            if (parsedUrl == null) {
+                                addLog("  无法解析图片地址: $pageUrl")
                                 continue
                             }
+                            imageUrl = parsedUrl
+                            fileName = extractFileName(parsedUrl)
+                            if (state.useCache) cacheUrl(pageId, imageUrl)
+                        }
 
-                            fileName = extractFileName(imageUrl)
-                            // Save to cache
-                            if (state.useCache) {
-                                cacheUrl(pageId, imageUrl)
+                        // Determine save file name
+                        val saveFileName = when (state.namingMode) {
+                            "sequential" -> {
+                                globalSeq++
+                                val ext = getFileExtension(imageUrl)
+                                "${String.format("%04d", globalSeq)}.$ext"
                             }
+                            else -> fileName
                         }
 
-                        // Check if file exists
-                        if (state.skipExisting && checkFileExists(state.saveDir, fileName, state.downloadType)) {
-                            totalSkipped++
-                            _uiState.update { it.copy(skippedCount = totalSkipped) }
-                            continue
-                        }
-
-                        // Download image
-                        val success = downloadImage(imageUrl, state.saveDir, fileName, state.downloadType)
-                        if (success) {
-                            totalDownloaded++
-                            addLog("  ✓ $fileName")
-                        } else {
-                            totalFailed++
-                            addLog("  ✗ 下载失败: $fileName")
-                        }
-
-                        _uiState.update {
-                            it.copy(
-                                downloadedCount = totalDownloaded,
-                                failedCount = totalFailed
-                            )
-                        }
+                        allTasks.add(DownloadTask(allTasks.size + 1, imageUrl, saveFileName, pageId))
                     }
 
-                    _uiState.update { it.copy(currentProgress = if (maxDownload > 0) totalDownloaded.toFloat() / maxDownload else 0f) }
+                    addLog("第 $currentPage 页: 已收集 ${allTasks.size} 个任务")
                     currentPage++
                 }
             } catch (e: Exception) {
-                addLog("下载异常: ${e.message}")
+                addLog("收集任务异常: ${e.message}")
             }
+
+            if (allTasks.isEmpty()) {
+                addLog("没有找到可下载的图片")
+                _uiState.update { it.copy(isDownloading = false, statusMessage = "无图片") }
+                return@launch
+            }
+
+            addLog("共 ${allTasks.size} 个下载任务，${threadCount} 线程下载")
+
+            // ── Phase 2: Multi-thread download + ordered save ──
+            var totalDownloaded = 0
+            var totalSkipped = 0
+            var totalFailed = 0
+            val totalTasks = allTasks.size
+            val buffer = ConcurrentHashMap<Int, ByteArray?>()
+            val fileNameMap = ConcurrentHashMap<Int, String>()
+            val semaphore = Semaphore(threadCount)
+
+            // Save original names for skip check
+            for (task in allTasks) {
+                fileNameMap[task.seq] = task.fileName
+            }
+
+            // Launch download coroutines
+            val downloadJob = coroutineScope {
+                allTasks.map { task ->
+                    async {
+                        semaphore.withPermit {
+                            if (isStopped) return@async
+                            // Skip check: only in original naming mode
+                            if (state.skipExisting && state.namingMode == "original") {
+                                if (checkFileExists(targetDir, task.fileName)) {
+                                    buffer[task.seq] = null // null = skipped
+                                    return@async
+                                }
+                            }
+                            val data = downloadToBytes(task.imageUrl)
+                            buffer[task.seq] = data
+                        }
+                    }
+                }
+            }
+
+            // Ordered save loop
+            var saveSeq = 1
+            while (saveSeq <= totalTasks && !isStopped) {
+                if (buffer.containsKey(saveSeq)) {
+                    val data = buffer.remove(saveSeq)
+                    val fileName = fileNameMap[saveSeq] ?: "unknown"
+                    if (data == null) {
+                        // Skipped
+                        totalSkipped++
+                        _uiState.update { it.copy(skippedCount = totalSkipped) }
+                    } else if (saveToFile(targetDir, fileName, data)) {
+                        totalDownloaded++
+                        addLog("  ✓ $fileName")
+                        _uiState.update { it.copy(downloadedCount = totalDownloaded) }
+                    } else {
+                        totalFailed++
+                        addLog("  ✗ 保存失败: $fileName")
+                        _uiState.update { it.copy(failedCount = totalFailed) }
+                    }
+                    _uiState.update {
+                        it.copy(currentProgress = saveSeq.toFloat() / totalTasks)
+                    }
+                    saveSeq++
+                } else {
+                    delay(50)
+                }
+            }
+
+            // Wait for any remaining downloads
+            downloadJob.awaitAll()
 
             addLog("下载完成 — 已下载: $totalDownloaded, 跳过: $totalSkipped, 失败: $totalFailed")
             _uiState.update {
                 it.copy(
                     isDownloading = false,
                     statusMessage = "下载完成",
-                    currentProgress = if (maxDownload > 0) totalDownloaded.toFloat() / maxDownload else 1f
+                    currentProgress = 1f
                 )
             }
         }
@@ -334,33 +402,37 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     // ── File Operations ──
 
-    private fun checkFileExists(saveDir: Uri, fileName: String, type: String): Boolean {
+    private fun createSubdirectory(parentUri: Uri, name: String): Uri {
+        val app = getApplication<Application>()
+        val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, parentUri)
+            ?: return parentUri
+        // Check if subdirectory already exists
+        val existing = parentDoc.findFile(name)
+        if (existing != null && existing.exists() && existing.isDirectory) {
+            return existing.uri
+        }
+        // Create new subdirectory
+        val newDir = parentDoc.createDirectory(name)
+        return newDir?.uri ?: parentUri
+    }
+
+    private fun checkFileExists(dirUri: Uri, fileName: String): Boolean {
         return try {
-            val resolver = getApplication<Application>().contentResolver
-            val dirUri = if (type == "scraps") {
-                Uri.parse("$saveDir/scraps")
-            } else {
-                saveDir
-            }
-            // Try to find the file
-            val fileUri = Uri.parse("$dirUri/$fileName")
-            try {
-                resolver.openInputStream(fileUri)?.close()
-                true
-            } catch (_: Exception) {
-                false
-            }
+            val app = getApplication<Application>()
+            val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri)
+            val file = dirDoc?.findFile(fileName)
+            file != null && file.exists()
         } catch (_: Exception) {
             false
         }
     }
 
-    private suspend fun downloadImage(
-        imageUrl: String,
-        saveDir: Uri,
-        fileName: String,
-        type: String
-    ): Boolean = withContext(Dispatchers.IO) {
+    private fun getFileExtension(url: String): String {
+        val name = url.substringAfterLast("/").substringBefore("?")
+        return if (name.contains(".")) name.substringAfterLast(".") else "jpg"
+    }
+
+    private suspend fun downloadToBytes(imageUrl: String): ByteArray? = withContext(Dispatchers.IO) {
         try {
             val conn = URL(imageUrl).openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
@@ -371,58 +443,49 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
             if (conn.responseCode != 200) {
                 conn.disconnect()
-                return@withContext false
+                return@withContext null
             }
 
-            val app = getApplication<Application>()
-            val resolver = app.contentResolver
-
-            // Create scraps subdirectory if needed
-            val targetDir = if (type == "scraps") {
-                try {
-                    val scrapsDir = Uri.parse("$saveDir/scraps")
-                    // Try to create directory via DocumentFile
-                    val documentFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, scrapsDir)
-                    if (documentFile == null || !documentFile.exists()) {
-                        // Create via parent
-                        val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, saveDir)
-                        parentDoc?.createDirectory("scraps")
-                    }
-                    scrapsDir
-                } catch (_: Exception) {
-                    saveDir
-                }
-            } else {
-                saveDir
-            }
-
-            val fileUri = Uri.parse("$targetDir/$fileName")
-            val outputStream = try {
-                resolver.openOutputStream(fileUri)
-            } catch (_: Exception) {
-                // Try creating the file
-                try {
-                    val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, targetDir)
-                    val newFile = parentDoc?.createFile("image/*", fileName)
-                    newFile?.uri?.let { resolver.openOutputStream(it) }
-                } catch (_: Exception) {
-                    null
-                }
-            }
-
-            if (outputStream == null) {
-                conn.disconnect()
-                return@withContext false
-            }
-
+            val buffer = ByteArrayOutputStream()
             conn.inputStream.use { input ->
-                outputStream.use { output ->
+                buffer.use { output ->
                     input.copyTo(output)
                 }
             }
             conn.disconnect()
-            true
-        } catch (e: Exception) {
+            buffer.toByteArray()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun saveToFile(dirUri: Uri, fileName: String, data: ByteArray): Boolean {
+        return try {
+            val app = getApplication<Application>()
+            val resolver = app.contentResolver
+            val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri)
+
+            // Delete existing file if present (for overwrite mode)
+            val existing = dirDoc?.findFile(fileName)
+            existing?.delete()
+
+            // Create new file
+            val mimeType = when {
+                fileName.endsWith(".png", true) -> "image/png"
+                fileName.endsWith(".gif", true) -> "image/gif"
+                fileName.endsWith(".webp", true) -> "image/webp"
+                else -> "image/jpeg"
+            }
+            val newFile = dirDoc?.createFile(mimeType, fileName)
+            if (newFile != null) {
+                resolver.openOutputStream(newFile.uri)?.use { output ->
+                    output.write(data)
+                }
+                true
+            } else {
+                false
+            }
+        } catch (_: Exception) {
             false
         }
     }

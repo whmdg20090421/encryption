@@ -325,6 +325,63 @@ fun FADownloaderScreen(
                                 Text("使用缓存", style = MaterialTheme.typography.bodySmall)
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Naming mode
+                        Text(
+                            "文件命名",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = state.namingMode == "original",
+                                onClick = { if (!state.isDownloading) viewModel.updateNamingMode("original") },
+                                label = { Text("原名称") },
+                                leadingIcon = if (state.namingMode == "original") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                } else null
+                            )
+                            FilterChip(
+                                selected = state.namingMode == "sequential",
+                                onClick = { if (!state.isDownloading) viewModel.updateNamingMode("sequential") },
+                                label = { Text("自定义编号") },
+                                leadingIcon = if (state.namingMode == "sequential") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                } else null
+                            )
+                        }
+                        if (state.namingMode == "original") {
+                            Text(
+                                "同名文件自动跳过",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Text(
+                                "从 0001 开始编号，同名文件覆盖",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Thread count
+                        Text(
+                            "下载线程: ${state.downloadThreads}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Slider(
+                            value = state.downloadThreads.toFloat(),
+                            onValueChange = { viewModel.updateDownloadThreads(it.toInt()) },
+                            valueRange = 1f..4f,
+                            steps = 2,
+                            enabled = !state.isDownloading
+                        )
                     }
                 }
             }
