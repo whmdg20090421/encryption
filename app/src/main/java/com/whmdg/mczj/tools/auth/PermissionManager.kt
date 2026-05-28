@@ -47,28 +47,39 @@ object PermissionManager {
 
     suspend fun tryAuthenticate(ctx: Context, pw: String): Result<Set<Feature>> =
         withContext(Dispatchers.Default) {
-            val derivedKey = NativeAuth.verifyPassword(pw)
-            if (derivedKey == null) {
-                return@withContext Result.failure(Exception("pw"))
-            }
-            val keyIdIdx = NativeAuth.keyIdOf(pw)
-            val keyId = KeyProfile.allKeyIds().elementAtOrNull(keyIdIdx)
-            if (keyId == null) {
+            try {
+                val derivedKey = NativeAuth.verifyPassword(pw)
+                if (derivedKey == null) {
+                    Log.w(TAG, "tryAuthenticate: verifyPassword returned null")
+                    return@withContext Result.failure(Exception("密码错误"))
+                }
+                Log.d(TAG, "tryAuthenticate: verifyPassword ok, len=${derivedKey.size}")
+                val keyIdIdx = NativeAuth.keyIdOf(pw)
+                Log.d(TAG, "tryAuthenticate: keyIdIdx=$keyIdIdx")
+                val keyId = KeyProfile.allKeyIds().elementAtOrNull(keyIdIdx)
+                if (keyId == null) {
+                    AESGCM.zero(derivedKey)
+                    Log.w(TAG, "tryAuthenticate: keyId is null for idx=$keyIdIdx")
+                    return@withContext Result.failure(Exception("密钥识别失败"))
+                }
+                val features = KeyProfile.featuresFor(keyId)
+                Log.d(TAG, "tryAuthenticate: keyId=$keyId, features=$features")
+                val token = TokenCodec.Token(keyId, features, System.currentTimeMillis())
+                val tokenBytes = TokenCodec.encode(token, derivedKey)
+                val (cipherToken, ivToken) = AESGCM.encrypt(tokenBytes, derivedKey)
+                val (wrappedKey, ivWrap) = KeystoreMaster.wrap(derivedKey)
                 AESGCM.zero(derivedKey)
-                return@withContext Result.failure(Exception("kid"))
+                TokenStorage.save(
+                    ctx,
+                    TokenStorage.Blob(wrappedKey, ivWrap, cipherToken, ivToken, keyId, System.currentTimeMillis())
+                )
+                _state.value = AuthState.Authed(keyId, features)
+                Log.d(TAG, "tryAuthenticate: success for keyId=$keyId")
+                Result.success(features)
+            } catch (e: Exception) {
+                Log.e(TAG, "tryAuthenticate: exception", e)
+                Result.failure(Exception("认证异常: ${e.message}"))
             }
-            val features = KeyProfile.featuresFor(keyId)
-            val token = TokenCodec.Token(keyId, features, System.currentTimeMillis())
-            val tokenBytes = TokenCodec.encode(token, derivedKey)
-            val (cipherToken, ivToken) = AESGCM.encrypt(tokenBytes, derivedKey)
-            val (wrappedKey, ivWrap) = KeystoreMaster.wrap(derivedKey)
-            AESGCM.zero(derivedKey)
-            TokenStorage.save(
-                ctx,
-                TokenStorage.Blob(wrappedKey, ivWrap, cipherToken, ivToken, keyId, System.currentTimeMillis())
-            )
-            _state.value = AuthState.Authed(keyId, features)
-            Result.success(features)
         }
 
     suspend fun switchKey(ctx: Context, currentPw: String, newPw: String): Boolean {

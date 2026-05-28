@@ -401,7 +401,16 @@ private val HOME_MODULES = listOf(
 fun HomeTab(onNavigate: (Screen) -> Unit) {
     val authState by PermissionManager.state.collectAsState()
     var lockedFeature by remember { mutableStateOf<Feature?>(null) }
+    var lastAuthError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
+
+    LaunchedEffect(lastAuthError) {
+        lastAuthError?.let {
+            android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_SHORT).show()
+            lastAuthError = null
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -444,25 +453,29 @@ fun HomeTab(onNavigate: (Screen) -> Unit) {
 
     lockedFeature?.let { feature ->
         if (authState is PermissionManager.AuthState.Locked) {
-            val ctx = LocalContext.current
             PasswordDialog(
                 onDismiss = { lockedFeature = null },
                 onVerify = { pw ->
                     val res = PermissionManager.tryAuthenticate(ctx, pw)
-                    if (res.isSuccess && PermissionManager.has(feature)) {
-                        lockedFeature = null
-                        val screen = when (feature) {
-                            Feature.ENCRYPTION_VAULT -> Screen.EncryptionHome
-                            Feature.FILE_MANAGER -> Screen.FileManager
-                            Feature.APP_PERMISSIONS -> Screen.AppPermissions
-                            Feature.BATCH_DOWNLOADER -> Screen.BatchDownloader
-                            Feature.FA_DOWNLOADER -> Screen.FADownloader
-                            Feature.SECURITY_SETTINGS -> Screen.Security
+                    if (res.isSuccess) {
+                        if (PermissionManager.has(feature)) {
+                            lockedFeature = null
+                            val screen = when (feature) {
+                                Feature.ENCRYPTION_VAULT -> Screen.EncryptionHome
+                                Feature.FILE_MANAGER -> Screen.FileManager
+                                Feature.APP_PERMISSIONS -> Screen.AppPermissions
+                                Feature.BATCH_DOWNLOADER -> Screen.BatchDownloader
+                                Feature.FA_DOWNLOADER -> Screen.FADownloader
+                                Feature.SECURITY_SETTINGS -> Screen.Security
+                            }
+                            onNavigate(screen)
+                            true
+                        } else {
+                            lockedFeature = null
+                            lastAuthError = "当前密钥无此模块权限"
+                            true
                         }
-                        onNavigate(screen)
-                        true
                     } else {
-                        lockedFeature = null
                         false
                     }
                 }
