@@ -42,10 +42,12 @@ object KeystoreMaster {
                 .setIsStrongBoxBacked(true)
                 .build()
             kg.init(strongSpec)
+            kg.generateKey()
         } catch (_: StrongBoxUnavailableException) {
-            kg.init(spec)
+            val kg2 = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+            kg2.init(spec)
+            kg2.generateKey()
         }
-        kg.generateKey()
     }
 
     private fun getKey(): SecretKey {
