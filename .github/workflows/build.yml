@@ -33,13 +33,12 @@ jobs:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
         run: |
           if [ -z "$KEYSTORE_B64" ]; then
-            echo "::warning::Secret KEYSTORE_B64 is empty. Will use debug signing."
-            touch app/release-keystore.jks
-          else
-            echo "$KEYSTORE_B64" | base64 -d > app/release-keystore.jks
-            ls -la app/release-keystore.jks
-            file app/release-keystore.jks || true
+            echo "::error::Secret KEYSTORE_B64 is empty."
+            exit 1
           fi
+          echo "$KEYSTORE_B64" | base64 -d > app/release-keystore.jks
+          ls -la app/release-keystore.jks
+          file app/release-keystore.jks || true
 
       - name: Build Release APK (arm64-v8a only)
         env:
