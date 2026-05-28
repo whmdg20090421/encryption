@@ -8,37 +8,41 @@
  * License/Waiver or the Apache Public License 2.0, at your option. The terms of
  * these licenses can be found at:
  *
- * - CC0 1.0 Universal : http://creativecommons.org/publicdomain/zero/1.0/
- * - Apache 2.0        : http://www.apache.org/licenses/LICENSE-2.0
+ * - CC0 1.0 Universal : https://creativecommons.org/publicdomain/zero/1.0
+ * - Apache 2.0        : https://www.apache.org/licenses/LICENSE-2.0
  *
  * You should have received a copy of both of these licenses along with this
  * software. If not, they may be obtained at the above URLs.
  */
 
-#ifndef ARGON2_BLAKE2_ROUND_REF_H
-#define ARGON2_BLAKE2_ROUND_REF_H
+#ifndef BLAKE_ROUND_MKA_H
+#define BLAKE_ROUND_MKA_H
 
+#include "blake2.h"
 #include "blake2-impl.h"
 
-#define fBlaMka(a, b)                                                          \
-    do {                                                                        \
-        (a) += (b) + 2 * (uint64_t)(uint32_t)(a) * (uint32_t)(b);             \
-    } while (0)
+/* designed by the Lyra PHC team */
+static BLAKE2_INLINE uint64_t fBlaMka(uint64_t x, uint64_t y) {
+    const uint64_t m = UINT64_C(0xFFFFFFFF);
+    const uint64_t xy = (x & m) * (y & m);
+    return x + y + 2 * xy;
+}
 
 #define G(a, b, c, d)                                                          \
-    do {                                                                        \
-        fBlaMka(a, b);                                                         \
-        fBlaMka(c, d);                                                         \
-        (a) = rotr64((a), 32);                                                 \
-        (d) = rotr64((d) ^ (a), 24);                                           \
-        fBlaMka(b, c);                                                         \
-        (a) = rotr64((a) ^ (b), 16);                                           \
-        (b) = rotr64((b), 63);                                                 \
-    } while (0)
+    do {                                                                       \
+        a = fBlaMka(a, b);                                                     \
+        d = rotr64(d ^ a, 32);                                                 \
+        c = fBlaMka(c, d);                                                     \
+        b = rotr64(b ^ c, 24);                                                 \
+        a = fBlaMka(a, b);                                                     \
+        d = rotr64(d ^ a, 16);                                                 \
+        c = fBlaMka(c, d);                                                     \
+        b = rotr64(b ^ c, 63);                                                 \
+    } while ((void)0, 0)
 
-#define BLAKE2_ROUND_NOMSG(v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11,  \
+#define BLAKE2_ROUND_NOMSG(v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11,   \
                            v12, v13, v14, v15)                                 \
-    do {                                                                        \
+    do {                                                                       \
         G(v0, v4, v8, v12);                                                    \
         G(v1, v5, v9, v13);                                                    \
         G(v2, v6, v10, v14);                                                   \
@@ -47,6 +51,6 @@
         G(v1, v6, v11, v12);                                                   \
         G(v2, v7, v8, v13);                                                    \
         G(v3, v4, v9, v14);                                                    \
-    } while (0)
+    } while ((void)0, 0)
 
-#endif /* ARGON2_BLAKE2_ROUND_REF_H */
+#endif
