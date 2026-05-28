@@ -5,6 +5,8 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.whmdg.mczj.tools.auth.Feature
+import com.whmdg.mczj.tools.auth.SecurityEnforcer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -69,6 +71,7 @@ data class FAUiState(
 
 class FADownloaderViewModel(application: Application) : AndroidViewModel(application) {
 
+    private val context: Context = application.applicationContext
     private val _uiState = MutableStateFlow(FAUiState())
     val uiState: StateFlow<FAUiState> = _uiState.asStateFlow()
 
@@ -186,6 +189,12 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     // ── Phase 1: Start collection, show preview immediately ──
 
     fun startDownload() {
+        // 业务层权限检查（第二道防线）
+        if (!SecurityEnforcer.checkOrDie(context, Feature.FA_DOWNLOADER, "FADownloaderViewModel.startDownload")) {
+            addLog("权限不足：无法启动下载")
+            return
+        }
+
         val state = _uiState.value
         if (state.author.isBlank()) {
             addLog("请输入作者名")

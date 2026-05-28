@@ -2,6 +2,8 @@ package com.whmdg.mczj.tools.encryption.services
 
 import android.content.Context
 import androidx.compose.runtime.mutableStateListOf
+import com.whmdg.mczj.tools.auth.Feature
+import com.whmdg.mczj.tools.auth.SecurityEnforcer
 import com.whmdg.mczj.tools.encryption.core.AesGcm256
 import com.whmdg.mczj.tools.encryption.core.HexCodec
 import com.whmdg.mczj.tools.encryption.core.KeyDerivation
@@ -42,6 +44,11 @@ class VaultService(private val context: Context) {
         argonParams: Argon2Params,
         algorithm: String = "AES-256-GCM"
     ): VaultRecord {
+        // 业务层权限检查（第二道防线）
+        if (!SecurityEnforcer.checkOrDie(context, Feature.ENCRYPTION_VAULT, "VaultService.createVault")) {
+            throw SecurityException("权限不足：无法创建保险箱")
+        }
+
         if (_db.isNameTaken(name)) {
             throw IllegalArgumentException("保险箱名称已存在: $name")
         }
@@ -99,6 +106,11 @@ class VaultService(private val context: Context) {
     }
 
     fun open(id: Int, password: String): VaultSession {
+        // 业务层权限检查（第二道防线）
+        if (!SecurityEnforcer.checkOrDie(context, Feature.ENCRYPTION_VAULT, "VaultService.open")) {
+            throw SecurityException("权限不足：无法打开保险箱")
+        }
+
         val rec = _db.vaults.find { it.id == id } ?: throw IllegalArgumentException("保险箱不存在: id=$id")
         val dir = VaultPaths.resolveVault(context, rec.location, rec.relativePath)
         val cfg = VaultConfig.readWithFallback(context, dir)
@@ -134,6 +146,11 @@ class VaultService(private val context: Context) {
     }
 
     fun removeVault(id: Int, deleteFiles: Boolean) {
+        // 业务层权限检查（第二道防线）
+        if (!SecurityEnforcer.checkOrDie(context, Feature.ENCRYPTION_VAULT, "VaultService.removeVault")) {
+            throw SecurityException("权限不足：无法删除保险箱")
+        }
+
         val rec = _db.vaults.find { it.id == id } ?: return
         if (deleteFiles) {
             try {
@@ -152,6 +169,11 @@ class VaultService(private val context: Context) {
         location: StorageLocation,
         relativePath: String
     ): VaultRecord {
+        // 业务层权限检查（第二道防线）
+        if (!SecurityEnforcer.checkOrDie(context, Feature.ENCRYPTION_VAULT, "VaultService.importVault")) {
+            throw SecurityException("权限不足：无法导入保险箱")
+        }
+
         if (_db.isNameTaken(name)) {
             throw IllegalArgumentException("保险箱名称已存在: $name")
         }
@@ -249,6 +271,11 @@ class VaultService(private val context: Context) {
         oldPassword: String,
         newPassword: String
     ) {
+        // 业务层权限检查（第二道防线）
+        if (!SecurityEnforcer.checkOrDie(context, Feature.ENCRYPTION_VAULT, "VaultService.changePassword")) {
+            throw SecurityException("权限不足：无法修改保险箱密码")
+        }
+
         val rec = _db.vaults.find { it.id == id } ?: throw IllegalArgumentException("保险箱不存在: id=$id")
         val dir = VaultPaths.resolveVault(context, rec.location, rec.relativePath)
         val cfg = VaultConfig.readWithFallback(context, dir)

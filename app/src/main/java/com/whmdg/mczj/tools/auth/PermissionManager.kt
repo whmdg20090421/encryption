@@ -22,13 +22,24 @@ object PermissionManager {
 
     fun init(ctx: Context) {
         KeystoreMaster.ensureKey()
-        val blob = TokenStorage.load(ctx) ?: return
-        val derivedKey = KeystoreMaster.unwrap(blob.wrappedKey, blob.ivWrap) ?: return
-        val token = TokenCodec.decode(
-            AESGCM.decrypt(blob.cipherToken, blob.ivToken, derivedKey) ?: return,
-            derivedKey
-        ) ?: return
+        val blob = TokenStorage.load(ctx) ?: run {
+            Log.d(TAG, "init: no stored token found")
+            return
+        }
+        val derivedKey = KeystoreMaster.unwrap(blob.wrappedKey, blob.ivWrap) ?: run {
+            Log.w(TAG, "init: failed to unwrap key from Keystore")
+            return
+        }
+        val decrypted = AESGCM.decrypt(blob.cipherToken, blob.ivToken, derivedKey) ?: run {
+            Log.w(TAG, "init: failed to decrypt token")
+            return
+        }
+        val token = TokenCodec.decode(decrypted, derivedKey) ?: run {
+            Log.w(TAG, "init: failed to decode/verify token HMAC")
+            return
+        }
         _state.value = AuthState.Authed(token.keyId, token.features)
+        Log.d(TAG, "init: restored auth state for keyId=${token.keyId}")
     }
 
     fun has(f: Feature): Boolean =

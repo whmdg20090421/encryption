@@ -10,16 +10,60 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 
+/**
+ * 密码输入弹窗，带错误计数和锁定机制。
+ *
+ * @param onDismiss 关闭弹窗回调
+ * @param onVerify 验证密码回调，返回 true 表示验证成功，false 表示失败
+ */
 @Composable
 fun PasswordDialog(
     onDismiss: () -> Unit,
-    onResult: (String) -> Unit
+    onVerify: suspend (String) -> Boolean
 ) {
     var password by remember { mutableStateOf("") }
     var errorCount by remember { mutableIntStateOf(0) }
     var lockedUntil by remember { mutableLongStateOf(0L) }
     var isProcessing by remember { mutableStateOf(false) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    val maxErrors = 5
+    val lockDurationMs = 30_000L
+
+    fun handleSubmit() {
+        if (isProcessing || password.isBlank()) return
+
+        val now = System.currentTimeMillis()
+        if (lockedUntil > now) {
+            errorMsg = "操作过于频繁，请稍后再试"
+            return
+        }
+
+        isProcessing = true
+        errorMsg = null
+
+        scope.launch {
+            val success = onVerify(password)
+            isProcessing = false
+
+            if (success) {
+                onDismiss()
+            } else {
+                errorCount++
+                password = ""
+                if (errorCount >= maxErrors) {
+                    lockedUntil = System.currentTimeMillis() + lockDurationMs
+                    errorMsg = "错误次数过多，请等待30秒后重试"
+                    errorCount = 0
+                } else {
+                    errorMsg = "密码错误，还剩${maxErrors - errorCount}次机会"
+                }
+            }
+        }
+    }
 
     AlertDialog(
         onDismissRequest = { if (!isProcessing) onDismiss() },
@@ -33,38 +77,37 @@ fun PasswordDialog(
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall
                     )
-                } else {
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        label = { Text("密码") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Password,
-                            imeAction = ImeAction.Done
-                        ),
-                        keyboardActions = KeyboardActions(onDone = {
-                            if (!isProcessing && password.isNotBlank()) {
-                                isProcessing = true
-                                onResult(password)
-                            }
-                        }),
-                        enabled = !isProcessing,
-                        modifier = Modifier.fillMaxWidth()
+                }
+
+                errorMsg?.let { msg ->
+                    Text(
+                        text = msg,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(bottom = 8.dp)
                     )
                 }
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it; errorMsg = null },
+                    label = { Text("密码") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { handleSubmit() }),
+                    enabled = !isProcessing && lockedUntil <= System.currentTimeMillis(),
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
             TextButton(
-                onClick = {
-                    if (!isProcessing && password.isNotBlank()) {
-                        isProcessing = true
-                        onResult(password)
-                    }
-                },
-                enabled = !isProcessing && password.isNotBlank()
+                onClick = { handleSubmit() },
+                enabled = !isProcessing && password.isNotBlank() && lockedUntil <= System.currentTimeMillis()
             ) {
                 Text("确认")
             }
@@ -86,8 +129,13 @@ fun NoPermissionDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("权限不足") },
-        text = { Text("当前密钥无此模块权限，请使用更高级别密钥或联系作者。") },
+        text = { Text("当前密钥无此模块权限，是否以只读模式查看？") },
         confirmButton = {
+            TextButton(onClick = onEnter) {
+                Text("查看")
+            }
+        },
+        dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("关闭")
             }

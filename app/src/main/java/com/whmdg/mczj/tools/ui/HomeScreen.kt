@@ -63,6 +63,7 @@ import com.whmdg.mczj.tools.auth.LocalPermissionGate
 import com.whmdg.mczj.tools.auth.NoPermissionDialog
 import com.whmdg.mczj.tools.auth.PasswordDialog
 import com.whmdg.mczj.tools.auth.PermissionManager
+import com.whmdg.mczj.tools.auth.ReadOnlyWrapper
 import androidx.compose.ui.draw.alpha
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -190,15 +191,23 @@ fun MainAppContainer() {
             )
         }
         is Screen.Security -> {
-            SecurityScreen(
-                onBack = { navigateBack() },
-                onNavigate = { navigateTo(it) }
-            )
+            CompositionLocalProvider(
+                LocalPermissionGate provides PermissionManager.has(Feature.SECURITY_SETTINGS)
+            ) {
+                SecurityScreen(
+                    onBack = { navigateBack() },
+                    onNavigate = { navigateTo(it) }
+                )
+            }
         }
         is Screen.PermissionSettings -> {
-            PermissionSettingsScreen(
-                onBack = { navigateBack() }
-            )
+            CompositionLocalProvider(
+                LocalPermissionGate provides PermissionManager.has(Feature.SECURITY_SETTINGS)
+            ) {
+                PermissionSettingsScreen(
+                    onBack = { navigateBack() }
+                )
+            }
         }
         is Screen.ThemeSettings -> {
             ThemeSettingsScreen(
@@ -206,7 +215,9 @@ fun MainAppContainer() {
             )
         }
         is Screen.EncryptionHome -> {
-            CompositionLocalProvider(LocalPermissionGate provides PermissionManager.has(Feature.ENCRYPTION_VAULT)) {
+            CompositionLocalProvider(
+                LocalPermissionGate provides PermissionManager.has(Feature.ENCRYPTION_VAULT)
+            ) {
                 EncryptionHomeScreen(
                     vaultService = vaultService,
                     settings = encryptionSettings,
@@ -216,31 +227,49 @@ fun MainAppContainer() {
             }
         }
         is Screen.VaultCreate -> {
-            VaultCreateScreen(
-                vaultService = vaultService,
-                onBack = { navigateBack() }
-            )
+            CompositionLocalProvider(
+                LocalPermissionGate provides PermissionManager.has(Feature.ENCRYPTION_VAULT)
+            ) {
+                VaultCreateScreen(
+                    vaultService = vaultService,
+                    onBack = { navigateBack() }
+                )
+            }
         }
         is Screen.VaultOpen -> {
-            VaultOpenScreen(
-                session = currentScreen.session,
-                onBack = { navigateBack() }
-            )
+            CompositionLocalProvider(
+                LocalPermissionGate provides PermissionManager.has(Feature.ENCRYPTION_VAULT)
+            ) {
+                VaultOpenScreen(
+                    session = currentScreen.session,
+                    onBack = { navigateBack() }
+                )
+            }
         }
         is Screen.VaultChangePassword -> {
-            VaultChangePasswordScreen(
-                vaultService = vaultService,
-                vault = currentScreen.vault,
-                onBack = { navigateBack() }
-            )
+            CompositionLocalProvider(
+                LocalPermissionGate provides PermissionManager.has(Feature.ENCRYPTION_VAULT)
+            ) {
+                VaultChangePasswordScreen(
+                    vaultService = vaultService,
+                    vault = currentScreen.vault,
+                    onBack = { navigateBack() }
+                )
+            }
         }
         is Screen.SpecialPermissions -> {
-            SpecialPermissionsScreen(
-                onBack = { navigateBack() }
-            )
+            CompositionLocalProvider(
+                LocalPermissionGate provides PermissionManager.has(Feature.SECURITY_SETTINGS)
+            ) {
+                SpecialPermissionsScreen(
+                    onBack = { navigateBack() }
+                )
+            }
         }
         is Screen.AppPermissions -> {
-            CompositionLocalProvider(LocalPermissionGate provides PermissionManager.has(Feature.APP_PERMISSIONS)) {
+            CompositionLocalProvider(
+                LocalPermissionGate provides PermissionManager.has(Feature.APP_PERMISSIONS)
+            ) {
                 AppPermissionsScreen(
                     onBack = { navigateBack() }
                 )
@@ -252,14 +281,18 @@ fun MainAppContainer() {
             )
         }
         is Screen.FileManager -> {
-            CompositionLocalProvider(LocalPermissionGate provides PermissionManager.has(Feature.FILE_MANAGER)) {
+            CompositionLocalProvider(
+                LocalPermissionGate provides PermissionManager.has(Feature.FILE_MANAGER)
+            ) {
                 FileManagerScreen(
                     onBack = { navigateBack() }
                 )
             }
         }
         is Screen.BatchDownloader -> {
-            CompositionLocalProvider(LocalPermissionGate provides PermissionManager.has(Feature.BATCH_DOWNLOADER)) {
+            CompositionLocalProvider(
+                LocalPermissionGate provides PermissionManager.has(Feature.BATCH_DOWNLOADER)
+            ) {
                 com.whmdg.mczj.tools.ui.download.BatchDownloaderScreen(
                     onBack = { navigateBack() },
                     onNavigate = { navigateTo(it) }
@@ -267,7 +300,9 @@ fun MainAppContainer() {
             }
         }
         is Screen.FADownloader -> {
-            CompositionLocalProvider(LocalPermissionGate provides PermissionManager.has(Feature.FA_DOWNLOADER)) {
+            CompositionLocalProvider(
+                LocalPermissionGate provides PermissionManager.has(Feature.FA_DOWNLOADER)
+            ) {
                 com.whmdg.mczj.tools.ui.download.FADownloaderScreen(
                     onBack = { navigateBack() },
                     onLogin = { navigateTo(Screen.FALogin) }
@@ -412,23 +447,23 @@ fun HomeTab(onNavigate: (Screen) -> Unit) {
             val ctx = LocalContext.current
             PasswordDialog(
                 onDismiss = { lockedFeature = null },
-                onResult = { pw ->
-                    scope.launch {
-                        val res = PermissionManager.tryAuthenticate(ctx, pw)
-                        if (res.isSuccess && PermissionManager.has(feature)) {
-                            lockedFeature = null
-                            val screen = when (feature) {
-                                Feature.ENCRYPTION_VAULT -> Screen.EncryptionHome
-                                Feature.FILE_MANAGER -> Screen.FileManager
-                                Feature.APP_PERMISSIONS -> Screen.AppPermissions
-                                Feature.BATCH_DOWNLOADER -> Screen.BatchDownloader
-                                Feature.FA_DOWNLOADER -> Screen.FADownloader
-                                Feature.SECURITY_SETTINGS -> Screen.Security
-                            }
-                            onNavigate(screen)
-                        } else {
-                            lockedFeature = null
+                onVerify = { pw ->
+                    val res = PermissionManager.tryAuthenticate(ctx, pw)
+                    if (res.isSuccess && PermissionManager.has(feature)) {
+                        lockedFeature = null
+                        val screen = when (feature) {
+                            Feature.ENCRYPTION_VAULT -> Screen.EncryptionHome
+                            Feature.FILE_MANAGER -> Screen.FileManager
+                            Feature.APP_PERMISSIONS -> Screen.AppPermissions
+                            Feature.BATCH_DOWNLOADER -> Screen.BatchDownloader
+                            Feature.FA_DOWNLOADER -> Screen.FADownloader
+                            Feature.SECURITY_SETTINGS -> Screen.Security
                         }
+                        onNavigate(screen)
+                        true
+                    } else {
+                        lockedFeature = null
+                        false
                     }
                 }
             )
@@ -437,6 +472,7 @@ fun HomeTab(onNavigate: (Screen) -> Unit) {
                 feature = feature,
                 onDismiss = { lockedFeature = null },
                 onEnter = {
+                    // 以只读模式进入模块
                     val screen = when (feature) {
                         Feature.ENCRYPTION_VAULT -> Screen.EncryptionHome
                         Feature.FILE_MANAGER -> Screen.FileManager
@@ -461,6 +497,7 @@ fun EncryptionHomeScreen(
     onBack: () -> Unit,
     onNavigate: (Screen) -> Unit
 ) {
+    val isReadOnly = !LocalPermissionGate.current
     var subTab by remember { mutableIntStateOf(0) }
     var showMenu by remember { mutableStateOf(false) }
 
@@ -482,63 +519,67 @@ fun EncryptionHomeScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(if (subTab == 0) "保险箱" else if (subTab == 1) "云盘" else "设置") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                actions = {
-                    if (subTab == 0) {
-                        IconButton(onClick = { folderPicker.launch(null) }) {
-                            Icon(Icons.Default.ArrowUpward, contentDescription = "导入保险箱")
+    ReadOnlyWrapper {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text(if (subTab == 0) "保险箱" else if (subTab == 1) "云盘" else "设置") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        }
+                    },
+                    actions = {
+                        // 只读模式下禁用操作按钮
+                        if (!isReadOnly && subTab == 0) {
+                            IconButton(onClick = { folderPicker.launch(null) }) {
+                                Icon(Icons.Default.ArrowUpward, contentDescription = "导入保险箱")
+                            }
                         }
                     }
+                )
+            },
+            bottomBar = {
+                // Tab 切换始终可用（用户选择允许）
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = subTab == 0,
+                        onClick = { subTab = 0 },
+                        icon = { Icon(if (subTab == 0) Icons.Filled.Lock else Icons.Outlined.Lock, contentDescription = "保险箱") },
+                        label = { Text("保险箱") }
+                    )
+                    NavigationBarItem(
+                        selected = subTab == 1,
+                        onClick = { subTab = 1 },
+                        icon = { Icon(if (subTab == 1) Icons.Filled.Cloud else Icons.Outlined.Cloud, contentDescription = "云盘") },
+                        label = { Text("云盘") }
+                    )
+                    NavigationBarItem(
+                        selected = subTab == 2,
+                        onClick = { subTab = 2 },
+                        icon = { Icon(if (subTab == 2) Icons.Filled.Settings else Icons.Outlined.Settings, contentDescription = "设置") },
+                        label = { Text("设置") }
+                    )
                 }
-            )
-        },
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = subTab == 0,
-                    onClick = { subTab = 0 },
-                    icon = { Icon(if (subTab == 0) Icons.Filled.Lock else Icons.Outlined.Lock, contentDescription = "保险箱") },
-                    label = { Text("保险箱") }
-                )
-                NavigationBarItem(
-                    selected = subTab == 1,
-                    onClick = { subTab = 1 },
-                    icon = { Icon(if (subTab == 1) Icons.Filled.Cloud else Icons.Outlined.Cloud, contentDescription = "云盘") },
-                    label = { Text("云盘") }
-                )
-                NavigationBarItem(
-                    selected = subTab == 2,
-                    onClick = { subTab = 2 },
-                    icon = { Icon(if (subTab == 2) Icons.Filled.Settings else Icons.Outlined.Settings, contentDescription = "设置") },
-                    label = { Text("设置") }
-                )
-            }
-        },
-        floatingActionButton = {
-            if (subTab == 0) {
-                FloatingActionButton(onClick = { showMenu = true }) {
-                    Icon(Icons.Default.Add, contentDescription = "添加")
+            },
+            floatingActionButton = {
+                // 只读模式下禁用浮动按钮
+                if (!isReadOnly && subTab == 0) {
+                    FloatingActionButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Default.Add, contentDescription = "添加")
+                    }
                 }
             }
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            when (subTab) {
-                0 -> VaultsListTab(vaultService = vaultService, settings = settings, onNavigate = onNavigate)
-                1 -> CloudTab()
-                2 -> EncryptionSettingsTab(settings = settings)
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                when (subTab) {
+                    0 -> VaultsListTab(vaultService = vaultService, settings = settings, onNavigate = onNavigate)
+                    1 -> CloudTab()
+                    2 -> EncryptionSettingsTab(settings = settings)
             }
 
             if (showMenu) {

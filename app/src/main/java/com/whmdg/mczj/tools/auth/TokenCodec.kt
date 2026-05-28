@@ -3,7 +3,6 @@ package com.whmdg.mczj.tools.auth
 import com.whmdg.mczj.tools.encryption.data.CanonicalJson
 import kotlinx.serialization.json.*
 import java.security.MessageDigest
-import java.util.Arrays
 
 object TokenCodec {
 
@@ -33,7 +32,8 @@ object TokenCodec {
         val payload = data.copyOfRange(0, payloadLen)
         val expectedHmac = data.copyOfRange(payloadLen, data.size)
         val actualHmac = hmacSha256(key, payload)
-        if (!Arrays.equals(expectedHmac, actualHmac)) return null
+        // 使用恒定时间比较防止时序攻击
+        if (!MessageDigest.isEqual(expectedHmac, actualHmac)) return null
         return try {
             val obj = Json.parseToJsonElement(String(payload, Charsets.UTF_8)).jsonObject
             val keyId = obj["keyId"]?.jsonPrimitive?.content ?: return null

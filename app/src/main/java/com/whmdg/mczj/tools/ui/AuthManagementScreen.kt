@@ -62,19 +62,19 @@ fun AuthManagementScreen(onBack: () -> Unit) {
                 1 -> {
                     PasswordDialog(
                         onDismiss = { phase = 0 },
-                        onResult = { pw ->
-                            scope.launch {
-                                val derived = withContext(Dispatchers.Default) {
-                                    com.whmdg.mczj.tools.auth.NativeAuth.verifyPassword(pw)
-                                }
-                                if (derived != null) {
-                                    derived.fill(0)
-                                    currentPw = pw
-                                    phase = 2
-                                } else {
-                                    resultMsg = "密码错误"
-                                    phase = 0
-                                }
+                        onVerify = { pw ->
+                            val derived = withContext(Dispatchers.Default) {
+                                com.whmdg.mczj.tools.auth.NativeAuth.verifyPassword(pw)
+                            }
+                            if (derived != null) {
+                                derived.fill(0)
+                                currentPw = pw
+                                phase = 2
+                                true
+                            } else {
+                                resultMsg = "密码错误"
+                                phase = 0
+                                false
                             }
                         }
                     )
@@ -126,16 +126,16 @@ fun AuthManagementScreen(onBack: () -> Unit) {
     if (showSwitchDialog) {
         PasswordDialog(
             onDismiss = { showSwitchDialog = false },
-            onResult = { newPw ->
-                scope.launch {
-                    val ok = PermissionManager.switchKey(context, currentPw!!, newPw)
-                    showSwitchDialog = false
-                    if (ok) {
-                        resultMsg = "密钥已切换"
-                        phase = 2
-                    } else {
-                        resultMsg = "新密码无效"
-                    }
+            onVerify = { newPw ->
+                val ok = PermissionManager.switchKey(context, currentPw!!, newPw)
+                showSwitchDialog = false
+                if (ok) {
+                    resultMsg = "密钥已切换"
+                    phase = 2
+                    true
+                } else {
+                    resultMsg = "新密码无效"
+                    false
                 }
             }
         )
