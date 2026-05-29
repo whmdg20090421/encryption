@@ -546,7 +546,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                                     }
                                     val m = meta ?: SubmissionMeta(imageUrl = cachedUrl, faId = pageId)
                                     // 校验缓存的图片 URL 必须包含作者名称
-                                    val checkAuthor = m.author.ifEmpty { state.author }.lowercase()
+                                    val checkAuthor = state.author.lowercase()
                                     if (checkAuthor.isNotEmpty() && !cachedUrl.lowercase().contains(checkAuthor)) {
                                         addLog("  ⚠ 缓存URL不含作者「$checkAuthor」，跳过: $cachedUrl")
                                         return@async null
@@ -557,7 +557,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                                     if (detailHtml == null) return@async null
                                     val info = parseSubmissionInfo(detailHtml) ?: return@async null
                                     // 校验图片 URL 必须包含作者名称（防止翻页错误导致抓到其他作者的作品）
-                                    val checkAuthor = info.author.ifEmpty { state.author }.lowercase()
+                                    val checkAuthor = state.author.lowercase()
                                     if (checkAuthor.isNotEmpty() && !info.imageUrl.lowercase().contains(checkAuthor)) {
                                         addLog("  ⚠ 跳过: 图片URL不含作者「$checkAuthor」: ${info.imageUrl}")
                                         return@async null
@@ -598,15 +598,9 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
                     val pageCollected = allTasks.size - countBeforePage
                     addPageSummary("第${pageNum}页（${pages.size}个链接），本页${pageCollected}个，累计${allTasks.size}个")
-                    // 从页面解析下一页 URL（参考 furaffinity-dl: 从 Next 按钮提取）
-                    val nextUrl = parseNextPageUrl(html, currentUrl)
-                    if (nextUrl != null) {
-                        currentUrl = nextUrl
-                        pageNum++
-                    } else {
-                        addLog("无更多页面，收集结束")
-                        break
-                    }
+                    // 手动递增页码（不依赖 Next 按钮解析，更可靠）
+                    pageNum++
+                    currentUrl = "$FA_BASE/${state.downloadType}/${state.author}/$pageNum"
                 }
             } catch (e: Exception) {
                 addLog("收集任务异常: ${e.message}")
