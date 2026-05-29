@@ -56,10 +56,10 @@ fun FADownloaderScreen(
     var showSilentRefresh by remember { mutableStateOf(false) }
     var silentRefreshWebView by remember { mutableStateOf<WebView?>(null) }
 
-    // Auto-scroll to latest log
+    // Auto-scroll to latest log (newest first)
     LaunchedEffect(state.logs.size) {
         if (state.logs.isNotEmpty()) {
-            logListState.animateScrollToItem(state.logs.size - 1)
+            logListState.animateScrollToItem(0)
         }
     }
 

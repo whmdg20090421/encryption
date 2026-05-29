@@ -413,6 +413,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             return
         }
 
+        clearLogs()
         val state = _uiState.value
         if (state.author.isBlank()) {
             addLog("请输入作者名")
@@ -883,7 +884,11 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun addLog(message: String) {
-        _uiState.update { it.copy(logs = it.logs + DownloadLog(message)) }
+        _uiState.update { it.copy(logs = listOf(DownloadLog(message)) + it.logs) }
+    }
+
+    private fun clearLogs() {
+        _uiState.update { it.copy(logs = emptyList()) }
     }
 
     // ── HTTP（参考 furaffinity-dl: 统一 session，自动带 Cookie） ──
