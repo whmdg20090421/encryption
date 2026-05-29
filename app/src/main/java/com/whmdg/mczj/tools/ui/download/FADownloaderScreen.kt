@@ -596,14 +596,27 @@ fun FADownloaderScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     SectionLabel("下载日志", Icons.Default.Terminal)
-                    if (state.isDownloading) {
-                        IconButton(onClick = { viewModel.togglePause() }) {
-                            Icon(
-                                if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                                contentDescription = if (state.isPaused) "继续" else "暂停",
-                                tint = if (state.isPaused) MaterialTheme.colorScheme.primary
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                    Row {
+                        if (state.hasFailedTasks) {
+                            IconButton(onClick = { viewModel.retryFailedTasks() }) {
+                                BadgedBox(badge = { Badge { Text("${state.failedTasks.size}") } }) {
+                                    Icon(
+                                        Icons.Default.Refresh,
+                                        contentDescription = "重试失败任务",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                        if (state.isDownloading) {
+                            IconButton(onClick = { viewModel.togglePause() }) {
+                                Icon(
+                                    if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                    contentDescription = if (state.isPaused) "继续" else "暂停",
+                                    tint = if (state.isPaused) MaterialTheme.colorScheme.primary
+                                           else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }

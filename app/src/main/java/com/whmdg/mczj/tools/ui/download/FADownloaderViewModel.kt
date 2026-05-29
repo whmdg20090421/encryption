@@ -94,6 +94,9 @@ data class FAUiState(
     val statusMessage: String = "准备就绪",
     val errorMessage: String? = null,
     val isPaused: Boolean = false,
+    // 失败重试
+    val failedTasks: List<PreviewItem> = emptyList(),
+    val hasFailedTasks: Boolean = false,
     // 目录冲突对话框
     val showDirConflict: Boolean = false,
     val conflictDirName: String = "",
@@ -448,7 +451,6 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             val allTasks = mutableListOf<PreviewItem>()
             var currentUrl = "$FA_BASE/${state.downloadType}/${state.author}/${startPage}"
             var consecutiveEmpty = 0
-            var globalSeq = 0
             var firstPageCount = 0
             var pageNum = startPage
 
@@ -566,11 +568,10 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
                         val (pageId, imageUrl, _, title, meta) = result
                         val ext = getFileExtension(imageUrl)
-                        globalSeq++
                         val safeTitle = title.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50)
                         val authorName = meta.author.ifEmpty { state.author }
                         val safeAuthor = authorName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-                        val saveFileName = "${String.format("%04d", globalSeq)}_${safeAuthor}_${safeTitle}_${pageId}.$ext"
+                        val saveFileName = "${safeAuthor}_${safeTitle}_${pageId}.$ext"
 
                         val task = PreviewItem(allTasks.size + 1, saveFileName, imageUrl, title, pageId, state.author, meta)
                         allTasks.add(task)
@@ -642,18 +643,10 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             val cookie = loadCookie()
             val threadCount = state.downloadThreads
 
-            val authorDir = checkAndCreateDirectory(state.saveDir!!, state.author)
-            if (authorDir == null) {
+            val targetDir = resolveTargetDir(state)
+            if (targetDir == null) {
                 _uiState.update { it.copy(isDownloading = false, statusMessage = "已取消") }
                 return@launch
-            }
-            val targetDir = if (state.downloadType == "scraps") {
-                checkAndCreateDirectory(authorDir, "scraps") ?: run {
-                    _uiState.update { it.copy(isDownloading = false, statusMessage = "已取消") }
-                    return@launch
-                }
-            } else {
-                authorDir
             }
             addLog("保存目录: ${state.saveDirPath}/${state.author}/${if (state.downloadType == "scraps") "scraps/" else ""}")
 
@@ -671,6 +664,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             var totalSkipped = 0
             var totalFailed = 0
             var totalTasks = 0
+            val failedTasksList = mutableListOf<PreviewItem>()
 
             val jobs = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
 
@@ -703,12 +697,18 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                                 return@async
                             }
                         }
-                        val data = downloadToBytes(task.imageUrl, cookie)
+                        // 下载，失败后自动重试一次
+                        var data = downloadToBytes(task.imageUrl, cookie)
+                        if (data == null) {
+                            delay(200)
+                            data = downloadToBytes(task.imageUrl, cookie)
+                        }
                         if (data == null) {
                             saveMutex.lock()
                             totalFailed++
-                            addLog("  (${totalDownloaded + totalSkipped + totalFailed}/$totalTasks) ✗ 下载失败: ${task.fileName}")
-                            _uiState.update { it.copy(failedCount = totalFailed) }
+                            failedTasksList.add(task)
+                            addLog("  (${totalDownloaded + totalSkipped + totalFailed}/$totalTasks) ✗ 失败（已加入重试队列）: ${task.fileName}")
+                            _uiState.update { it.copy(failedCount = totalFailed, failedTasks = failedTasksList.toList(), hasFailedTasks = true) }
                             nextSeq++
                             saveMutex.unlock()
                             return@async
@@ -738,7 +738,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
             // 自定义编号模式：按 FA ID 匹配重排序
             if (!isStopped) {
-                reorderFiles(targetDir, state.author)
+                renumberFiles(targetDir, state.author)
             }
 
             _uiState.update {
@@ -793,6 +793,84 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         val wasPaused = _uiState.value.isPaused
         _uiState.update { it.copy(isPaused = !wasPaused) }
         addLog(if (wasPaused) "下载已继续" else "下载已暂停")
+    }
+
+    fun retryFailedTasks() {
+        val failed = _uiState.value.failedTasks
+        if (failed.isEmpty()) return
+        _uiState.update { it.copy(failedTasks = emptyList(), hasFailedTasks = false) }
+        addLog("重试 ${failed.size} 个失败任务...")
+
+        val state = _uiState.value
+        downloadJob = viewModelScope.launch(Dispatchers.IO) {
+            val cookie = loadCookie()
+            val saveMutex = Mutex()
+            var retried = 0
+            var success = 0
+            var stillFailed = 0
+            val stillFailedList = mutableListOf<PreviewItem>()
+            val targetDir = resolveTargetDir(state) ?: return@launch
+
+            val semaphore = Semaphore(state.downloadThreads)
+            val jobs = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
+
+            for (task in failed) {
+                retried++
+                val deferred = async {
+                    semaphore.withPermit {
+                        if (isStopped) return@async
+                        var data = downloadToBytes(task.imageUrl, cookie)
+                        if (data == null) {
+                            delay(200)
+                            data = downloadToBytes(task.imageUrl, cookie)
+                        }
+                        if (data == null) {
+                            saveMutex.lock()
+                            stillFailed++
+                            stillFailedList.add(task)
+                            addLog("  ✗ 重试仍失败: ${task.fileName}")
+                            _uiState.update { it.copy(failedCount = it.failedCount + stillFailed, failedTasks = stillFailedList.toList(), hasFailedTasks = stillFailedList.isNotEmpty()) }
+                            saveMutex.unlock()
+                            return@async
+                        }
+                        saveMutex.lock()
+                        if (saveToFile(targetDir, task.fileName, data)) {
+                            success++
+                            addLog("  ✓ 重试成功: ${task.fileName}")
+                            _uiState.update { it.copy(downloadedCount = it.downloadedCount + 1) }
+                        } else {
+                            stillFailed++
+                            stillFailedList.add(task)
+                            addLog("  ✗ 重试保存失败: ${task.fileName}")
+                        }
+                        saveMutex.unlock()
+                    }
+                }
+                jobs.add(deferred)
+            }
+            jobs.awaitAll()
+
+            addLog("重试完成 — 成功: $success, 仍失败: $stillFailed")
+
+            // 重排序
+            if (!isStopped) {
+                renumberFiles(targetDir, state.author)
+            }
+
+            if (stillFailedList.isEmpty()) {
+                _uiState.update { it.copy(isDownloading = false, statusMessage = "下载完成") }
+            }
+        }
+    }
+
+    /** 解析目标目录 URI（复用 confirmDownload 的目录创建逻辑） */
+    private suspend fun resolveTargetDir(state: FAUiState): Uri? {
+        val authorDir = checkAndCreateDirectory(state.saveDir!!, state.author) ?: return null
+        return if (state.downloadType == "scraps") {
+            checkAndCreateDirectory(authorDir, "scraps")
+        } else {
+            authorDir
+        }
     }
 
     private fun addLog(message: String) {
@@ -978,7 +1056,10 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun cacheUrl(author: String, pageId: String, imageUrl: String) {
-        cachePrefs.edit().putString("$author/$pageId", imageUrl).apply()
+        // 只缓存 d.furaffinity.net 格式的链接
+        if (imageUrl.matches(Regex("""https://d\.furaffinity\.net/art/[^/]+/\d+.*"""))) {
+            cachePrefs.edit().putString("$author/$pageId", imageUrl).apply()
+        }
     }
 
     // ── File Operations ──
@@ -1100,26 +1181,35 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     /** 已有文件解析结果 */
     private data class ExistingFileInfo(val faId: String, val author: String, val title: String, val fileName: String)
 
-    /** 扫描目录中所有符合命名格式的文件，构建 FAID 索引 */
+    /** 扫描目录中所有符合命名格式的文件，构建 FAID 索引（兼容带序号和无序号） */
     private fun buildExistingFileIndex(dirUri: Uri): Map<String, ExistingFileInfo> {
         val result = mutableMapOf<String, ExistingFileInfo>()
         try {
             val app = getApplication<Application>()
             val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri)
                 ?: return result
-            // 匹配格式: 0001_author_title_FAID.ext
-            val pattern = Regex("""^\d{4}_(.+?)_(\d+)\.\w+$""")
+            // 带序号: 0001_author_title_FAID.ext
+            val numberedPattern = Regex("""^\d{4}_([^_]+)_(.+)_(\d+)\.\w+$""")
+            // 无序号: author_title_FAID.ext
+            val unnumberedPattern = Regex("""^([^_]+)_(.+)_(\d+)\.\w+$""")
             for (file in dirDoc.listFiles()) {
                 if (!file.isFile) continue
                 val name = file.name ?: continue
-                val match = pattern.matchEntire(name) ?: continue
-                val authorTitle = match.groupValues[1]
-                val faId = match.groupValues[2]
-                // 从 author_title 中分离：第一个 _ 之前是作者，之后是标题
-                val sepIdx = authorTitle.indexOf('_')
-                if (sepIdx > 0) {
-                    val author = authorTitle.substring(0, sepIdx)
-                    val title = authorTitle.substring(sepIdx + 1)
+                // 跳过 .tmp 文件
+                if (name.endsWith(".tmp")) continue
+                val numbered = numberedPattern.matchEntire(name)
+                if (numbered != null) {
+                    val author = numbered.groupValues[1]
+                    val title = numbered.groupValues[2]
+                    val faId = numbered.groupValues[3]
+                    result[faId] = ExistingFileInfo(faId, author, title, name)
+                    continue
+                }
+                val unnumbered = unnumberedPattern.matchEntire(name)
+                if (unnumbered != null) {
+                    val author = unnumbered.groupValues[1]
+                    val title = unnumbered.groupValues[2]
+                    val faId = unnumbered.groupValues[3]
                     result[faId] = ExistingFileInfo(faId, author, title, name)
                 }
             }
@@ -1133,60 +1223,150 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     /**
-     * 重排序：按标题分组 → 组间按最早 FAID 排序 → 组内按 FAID 排序 → 从 0001 重新编号。
-     * 文件名格式: 0001_author_title_FAID.ext
+     * 智能差量重命名：
+     * 1. 扫描带序号旧文件 + 无序号新文件
+     * 2. 合并所有标识，按标题分组排序
+     * 3. 差量比对旧编号与新编号，找到第一个差异位置
+     * 4. 只重命名从该位置开始的文件（两步法避免冲突）
      */
-    private suspend fun reorderFiles(dirUri: Uri, author: String) = withContext(Dispatchers.IO) {
+    private suspend fun renumberFiles(dirUri: Uri, author: String) = withContext(Dispatchers.IO) {
         try {
             val app = getApplication<Application>()
             val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri) ?: return@withContext
-
             val safeAuthor = author.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-            // 匹配格式: 0001_author_title_FAID.ext
-            val filePattern = Regex("""^\d{4}_([^_]+)_(.+)_(\d+)\.(\w+)$""")
 
-            data class FileEntry(
-                val title: String, val faId: Long, val ext: String,
-                val docFile: androidx.documentfile.provider.DocumentFile, val oldName: String
-            )
-            val entries = mutableListOf<FileEntry>()
+            // 匹配模式
+            val numberedPattern = Regex("""^\d{4}_([^_]+)_(.+)_(\d+)\.(\w+)$""")
+            val unnumberedPattern = Regex("""^([^_]+)_(.+)_(\d+)\.(\w+)$""")
 
+            data class FileIdentity(val title: String, val faId: Long, val ext: String)
+            data class OldEntry(val seq: Int, val identity: FileIdentity, val docFile: androidx.documentfile.provider.DocumentFile, val name: String)
+
+            val oldEntries = mutableListOf<OldEntry>()
+            val newDownloads = mutableListOf<androidx.documentfile.provider.DocumentFile>()
+            val allIdentities = mutableSetOf<FileIdentity>()
+
+            // ── Step 1: 扫描目录 ──
             for (file in dirDoc.listFiles()) {
                 if (!file.isFile) continue
                 val name = file.name ?: continue
-                val match = filePattern.matchEntire(name) ?: continue
-                val title = match.groupValues[2]
-                val faId = match.groupValues[3].toLongOrNull() ?: continue
-                val ext = match.groupValues[4]
-                entries.add(FileEntry(title, faId, ext, file, name))
+                if (name.endsWith(".tmp")) continue
+
+                val numbered = numberedPattern.matchEntire(name)
+                if (numbered != null) {
+                    val title = numbered.groupValues[1]
+                    val faId = numbered.groupValues[2].toLongOrNull() ?: continue
+                    val ext = numbered.groupValues[3]
+                    val seq = name.substringBefore("_").toIntOrNull() ?: 0
+                    val identity = FileIdentity(title, faId, ext)
+                    oldEntries.add(OldEntry(seq, identity, file, name))
+                    allIdentities.add(identity)
+                    continue
+                }
+                val unnumbered = unnumberedPattern.matchEntire(name)
+                if (unnumbered != null) {
+                    val title = unnumbered.groupValues[1]
+                    val faId = unnumbered.groupValues[2].toLongOrNull() ?: continue
+                    val ext = unnumbered.groupValues[3]
+                    allIdentities.add(FileIdentity(title, faId, ext))
+                    newDownloads.add(file)
+                }
             }
 
-            if (entries.isEmpty()) return@withContext
+            if (allIdentities.isEmpty()) return@withContext
 
-            // 分组 → 组间按最早 FAID 排序 → 组内按 FAID 排序
-            val grouped = entries.groupBy { it.title }
+            // ── Step 2: 排序（标题分组 → 组间最早FAID → 组内FAID） ──
+            val grouped = allIdentities.groupBy { it.title }
             val sorted = grouped.entries
                 .sortedBy { (_, group) -> group.minOf { it.faId } }
                 .flatMap { (_, group) -> group.sortedBy { it.faId } }
 
-            addLog("重排序: 发现 ${entries.size} 个文件，${grouped.size} 组，开始重命名...")
+            // ── Step 3: 新编号映射 ──
+            val newNumbering = sorted.mapIndexed { idx, identity -> (idx + 1) to identity }
 
-            var seq = 0
-            var renamed = 0
-            for (entry in sorted) {
-                seq++
-                val newName = "${String.format("%04d", seq)}_${safeAuthor}_${entry.title}_${entry.faId}.${entry.ext}"
-                if (entry.oldName != newName) {
-                    try {
-                        entry.docFile.renameTo(newName)
-                        renamed++
-                    } catch (e: Exception) {
-                        addLog("  重命名失败: ${entry.oldName} → $newName")
+            // ── Step 4: 旧编号映射 ──
+            val oldNumbering = oldEntries.associate { it.seq to it.identity }
+
+            // ── Step 5: 差量比对 ──
+            val maxOld = oldNumbering.keys.maxOrNull() ?: 0
+            val maxNew = newNumbering.size
+            val maxSize = maxOf(maxOld, maxNew)
+            var firstDiff = maxSize + 1
+            for (i in 1..maxSize) {
+                val oldId = oldNumbering[i]
+                val newId = newNumbering.getOrNull(i - 1)?.second
+                if (oldId != newId) {
+                    firstDiff = i
+                    break
+                }
+            }
+
+            if (firstDiff > maxSize) {
+                addLog("重排序: 无变化")
+                return@withContext
+            }
+
+            addLog("重排序: ${allIdentities.size} 个文件，${grouped.size} 组，从第 $firstDiff 个开始重命名...")
+
+            // ── Step 6: 构建重命名操作列表 ──
+            data class RenameOp(val docFile: androidx.documentfile.provider.DocumentFile, val from: String, val to: String)
+            val ops = mutableListOf<RenameOp>()
+
+            val oldByIdentity = oldEntries.associateBy { it.identity }
+            val newFileByIdentity = mutableMapOf<FileIdentity, androidx.documentfile.provider.DocumentFile>()
+            for (file in newDownloads) {
+                val name = file.name ?: continue
+                val match = unnumberedPattern.matchEntire(name) ?: continue
+                val title = match.groupValues[1]
+                val faId = match.groupValues[2].toLongOrNull() ?: continue
+                val ext = match.groupValues[3]
+                newFileByIdentity[FileIdentity(title, faId, ext)] = file
+            }
+
+            for (i in firstDiff..maxNew) {
+                val identity = newNumbering.getOrNull(i - 1)?.second ?: continue
+                val newName = "${String.format("%04d", i)}_${safeAuthor}_${identity.title}_${identity.faId}.${identity.ext}"
+
+                val oldEntry = oldByIdentity[identity]
+                if (oldEntry != null) {
+                    if (oldEntry.name != newName) {
+                        ops.add(RenameOp(oldEntry.docFile, oldEntry.name, newName))
+                    }
+                } else {
+                    val newFile = newFileByIdentity[identity]
+                    if (newFile != null) {
+                        val currentName = newFile.name ?: continue
+                        ops.add(RenameOp(newFile, currentName, newName))
                     }
                 }
             }
 
-            addLog("重排序完成: 重命名 $renamed 个文件")
+            if (ops.isEmpty()) {
+                addLog("重排序: 无需重命名")
+                return@withContext
+            }
+
+            // ── Step 7: 两步重命名（先 → .tmp，再 → 最终名） ──
+            var renamed = 0
+            for (op in ops) {
+                try {
+                    op.docFile.renameTo("${op.to}.tmp")
+                    renamed++
+                } catch (e: Exception) {
+                    addLog("  重命名失败: ${op.from}")
+                }
+            }
+            for (op in ops) {
+                try {
+                    dirDoc.listFiles()
+                        .firstOrNull { it.name == "${op.to}.tmp" }
+                        ?.renameTo(op.to)
+                } catch (e: Exception) {
+                    addLog("  最终重命名失败: ${op.to}.tmp")
+                }
+            }
+
+            addLog("重排序完成: 重命名 $renamed 个文件（从第 $firstDiff 个开始）")
         } catch (e: Exception) {
             addLog("重排序异常: ${e.message}")
         }
