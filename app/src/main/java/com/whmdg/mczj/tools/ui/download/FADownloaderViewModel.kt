@@ -37,7 +37,10 @@ data class DownloadLog(val message: String, val timestamp: Long = System.current
 data class PreviewItem(
     val seq: Int,
     val fileName: String,
-    val imageUrl: String
+    val imageUrl: String,
+    val title: String = "",      // 作品标题
+    val faId: String = "",       // FA 作品编号
+    val author: String = ""      // 作者名
 )
 
 data class FAUiState(
@@ -307,40 +310,43 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                     }
                     consecutiveEmpty = 0
 
-                    // First page done → 用分页链接估算总页数
+                    // First page done → 初始保守估算
                     if (currentPage == startPage) {
                         firstPageCount = pages.size
-                        val maxPageNum = parseMaxPage(html)
                         val estimatedTotal = if (maxDownload > 0) {
-                            minOf(firstPageCount * maxPageNum, maxDownload)
+                            minOf(firstPageCount * 10, maxDownload)
                         } else {
-                            firstPageCount * maxPageNum
+                            firstPageCount * 10  // 保守估算 10 页
                         }
                         _uiState.update { it.copy(collectionTotal = estimatedTotal) }
-                        addLog("每页 ~$firstPageCount 个，共 $maxPageNum 页，预估 $estimatedTotal 个任务")
+                        addLog("第一页发现 $firstPageCount 个作品，开始逐页爬取...")
                     }
 
                     // 并行抓取详情页，复用 downloadThreads 作为并发数
+                    data class DetailResult(val pageId: String, val imageUrl: String, val fileName: String, val title: String)
                     val semaphore = Semaphore(state.downloadThreads)
-                    val deferreds = mutableListOf<kotlinx.coroutines.Deferred<Triple<String, String, String>?>>()
+                    val deferreds = mutableListOf<kotlinx.coroutines.Deferred<DetailResult?>>()
+                    val seenPageIds = mutableSetOf<String>()  // 去重
 
                     for (pageUrl in pages) {
                         if (isStopped) break
                         if (maxDownload > 0 && allTasks.size >= maxDownload) break
 
+                        val pageId = extractPageId(pageUrl)
+                        if (!seenPageIds.add(pageId)) continue  // 跳过重复
+
                         val deferred = async {
                             semaphore.withPermit {
-                                val pageId = extractPageId(pageUrl)
                                 val cachedUrl = if (state.useCache) getCachedUrl(pageId) else null
                                 if (cachedUrl != null) {
-                                    Triple(pageId, cachedUrl, extractFileName(cachedUrl))
+                                    DetailResult(pageId, cachedUrl, extractFileName(cachedUrl), "")
                                 } else {
                                     val detailHtml = fetchHtml(pageUrl, cookie)
                                     if (detailHtml == null) return@async null
-                                    val parsedUrl = parseImageUrl(detailHtml)
-                                    if (parsedUrl == null) return@async null
-                                    if (state.useCache) cacheUrl(pageId, parsedUrl)
-                                    Triple(pageId, parsedUrl, extractFileName(parsedUrl))
+                                    val info = parseSubmissionInfo(detailHtml)
+                                    if (info == null) return@async null
+                                    if (state.useCache) cacheUrl(pageId, info.imageUrl)
+                                    DetailResult(pageId, info.imageUrl, extractFileName(info.imageUrl), info.title)
                                 }
                             }
                         }
@@ -352,17 +358,19 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                         if (isStopped) break
                         val result = deferred.await() ?: continue
 
-                        val (_, imageUrl, fileName) = result
+                        val (pageId, imageUrl, fileName, title) = result
                         val saveFileName = when (state.namingMode) {
                             "sequential" -> {
                                 globalSeq++
                                 val ext = getFileExtension(imageUrl)
-                                "${String.format("%04d", globalSeq)}.$ext"
+                                val safeTitle = title.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50)
+                                val safeAuthor = state.author.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                                "${String.format("%04d", globalSeq)}_${safeAuthor}_${safeTitle}_${pageId}.$ext"
                             }
                             else -> fileName
                         }
 
-                        val task = PreviewItem(allTasks.size + 1, saveFileName, imageUrl)
+                        val task = PreviewItem(allTasks.size + 1, saveFileName, imageUrl, title, pageId, state.author)
                         allTasks.add(task)
                         channel.send(task)
 
@@ -370,7 +378,6 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                             it.copy(
                                 pendingTasks = it.pendingTasks + task,
                                 collectionLoaded = allTasks.size,
-                                // 动态修正估算：实际值不低于已收集数
                                 collectionTotal = it.collectionTotal.coerceAtLeast(allTasks.size)
                             )
                         }
@@ -499,6 +506,12 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             }
 
             addLog("下载完成 — 已下载: $totalDownloaded, 跳过: $totalSkipped, 失败: $totalFailed")
+
+            // 自定义编号模式：按 FA ID 匹配重排序
+            if (state.namingMode == "sequential" && !isStopped) {
+                reorderFiles(targetDir, state.author)
+            }
+
             _uiState.update {
                 it.copy(
                     isDownloading = false,
@@ -631,6 +644,18 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         return if (imgMatcher.find()) imgMatcher.group(1) else null
     }
 
+    /** 从详情页解析图片URL + 标题 */
+    private data class SubmissionInfo(val imageUrl: String, val title: String)
+
+    private fun parseSubmissionInfo(html: String): SubmissionInfo? {
+        val imageUrl = parseImageUrl(html) ?: return null
+        // 提取标题: <div class="submission-title"><h2>TITLE</h2></div>
+        val titlePattern = Pattern.compile("""submission-title[^>]*>\s*<h2[^>]*>([^<]+)</h2>""")
+        val titleMatcher = titlePattern.matcher(html)
+        val title = if (titleMatcher.find()) titleMatcher.group(1)?.trim() ?: "" else ""
+        return SubmissionInfo(imageUrl, title)
+    }
+
     private fun extractFileName(url: String): String {
         return url.substringAfterLast("/").substringBefore("?")
     }
@@ -680,6 +705,70 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     private fun getFileExtension(url: String): String {
         val name = url.substringAfterLast("/").substringBefore("?")
         return if (name.contains(".")) name.substringAfterLast(".") else "jpg"
+    }
+
+    /**
+     * 自定义编号模式重排序：按 FA ID 匹配已有文件，重新从 0001 编号。
+     * 文件名格式: 0001_author_title_FAID.ext → 按 FAID 匹配后重命名为 0001_...FAID.ext
+     */
+    private suspend fun reorderFiles(dirUri: Uri, author: String) = withContext(Dispatchers.IO) {
+        try {
+            val app = getApplication<Application>()
+            val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri) ?: return@withContext
+
+            // 收集所有匹配 FAID 格式的文件: *_FAID.ext
+            val faIdPattern = Regex("""_(\d+)\.\w+$""")
+            data class FileEntry(val faId: String, val docFile: androidx.documentfile.provider.DocumentFile)
+            val entries = mutableListOf<FileEntry>()
+
+            for (file in dirDoc.listFiles()) {
+                if (!file.isFile) continue
+                val name = file.name ?: continue
+                val match = faIdPattern.find(name)
+                if (match != null) {
+                    entries.add(FileEntry(match.groupValues[1], file))
+                }
+            }
+
+            if (entries.isEmpty()) return@withContext
+
+            // 按 FA ID 排序（保持原始顺序）
+            entries.sortBy { it.faId.toLongOrNull() ?: 0L }
+
+            addLog("重排序: 发现 ${entries.size} 个文件，开始重命名...")
+
+            // 重命名: 0001_author_title_FAID.ext
+            val safeAuthor = author.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            var seq = 0
+            var renamed = 0
+            for (entry in entries) {
+                seq++
+                val oldName = entry.docFile.name ?: continue
+                val ext = oldName.substringAfterLast(".")
+                // 提取标题部分（去掉旧序号和FAID）
+                val titlePart = oldName
+                    .removePrefix(Regex("^\\d{4}_").replace(oldName, "").let { oldName.removePrefix(oldName.take(4)) })
+                    .let { name ->
+                        // 提取 _FAID.ext 之前的部分作为标题
+                        val idx = name.lastIndexOf("_${entry.faId}")
+                        if (idx > 0) name.substring(0, idx) else ""
+                    }
+                val newName = "${String.format("%04d", seq)}_${safeAuthor}_${titlePart}_${entry.faId}.$ext"
+
+                if (oldName != newName) {
+                    try {
+                        entry.docFile.renameTo(newName)
+                        renamed++
+                    } catch (e: Exception) {
+                        addLog("  重命名失败: $oldName → $newName")
+                    }
+                }
+            }
+
+            addLog("重排序完成: 重命名 $renamed 个文件")
+        } catch (e: Exception) {
+            addLog("重排序异常: ${e.message}")
+        }
     }
 
     private suspend fun downloadToBytes(imageUrl: String): ByteArray? = withContext(Dispatchers.IO) {

@@ -672,7 +672,7 @@ fun FADownloaderScreen(
                 if (state.collectionComplete) {
                     Text("下载预览 (${state.collectionLoaded} 个文件)")
                 } else {
-                    Text("正在收集 ${state.collectionLoaded}/约${state.collectionTotal}")
+                    Text("正在收集 ${state.downloadedCount}/${state.collectionLoaded}/约${state.collectionTotal}")
                 }
             },
             text = {
