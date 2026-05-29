@@ -54,6 +54,15 @@ data class SubmissionMeta(
     val favorites: Int = 0
 )
 
+/** 网络/登录状态 */
+enum class NetworkStatus {
+    CHECKING,       // 正在检测
+    NO_COOKIE,      // 未登录（无Cookie）
+    NETWORK_DOWN,   // 网络断开（百度不通）
+    COOKIE_EXPIRED, // Cookie失效（FA不通）
+    CONNECTED       // 正常连接（显示用户名）
+}
+
 /** 预览列表中的单个下载任务 */
 data class PreviewItem(
     val seq: Int,
@@ -77,6 +86,7 @@ data class FAUiState(
     val downloadThreads: Int = 1,
     val isLoggedIn: Boolean = false,
     val username: String = "",
+    val networkStatus: NetworkStatus = NetworkStatus.CHECKING,
     val cookieExpired: Boolean = false,
     val cookieRefreshAttempts: Int = 0,
     val isDownloading: Boolean = false,
@@ -370,6 +380,50 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 isLoggedIn = cookie.isNotEmpty() && cookie.contains("a=") && cookie.contains("b="),
                 username = username.ifEmpty { it.username }
             )
+        }
+    }
+
+    /** 检查网络和登录状态：Cookie → 百度 → FA */
+    fun checkNetworkStatus() {
+        _uiState.update { it.copy(networkStatus = NetworkStatus.CHECKING) }
+        viewModelScope.launch(Dispatchers.IO) {
+            // Step 1: 检查Cookie
+            val cookie = loadCookie()
+            if (cookie.isEmpty() || !cookie.contains("a=") || !cookie.contains("b=")) {
+                _uiState.update { it.copy(networkStatus = NetworkStatus.NO_COOKIE) }
+                return@launch
+            }
+
+            // Step 2: Ping百度
+            if (!pingHost("www.baidu.com")) {
+                _uiState.update { it.copy(networkStatus = NetworkStatus.NETWORK_DOWN) }
+                return@launch
+            }
+
+            // Step 3: Ping FA
+            if (!pingHost("www.furaffinity.net")) {
+                _uiState.update { it.copy(networkStatus = NetworkStatus.COOKIE_EXPIRED) }
+                return@launch
+            }
+
+            // Step 4: 获取用户名
+            val username = prefs.getString("username", "") ?: ""
+            _uiState.update {
+                it.copy(
+                    networkStatus = NetworkStatus.CONNECTED,
+                    username = username.ifEmpty { it.username }
+                )
+            }
+        }
+    }
+
+    private fun pingHost(host: String): Boolean {
+        return try {
+            val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -W 3 $host")
+            val exitCode = process.waitFor()
+            exitCode == 0
+        } catch (_: Exception) {
+            false
         }
     }
 

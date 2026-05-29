@@ -63,9 +63,10 @@ fun FADownloaderScreen(
         }
     }
 
-    // 刷新认证状态（从登录页返回时同步 Cookie 和用户名）
+    // 刷新认证状态并检查网络连接
     LaunchedEffect(Unit) {
         viewModel.refreshAuth()
+        viewModel.checkNetworkStatus()
     }
 
     // Trigger silent cookie refresh when cookie is expired and attempts < 3
@@ -154,30 +155,68 @@ fun FADownloaderScreen(
                     }
                 },
                 actions = {
-                    // Login status — show username when logged in, login button when not
-                    if (state.isLoggedIn) {
-                        TextButton(onClick = onLogin) {
-                            Icon(
-                                Icons.Default.Person,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                state.username.ifEmpty { "已登录" },
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                    // 网络/登录状态显示
+                    when (state.networkStatus) {
+                        NetworkStatus.CHECKING -> {
+                            TextButton(onClick = { viewModel.checkNetworkStatus() }) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("检测中...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
-                    } else {
-                        TextButton(onClick = onLogin) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.Login,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("登录")
+                        NetworkStatus.NO_COOKIE -> {
+                            TextButton(onClick = onLogin) {
+                                Icon(
+                                    Icons.Default.Warning,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("未登录", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                        NetworkStatus.NETWORK_DOWN -> {
+                            TextButton(onClick = { viewModel.checkNetworkStatus() }) {
+                                Icon(
+                                    Icons.Default.CloudOff,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("网络断开", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                        NetworkStatus.COOKIE_EXPIRED -> {
+                            TextButton(onClick = onLogin) {
+                                Icon(
+                                    Icons.Default.VpnKeyOff,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Cookie失效", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                        NetworkStatus.CONNECTED -> {
+                            TextButton(onClick = onLogin) {
+                                Icon(
+                                    Icons.Default.Person,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    state.username.ifEmpty { "已登录" },
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
 
