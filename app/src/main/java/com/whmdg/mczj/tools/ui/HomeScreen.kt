@@ -126,6 +126,17 @@ fun NavigateGate(
     var noPermModule by remember { mutableStateOf<ModuleId?>(null) }
     var toastMsg by remember { mutableStateOf<String?>(null) }
 
+    // DEBUG: 认证成功后的调试弹窗状态
+    data class DebugInfo(
+        val keyId: String,
+        val features: Set<Feature>,
+        val neededFeature: Feature,
+        val hasPerm: Boolean,
+        val authState: String,
+        val targetScreen: Screen
+    )
+    var debugInfo by remember { mutableStateOf<DebugInfo?>(null) }
+
     LaunchedEffect(toastMsg) {
         toastMsg?.let {
             Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show()
@@ -135,9 +146,12 @@ fun NavigateGate(
 
     fun navigateToModule(moduleId: ModuleId) {
         val entry = MODULE_REGISTRY[moduleId] ?: return
-        if (PermissionManager.has(entry.feature)) {
+        val hasPerm = PermissionManager.has(entry.feature)
+        val state = PermissionManager.state.value
+        android.util.Log.d("NavGate", "navigateToModule: $moduleId, feature=${entry.feature}, hasPerm=$hasPerm, state=$state")
+        if (hasPerm) {
             onNavigate(entry.screen)
-        } else if (authState is PermissionManager.AuthState.Locked) {
+        } else if (state is PermissionManager.AuthState.Locked) {
             pendingModule = moduleId
         } else {
             noPermModule = moduleId
@@ -154,15 +168,20 @@ fun NavigateGate(
             onVerify = { pw ->
                 val res = PermissionManager.tryAuthenticate(ctx, pw)
                 if (res.isSuccess) {
-                    if (PermissionManager.has(entry.feature)) {
-                        onNavigate(entry.screen)
-                        pendingModule = null
-                        true
-                    } else {
-                        pendingModule = null
-                        toastMsg = "当前密钥无此模块权限"
-                        true
-                    }
+                    val features = res.getOrNull() ?: emptySet()
+                    val hasPerm = PermissionManager.has(entry.feature)
+                    val state = PermissionManager.state.value
+                    val keyId = (state as? PermissionManager.AuthState.Authed)?.keyId ?: "?"
+                    pendingModule = null
+                    debugInfo = DebugInfo(
+                        keyId = keyId,
+                        features = features,
+                        neededFeature = entry.feature,
+                        hasPerm = hasPerm,
+                        authState = state.toString(),
+                        targetScreen = entry.screen
+                    )
+                    true
                 } else {
                     false
                 }
@@ -176,6 +195,37 @@ fun NavigateGate(
         NoPermissionDialog(
             feature = entry.feature,
             onDismiss = { noPermModule = null }
+        )
+    }
+
+    // DEBUG: 认证成功后的调试弹窗
+    debugInfo?.let { info ->
+        AlertDialog(
+            onDismissRequest = { debugInfo = null },
+            title = { Text("密钥已激活") },
+            text = {
+                Column {
+                    Text("当前已激活权限：", style = MaterialTheme.typography.titleSmall)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("keyId = \"${info.keyId}\"")
+                    Text("features = ${info.features.joinToString { it.name }}")
+                    Text("neededFeature = ${info.neededFeature.name}")
+                    Text("hasPerm = ${info.hasPerm}")
+                    Text("authState = ${info.authState}")
+                    Text("targetScreen = ${info.targetScreen::class.simpleName}")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val screen = info.targetScreen
+                    debugInfo = null
+                    if (info.hasPerm) {
+                        onNavigate(screen)
+                    }
+                }) {
+                    Text(if (info.hasPerm) "继续进入" else "确定")
+                }
+            }
         )
     }
 }
