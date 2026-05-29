@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
 import java.io.InputStreamReader
+import java.net.CookieManager
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
@@ -733,28 +734,35 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         _uiState.update { it.copy(logs = it.logs + DownloadLog(message)) }
     }
 
-    // ── HTTP ──
+    // ── HTTP（参考 furaffinity-dl: 统一 session，自动带 Cookie） ──
+
+    private val cookieManager = CookieManager()
+
+    /** 统一 HTTP GET —— 所有请求都通过这里，自动带 Cookie（类似 furaffinity-dl 的 session.get） */
+    private fun httpGet(url: String, cookie: String): HttpURLConnection {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.setRequestProperty("User-Agent", USER_AGENT)
+        conn.setRequestProperty("Referer", REFERER)
+        conn.setRequestProperty("Accept", "*/*")
+        // 自动携带 Cookie（参考 furaffinity-dl: session.cookies 自动附加）
+        if (cookie.isNotEmpty()) {
+            conn.setRequestProperty("Cookie", cookie)
+        }
+        conn.connectTimeout = CONNECT_TIMEOUT
+        conn.readTimeout = READ_TIMEOUT
+        return conn
+    }
 
     private suspend fun fetchHtml(url: String, cookie: String, silent: Boolean = false): String? = withContext(Dispatchers.IO) {
         try {
-            val conn = URL(url).openConnection() as HttpURLConnection
-            conn.requestMethod = "GET"
-            conn.setRequestProperty("User-Agent", USER_AGENT)
-            conn.setRequestProperty("Referer", REFERER)
-            conn.setRequestProperty("Accept", "*/*")
-            if (cookie.isNotEmpty()) {
-                conn.setRequestProperty("Cookie", cookie)
-            }
-            conn.connectTimeout = CONNECT_TIMEOUT
-            conn.readTimeout = READ_TIMEOUT
-
+            val conn = httpGet(url, cookie)
             val code = conn.responseCode
             if (code !in 200..299) {
                 if (!silent) addLog("  HTTP $code: $url")
                 conn.disconnect()
                 return@withContext null
             }
-
             val reader = BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8))
             val html = reader.readText()
             reader.close()
@@ -971,25 +979,16 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    /** 下载图片（参考 furaffinity-dl 的 download_file: 用同一个 session.get） */
     private suspend fun downloadToBytes(imageUrl: String, cookie: String = ""): ByteArray? = withContext(Dispatchers.IO) {
         try {
-            val conn = URL(imageUrl).openConnection() as HttpURLConnection
-            conn.requestMethod = "GET"
-            conn.setRequestProperty("User-Agent", USER_AGENT)
-            conn.setRequestProperty("Referer", REFERER)
-            if (cookie.isNotEmpty()) {
-                conn.setRequestProperty("Cookie", cookie)
-            }
-            conn.connectTimeout = CONNECT_TIMEOUT
-            conn.readTimeout = READ_TIMEOUT
-
+            val conn = httpGet(imageUrl, cookie)
             val code = conn.responseCode
             if (code != 200) {
                 addLog("  HTTP $code: $imageUrl")
                 conn.disconnect()
                 return@withContext null
             }
-
             val buffer = ByteArrayOutputStream()
             conn.inputStream.use { input ->
                 buffer.use { output ->
@@ -998,7 +997,8 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             }
             conn.disconnect()
             buffer.toByteArray()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            addLog("  下载异常: ${e.message}")
             null
         }
     }
