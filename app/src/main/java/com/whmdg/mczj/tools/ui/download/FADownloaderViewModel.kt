@@ -1523,7 +1523,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    // ── 系列检测：同名作品按物种区分 ──
+    // ── 系列检测：同名作品按标题前缀分组 ──
 
     data class SeriesDetectionResult(
         val updatedTasks: List<PreviewItem>,
@@ -1532,9 +1532,9 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     )
 
     /**
-     * 检测同名作品并按物种区分系列。
-     * 当发现多个作品标题相同时，通过物种字段区分不同系列，
-     * 并在文件名后添加 _物种 后缀。
+     * 检测同名作品并按系列区分。
+     * 当发现多个作品标题相同时，去掉标题末尾5个字符作为系列前缀，
+     * 按FAID排序分为系列A（旧）和系列B（新），添加 _A/_B 后缀。
      */
     private fun detectAndResolveSeries(tasks: List<PreviewItem>, author: String): SeriesDetectionResult {
         // 按标题分组（忽略大小写和前后空格）
@@ -1551,41 +1551,77 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         var duplicateCount = 0
         val updatedTasks = tasks.toMutableList()
 
+        // 系列前缀 -> 系列标签列表（A, B, C...）
+        val seriesPrefixMap = mutableMapOf<String, MutableList<String>>()
+
         for ((_, group) in duplicateTitles) {
             duplicateCount++
 
-            // 收集这个标题组中所有出现的物种
-            val speciesMap = mutableMapOf<String, MutableList<Int>>() // species -> task indices
-            for (task in group) {
-                val species = task.meta.species.trim()
-                if (species.isNotEmpty()) {
-                    speciesMap.getOrPut(species) { mutableListOf() }.add(task.seq - 1)
-                }
-            }
+            // 获取标题并去掉末尾5个字符作为系列前缀
+            val title = group.first().title.trim()
+            val seriesPrefix = if (title.length > 5) title.dropLast(5).trim() else title
 
-            // 如果物种数 <= 1，无法区分，跳过
-            if (speciesMap.size <= 1) {
-                addLog("  同名作品「${group.first().title}」物种相同，无法区分系列")
-                continue
-            }
+            // 按FAID排序（旧的在前）
+            val sortedGroup = group.sortedBy { it.faId.toLongOrNull() ?: 0L }
 
-            addLog("  同名作品「${group.first().title}」发现 ${speciesMap.size} 个系列: ${speciesMap.keys.joinToString(", ")}")
+            // 检查这个系列前缀是否已存在
+            val existingLabels = seriesPrefixMap[seriesPrefix]
+            if (existingLabels == null) {
+                // 新系列：创建A和B
+                val labels = mutableListOf("A", "B")
+                seriesPrefixMap[seriesPrefix] = labels
 
-            // 为每个作品添加物种后缀
-            for ((species, indices) in speciesMap) {
-                val safeSpecies = species.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(20)
-                for (index in indices) {
-                    val task = updatedTasks[index]
-                    val oldName = task.fileName
-                    val ext = oldName.substringAfterLast(".")
-                    val nameWithoutExt = oldName.substringBeforeLast(".")
+                // 系列A：旧作品（前一半）
+                val halfSize = (sortedGroup.size + 1) / 2
+                val seriesA = sortedGroup.take(halfSize)
+                val seriesB = sortedGroup.drop(halfSize)
 
-                    // 检查是否已经有物种后缀
-                    if (!nameWithoutExt.endsWith("_$safeSpecies")) {
-                        val newName = "${nameWithoutExt}_$safeSpecies.$ext"
-                        updatedTasks[index] = task.copy(fileName = newName)
+                addLog("  同名作品「$title」发现新系列，前缀「$seriesPrefix」")
+
+                // 重命名系列A
+                for (task in seriesA) {
+                    val index = updatedTasks.indexOfFirst { it.faId == task.faId }
+                    if (index >= 0) {
+                        val oldName = updatedTasks[index].fileName
+                        val ext = oldName.substringAfterLast(".")
+                        val nameWithoutExt = oldName.substringBeforeLast(".")
+                        val newName = "${nameWithoutExt}_A.$ext"
+                        updatedTasks[index] = updatedTasks[index].copy(fileName = newName)
                         renamedCount++
-                        addLog("    重命名: $oldName → $newName")
+                        addLog("    系列A: $oldName → $newName")
+                    }
+                }
+
+                // 重命名系列B
+                for (task in seriesB) {
+                    val index = updatedTasks.indexOfFirst { it.faId == task.faId }
+                    if (index >= 0) {
+                        val oldName = updatedTasks[index].fileName
+                        val ext = oldName.substringAfterLast(".")
+                        val nameWithoutExt = oldName.substringBeforeLast(".")
+                        val newName = "${nameWithoutExt}_B.$ext"
+                        updatedTasks[index] = updatedTasks[index].copy(fileName = newName)
+                        renamedCount++
+                        addLog("    系列B: $oldName → $newName")
+                    }
+                }
+            } else {
+                // 已有系列：添加新标签（C, D, E...）
+                val nextLabel = ('A' + existingLabels.size).toString()
+                existingLabels.add(nextLabel)
+
+                addLog("  同名作品「$title」归入已有系列，新增系列$nextLabel")
+
+                for (task in sortedGroup) {
+                    val index = updatedTasks.indexOfFirst { it.faId == task.faId }
+                    if (index >= 0) {
+                        val oldName = updatedTasks[index].fileName
+                        val ext = oldName.substringAfterLast(".")
+                        val nameWithoutExt = oldName.substringBeforeLast(".")
+                        val newName = "${nameWithoutExt}_$nextLabel.$ext"
+                        updatedTasks[index] = updatedTasks[index].copy(fileName = newName)
+                        renamedCount++
+                        addLog("    系列$nextLabel: $oldName → $newName")
                     }
                 }
             }
