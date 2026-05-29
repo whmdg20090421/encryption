@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.auth.Feature
 import com.whmdg.mczj.tools.auth.SecurityEnforcer
 import kotlinx.coroutines.Dispatchers
@@ -82,7 +83,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     /** 收集→下载的生产者-消费者通道 */
     private var downloadChannel: Channel<PreviewItem>? = null
 
-    private val prefs = application.getSharedPreferences("fa_download_auth", Context.MODE_PRIVATE)
+    private val prefs = application.getSharedPreferences(AppDataPaths.PREFS_BATCH_DOWNLOADER, Context.MODE_PRIVATE)
     private val cachePrefs = application.getSharedPreferences("fa_download_cache", Context.MODE_PRIVATE)
 
     companion object {
@@ -94,7 +95,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         private const val MAX_COOKIE_REFRESH_ATTEMPTS = 3
 
         fun saveCookieStatic(context: Context, cookie: String, username: String = "") {
-            context.getSharedPreferences("fa_download_auth", Context.MODE_PRIVATE)
+            context.getSharedPreferences(AppDataPaths.PREFS_BATCH_DOWNLOADER, Context.MODE_PRIVATE)
                 .edit()
                 .putString("cookie", cookie)
                 .putString("username", username)
@@ -105,17 +106,27 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     init {
         val cookie = prefs.getString("cookie", "") ?: ""
         val username = prefs.getString("username", "") ?: ""
+        val savedDirUri = prefs.getString("save_dir_uri", null)
+        val savedDirPath = prefs.getString("save_dir_path", "") ?: ""
         _uiState.update {
             it.copy(
                 isLoggedIn = cookie.isNotEmpty() && cookie.contains("a=") && cookie.contains("b="),
-                username = username
+                username = username,
+                saveDir = savedDirUri?.let { uri -> Uri.parse(uri) },
+                saveDirPath = savedDirPath
             )
         }
     }
 
     fun updateAuthor(author: String) = _uiState.update { it.copy(author = author) }
     fun updateType(type: String) = _uiState.update { it.copy(downloadType = type) }
-    fun updateSaveDir(uri: Uri, path: String) = _uiState.update { it.copy(saveDir = uri, saveDirPath = path) }
+    fun updateSaveDir(uri: Uri, path: String) {
+        prefs.edit()
+            .putString("save_dir_uri", uri.toString())
+            .putString("save_dir_path", path)
+            .apply()
+        _uiState.update { it.copy(saveDir = uri, saveDirPath = path) }
+    }
     fun updateStartPage(page: String) = _uiState.update { it.copy(startPage = page) }
     fun updateMaxDownload(max: String) = _uiState.update { it.copy(maxDownload = max) }
     fun updateSkipExisting(skip: Boolean) = _uiState.update { it.copy(skipExisting = skip) }
@@ -151,6 +162,18 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun loadCookie(): String = prefs.getString("cookie", "") ?: ""
+
+    /** 从 SharedPreferences 刷新认证状态（从登录页返回时调用） */
+    fun refreshAuth() {
+        val cookie = prefs.getString("cookie", "") ?: ""
+        val username = prefs.getString("username", "") ?: ""
+        _uiState.update {
+            it.copy(
+                isLoggedIn = cookie.isNotEmpty() && cookie.contains("a=") && cookie.contains("b="),
+                username = username.ifEmpty { it.username }
+            )
+        }
+    }
 
     fun markCookieExpired() {
         val currentAttempts = _uiState.value.cookieRefreshAttempts
@@ -279,45 +302,52 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                     }
                     consecutiveEmpty = 0
 
-                    // First page done → estimate total
+                    // First page done → 用分页链接估算总页数
                     if (currentPage == startPage) {
                         firstPageCount = pages.size
+                        val maxPageNum = parseMaxPage(html)
                         val estimatedTotal = if (maxDownload > 0) {
-                            minOf(firstPageCount * 20, maxDownload) // rough estimate
+                            minOf(firstPageCount * maxPageNum, maxDownload)
                         } else {
-                            firstPageCount * 20 // assume ~20 pages as initial estimate
+                            firstPageCount * maxPageNum
                         }
                         _uiState.update { it.copy(collectionTotal = estimatedTotal) }
+                        addLog("每页 ~$firstPageCount 个，共 $maxPageNum 页，预估 $estimatedTotal 个任务")
                     }
+
+                    // 并行抓取详情页，复用 downloadThreads 作为并发数
+                    val semaphore = Semaphore(state.downloadThreads)
+                    val deferreds = mutableListOf<kotlinx.coroutines.Deferred<Triple<String, String, String>?>>()
 
                     for (pageUrl in pages) {
                         if (isStopped) break
                         if (maxDownload > 0 && allTasks.size >= maxDownload) break
 
-                        val pageId = extractPageId(pageUrl)
-                        val imageUrl: String
-                        val fileName: String
-
-                        val cachedUrl = if (state.useCache) getCachedUrl(pageId) else null
-                        if (cachedUrl != null) {
-                            imageUrl = cachedUrl
-                            fileName = extractFileName(cachedUrl)
-                        } else {
-                            val detailHtml = fetchHtml(pageUrl, cookie)
-                            if (detailHtml == null) {
-                                addLog("  获取详情页失败: $pageUrl")
-                                continue
+                        val deferred = async {
+                            semaphore.withPermit {
+                                val pageId = extractPageId(pageUrl)
+                                val cachedUrl = if (state.useCache) getCachedUrl(pageId) else null
+                                if (cachedUrl != null) {
+                                    Triple(pageId, cachedUrl, extractFileName(cachedUrl))
+                                } else {
+                                    val detailHtml = fetchHtml(pageUrl, cookie)
+                                    if (detailHtml == null) return@async null
+                                    val parsedUrl = parseImageUrl(detailHtml)
+                                    if (parsedUrl == null) return@async null
+                                    if (state.useCache) cacheUrl(pageId, parsedUrl)
+                                    Triple(pageId, parsedUrl, extractFileName(parsedUrl))
+                                }
                             }
-                            val parsedUrl = parseImageUrl(detailHtml)
-                            if (parsedUrl == null) {
-                                addLog("  无法解析图片地址: $pageUrl")
-                                continue
-                            }
-                            imageUrl = parsedUrl
-                            fileName = extractFileName(parsedUrl)
-                            if (state.useCache) cacheUrl(pageId, imageUrl)
                         }
+                        deferreds.add(deferred)
+                    }
 
+                    // 收集结果并更新进度
+                    for (deferred in deferreds) {
+                        if (isStopped) break
+                        val result = deferred.await() ?: continue
+
+                        val (_, imageUrl, fileName) = result
                         val saveFileName = when (state.namingMode) {
                             "sequential" -> {
                                 globalSeq++
@@ -334,22 +364,11 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                         _uiState.update {
                             it.copy(
                                 pendingTasks = it.pendingTasks + task,
-                                collectionLoaded = allTasks.size
+                                collectionLoaded = allTasks.size,
+                                // 动态修正估算：实际值不低于已收集数
+                                collectionTotal = it.collectionTotal.coerceAtLeast(allTasks.size)
                             )
                         }
-                    }
-
-                    // Update estimated total as we discover more pages
-                    if (firstPageCount > 0 && currentPage > startPage) {
-                        val pagesProcessed = currentPage - startPage + 1
-                        val refinedTotal = if (maxDownload > 0) {
-                            minOf(firstPageCount * pagesProcessed, maxDownload)
-                        } else {
-                            // If we've processed multiple pages, refine estimate
-                            val avgPerPage = allTasks.size.toDouble() / pagesProcessed
-                            (avgPerPage * pagesProcessed * 1.5).toInt().coerceAtLeast(allTasks.size)
-                        }
-                        _uiState.update { it.copy(collectionTotal = refinedTotal) }
                     }
 
                     addLog("第 $currentPage 页: 已收集 ${allTasks.size} 个任务")
@@ -526,7 +545,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     // ── HTTP ──
 
-    private suspend fun fetchHtml(url: String, cookie: String): String? = withContext(Dispatchers.IO) {
+    private suspend fun fetchHtml(url: String, cookie: String, silent: Boolean = false): String? = withContext(Dispatchers.IO) {
         try {
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
@@ -539,7 +558,10 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             conn.connectTimeout = CONNECT_TIMEOUT
             conn.readTimeout = READ_TIMEOUT
 
-            if (conn.responseCode == 503) {
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                if (!silent) addLog("  HTTP $code: $url")
+                conn.disconnect()
                 return@withContext null
             }
 
@@ -549,6 +571,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             conn.disconnect()
             html
         } catch (e: Exception) {
+            if (!silent) addLog("  请求异常: ${e.message}")
             null
         }
     }
@@ -563,6 +586,19 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             pages.add("$FA_BASE/view/${matcher.group(1)}/")
         }
         return pages.distinct()
+    }
+
+    /** 从画廊页面解析最大页码（如存在分页导航） */
+    private fun parseMaxPage(html: String): Int {
+        // 匹配 /gallery/username/123/ 或 /scraps/username/123/ 格式的分页链接
+        val pattern = Pattern.compile("""href="/(?:gallery|scraps)/[^/]+/(\d+)/"""")
+        val matcher = pattern.matcher(html)
+        var maxPage = 1
+        while (matcher.find()) {
+            val page = matcher.group(1)?.toIntOrNull() ?: continue
+            if (page > maxPage) maxPage = page
+        }
+        return maxPage
     }
 
     private fun parseImageUrl(html: String): String? {

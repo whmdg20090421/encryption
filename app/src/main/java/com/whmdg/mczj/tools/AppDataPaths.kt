@@ -49,6 +49,13 @@ object AppDataPaths {
         return dir
     }
 
+    /** 批量下载器模块目录 */
+    fun batchDownloader(context: Context): File {
+        val dir = File(root(context), "批量下载器")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     // ── SharedPreferences 名称常量 ──
 
     /** 文件管理器 SharedPreferences（同一个界面的设置存在同一个 XML） */
@@ -59,4 +66,7 @@ object AppDataPaths {
 
     /** 加密设置 SharedPreferences */
     const val PREFS_ENCRYPTION = "encryption_settings"
+
+    /** 批量下载器 SharedPreferences */
+    const val PREFS_BATCH_DOWNLOADER = "batch_downloader_prefs"
 }

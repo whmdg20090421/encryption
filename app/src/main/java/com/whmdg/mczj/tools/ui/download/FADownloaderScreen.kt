@@ -60,6 +60,11 @@ fun FADownloaderScreen(
         }
     }
 
+    // 刷新认证状态（从登录页返回时同步 Cookie 和用户名）
+    LaunchedEffect(Unit) {
+        viewModel.refreshAuth()
+    }
+
     // Trigger silent cookie refresh when cookie is expired and attempts < 3
     LaunchedEffect(state.cookieExpired, state.cookieRefreshAttempts) {
         if (state.cookieExpired && viewModel.shouldAttemptCookieRefresh()) {
@@ -646,7 +651,7 @@ fun FADownloaderScreen(
                 if (state.collectionComplete) {
                     Text("下载预览 (${state.collectionLoaded} 个文件)")
                 } else {
-                    Text("正在收集 ${state.collectionLoaded}/${state.collectionTotal}")
+                    Text("正在收集 ${state.collectionLoaded}/约${state.collectionTotal}")
                 }
             },
             text = {
