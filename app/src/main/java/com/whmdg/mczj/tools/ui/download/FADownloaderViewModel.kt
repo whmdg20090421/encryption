@@ -23,12 +23,11 @@ import java.io.InputStreamReader
 import java.net.CookieManager
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
@@ -611,70 +610,65 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             }
             addLog("保存目录: ${state.author}/${if (state.downloadType == "scraps") "scraps/" else ""}")
 
-            // Producer-consumer: read from channel, download in parallel, save in order
-            val buffer = HashMap<Int, ByteArray?>()
-            val fileNameMap = ConcurrentHashMap<Int, String>()
+            // 每个任务独立：下载→保存→立即输出日志
             val semaphore = Semaphore(threadCount)
+            val saveMutex = Mutex()
             var nextSeq = 1
             var totalDownloaded = 0
             var totalSkipped = 0
             var totalFailed = 0
-            var totalReceived = 0
+            var totalTasks = 0
 
-            // Consume from channel: for each task, spawn a download coroutine
-            val dlJob = coroutineScope {
-                val jobs = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
+            val jobs = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
 
-                for (task in ch) {
-                    if (isStopped) break
-                    totalReceived++
-                    fileNameMap[task.seq] = task.fileName
+            for (task in ch) {
+                if (isStopped) break
+                totalTasks++
 
-                    val deferred = async {
-                        semaphore.withPermit {
-                            if (isStopped) return@async
-                            if (state.skipExisting && state.namingMode == "original") {
-                                if (checkFileExists(targetDir, task.fileName)) {
-                                    buffer[task.seq] = null // skipped
-                                    return@async
-                                }
+                val deferred = async {
+                    semaphore.withPermit {
+                        if (isStopped) return@async
+                        if (state.skipExisting && state.namingMode == "original") {
+                            if (checkFileExists(targetDir, task.fileName)) {
+                                addLog("  ⏭ 跳过: ${task.fileName}")
+                                saveMutex.lock()
+                                totalSkipped++
+                                _uiState.update { it.copy(skippedCount = totalSkipped) }
+                                nextSeq++
+                                saveMutex.unlock()
+                                return@async
                             }
-                            val data = downloadToBytes(task.imageUrl, cookie)
-                            buffer[task.seq] = data
                         }
+                        val data = downloadToBytes(task.imageUrl, cookie)
+                        if (data == null) {
+                            saveMutex.lock()
+                            totalFailed++
+                            addLog("  ✗ 下载失败: ${task.fileName}")
+                            _uiState.update { it.copy(failedCount = totalFailed) }
+                            nextSeq++
+                            saveMutex.unlock()
+                            return@async
+                        }
+                        // 保存并立即输出日志
+                        saveMutex.lock()
+                        if (saveToFile(targetDir, task.fileName, data)) {
+                            totalDownloaded++
+                            addLog("  ✓ ${task.fileName}")
+                            _uiState.update { it.copy(downloadedCount = totalDownloaded) }
+                        } else {
+                            totalFailed++
+                            addLog("  ✗ 保存失败: ${task.fileName}")
+                            _uiState.update { it.copy(failedCount = totalFailed) }
+                        }
+                        _uiState.update { it.copy(currentProgress = nextSeq.toFloat() / totalTasks.coerceAtLeast(1)) }
+                        nextSeq++
+                        saveMutex.unlock()
                     }
-                    jobs.add(deferred)
                 }
-
-                jobs
+                jobs.add(deferred)
             }
 
-            // Wait for all downloads to finish
-            dlJob.awaitAll()
-
-            // Ordered save: drain buffer in sequence order
-            while (nextSeq <= totalReceived && !isStopped) {
-                if (buffer.containsKey(nextSeq)) {
-                    val data = buffer.remove(nextSeq)
-                    val fileName = fileNameMap[nextSeq] ?: "unknown"
-                    if (data == null) {
-                        totalSkipped++
-                        _uiState.update { it.copy(skippedCount = totalSkipped) }
-                    } else if (saveToFile(targetDir, fileName, data)) {
-                        totalDownloaded++
-                        addLog("  ✓ $fileName")
-                        _uiState.update { it.copy(downloadedCount = totalDownloaded) }
-                    } else {
-                        totalFailed++
-                        addLog("  ✗ 保存失败: $fileName")
-                        _uiState.update { it.copy(failedCount = totalFailed) }
-                    }
-                    _uiState.update { it.copy(currentProgress = nextSeq.toFloat() / totalReceived.coerceAtLeast(1)) }
-                    nextSeq++
-                } else {
-                    delay(50)
-                }
-            }
+            jobs.awaitAll()
 
             addLog("下载完成 — 已下载: $totalDownloaded, 跳过: $totalSkipped, 失败: $totalFailed")
 
@@ -891,9 +885,11 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         val app = getApplication<Application>()
         val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, parentUri)
             ?: return parentUri
-        val existing = parentDoc.findFile(name)
-        if (existing != null && existing.exists() && existing.isDirectory) {
-            return existing.uri
+        // 大小写不敏感匹配：遍历已有文件夹，忽略大小写比较
+        for (file in parentDoc.listFiles()) {
+            if (file.isDirectory && file.name?.equals(name, ignoreCase = true) == true) {
+                return file.uri
+            }
         }
         val newDir = parentDoc.createDirectory(name)
         return newDir?.uri ?: parentUri
