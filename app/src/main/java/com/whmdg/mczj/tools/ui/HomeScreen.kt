@@ -62,6 +62,7 @@ import com.whmdg.mczj.tools.auth.Feature
 import com.whmdg.mczj.tools.auth.NoPermissionDialog
 import com.whmdg.mczj.tools.auth.PasswordDialog
 import com.whmdg.mczj.tools.auth.PermissionManager
+import androidx.compose.ui.draw.alpha
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -146,12 +147,9 @@ fun NavigateGate(
 
     fun navigateToModule(moduleId: ModuleId) {
         val entry = MODULE_REGISTRY[moduleId] ?: return
-        val hasPerm = PermissionManager.has(entry.feature)
-        val state = PermissionManager.state.value
-        android.util.Log.d("NavGate", "navigateToModule: $moduleId, feature=${entry.feature}, hasPerm=$hasPerm, state=$state")
-        if (hasPerm) {
+        if (PermissionManager.has(entry.feature)) {
             onNavigate(entry.screen)
-        } else if (state is PermissionManager.AuthState.Locked) {
+        } else if (PermissionManager.state.value is PermissionManager.AuthState.Locked) {
             pendingModule = moduleId
         } else {
             noPermModule = moduleId
@@ -525,6 +523,7 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
                     title = entry.title,
                     subtitle = entry.subtitle,
                     icon = entry.icon,
+                    enabled = PermissionManager.has(entry.feature),
                     onClick = { navigateToModule(moduleId) }
                 )
             }
@@ -1234,6 +1233,7 @@ fun SettingsTab(navigateToModule: (ModuleId) -> Unit, onNavigate: (Screen) -> Un
                 title = secEntry.title,
                 subtitle = secEntry.subtitle,
                 icon = secEntry.icon,
+                enabled = PermissionManager.has(secEntry.feature),
                 onClick = { navigateToModule(ModuleId.SECURITY) }
             )
             CompactSettingsItem(
@@ -1290,20 +1290,30 @@ private fun CompactSettingsItem(
     title: String,
     subtitle: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    enabled: Boolean = true
 ) {
+    val alpha = if (enabled) 1f else 0.5f
+    val iconTint = if (enabled) MaterialTheme.colorScheme.primary
+                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    val textColor = if (enabled) Color.Unspecified
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    val subtitleColor = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
             .clickable(onClick = onClick)
+            .alpha(alpha)
             .padding(vertical = 12.dp, horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
+            tint = iconTint,
             modifier = Modifier.size(20.dp)
         )
         Spacer(modifier = Modifier.width(12.dp))
@@ -1312,13 +1322,14 @@ private fun CompactSettingsItem(
                 text = title,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
+                color = textColor,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = subtitleColor,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
@@ -1326,7 +1337,8 @@ private fun CompactSettingsItem(
         Icon(
             imageVector = Icons.Default.ChevronRight,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
+                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
             modifier = Modifier.size(16.dp)
         )
     }
