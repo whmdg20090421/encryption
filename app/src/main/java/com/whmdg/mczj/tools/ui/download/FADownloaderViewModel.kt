@@ -36,14 +36,33 @@ data class DownloadLog(val message: String, val timestamp: Long = System.current
 
 enum class DirConflictAction { RENAME, MERGE, DELETE }
 
+/** 作品元数据（参考 furaffinity-dl） */
+data class SubmissionMeta(
+    val faId: String = "",
+    val imageUrl: String = "",
+    val fileName: String = "",
+    val title: String = "",
+    val author: String = "",
+    val date: String = "",
+    val description: String = "",
+    val tags: List<String> = emptyList(),
+    val category: String = "",
+    val theme: String = "",
+    val species: String = "",
+    val rating: String = "",
+    val views: Int = 0,
+    val favorites: Int = 0
+)
+
 /** 预览列表中的单个下载任务 */
 data class PreviewItem(
     val seq: Int,
     val fileName: String,
     val imageUrl: String,
-    val title: String = "",      // 作品标题
-    val faId: String = "",       // FA 作品编号
-    val author: String = ""      // 作者名
+    val title: String = "",
+    val faId: String = "",
+    val author: String = "",
+    val meta: SubmissionMeta = SubmissionMeta()
 )
 
 data class FAUiState(
@@ -55,7 +74,6 @@ data class FAUiState(
     val maxDownload: String = "0",
     val skipExisting: Boolean = true,
     val useCache: Boolean = true,
-    val namingMode: String = "original",
     val downloadThreads: Int = 1,
     val isLoggedIn: Boolean = false,
     val username: String = "",
@@ -135,7 +153,6 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         val username = prefs.getString("username", "") ?: ""
         val savedDirUri = prefs.getString("save_dir_uri", null)
         val savedDirPath = prefs.getString("save_dir_path", "") ?: ""
-        val savedNamingMode = prefs.getString("naming_mode", "original") ?: "original"
         val savedSkipExisting = prefs.getBoolean("skip_existing", true)
         val savedThreads = prefs.getInt("download_threads", 1)
         _uiState.update {
@@ -144,7 +161,6 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 username = username,
                 saveDir = savedDirUri?.let { uri -> Uri.parse(uri) },
                 saveDirPath = savedDirPath,
-                namingMode = savedNamingMode,
                 skipExisting = savedSkipExisting,
                 downloadThreads = savedThreads
             )
@@ -167,10 +183,6 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         _uiState.update { it.copy(skipExisting = skip) }
     }
     fun updateUseCache(use: Boolean) = _uiState.update { it.copy(useCache = use) }
-    fun updateNamingMode(mode: String) {
-        prefs.edit().putString("naming_mode", mode).apply()
-        _uiState.update { it.copy(namingMode = mode) }
-    }
     fun updateDownloadThreads(threads: Int) {
         val t = threads.coerceIn(1, 4)
         prefs.edit().putInt("download_threads", t).apply()
@@ -512,7 +524,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                     }
 
                     // 并行抓取详情页，复用 downloadThreads 作为并发数
-                    data class DetailResult(val pageId: String, val imageUrl: String, val fileName: String, val title: String)
+                    data class DetailResult(val pageId: String, val imageUrl: String, val fileName: String, val title: String, val meta: SubmissionMeta = SubmissionMeta())
                     val semaphore = Semaphore(state.downloadThreads)
                     val deferreds = mutableListOf<kotlinx.coroutines.Deferred<DetailResult?>>()
                     val seenPageIds = mutableSetOf<String>()  // 去重
@@ -528,19 +540,19 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                             semaphore.withPermit {
                                 val cachedUrl = if (state.useCache) getCachedUrl(state.author, pageId) else null
                                 if (cachedUrl != null) {
-                                    // 缓存命中：仍需获取标题（sequential 命名依赖标题）
-                                    val title = if (state.namingMode == "sequential") {
+                                    // 缓存命中：仍需获取元数据（命名格式依赖标题）
+                                    val meta = run {
                                         val detailHtml = fetchHtml(pageUrl, cookie)
-                                        if (detailHtml != null) parseSubmissionInfo(detailHtml)?.title ?: "" else ""
-                                    } else ""
-                                    DetailResult(pageId, cachedUrl, extractFileName(cachedUrl), title)
+                                        if (detailHtml != null) parseSubmissionInfo(detailHtml) else null
+                                    }
+                                    val m = meta ?: SubmissionMeta(imageUrl = cachedUrl, faId = pageId)
+                                    DetailResult(pageId, cachedUrl, extractFileName(cachedUrl), m.title, m)
                                 } else {
                                     val detailHtml = fetchHtml(pageUrl, cookie)
                                     if (detailHtml == null) return@async null
-                                    val info = parseSubmissionInfo(detailHtml)
-                                    if (info == null) return@async null
+                                    val info = parseSubmissionInfo(detailHtml) ?: return@async null
                                     if (state.useCache) cacheUrl(state.author, pageId, info.imageUrl)
-                                    DetailResult(pageId, info.imageUrl, extractFileName(info.imageUrl), info.title)
+                                    DetailResult(pageId, info.imageUrl, extractFileName(info.imageUrl), info.title, info)
                                 }
                             }
                         }
@@ -552,19 +564,15 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                         if (isStopped) break
                         val result = deferred.await() ?: continue
 
-                        val (pageId, imageUrl, fileName, title) = result
-                        val saveFileName = when (state.namingMode) {
-                            "sequential" -> {
-                                globalSeq++
-                                val ext = getFileExtension(imageUrl)
-                                val safeTitle = title.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50)
-                                val safeAuthor = state.author.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-                                "${String.format("%04d", globalSeq)}_${safeAuthor}_${safeTitle}_${pageId}.$ext"
-                            }
-                            else -> fileName
-                        }
+                        val (pageId, imageUrl, _, title, meta) = result
+                        val ext = getFileExtension(imageUrl)
+                        globalSeq++
+                        val safeTitle = title.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50)
+                        val authorName = meta.author.ifEmpty { state.author }
+                        val safeAuthor = authorName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                        val saveFileName = "${String.format("%04d", globalSeq)}_${safeAuthor}_${safeTitle}_${pageId}.$ext"
 
-                        val task = PreviewItem(allTasks.size + 1, saveFileName, imageUrl, title, pageId, state.author)
+                        val task = PreviewItem(allTasks.size + 1, saveFileName, imageUrl, title, pageId, state.author, meta)
                         allTasks.add(task)
                         channel.send(task)
 
@@ -672,13 +680,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                             delay(200)
                         }
                         if (isStopped) return@async
-                        if (state.skipExisting) {
-                            val shouldSkip = when (state.namingMode) {
-                                "original" -> checkFileExists(targetDir, task.fileName)
-                                "sequential" -> checkFaIdExists(targetDir, task.faId)
-                                else -> false
-                            }
-                            if (shouldSkip) {
+                        if (state.skipExisting && checkFaIdExists(targetDir, task.faId)) {
                                 addLog("  (${totalDownloaded + totalSkipped + totalFailed + 1}/$totalTasks) ⏭ 跳过: ${task.fileName}")
                                 saveMutex.lock()
                                 totalSkipped++
@@ -722,7 +724,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             addLog("下载完成 — 已下载: $totalDownloaded, 跳过: $totalSkipped, 失败: $totalFailed")
 
             // 自定义编号模式：按 FA ID 匹配重排序
-            if (state.namingMode == "sequential" && !isStopped) {
+            if (!isStopped) {
                 reorderFiles(targetDir, state.author)
             }
 
@@ -893,16 +895,47 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         return if (imgMatcher.find()) imgMatcher.group(1) else null
     }
 
-    /** 从详情页解析图片URL + 标题 */
-    private data class SubmissionInfo(val imageUrl: String, val title: String)
-
-    private fun parseSubmissionInfo(html: String): SubmissionInfo? {
+    /** 从详情页解析完整元数据（参考 furaffinity-dl） */
+    private fun parseSubmissionInfo(html: String): SubmissionMeta? {
         val imageUrl = parseImageUrl(html) ?: return null
-        // 提取标题: <div class="submission-title"><h2>TITLE</h2></div>
-        val titlePattern = Pattern.compile("""submission-title[^>]*>\s*<h2[^>]*>([^<]+)</h2>""")
-        val titleMatcher = titlePattern.matcher(html)
-        val title = if (titleMatcher.find()) titleMatcher.group(1)?.trim() ?: "" else ""
-        return SubmissionInfo(imageUrl, title)
+        fun regex(pattern: String): String {
+            val m = Pattern.compile(pattern, Pattern.DOTALL).matcher(html)
+            return if (m.find()) (m.group(1) ?: "").trim() else ""
+        }
+        fun regexInt(pattern: String): Int = regex(pattern).replace(",", "").toIntOrNull() ?: 0
+
+        val title = regex("""submission-title[^>]*>\s*<h2[^>]*>([^<]+)</h2>""")
+        val author = regex("""c-usernameBlockSimple__displayName[^>]*title="([^"]+)"""")
+        val date = regex("""popup_date[^>]*title="([^"]+)"""")
+        val description = regex("""submission-description[^>]*>(.*?)</div>""").replace("\r\n", "\n").trim()
+        val rating = regex("""c-contentRating--([a-z]+)""")
+
+        // 统计信息: Category, Theme, Species
+        val category = regex("""Category\s*</span>\s*<span[^>]*>([^<]+)</span>""")
+        val theme = regex("""Theme\s*</span>\s*<span[^>]*>([^<]+)</span>""")
+        val species = regex("""Species\s*</span>\s*<span[^>]*>([^<]+)</span>""")
+
+        // 浏览数 / 收藏数
+        val views = regexInt("""title="Views"[^>]*>\s*<div[^>]*>([\d,]+)</div>""")
+        val favorites = regexInt("""title="Favorites"[^>]*>\s*<div[^>]*>([\d,]+)</div>""")
+
+        // 标签
+        val tags = mutableListOf<String>()
+        val tagMatcher = Pattern.compile("""/search/[^"]*"[^>]*>([^<]+)</a>""").matcher(html)
+        while (tagMatcher.find()) {
+            tagMatcher.group(1)?.trim()?.let { tags.add(it) }
+        }
+
+        // 从 URL 提取 FA ID
+        val idMatcher = Pattern.compile("""/view/(\d+)/""").matcher(html)
+        val faId = if (idMatcher.find()) idMatcher.group(1) ?: "" else ""
+
+        return SubmissionMeta(
+            faId = faId, imageUrl = imageUrl, fileName = extractFileName(imageUrl),
+            title = title, author = author, date = date, description = description,
+            tags = tags, category = category, theme = theme, species = species,
+            rating = rating, views = views, favorites = favorites
+        )
     }
 
     private fun extractFileName(url: String): String {
