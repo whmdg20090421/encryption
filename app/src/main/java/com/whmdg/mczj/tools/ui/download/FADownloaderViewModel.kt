@@ -711,6 +711,26 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             }
 
             channel.close()
+
+            // ── 系列检测：同名作品按物种区分 ──
+            val seriesResult = detectAndResolveSeries(allTasks, state.author)
+            if (seriesResult.renamedCount > 0) {
+                addLog("系列检测: 发现 ${seriesResult.duplicateCount} 组同名作品，${seriesResult.renamedCount} 个文件添加物种后缀")
+                // 重建 channel 发送更新后的任务
+                val updatedChannel = Channel<PreviewItem>(Channel.UNLIMITED)
+                downloadChannel = updatedChannel
+                allTasks.clear()
+                for (task in seriesResult.updatedTasks) {
+                    allTasks.add(task)
+                    updatedChannel.send(task)
+                }
+                updatedChannel.close()
+                // 更新 UI 预览列表
+                _uiState.update {
+                    it.copy(pendingTasks = seriesResult.updatedTasks)
+                }
+            }
+
             val isEmpty = allTasks.isEmpty()
             _uiState.update {
                 it.copy(
@@ -1501,6 +1521,77 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         } catch (e: Exception) {
             addLog("重排序异常: ${e.message}")
         }
+    }
+
+    // ── 系列检测：同名作品按物种区分 ──
+
+    data class SeriesDetectionResult(
+        val updatedTasks: List<PreviewItem>,
+        val duplicateCount: Int,
+        val renamedCount: Int
+    )
+
+    /**
+     * 检测同名作品并按物种区分系列。
+     * 当发现多个作品标题相同时，通过物种字段区分不同系列，
+     * 并在文件名后添加 _物种 后缀。
+     */
+    private fun detectAndResolveSeries(tasks: List<PreviewItem>, author: String): SeriesDetectionResult {
+        // 按标题分组（忽略大小写和前后空格）
+        val titleGroups = tasks.groupBy { it.title.trim().lowercase() }
+
+        // 找出有多个作品的标题组
+        val duplicateTitles = titleGroups.filter { it.value.size > 1 }
+
+        if (duplicateTitles.isEmpty()) {
+            return SeriesDetectionResult(tasks, 0, 0)
+        }
+
+        var renamedCount = 0
+        var duplicateCount = 0
+        val updatedTasks = tasks.toMutableList()
+
+        for ((_, group) in duplicateTitles) {
+            duplicateCount++
+
+            // 收集这个标题组中所有出现的物种
+            val speciesMap = mutableMapOf<String, MutableList<Int>>() // species -> task indices
+            for (task in group) {
+                val species = task.meta.species.trim()
+                if (species.isNotEmpty()) {
+                    speciesMap.getOrPut(species) { mutableListOf() }.add(task.seq - 1)
+                }
+            }
+
+            // 如果物种数 <= 1，无法区分，跳过
+            if (speciesMap.size <= 1) {
+                addLog("  同名作品「${group.first().title}」物种相同，无法区分系列")
+                continue
+            }
+
+            addLog("  同名作品「${group.first().title}」发现 ${speciesMap.size} 个系列: ${speciesMap.keys.joinToString(", ")}")
+
+            // 为每个作品添加物种后缀
+            for ((species, indices) in speciesMap) {
+                val safeSpecies = species.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(20)
+                for (index in indices) {
+                    val task = updatedTasks[index]
+                    val oldName = task.fileName
+                    val ext = oldName.substringAfterLast(".")
+                    val nameWithoutExt = oldName.substringBeforeLast(".")
+
+                    // 检查是否已经有物种后缀
+                    if (!nameWithoutExt.endsWith("_$safeSpecies")) {
+                        val newName = "${nameWithoutExt}_$safeSpecies.$ext"
+                        updatedTasks[index] = task.copy(fileName = newName)
+                        renamedCount++
+                        addLog("    重命名: $oldName → $newName")
+                    }
+                }
+            }
+        }
+
+        return SeriesDetectionResult(updatedTasks, duplicateCount, renamedCount)
     }
 
     /** 下载图片（参考 furaffinity-dl 的 download_file: 用同一个 session.get） */
