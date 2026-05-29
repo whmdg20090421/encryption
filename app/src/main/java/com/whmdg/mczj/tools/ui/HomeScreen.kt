@@ -59,12 +59,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.whmdg.mczj.tools.auth.Feature
-import com.whmdg.mczj.tools.auth.LocalPermissionGate
 import com.whmdg.mczj.tools.auth.NoPermissionDialog
 import com.whmdg.mczj.tools.auth.PasswordDialog
 import com.whmdg.mczj.tools.auth.PermissionManager
-import com.whmdg.mczj.tools.auth.ReadOnlyWrapper
-import androidx.compose.ui.draw.alpha
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -86,6 +83,101 @@ sealed class Screen {
     data class VaultOpen(val session: VaultSession) : Screen()
     data class VaultChangePassword(val vault: VaultRecord) : Screen()
     object AuthManagement : Screen()
+}
+
+enum class ModuleId {
+    ENCRYPTION,
+    FILE_MANAGER,
+    APP_PERMISSIONS,
+    BATCH_DOWNLOADER,
+    FA_DOWNLOADER,
+    SECURITY
+}
+
+data class ModuleEntry(
+    val title: String,
+    val subtitle: String,
+    val icon: ImageVector,
+    val feature: Feature,
+    val screen: Screen
+)
+
+val MODULE_REGISTRY: Map<ModuleId, ModuleEntry> = mapOf(
+    ModuleId.ENCRYPTION to ModuleEntry("加密", "常用加密 / 解密工具", Icons.Default.Lock, Feature.ENCRYPTION_VAULT, Screen.EncryptionHome),
+    ModuleId.FILE_MANAGER to ModuleEntry("文件管理器", "双面板文件浏览工具", Icons.Default.Folder, Feature.FILE_MANAGER, Screen.FileManager),
+    ModuleId.APP_PERMISSIONS to ModuleEntry("应用权限管理", "查看和管理应用权限", Icons.Default.Security, Feature.APP_PERMISSIONS, Screen.AppPermissions),
+    ModuleId.BATCH_DOWNLOADER to ModuleEntry("批量下载器", "FA 图片批量下载等工具", Icons.Default.Download, Feature.BATCH_DOWNLOADER, Screen.BatchDownloader),
+    ModuleId.FA_DOWNLOADER to ModuleEntry("FA 下载器", "FA 内容下载工具", Icons.Default.CloudDownload, Feature.FA_DOWNLOADER, Screen.FADownloader),
+    ModuleId.SECURITY to ModuleEntry("安全", "权限设置与特殊权限管理", Icons.Default.Lock, Feature.SECURITY_SETTINGS, Screen.Security)
+)
+
+/**
+ * 集中式鉴权跳转：传入 ModuleId → 校验权限 → 通过则由本函数跳转，否则拦截。
+ */
+@Composable
+fun NavigateGate(
+    onNavigate: (Screen) -> Unit,
+    content: @Composable (navigateToModule: (ModuleId) -> Unit) -> Unit
+) {
+    val authState by PermissionManager.state.collectAsState()
+    val ctx = LocalContext.current
+
+    var pendingModule by remember { mutableStateOf<ModuleId?>(null) }
+    var noPermModule by remember { mutableStateOf<ModuleId?>(null) }
+    var toastMsg by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(toastMsg) {
+        toastMsg?.let {
+            Toast.makeText(ctx, it, Toast.LENGTH_SHORT).show()
+            toastMsg = null
+        }
+    }
+
+    fun navigateToModule(moduleId: ModuleId) {
+        val entry = MODULE_REGISTRY[moduleId] ?: return
+        if (PermissionManager.has(entry.feature)) {
+            onNavigate(entry.screen)
+        } else if (authState is PermissionManager.AuthState.Locked) {
+            pendingModule = moduleId
+        } else {
+            noPermModule = moduleId
+        }
+    }
+
+    content(::navigateToModule)
+
+    // 未登录 → 密码输入弹窗
+    pendingModule?.let { moduleId ->
+        val entry = MODULE_REGISTRY[moduleId]!!
+        PasswordDialog(
+            onDismiss = { pendingModule = null },
+            onVerify = { pw ->
+                val res = PermissionManager.tryAuthenticate(ctx, pw)
+                if (res.isSuccess) {
+                    if (PermissionManager.has(entry.feature)) {
+                        onNavigate(entry.screen)
+                        pendingModule = null
+                        true
+                    } else {
+                        pendingModule = null
+                        toastMsg = "当前密钥无此模块权限"
+                        true
+                    }
+                } else {
+                    false
+                }
+            }
+        )
+    }
+
+    // 已登录但权限不足 → 仅提示
+    noPermModule?.let { moduleId ->
+        val entry = MODULE_REGISTRY[moduleId]!!
+        NoPermissionDialog(
+            feature = entry.feature,
+            onDismiss = { noPermModule = null }
+        )
+    }
 }
 
 @Composable
@@ -191,23 +283,15 @@ fun MainAppContainer() {
             )
         }
         is Screen.Security -> {
-            CompositionLocalProvider(
-                LocalPermissionGate provides PermissionManager.has(Feature.SECURITY_SETTINGS)
-            ) {
-                SecurityScreen(
-                    onBack = { navigateBack() },
-                    onNavigate = { navigateTo(it) }
-                )
-            }
+            SecurityScreen(
+                onBack = { navigateBack() },
+                onNavigate = { navigateTo(it) }
+            )
         }
         is Screen.PermissionSettings -> {
-            CompositionLocalProvider(
-                LocalPermissionGate provides PermissionManager.has(Feature.SECURITY_SETTINGS)
-            ) {
-                PermissionSettingsScreen(
-                    onBack = { navigateBack() }
-                )
-            }
+            PermissionSettingsScreen(
+                onBack = { navigateBack() }
+            )
         }
         is Screen.ThemeSettings -> {
             ThemeSettingsScreen(
@@ -215,65 +299,41 @@ fun MainAppContainer() {
             )
         }
         is Screen.EncryptionHome -> {
-            CompositionLocalProvider(
-                LocalPermissionGate provides PermissionManager.has(Feature.ENCRYPTION_VAULT)
-            ) {
-                EncryptionHomeScreen(
-                    vaultService = vaultService,
-                    settings = encryptionSettings,
-                    onBack = { navigateBack() },
-                    onNavigate = { navigateTo(it) }
-                )
-            }
+            EncryptionHomeScreen(
+                vaultService = vaultService,
+                settings = encryptionSettings,
+                onBack = { navigateBack() },
+                onNavigate = { navigateTo(it) }
+            )
         }
         is Screen.VaultCreate -> {
-            CompositionLocalProvider(
-                LocalPermissionGate provides PermissionManager.has(Feature.ENCRYPTION_VAULT)
-            ) {
-                VaultCreateScreen(
-                    vaultService = vaultService,
-                    onBack = { navigateBack() }
-                )
-            }
+            VaultCreateScreen(
+                vaultService = vaultService,
+                onBack = { navigateBack() }
+            )
         }
         is Screen.VaultOpen -> {
-            CompositionLocalProvider(
-                LocalPermissionGate provides PermissionManager.has(Feature.ENCRYPTION_VAULT)
-            ) {
-                VaultOpenScreen(
-                    session = currentScreen.session,
-                    onBack = { navigateBack() }
-                )
-            }
+            VaultOpenScreen(
+                session = currentScreen.session,
+                onBack = { navigateBack() }
+            )
         }
         is Screen.VaultChangePassword -> {
-            CompositionLocalProvider(
-                LocalPermissionGate provides PermissionManager.has(Feature.ENCRYPTION_VAULT)
-            ) {
-                VaultChangePasswordScreen(
-                    vaultService = vaultService,
-                    vault = currentScreen.vault,
-                    onBack = { navigateBack() }
-                )
-            }
+            VaultChangePasswordScreen(
+                vaultService = vaultService,
+                vault = currentScreen.vault,
+                onBack = { navigateBack() }
+            )
         }
         is Screen.SpecialPermissions -> {
-            CompositionLocalProvider(
-                LocalPermissionGate provides PermissionManager.has(Feature.SECURITY_SETTINGS)
-            ) {
-                SpecialPermissionsScreen(
-                    onBack = { navigateBack() }
-                )
-            }
+            SpecialPermissionsScreen(
+                onBack = { navigateBack() }
+            )
         }
         is Screen.AppPermissions -> {
-            CompositionLocalProvider(
-                LocalPermissionGate provides PermissionManager.has(Feature.APP_PERMISSIONS)
-            ) {
-                AppPermissionsScreen(
-                    onBack = { navigateBack() }
-                )
-            }
+            AppPermissionsScreen(
+                onBack = { navigateBack() }
+            )
         }
         is Screen.PermissionManagementConfig -> {
             PermissionManagementConfigScreen(
@@ -281,33 +341,21 @@ fun MainAppContainer() {
             )
         }
         is Screen.FileManager -> {
-            CompositionLocalProvider(
-                LocalPermissionGate provides PermissionManager.has(Feature.FILE_MANAGER)
-            ) {
-                FileManagerScreen(
-                    onBack = { navigateBack() }
-                )
-            }
+            FileManagerScreen(
+                onBack = { navigateBack() }
+            )
         }
         is Screen.BatchDownloader -> {
-            CompositionLocalProvider(
-                LocalPermissionGate provides PermissionManager.has(Feature.BATCH_DOWNLOADER)
-            ) {
-                com.whmdg.mczj.tools.ui.download.BatchDownloaderScreen(
-                    onBack = { navigateBack() },
-                    onNavigate = { navigateTo(it) }
-                )
-            }
+            com.whmdg.mczj.tools.ui.download.BatchDownloaderScreen(
+                onBack = { navigateBack() },
+                onNavigate = { navigateTo(it) }
+            )
         }
         is Screen.FADownloader -> {
-            CompositionLocalProvider(
-                LocalPermissionGate provides PermissionManager.has(Feature.FA_DOWNLOADER)
-            ) {
-                com.whmdg.mczj.tools.ui.download.FADownloaderScreen(
-                    onBack = { navigateBack() },
-                    onLogin = { navigateTo(Screen.FALogin) }
-                )
-            }
+            com.whmdg.mczj.tools.ui.download.FADownloaderScreen(
+                onBack = { navigateBack() },
+                onLogin = { navigateTo(Screen.FALogin) }
+            )
         }
         is Screen.FALogin -> {
             com.whmdg.mczj.tools.ui.download.FALoginScreen(
@@ -368,49 +416,32 @@ fun HomeScreen(
             }
         }
     ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            if (selectedTab == 0) {
-                HomeTab(onNavigate = onNavigate)
-            } else {
-                SettingsTab(onNavigate = onNavigate)
+        NavigateGate(onNavigate = onNavigate) { navigateToModule ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                if (selectedTab == 0) {
+                    HomeTab(navigateToModule = navigateToModule)
+                } else {
+                    SettingsTab(navigateToModule = navigateToModule, onNavigate = onNavigate)
+                }
             }
         }
     }
 }
 
-private data class ModuleDef(
-    val title: String,
-    val subtitle: String,
-    val icon: ImageVector,
-    val feature: Feature,
-    val screen: Screen
-)
-
-private val HOME_MODULES = listOf(
-    ModuleDef("加密", "常用加密 / 解密工具", Icons.Default.Lock, Feature.ENCRYPTION_VAULT, Screen.EncryptionHome),
-    ModuleDef("文件管理器", "双面板文件浏览工具", Icons.Default.Folder, Feature.FILE_MANAGER, Screen.FileManager),
-    ModuleDef("应用权限管理", "查看和管理应用权限", Icons.Default.Security, Feature.APP_PERMISSIONS, Screen.AppPermissions),
-    ModuleDef("批量下载器", "FA 图片批量下载等工具", Icons.Default.Download, Feature.BATCH_DOWNLOADER, Screen.BatchDownloader)
+private val HOME_MODULE_IDS = listOf(
+    ModuleId.ENCRYPTION,
+    ModuleId.FILE_MANAGER,
+    ModuleId.APP_PERMISSIONS,
+    ModuleId.BATCH_DOWNLOADER
 )
 
 @Composable
-fun HomeTab(onNavigate: (Screen) -> Unit) {
+fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
     val authState by PermissionManager.state.collectAsState()
-    var lockedFeature by remember { mutableStateOf<Feature?>(null) }
-    var lastAuthError by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-    val ctx = LocalContext.current
-
-    LaunchedEffect(lastAuthError) {
-        lastAuthError?.let {
-            android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_SHORT).show()
-            lastAuthError = null
-        }
-    }
 
     Column(
         modifier = Modifier
@@ -438,66 +469,15 @@ fun HomeTab(onNavigate: (Screen) -> Unit) {
             title = "工具",
             icon = Icons.Default.Build
         ) {
-            HOME_MODULES.forEach { mod ->
+            HOME_MODULE_IDS.forEach { moduleId ->
+                val entry = MODULE_REGISTRY[moduleId]!!
                 CompactSettingsItem(
-                    title = mod.title,
-                    subtitle = mod.subtitle,
-                    icon = mod.icon,
-                    enabled = PermissionManager.has(mod.feature),
-                    onClick = { onNavigate(mod.screen) },
-                    onLockedClick = { lockedFeature = mod.feature }
+                    title = entry.title,
+                    subtitle = entry.subtitle,
+                    icon = entry.icon,
+                    onClick = { navigateToModule(moduleId) }
                 )
             }
-        }
-    }
-
-    lockedFeature?.let { feature ->
-        if (authState is PermissionManager.AuthState.Locked) {
-            PasswordDialog(
-                onDismiss = { lockedFeature = null },
-                onVerify = { pw ->
-                    val res = PermissionManager.tryAuthenticate(ctx, pw)
-                    if (res.isSuccess) {
-                        if (PermissionManager.has(feature)) {
-                            lockedFeature = null
-                            val screen = when (feature) {
-                                Feature.ENCRYPTION_VAULT -> Screen.EncryptionHome
-                                Feature.FILE_MANAGER -> Screen.FileManager
-                                Feature.APP_PERMISSIONS -> Screen.AppPermissions
-                                Feature.BATCH_DOWNLOADER -> Screen.BatchDownloader
-                                Feature.FA_DOWNLOADER -> Screen.FADownloader
-                                Feature.SECURITY_SETTINGS -> Screen.Security
-                            }
-                            onNavigate(screen)
-                            true
-                        } else {
-                            lockedFeature = null
-                            lastAuthError = "当前密钥无此模块权限"
-                            true
-                        }
-                    } else {
-                        false
-                    }
-                }
-            )
-        } else if (!PermissionManager.has(feature)) {
-            NoPermissionDialog(
-                feature = feature,
-                onDismiss = { lockedFeature = null },
-                onEnter = {
-                    // 以只读模式进入模块
-                    val screen = when (feature) {
-                        Feature.ENCRYPTION_VAULT -> Screen.EncryptionHome
-                        Feature.FILE_MANAGER -> Screen.FileManager
-                        Feature.APP_PERMISSIONS -> Screen.AppPermissions
-                        Feature.BATCH_DOWNLOADER -> Screen.BatchDownloader
-                        Feature.FA_DOWNLOADER -> Screen.FADownloader
-                        Feature.SECURITY_SETTINGS -> Screen.Security
-                    }
-                    lockedFeature = null
-                    onNavigate(screen)
-                }
-            )
         }
     }
 }
@@ -510,7 +490,6 @@ fun EncryptionHomeScreen(
     onBack: () -> Unit,
     onNavigate: (Screen) -> Unit
 ) {
-    val isReadOnly = !LocalPermissionGate.current
     var subTab by remember { mutableIntStateOf(0) }
     var showMenu by remember { mutableStateOf(false) }
 
@@ -532,8 +511,7 @@ fun EncryptionHomeScreen(
         }
     }
 
-    ReadOnlyWrapper {
-        Scaffold(
+    Scaffold(
             topBar = {
                 TopAppBar(
                     title = { Text(if (subTab == 0) "保险箱" else if (subTab == 1) "云盘" else "设置") },
@@ -543,8 +521,7 @@ fun EncryptionHomeScreen(
                         }
                     },
                     actions = {
-                        // 只读模式下禁用操作按钮
-                        if (!isReadOnly && subTab == 0) {
+                        if (subTab == 0) {
                             IconButton(onClick = { folderPicker.launch(null) }) {
                                 Icon(Icons.Default.ArrowUpward, contentDescription = "导入保险箱")
                             }
@@ -553,7 +530,6 @@ fun EncryptionHomeScreen(
                 )
             },
             bottomBar = {
-                // Tab 切换始终可用（用户选择允许）
                 NavigationBar {
                     NavigationBarItem(
                         selected = subTab == 0,
@@ -576,8 +552,7 @@ fun EncryptionHomeScreen(
                 }
             },
             floatingActionButton = {
-                // 只读模式下禁用浮动按钮
-                if (!isReadOnly && subTab == 0) {
+                if (subTab == 0) {
                     FloatingActionButton(onClick = { showMenu = true }) {
                         Icon(Icons.Default.Add, contentDescription = "添加")
                     }
@@ -683,7 +658,6 @@ fun EncryptionHomeScreen(
             ErrorDialog(error = encryptionError, onDismiss = { encryptionError = null })
         }
     }
-}
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -1182,7 +1156,7 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
 }
 
 @Composable
-fun SettingsTab(onNavigate: (Screen) -> Unit) {
+fun SettingsTab(navigateToModule: (ModuleId) -> Unit, onNavigate: (Screen) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1205,11 +1179,12 @@ fun SettingsTab(onNavigate: (Screen) -> Unit) {
             title = "安全与权限",
             icon = Icons.Default.Security
         ) {
+            val secEntry = MODULE_REGISTRY[ModuleId.SECURITY]!!
             CompactSettingsItem(
-                title = "安全",
-                subtitle = "权限设置与特殊权限管理",
-                icon = Icons.Default.Lock,
-                onClick = { onNavigate(Screen.Security) }
+                title = secEntry.title,
+                subtitle = secEntry.subtitle,
+                icon = secEntry.icon,
+                onClick = { navigateToModule(ModuleId.SECURITY) }
             )
             CompactSettingsItem(
                 title = "更改密钥授权",
@@ -1265,33 +1240,20 @@ private fun CompactSettingsItem(
     title: String,
     subtitle: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-    onLockedClick: (() -> Unit)? = null
+    onClick: () -> Unit
 ) {
-    val alpha = if (enabled) 1f else 0.5f
-    val iconTint = if (enabled) MaterialTheme.colorScheme.primary
-                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-    val textColor = if (enabled) Color.Unspecified
-                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-    val subtitleColor = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .clickable {
-                if (enabled) onClick() else onLockedClick?.invoke()
-            }
-            .alpha(alpha)
+            .clickable(onClick = onClick)
             .padding(vertical = 12.dp, horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = iconTint,
+            tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(20.dp)
         )
         Spacer(modifier = Modifier.width(12.dp))
@@ -1300,14 +1262,13 @@ private fun CompactSettingsItem(
                 text = title,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
-                color = textColor,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
-                color = subtitleColor,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
@@ -1315,8 +1276,7 @@ private fun CompactSettingsItem(
         Icon(
             imageVector = Icons.Default.ChevronRight,
             contentDescription = null,
-            tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
-                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(16.dp)
         )
     }

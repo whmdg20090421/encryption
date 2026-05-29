@@ -136,21 +136,15 @@ fun PasswordDialog(
 @Composable
 fun NoPermissionDialog(
     feature: Feature,
-    onDismiss: () -> Unit,
-    onEnter: () -> Unit
+    onDismiss: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("权限不足") },
-        text = { Text("当前密钥无此模块权限，是否以只读模式查看？") },
+        text = { Text("当前密钥无此模块权限，请使用更高级别密钥解锁") },
         confirmButton = {
-            TextButton(onClick = onEnter) {
-                Text("查看")
-            }
-        },
-        dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("关闭")
+                Text("确定")
             }
         }
     )
