@@ -40,7 +40,7 @@ fun FALoginScreen(
     /** 提取 Cookie 并弹出确认对话框 */
     fun extractAndShowCookie() {
         val cookieManager = CookieManager.getInstance()
-        val cookies = cookieManager.getCookie("furaffinity.net")
+        val cookies = cookieManager.getCookie("https://www.furaffinity.net")
         if (cookies == null || !hasFACookies(cookies)) {
             statusText = "未检测到有效登录，请先完成登录"
             cookiesDetected = false
@@ -233,7 +233,7 @@ fun FALoginScreen(
                                     isLoading = false
 
                                     val cookieManager = CookieManager.getInstance()
-                                    val cookies = cookieManager.getCookie("furaffinity.net")
+                                    val cookies = cookieManager.getCookie("https://www.furaffinity.net")
                                     if (cookies != null && hasFACookies(cookies)) {
                                         cookiesDetected = true
                                         statusText = "登录成功，请点击右上角「确定」保存"
