@@ -135,12 +135,18 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         val username = prefs.getString("username", "") ?: ""
         val savedDirUri = prefs.getString("save_dir_uri", null)
         val savedDirPath = prefs.getString("save_dir_path", "") ?: ""
+        val savedNamingMode = prefs.getString("naming_mode", "original") ?: "original"
+        val savedSkipExisting = prefs.getBoolean("skip_existing", true)
+        val savedThreads = prefs.getInt("download_threads", 1)
         _uiState.update {
             it.copy(
                 isLoggedIn = cookie.isNotEmpty() && cookie.contains("a=") && cookie.contains("b="),
                 username = username,
                 saveDir = savedDirUri?.let { uri -> Uri.parse(uri) },
-                saveDirPath = savedDirPath
+                saveDirPath = savedDirPath,
+                namingMode = savedNamingMode,
+                skipExisting = savedSkipExisting,
+                downloadThreads = savedThreads
             )
         }
     }
@@ -156,10 +162,20 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
     fun updateStartPage(page: String) = _uiState.update { it.copy(startPage = page) }
     fun updateMaxDownload(max: String) = _uiState.update { it.copy(maxDownload = max) }
-    fun updateSkipExisting(skip: Boolean) = _uiState.update { it.copy(skipExisting = skip) }
+    fun updateSkipExisting(skip: Boolean) {
+        prefs.edit().putBoolean("skip_existing", skip).apply()
+        _uiState.update { it.copy(skipExisting = skip) }
+    }
     fun updateUseCache(use: Boolean) = _uiState.update { it.copy(useCache = use) }
-    fun updateNamingMode(mode: String) = _uiState.update { it.copy(namingMode = mode) }
-    fun updateDownloadThreads(threads: Int) = _uiState.update { it.copy(downloadThreads = threads.coerceIn(1, 4)) }
+    fun updateNamingMode(mode: String) {
+        prefs.edit().putString("naming_mode", mode).apply()
+        _uiState.update { it.copy(namingMode = mode) }
+    }
+    fun updateDownloadThreads(threads: Int) {
+        val t = threads.coerceIn(1, 4)
+        prefs.edit().putInt("download_threads", t).apply()
+        _uiState.update { it.copy(downloadThreads = t) }
+    }
 
     // ── 作者历史管理 ──
 
@@ -512,7 +528,12 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                             semaphore.withPermit {
                                 val cachedUrl = if (state.useCache) getCachedUrl(state.author, pageId) else null
                                 if (cachedUrl != null) {
-                                    DetailResult(pageId, cachedUrl, extractFileName(cachedUrl), "")
+                                    // 缓存命中：仍需获取标题（sequential 命名依赖标题）
+                                    val title = if (state.namingMode == "sequential") {
+                                        val detailHtml = fetchHtml(pageUrl, cookie)
+                                        if (detailHtml != null) parseSubmissionInfo(detailHtml)?.title ?: "" else ""
+                                    } else ""
+                                    DetailResult(pageId, cachedUrl, extractFileName(cachedUrl), title)
                                 } else {
                                     val detailHtml = fetchHtml(pageUrl, cookie)
                                     if (detailHtml == null) return@async null
