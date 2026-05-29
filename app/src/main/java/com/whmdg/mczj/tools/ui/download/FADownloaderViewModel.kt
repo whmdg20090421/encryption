@@ -610,15 +610,18 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     private fun parseImageUrl(html: String): String? {
         // 多种格式尝试匹配下载链接
+        // FA 当前下载域名: d.furaffinity.net（旧: d.facdn.net）
         val patterns = listOf(
-            // 标准格式: href="//d.facdn.net/...">Download
+            // d.furaffinity.net（当前域名）
+            Pattern.compile("""href="(//d\.furaffinity\.net/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
+            Pattern.compile("""href="(https?://d\.furaffinity\.net/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
+            // d.facdn.net（旧域名兼容）
             Pattern.compile("""href="(//d\.facdn\.net/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
-            // https 前缀
             Pattern.compile("""href="(https?://d\.facdn\.net/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
-            // 任意 facdn 子域名
-            Pattern.compile("""href="(//[^"]*facdn[^"]*\.(net|com)/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
+            // 通用匹配任何 /art/ 路径的下载链接
+            Pattern.compile("""href="(//d\.[^"]+\.net/art/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
             // 下载按钮带 download 属性
-            Pattern.compile("""href="(//[^"]*facdn[^"]*\.(net|com)/[^"]+)"[^>]*download"""),
+            Pattern.compile("""href="(//d\.[^"]+\.net/[^"]+)"[^>]*download"""),
         )
         for (pattern in patterns) {
             val matcher = pattern.matcher(html)
