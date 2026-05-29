@@ -765,6 +765,13 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 addLog("发现 ${existingFiles.size} 个已有文件，将按 FAID+作者+标题匹配跳过")
             }
 
+            // dirDoc 只创建一次，后续复用
+            val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(getApplication(), targetDir)
+            if (dirDoc == null) {
+                _uiState.update { it.copy(isDownloading = false, statusMessage = "目录无效") }
+                return@launch
+            }
+
             // 每个任务独立：下载→保存→立即输出日志
             val semaphore = Semaphore(threadCount)
             val saveMutex = Mutex()
@@ -821,7 +828,8 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                         }
                         // 保存并立即输出日志
                         saveMutex.lock()
-                        if (saveToFile(targetDir, task.fileName, data)) {
+                        val existingUri = existingFiles[task.faId]?.docUri
+                        if (saveToFile(dirDoc, task.fileName, data, existingUri)) {
                             totalDownloaded++
                             addLog("  (${totalDownloaded + totalSkipped + totalFailed}/$totalTasks) ✓ ${task.fileName}")
                             _uiState.update { it.copy(downloadedCount = totalDownloaded) }
@@ -917,6 +925,12 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             val stillFailedList = mutableListOf<PreviewItem>()
             val targetDir = resolveTargetDir(state) ?: return@launch
 
+            val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(getApplication(), targetDir)
+            if (dirDoc == null) {
+                addLog("重试失败: 目录无效")
+                return@launch
+            }
+
             val semaphore = Semaphore(state.downloadThreads)
             val jobs = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
 
@@ -940,7 +954,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                             return@async
                         }
                         saveMutex.lock()
-                        if (saveToFile(targetDir, task.fileName, data)) {
+                        if (saveToFile(dirDoc, task.fileName, data)) {
                             success++
                             addLog("  ✓ 重试成功: ${task.fileName}")
                             _uiState.update { it.copy(downloadedCount = it.downloadedCount + 1) }
@@ -1293,7 +1307,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     /** 已有文件解析结果 */
-    private data class ExistingFileInfo(val faId: String, val author: String, val title: String, val fileName: String)
+    private data class ExistingFileInfo(val faId: String, val author: String, val title: String, val fileName: String, val docUri: Uri)
 
     /** 扫描目录中所有符合命名格式的文件，构建 FAID 索引（兼容带序号和无序号） */
     private fun buildExistingFileIndex(dirUri: Uri): Map<String, ExistingFileInfo> {
@@ -1316,14 +1330,14 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 if (numbered != null) {
                     val prefix = numbered.groupValues[1]
                     val faId = numbered.groupValues[2]
-                    result[faId] = ExistingFileInfo(faId, "", prefix, name)
+                    result[faId] = ExistingFileInfo(faId, "", prefix, name, file.uri)
                     continue
                 }
                 val unnumbered = unnumberedPattern.matchEntire(name)
                 if (unnumbered != null) {
                     val prefix = unnumbered.groupValues[1]
                     val faId = unnumbered.groupValues[2]
-                    result[faId] = ExistingFileInfo(faId, "", prefix, name)
+                    result[faId] = ExistingFileInfo(faId, "", prefix, name, file.uri)
                 }
             }
         } catch (_: Exception) {}
@@ -1449,22 +1463,37 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             }
 
             // ── Step 5: 两步重命名（先 → .tmp，再 → 最终名） ──
+            // 两步法防循环冲突，同时尝试快速路径 + listFiles() 兜底
             var renamed = 0
+            val secondPass = mutableListOf<Pair<androidx.documentfile.provider.DocumentFile, String>>()
             for (op in ops) {
                 try {
                     op.docFile.renameTo("${op.to}.tmp")
+                    secondPass.add(op.docFile to op.to)
                     renamed++
-                } catch (_: Exception) {}
-            }
-            // HashMap 查找 O(1)，替代 firstOrNull 的 O(m)
-            val tmpMap = dirDoc.listFiles()
-                .filter { it.name?.endsWith(".tmp") == true }
-                .associateBy { it.name }
-            for (op in ops) {
-                try {
-                    tmpMap["${op.to}.tmp"]?.renameTo(op.to)
                 } catch (_: Exception) {
-                    addLog("  重命名失败: ${op.to}")
+                    addLog("  .tmp 重命名失败: ${op.from}")
+                }
+            }
+            // 快速路径：直接复用 docFile（renameTo 后内部 mUri 可能已自动更新）
+            val needFallback = mutableListOf<Pair<androidx.documentfile.provider.DocumentFile, String>>()
+            for ((docFile, finalName) in secondPass) {
+                if (!docFile.renameTo(finalName)) {
+                    needFallback.add(docFile to finalName)
+                }
+            }
+            // 兜底：仅在快速路径失败时才 listFiles()
+            if (needFallback.isNotEmpty()) {
+                val tmpMap = dirDoc.listFiles()
+                    .filter { it.name?.endsWith(".tmp") == true }
+                    .associateBy { it.name }
+                for ((_, finalName) in needFallback) {
+                    try {
+                        tmpMap["${finalName}.tmp"]?.renameTo(finalName)
+                            ?: addLog("  兜底失败: ${finalName}.tmp 不存在")
+                    } catch (_: Exception) {
+                        addLog("  重命名失败: $finalName")
+                    }
                 }
             }
 
@@ -1498,14 +1527,15 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    private fun saveToFile(dirUri: Uri, fileName: String, data: ByteArray): Boolean {
+    private fun saveToFile(dirDoc: androidx.documentfile.provider.DocumentFile, fileName: String, data: ByteArray, existingUri: Uri? = null): Boolean {
         return try {
             val app = getApplication<Application>()
             val resolver = app.contentResolver
-            val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri)
 
-            val existing = dirDoc?.findFile(fileName)
-            existing?.delete()
+            // 直接按 URI 删除已有文件，O(1)，不扫目录
+            existingUri?.let {
+                try { android.provider.DocumentsContract.deleteDocument(resolver, it) } catch (_: Exception) {}
+            }
 
             val mimeType = when {
                 fileName.endsWith(".png", true) -> "image/png"
@@ -1513,7 +1543,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 fileName.endsWith(".webp", true) -> "image/webp"
                 else -> "image/jpeg"
             }
-            val newFile = dirDoc?.createFile(mimeType, fileName)
+            val newFile = dirDoc.createFile(mimeType, fileName)
             if (newFile != null) {
                 resolver.openOutputStream(newFile.uri)?.use { output ->
                     output.write(data)
