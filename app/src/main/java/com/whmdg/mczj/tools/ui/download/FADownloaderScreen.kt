@@ -11,7 +11,10 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -271,9 +274,54 @@ fun FADownloaderScreen(
                             placeholder = { Text("例如: username") },
                             singleLine = true,
                             leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                            trailingIcon = {
+                                IconButton(onClick = { viewModel.toggleAuthorHistory() }) {
+                                    Icon(Icons.Default.History, contentDescription = "历史记录")
+                                }
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             enabled = !state.isDownloading
                         )
+
+                        // 作者历史下拉列表
+                        if (state.showAuthorHistory && state.authorHistory.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                                Column(modifier = Modifier.padding(8.dp)) {
+                                    Text("历史作者", style = MaterialTheme.typography.labelMedium)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    state.authorHistory.take(10).forEach { entry ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    viewModel.updateAuthor(entry.author)
+                                                    viewModel.toggleAuthorHistory()
+                                                }
+                                                .padding(vertical = 4.dp, horizontal = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                entry.author,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            IconButton(
+                                                onClick = { viewModel.removeAuthorFromHistory(entry.author) },
+                                                modifier = Modifier.size(24.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Close,
+                                                    contentDescription = "删除",
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         Spacer(modifier = Modifier.height(12.dp))
 
@@ -413,6 +461,19 @@ fun FADownloaderScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("使用缓存", style = MaterialTheme.typography.bodySmall)
+                                if (state.useCache) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    IconButton(
+                                        onClick = { viewModel.toggleCacheViewer() },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.List,
+                                            contentDescription = "查看缓存",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
 
@@ -635,7 +696,7 @@ fun FADownloaderScreen(
                 )
             },
             title = { Text("图片未加载完毕") },
-            text = { Text("当前已加载 ${state.collectionLoaded} 个任务，预估共 ${state.collectionTotal} 个。是否等待加载完毕后继续下载？") },
+            text = { Text("当前已加载 ${state.collectionLoaded} 个任务。是否等待加载完毕后继续下载？") },
             confirmButton = {
                 Button(onClick = {
                     showEarlyConfirmWarning = false
@@ -652,11 +713,11 @@ fun FADownloaderScreen(
 
     // ── Download Preview Dialog ──
     if (state.showPreview) {
-        val totalDisplay = state.collectionTotal.coerceAtLeast(1)
         val progressValue = if (state.collectionComplete) {
             1f
         } else {
-            state.collectionLoaded.toFloat() / totalDisplay
+            // 收集阶段无预估，用不确定进度
+            0f
         }
 
         AlertDialog(
@@ -672,7 +733,7 @@ fun FADownloaderScreen(
                 if (state.collectionComplete) {
                     Text("下载预览 (${state.collectionLoaded} 个文件)")
                 } else {
-                    Text("正在收集 ${state.downloadedCount}/${state.collectionLoaded}/约${state.collectionTotal}")
+                    Text("正在收集 ${state.collectionLoaded} 个")
                 }
             },
             text = {
@@ -740,25 +801,42 @@ fun FADownloaderScreen(
 
                     // Progress bar
                     Column {
-                        LinearProgressIndicator(
-                            progress = { progressValue },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                        )
+                        if (state.collectionComplete) {
+                            LinearProgressIndicator(
+                                progress = { progressValue },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                            )
+                        }
                         Spacer(modifier = Modifier.height(4.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
+                            if (state.collectionComplete) {
+                                Text(
+                                    "${(progressValue * 100).toInt()}%",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                Text(
+                                    "爬取中...",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             Text(
-                                "${(progressValue * 100).toInt()}%",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                "${state.collectionLoaded} / ${if (state.collectionComplete) state.collectionLoaded else state.collectionTotal}",
+                                "${state.collectionLoaded} 个",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -785,6 +863,109 @@ fun FADownloaderScreen(
             dismissButton = {
                 TextButton(onClick = { viewModel.cancelPreview() }) {
                     Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── Cache Viewer Dialog ──
+    if (state.showCacheViewer) {
+        AlertDialog(
+            onDismissRequest = { viewModel.toggleCacheViewer() },
+            icon = {
+                Icon(
+                    Icons.Default.List,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            title = { Text("缓存管理") },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    if (state.cachedAuthors.isEmpty()) {
+                        Text("暂无缓存数据", style = MaterialTheme.typography.bodyMedium)
+                    } else if (state.selectedCachedAuthor == null) {
+                        // 作者列表
+                        Text("已缓存的作者 (${state.cachedAuthors.size})", style = MaterialTheme.typography.labelMedium)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        state.cachedAuthors.forEach { authorInfo ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { viewModel.selectCachedAuthor(authorInfo.author) }
+                                    .padding(vertical = 6.dp, horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(authorInfo.author, style = MaterialTheme.typography.bodyMedium)
+                                    Text("${authorInfo.count} 个链接", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                IconButton(onClick = { viewModel.deleteCachedAuthor(authorInfo.author) }, modifier = Modifier.size(24.dp)) {
+                                    Icon(Icons.Default.Delete, contentDescription = "删除作者缓存", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                    } else {
+                        // 链接列表
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(onClick = {
+                                viewModel.resetCacheViewerSelection()
+                            }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(state.selectedCachedAuthor!!, style = MaterialTheme.typography.titleSmall)
+                            Spacer(modifier = Modifier.weight(1f))
+                            Text("${state.cachedLinks.size} 个", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        if (state.selectedCacheLinks.isNotEmpty()) {
+                            Button(
+                                onClick = { viewModel.deleteSelectedCacheLinks() },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("删除选中 (${state.selectedCacheLinks.size})")
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        state.cachedLinks.forEach { link ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { viewModel.toggleCacheLinkSelection(link.pageId) }
+                                    .padding(vertical = 4.dp, horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = link.pageId in state.selectedCacheLinks,
+                                    onCheckedChange = { viewModel.toggleCacheLinkSelection(link.pageId) },
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(link.pageId, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                                    Text(
+                                        link.imageUrl.take(60) + if (link.imageUrl.length > 60) "..." else "",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.toggleCacheViewer() }) {
+                    Text("关闭")
                 }
             }
         )

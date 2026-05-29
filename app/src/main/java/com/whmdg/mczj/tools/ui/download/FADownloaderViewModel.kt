@@ -71,8 +71,21 @@ data class FAUiState(
     val failedCount: Int = 0,
     val currentProgress: Float = 0f,
     val statusMessage: String = "准备就绪",
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    // 作者历史
+    val authorHistory: List<AuthorHistoryEntry> = emptyList(),
+    val showAuthorHistory: Boolean = false,
+    // 缓存查看器
+    val showCacheViewer: Boolean = false,
+    val cachedAuthors: List<CachedAuthorInfo> = emptyList(),
+    val selectedCachedAuthor: String? = null,
+    val cachedLinks: List<CachedLinkInfo> = emptyList(),
+    val selectedCacheLinks: Set<String> = emptySet()
 )
+
+data class AuthorHistoryEntry(val author: String, val timestamp: Long)
+data class CachedAuthorInfo(val author: String, val count: Int, val timestamp: Long)
+data class CachedLinkInfo(val pageId: String, val imageUrl: String)
 
 class FADownloaderViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -137,6 +150,139 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     fun updateUseCache(use: Boolean) = _uiState.update { it.copy(useCache = use) }
     fun updateNamingMode(mode: String) = _uiState.update { it.copy(namingMode = mode) }
     fun updateDownloadThreads(threads: Int) = _uiState.update { it.copy(downloadThreads = threads.coerceIn(1, 4)) }
+
+    // ── 作者历史管理 ──
+
+    private val historyPrefs = application.getSharedPreferences("fa_author_history", Context.MODE_PRIVATE)
+
+    init {
+        // 加载作者历史
+        _uiState.update { it.copy(authorHistory = loadAuthorHistory()) }
+    }
+
+    private fun loadAuthorHistory(): List<AuthorHistoryEntry> {
+        val raw = historyPrefs.getString("history", "") ?: ""
+        if (raw.isEmpty()) return emptyList()
+        return raw.split("|||").mapNotNull { entry ->
+            val parts = entry.split(":::", limit = 2)
+            if (parts.size == 2) {
+                AuthorHistoryEntry(parts[0], parts[1].toLongOrNull() ?: 0L)
+            } else null
+        }.sortedByDescending { it.timestamp }
+    }
+
+    private fun saveAuthorHistory(list: List<AuthorHistoryEntry>) {
+        val raw = list.joinToString("|||") { "${it.author}:::${it.timestamp}" }
+        historyPrefs.edit().putString("history", raw).apply()
+    }
+
+    /** 将作者添加到历史记录（如果已存在则移到最前） */
+    fun addAuthorToHistory(author: String) {
+        if (author.isBlank()) return
+        val current = loadAuthorHistory().toMutableList()
+        current.removeAll { it.author.equals(author, ignoreCase = true) }
+        current.add(0, AuthorHistoryEntry(author, System.currentTimeMillis()))
+        saveAuthorHistory(current)
+        _uiState.update { it.copy(authorHistory = current) }
+    }
+
+    /** 从历史记录中删除作者 */
+    fun removeAuthorFromHistory(author: String) {
+        val current = loadAuthorHistory().toMutableList()
+        current.removeAll { it.author == author }
+        saveAuthorHistory(current)
+        _uiState.update { it.copy(authorHistory = current) }
+    }
+
+    fun toggleAuthorHistory() {
+        _uiState.update { it.copy(showAuthorHistory = !it.showAuthorHistory) }
+    }
+
+    // ── 缓存查看器 ──
+
+    fun toggleCacheViewer() {
+        val show = !_uiState.value.showCacheViewer
+        if (show) {
+            loadCachedAuthors()
+        }
+        _uiState.update { it.copy(showCacheViewer = show, selectedCachedAuthor = null, cachedLinks = emptyList(), selectedCacheLinks = emptySet()) }
+    }
+
+    private fun loadCachedAuthors() {
+        val allEntries = cachePrefs.all
+        // 按 author 分组: key 格式为 "author:pageId" 或纯 pageId
+        // 为兼容旧格式，先加载所有条目
+        val authorMap = mutableMapOf<String, MutableList<Pair<String, String>>>()
+        for ((key, value) in allEntries) {
+            if (value is String && key != "author_links") {
+                // 尝试从 key 中提取 author（新格式: author/pageId）
+                val parts = key.split("/", limit = 2)
+                if (parts.size == 2) {
+                    authorMap.getOrPut(parts[0]) { mutableListOf() }.add(parts[1] to value)
+                } else {
+                    // 旧格式：无 author 信息，归入 "未知作者"
+                    authorMap.getOrPut("未知作者") { mutableListOf() }.add(key to value)
+                }
+            }
+        }
+        val authors = authorMap.map { (author, links) ->
+            CachedAuthorInfo(author, links.size, System.currentTimeMillis())
+        }.sortedByDescending { it.timestamp }
+        _uiState.update { it.copy(cachedAuthors = authors) }
+    }
+
+    fun resetCacheViewerSelection() {
+        _uiState.update { it.copy(selectedCachedAuthor = null, cachedLinks = emptyList(), selectedCacheLinks = emptySet()) }
+    }
+
+    fun selectCachedAuthor(author: String) {
+        val allEntries = cachePrefs.all
+        val links = mutableListOf<CachedLinkInfo>()
+        for ((key, value) in allEntries) {
+            if (value is String && key.startsWith("$author/")) {
+                val pageId = key.removePrefix("$author/")
+                links.add(CachedLinkInfo(pageId, value))
+            }
+        }
+        _uiState.update { it.copy(selectedCachedAuthor = author, cachedLinks = links, selectedCacheLinks = emptySet()) }
+    }
+
+    fun toggleCacheLinkSelection(pageId: String) {
+        _uiState.update { state ->
+            val newSet = if (pageId in state.selectedCacheLinks) {
+                state.selectedCacheLinks - pageId
+            } else {
+                state.selectedCacheLinks + pageId
+            }
+            state.copy(selectedCacheLinks = newSet)
+        }
+    }
+
+    fun deleteSelectedCacheLinks() {
+        val state = _uiState.value
+        val author = state.selectedCachedAuthor ?: return
+        val editor = cachePrefs.edit()
+        for (pageId in state.selectedCacheLinks) {
+            editor.remove("$author/$pageId")
+        }
+        editor.apply()
+        // 刷新
+        selectCachedAuthor(author)
+        loadCachedAuthors()
+    }
+
+    fun deleteCachedAuthor(author: String) {
+        val allEntries = cachePrefs.all
+        val editor = cachePrefs.edit()
+        for ((key, _) in allEntries) {
+            if (key.startsWith("$author/")) {
+                editor.remove(key)
+            }
+        }
+        editor.apply()
+        loadCachedAuthors()
+        _uiState.update { it.copy(selectedCachedAuthor = null, cachedLinks = emptyList(), selectedCacheLinks = emptySet()) }
+    }
 
     fun saveCookie(cookie: String, username: String = "") {
         prefs.edit()
@@ -237,6 +383,8 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         }
 
         isStopped = false
+        // 记录作者到历史
+        addAuthorToHistory(state.author)
         val channel = Channel<PreviewItem>(Channel.UNLIMITED)
         downloadChannel = channel
 
@@ -259,24 +407,26 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             val cookie = loadCookie()
 
             val allTasks = mutableListOf<PreviewItem>()
-            var currentPage = startPage
+            var currentUrl = "$FA_BASE/${state.downloadType}/${state.author}/${startPage}"
             var consecutiveEmpty = 0
             var globalSeq = 0
             var firstPageCount = 0
+            var pageNum = startPage
 
             try {
                 while (!isStopped) {
                     if (maxDownload > 0 && allTasks.size >= maxDownload) break
 
-                    val url = "$FA_BASE/${state.downloadType}/${state.author}/$currentPage"
-                    val html = fetchHtml(url, cookie)
+                    val html = fetchHtml(currentUrl, cookie)
                     if (html == null) {
                         consecutiveEmpty++
                         if (consecutiveEmpty >= 3) {
                             addLog("连续 3 次失败，停止收集")
                             break
                         }
-                        currentPage++
+                        // 无法从空 HTML 解析下一页，回退到页码递增
+                        pageNum++
+                        currentUrl = "$FA_BASE/${state.downloadType}/${state.author}/$pageNum"
                         continue
                     }
 
@@ -293,32 +443,44 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                         channel.close()
                         return@launch
                     }
-                    if (html.contains("id=\"login-form\"") && state.isLoggedIn) {
-                        addLog("Cookie 已失效")
-                        markCookieExpired()
-                        _uiState.update { it.copy(isCollecting = false, statusMessage = "Cookie 失效") }
-                        channel.close()
-                        return@launch
+
+                    // 检测画廊结束（参考 furaffinity-dl: id="no-images"）
+                    if (isGalleryEnd(html)) {
+                        addLog("已到画廊末尾 (第 $pageNum 页)")
+                        break
                     }
 
                     val pages = parseGalleryPages(html)
                     if (pages.isEmpty()) {
                         consecutiveEmpty++
-                        if (consecutiveEmpty >= 2) break
-                        currentPage++
+                        addLog("第 $pageNum 页: 未发现作品链接 (连续空页 $consecutiveEmpty)")
+                        // 仅在连续空页 + 登录表单存在时才判定 Cookie 失效
+                        if (consecutiveEmpty >= 2 && html.contains("id=\"login-form\"") && state.isLoggedIn) {
+                            addLog("Cookie 可能已失效（连续空页且含登录表单）")
+                            markCookieExpired()
+                            _uiState.update { it.copy(isCollecting = false, statusMessage = "Cookie 失效") }
+                            channel.close()
+                            return@launch
+                        }
+                        if (consecutiveEmpty >= 4) {
+                            addLog("连续 4 页无内容，停止收集")
+                            break
+                        }
+                        // 尝试下一页（优先从 Next 按钮解析，回退到页码递增）
+                        val nextUrl = parseNextPageUrl(html, currentUrl)
+                        if (nextUrl != null) {
+                            currentUrl = nextUrl; pageNum++
+                        } else {
+                            pageNum++
+                            currentUrl = "$FA_BASE/${state.downloadType}/${state.author}/$pageNum"
+                        }
                         continue
                     }
                     consecutiveEmpty = 0
 
-                    // First page done → 初始保守估算
-                    if (currentPage == startPage) {
+                    // First page done → 记录每页作品数
+                    if (pageNum == startPage) {
                         firstPageCount = pages.size
-                        val estimatedTotal = if (maxDownload > 0) {
-                            minOf(firstPageCount * 10, maxDownload)
-                        } else {
-                            firstPageCount * 10  // 保守估算 10 页
-                        }
-                        _uiState.update { it.copy(collectionTotal = estimatedTotal) }
                         addLog("第一页发现 $firstPageCount 个作品，开始逐页爬取...")
                     }
 
@@ -337,7 +499,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
                         val deferred = async {
                             semaphore.withPermit {
-                                val cachedUrl = if (state.useCache) getCachedUrl(pageId) else null
+                                val cachedUrl = if (state.useCache) getCachedUrl(state.author, pageId) else null
                                 if (cachedUrl != null) {
                                     DetailResult(pageId, cachedUrl, extractFileName(cachedUrl), "")
                                 } else {
@@ -345,7 +507,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                                     if (detailHtml == null) return@async null
                                     val info = parseSubmissionInfo(detailHtml)
                                     if (info == null) return@async null
-                                    if (state.useCache) cacheUrl(pageId, info.imageUrl)
+                                    if (state.useCache) cacheUrl(state.author, pageId, info.imageUrl)
                                     DetailResult(pageId, info.imageUrl, extractFileName(info.imageUrl), info.title)
                                 }
                             }
@@ -383,8 +545,16 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                         }
                     }
 
-                    addLog("第 $currentPage 页: 已收集 ${allTasks.size} 个任务")
-                    currentPage++
+                    addLog("第 $pageNum 页: 已收集 ${allTasks.size} 个任务")
+                    // 从页面解析下一页 URL（参考 furaffinity-dl: 从 Next 按钮提取）
+                    val nextUrl = parseNextPageUrl(html, currentUrl)
+                    if (nextUrl != null) {
+                        currentUrl = nextUrl
+                        pageNum++
+                    } else {
+                        addLog("无更多页面，收集结束")
+                        break
+                    }
                 }
             } catch (e: Exception) {
                 addLog("收集任务异常: ${e.message}")
@@ -600,25 +770,46 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     private fun parseGalleryPages(html: String): List<String> {
         val pages = mutableListOf<String>()
-        val pattern = Pattern.compile("""<a href="/view/(\d+)/">""")
-        val matcher = pattern.matcher(html)
-        while (matcher.find()) {
-            pages.add("$FA_BASE/view/${matcher.group(1)}/")
+        // 方式1: 匹配 <figure> 内的 <a href="/view/ID/...">（参考 furaffinity-dl 的 figure 标签方式）
+        val figurePattern = Pattern.compile("""<figure[^>]*>.*?<a\s+href="(/view/(\d+)(?:/[^"]*)?)".*?</figure>""", Pattern.DOTALL)
+        val figureMatcher = figurePattern.matcher(html)
+        while (figureMatcher.find()) {
+            pages.add("$FA_BASE${figureMatcher.group(1)}")
+        }
+        // 方式2: 直接匹配 <a href="/view/ID/"> 作为后备
+        if (pages.isEmpty()) {
+            val linkPattern = Pattern.compile("""<a\s+href="(/view/(\d+)(?:/[^"]*)?)"[^>]*>""")
+            val linkMatcher = linkPattern.matcher(html)
+            while (linkMatcher.find()) {
+                pages.add("$FA_BASE${linkMatcher.group(1)}")
+            }
         }
         return pages.distinct()
     }
 
-    /** 从画廊页面解析最大页码（如存在分页导航） */
-    private fun parseMaxPage(html: String): Int {
-        // 匹配 /gallery/username/123/ 或 /scraps/username/123/ 格式的分页链接
-        val pattern = Pattern.compile("""href="/(?:gallery|scraps)/[^/]+/(\d+)/"""")
-        val matcher = pattern.matcher(html)
-        var maxPage = 1
-        while (matcher.find()) {
-            val page = matcher.group(1)?.toIntOrNull() ?: continue
-            if (page > maxPage) maxPage = page
+    /** 检测画廊是否已结束（参考 furaffinity-dl: id="no-images"） */
+    private fun isGalleryEnd(html: String): Boolean {
+        return html.contains("id=\"no-images\"")
+    }
+
+    /** 从页面解析下一页 URL（参考 furaffinity-dl: 从 Next 按钮的 form action 提取） */
+    private fun parseNextPageUrl(html: String, currentUrl: String): String? {
+        // 方式1: 从 Next 按钮的 form action 提取
+        val nextPattern = Pattern.compile("""<form[^>]+action="([^"]*)"[^>]*>.*?<button[^>]*>[^<]*[Nn]ext""", Pattern.DOTALL)
+        val nextMatcher = nextPattern.matcher(html)
+        if (nextMatcher.find()) {
+            val action = nextMatcher.group(1) ?: ""
+            if (action.isNotEmpty()) {
+                return if (action.startsWith("http")) action else "$FA_BASE$action"
+            }
         }
-        return maxPage
+        // 方式2: 从分页链接提取下一页
+        val pagePattern = Pattern.compile("""href="(/(?:gallery|scraps)/[^/]+/(\d+)/[^"]*)"[^>]*>\s*(?:»|Next|下一页)""")
+        val pageMatcher = pagePattern.matcher(html)
+        if (pageMatcher.find()) {
+            return "$FA_BASE${pageMatcher.group(1)}"
+        }
+        return null
     }
 
     private fun parseImageUrl(html: String): String? {
@@ -668,13 +859,22 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     // ── Cache ──
 
-    private fun getCachedUrl(pageId: String): String? {
-        val url = cachePrefs.getString(pageId, null)
-        return if (url.isNullOrEmpty()) null else url
+    private fun getCachedUrl(author: String, pageId: String): String? {
+        // 新格式: author/pageId
+        val newKey = "$author/$pageId"
+        val url = cachePrefs.getString(newKey, null)
+        if (!url.isNullOrEmpty()) return url
+        // 兼容旧格式: pageId（自动迁移）
+        val oldUrl = cachePrefs.getString(pageId, null)
+        if (!oldUrl.isNullOrEmpty()) {
+            cachePrefs.edit().putString(newKey, oldUrl).remove(pageId).apply()
+            return oldUrl
+        }
+        return null
     }
 
-    private fun cacheUrl(pageId: String, imageUrl: String) {
-        cachePrefs.edit().putString(pageId, imageUrl).apply()
+    private fun cacheUrl(author: String, pageId: String, imageUrl: String) {
+        cachePrefs.edit().putString("$author/$pageId", imageUrl).apply()
     }
 
     // ── File Operations ──
