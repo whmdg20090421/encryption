@@ -67,7 +67,8 @@ data class FAUiState(
     val skippedCount: Int = 0,
     val failedCount: Int = 0,
     val currentProgress: Float = 0f,
-    val statusMessage: String = "准备就绪"
+    val statusMessage: String = "准备就绪",
+    val errorMessage: String? = null
 )
 
 class FADownloaderViewModel(application: Application) : AndroidViewModel(application) {
@@ -173,6 +174,10 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 username = username.ifEmpty { it.username }
             )
         }
+    }
+
+    fun clearError() {
+        _uiState.update { it.copy(errorMessage = null) }
     }
 
     fun markCookieExpired() {
@@ -379,15 +384,17 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             }
 
             channel.close()
+            val isEmpty = allTasks.isEmpty()
             _uiState.update {
                 it.copy(
                     isCollecting = false,
                     collectionComplete = true,
                     collectionTotal = allTasks.size,
-                    statusMessage = if (allTasks.isEmpty()) "无图片" else "收集完成 ${allTasks.size} 个任务"
+                    statusMessage = if (isEmpty) "无图片" else "收集完成 ${allTasks.size} 个任务",
+                    errorMessage = if (isEmpty) "未找到可下载的图片。可能原因：\n• Cookie 已失效或未登录\n• 作者名拼写错误\n• FA 页面结构已变化导致解析失败\n\n请检查日志中的错误信息。" else null
                 )
             }
-            if (allTasks.isEmpty()) {
+            if (isEmpty) {
                 addLog("没有找到可下载的图片")
             } else {
                 addLog("收集完成，共 ${allTasks.size} 个任务")
@@ -602,9 +609,28 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun parseImageUrl(html: String): String? {
-        val pattern = Pattern.compile("""href="(//d\.facdn\.net/[^"]+)"[^>]*>\s*Download""")
-        val matcher = pattern.matcher(html)
-        return if (matcher.find()) "https:${matcher.group(1)}" else null
+        // 多种格式尝试匹配下载链接
+        val patterns = listOf(
+            // 标准格式: href="//d.facdn.net/...">Download
+            Pattern.compile("""href="(//d\.facdn\.net/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
+            // https 前缀
+            Pattern.compile("""href="(https?://d\.facdn\.net/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
+            // 任意 facdn 子域名
+            Pattern.compile("""href="(//[^"]*facdn[^"]*\.(net|com)/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
+            // 下载按钮带 download 属性
+            Pattern.compile("""href="(//[^"]*facdn[^"]*\.(net|com)/[^"]+)"[^>]*download"""),
+        )
+        for (pattern in patterns) {
+            val matcher = pattern.matcher(html)
+            if (matcher.find()) {
+                val url = matcher.group(1) ?: continue
+                return if (url.startsWith("//")) "https:$url" else url
+            }
+        }
+        // 最终回退: 查找 submission 图片 src
+        val imgPattern = Pattern.compile("""<img[^>]+id="submissionImg"[^>]+src="(https?://[^"]+)"""")
+        val imgMatcher = imgPattern.matcher(html)
+        return if (imgMatcher.find()) imgMatcher.group(1) else null
     }
 
     private fun extractFileName(url: String): String {

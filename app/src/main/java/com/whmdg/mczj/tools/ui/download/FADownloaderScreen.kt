@@ -601,6 +601,27 @@ fun FADownloaderScreen(
         }
     }
 
+    // ── Fatal error dialog ──
+    if (state.errorMessage != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.clearError() },
+            icon = {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("收集失败") },
+            text = { Text(state.errorMessage!!) },
+            confirmButton = {
+                Button(onClick = { viewModel.clearError() }) {
+                    Text("知道了")
+                }
+            }
+        )
+    }
+
     // ── Early confirm warning dialog ──
     var showEarlyConfirmWarning by remember { mutableStateOf(false) }
     if (showEarlyConfirmWarning) {
@@ -818,14 +839,20 @@ private fun LogLine(message: String) {
         message.contains("完成") -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+    // 长文本自动换行，续行前加 ↳ 箭头标识
+    val displayText = if (message.length > 80) {
+        val firstLine = message.take(80)
+        val rest = message.drop(80).chunked(80).joinToString("\n") { "↳ $it" }
+        "$firstLine\n$rest"
+    } else {
+        message
+    }
     Text(
-        text = message,
+        text = displayText,
         style = MaterialTheme.typography.bodySmall.copy(
             fontFamily = FontFamily.Monospace,
             fontSize = 12.sp
         ),
-        color = color,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis
+        color = color
     )
 }
