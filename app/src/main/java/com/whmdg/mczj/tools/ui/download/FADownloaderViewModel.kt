@@ -190,7 +190,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     fun startDownload() {
         // 业务层权限检查（第二道防线）
-        if (!SecurityEnforcer.checkOrDie(context, Feature.FA_DOWNLOADER, "FADownloaderViewModel.startDownload")) {
+        if (!SecurityEnforcer.checkOrDie(context, Feature.BATCH_DOWNLOADER, "FADownloaderViewModel.startDownload")) {
             addLog("权限不足：无法启动下载")
             return
         }

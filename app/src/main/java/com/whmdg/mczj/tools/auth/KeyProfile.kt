@@ -17,8 +17,8 @@ object KeyProfile {
     val PROFILES: Map<String, Set<Feature>> = run {
         val m = mapOf(
             decode(K1) to Feature.values().toSet(),
-            decode(K2) to setOf(Feature.ENCRYPTION_VAULT, Feature.FA_DOWNLOADER),
-            decode(K3) to setOf(Feature.FA_DOWNLOADER)
+            decode(K2) to setOf(Feature.ENCRYPTION_VAULT, Feature.BATCH_DOWNLOADER, Feature.SECURITY_SETTINGS),
+            decode(K3) to setOf(Feature.BATCH_DOWNLOADER, Feature.SECURITY_SETTINGS)
         )
         Log.d(TAG, "PROFILES initialized: ${m.keys}")
         m.forEach { (k, v) -> Log.d(TAG, "  key=$k features=$v") }

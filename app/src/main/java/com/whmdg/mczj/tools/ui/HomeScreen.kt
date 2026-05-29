@@ -91,7 +91,6 @@ enum class ModuleId {
     FILE_MANAGER,
     APP_PERMISSIONS,
     BATCH_DOWNLOADER,
-    FA_DOWNLOADER,
     SECURITY
 }
 
@@ -108,7 +107,6 @@ val MODULE_REGISTRY: Map<ModuleId, ModuleEntry> = mapOf(
     ModuleId.FILE_MANAGER to ModuleEntry("文件管理器", "双面板文件浏览工具", Icons.Default.Folder, Feature.FILE_MANAGER, Screen.FileManager),
     ModuleId.APP_PERMISSIONS to ModuleEntry("应用权限管理", "查看和管理应用权限", Icons.Default.Security, Feature.APP_PERMISSIONS, Screen.AppPermissions),
     ModuleId.BATCH_DOWNLOADER to ModuleEntry("批量下载器", "FA 图片批量下载等工具", Icons.Default.Download, Feature.BATCH_DOWNLOADER, Screen.BatchDownloader),
-    ModuleId.FA_DOWNLOADER to ModuleEntry("FA 下载器", "FA 内容下载工具", Icons.Default.CloudDownload, Feature.FA_DOWNLOADER, Screen.FADownloader),
     ModuleId.SECURITY to ModuleEntry("安全", "权限设置与特殊权限管理", Icons.Default.Lock, Feature.SECURITY_SETTINGS, Screen.Security)
 )
 
