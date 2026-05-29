@@ -609,28 +609,23 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun parseImageUrl(html: String): String? {
-        // 多种格式尝试匹配下载链接
-        // FA 当前下载域名: d.furaffinity.net（旧: d.facdn.net）
-        val patterns = listOf(
-            // d.furaffinity.net（当前域名）
-            Pattern.compile("""href="(//d\.furaffinity\.net/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
-            Pattern.compile("""href="(https?://d\.furaffinity\.net/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
-            // d.facdn.net（旧域名兼容）
-            Pattern.compile("""href="(//d\.facdn\.net/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
-            Pattern.compile("""href="(https?://d\.facdn\.net/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
-            // 通用匹配任何 /art/ 路径的下载链接
-            Pattern.compile("""href="(//d\.[^"]+\.net/art/[^"]+)"[^>]*>[^<]*[Dd]ownload"""),
-            // 下载按钮带 download 属性
-            Pattern.compile("""href="(//d\.[^"]+\.net/[^"]+)"[^>]*download"""),
-        )
-        for (pattern in patterns) {
-            val matcher = pattern.matcher(html)
-            if (matcher.find()) {
-                val url = matcher.group(1) ?: continue
-                return if (url.startsWith("//")) "https:$url" else url
-            }
+        // 方式1: 查找文本为 "Download" 的 <a> 标签（参考 furaffinity-dl 项目，不硬编码域名）
+        val downloadLinkPattern = Pattern.compile("""<a[^>]+href="([^"]+)"[^>]*>\s*[Dd]ownload""")
+        val downloadMatcher = downloadLinkPattern.matcher(html)
+        if (downloadMatcher.find()) {
+            val href = downloadMatcher.group(1) ?: ""
+            val url = if (href.startsWith("//")) "https:$href" else href
+            if (url.startsWith("http")) return url
         }
-        // 最终回退: 查找 submission 图片 src
+        // 方式2: 带 download 属性的链接
+        val downloadAttrPattern = Pattern.compile("""<a[^>]+href="([^"]+)"[^>]*download[^>]*>""")
+        val downloadAttrMatcher = downloadAttrPattern.matcher(html)
+        if (downloadAttrMatcher.find()) {
+            val href = downloadAttrMatcher.group(1) ?: ""
+            val url = if (href.startsWith("//")) "https:$href" else href
+            if (url.startsWith("http")) return url
+        }
+        // 方式3: 回退到 submission 图片 src
         val imgPattern = Pattern.compile("""<img[^>]+id="submissionImg"[^>]+src="(https?://[^"]+)"""")
         val imgMatcher = imgPattern.matcher(html)
         return if (imgMatcher.find()) imgMatcher.group(1) else null
