@@ -111,8 +111,14 @@ data class FAUiState(
     val cachedAuthors: List<CachedAuthorInfo> = emptyList(),
     val selectedCachedAuthor: String? = null,
     val cachedLinks: List<CachedLinkInfo> = emptyList(),
-    val selectedCacheLinks: Set<String> = emptySet()
+    val selectedCacheLinks: Set<String> = emptySet(),
+    // 页面预扫描
+    val isScanning: Boolean = false,
+    val showScanResult: Boolean = false,
+    val scanResults: List<ScanPageInfo> = emptyList()
 )
+
+data class ScanPageInfo(val pageNum: Int, val linkCount: Int)
 
 data class AuthorHistoryEntry(val author: String, val timestamp: Long)
 data class CachedAuthorInfo(val author: String, val count: Int, val timestamp: Long)
@@ -405,10 +411,9 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         _uiState.update { it.copy(cookieRefreshAttempts = 0) }
     }
 
-    // ── Phase 1: Start collection, show preview immediately ──
+    // ── Phase 0: Scan pages to count total ──
 
     fun startDownload() {
-        // 业务层权限检查（第二道防线）
         if (!SecurityEnforcer.checkOrDie(context, Feature.BATCH_DOWNLOADER, "FADownloaderViewModel.startDownload")) {
             addLog("权限不足：无法启动下载")
             return
@@ -425,9 +430,106 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             return
         }
 
-        isStopped = false
-        // 记录作者到历史
         addAuthorToHistory(state.author)
+        isStopped = false
+
+        _uiState.update {
+            it.copy(
+                isScanning = true,
+                showScanResult = false,
+                scanResults = emptyList(),
+                statusMessage = "正在扫描页面..."
+            )
+        }
+        addLog("正在扫描 ${state.author} 的 ${state.downloadType}...")
+
+        collectJob = viewModelScope.launch(Dispatchers.IO) {
+            val startPage = state.startPage.toIntOrNull() ?: 1
+            val cookie = loadCookie()
+            val results = mutableListOf<ScanPageInfo>()
+            var pageNum = startPage
+            var consecutiveEmpty = 0
+
+            try {
+                while (!isStopped) {
+                    val url = "$FA_BASE/${state.downloadType}/${state.author}/$pageNum"
+                    addLog("扫描第 $pageNum 页...")
+                    val html = fetchHtml(url, cookie)
+
+                    if (html == null) {
+                        consecutiveEmpty++
+                        if (consecutiveEmpty >= 3) {
+                            addLog("连续 3 次请求失败，停止扫描")
+                            break
+                        }
+                        pageNum++
+                        continue
+                    }
+
+                    if (html.contains("could not be found")) {
+                        addLog("未找到作者「${state.author}」")
+                        break
+                    }
+
+                    if (isGalleryEnd(html)) {
+                        addLog("已到画廊末尾 (第 $pageNum 页)")
+                        break
+                    }
+
+                    val pages = parseGalleryPages(html)
+                    if (pages.isEmpty()) {
+                        consecutiveEmpty++
+                        if (consecutiveEmpty >= 2) {
+                            addLog("连续空页，停止扫描")
+                            break
+                        }
+                        pageNum++
+                        continue
+                    }
+
+                    consecutiveEmpty = 0
+                    results.add(ScanPageInfo(pageNum, pages.size))
+                    addLog("第 $pageNum 页: ${pages.size} 个链接")
+                    pageNum++
+                }
+            } catch (e: Exception) {
+                addLog("扫描异常: ${e.message}")
+            }
+
+            val totalLinks = results.sumOf { it.linkCount }
+            addLog("扫描完成: ${results.size} 页，共 $totalLinks 个链接")
+
+            _uiState.update {
+                it.copy(
+                    isScanning = false,
+                    showScanResult = true,
+                    scanResults = results,
+                    statusMessage = "扫描完成"
+                )
+            }
+        }
+    }
+
+    fun cancelScan() {
+        isStopped = true
+        collectJob?.cancel()
+        _uiState.update {
+            it.copy(
+                isScanning = false,
+                showScanResult = false,
+                scanResults = emptyList(),
+                statusMessage = "已取消"
+            )
+        }
+    }
+
+    // ── Phase 1: Confirm scan and start collection ──
+
+    fun confirmScanAndCollect() {
+        _uiState.update { it.copy(showScanResult = false) }
+
+        val state = _uiState.value
+        isStopped = false
         val channel = Channel<PreviewItem>(Channel.UNLIMITED)
         downloadChannel = channel
 
@@ -443,82 +545,33 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 statusMessage = "正在收集任务..."
             )
         }
-        addLog("正在收集 ${state.author} 的 ${state.downloadType}...")
+        addLog("开始收集 ${state.author} 的 ${state.downloadType}...")
 
         collectJob = viewModelScope.launch(Dispatchers.IO) {
-            val startPage = state.startPage.toIntOrNull() ?: 1
             val maxDownload = state.maxDownload.toIntOrNull() ?: 0
             val cookie = loadCookie()
+            val pagesToScan = state.scanResults
 
             val allTasks = mutableListOf<PreviewItem>()
-            var currentUrl = "$FA_BASE/${state.downloadType}/${state.author}/${startPage}"
-            var consecutiveEmpty = 0
-            var pageNum = startPage
 
             try {
-                while (!isStopped) {
+                for (scanInfo in pagesToScan) {
+                    if (isStopped) break
                     if (maxDownload > 0 && allTasks.size >= maxDownload) break
 
-                    val html = fetchHtml(currentUrl, cookie)
+                    val pageNum = scanInfo.pageNum
+                    val url = "$FA_BASE/${state.downloadType}/${state.author}/$pageNum"
+                    val html = fetchHtml(url, cookie)
                     if (html == null) {
-                        consecutiveEmpty++
-                        if (consecutiveEmpty >= 3) {
-                            addLog("连续 3 次失败，停止收集")
-                            break
-                        }
-                        // 无法从空 HTML 解析下一页，回退到页码递增
-                        pageNum++
-                        currentUrl = "$FA_BASE/${state.downloadType}/${state.author}/$pageNum"
+                        addLog("第 $pageNum 页: 请求失败，跳过")
                         continue
-                    }
-
-                    if (html.contains("could not be found")) {
-                        addLog("未找到作者「${state.author}」，请检查名称")
-                        _uiState.update { it.copy(isCollecting = false, statusMessage = "作者不存在") }
-                        channel.close()
-                        return@launch
-                    }
-                    if (html.contains("available to registered users only")) {
-                        addLog("该作者的作品仅对注册用户可见，请先登录")
-                        markCookieExpired()
-                        _uiState.update { it.copy(isCollecting = false, statusMessage = "需要登录") }
-                        channel.close()
-                        return@launch
-                    }
-
-                    // 检测画廊结束（参考 furaffinity-dl: id="no-images"）
-                    if (isGalleryEnd(html)) {
-                        addLog("已到画廊末尾 (第 $pageNum 页)")
-                        break
                     }
 
                     val pages = parseGalleryPages(html)
                     if (pages.isEmpty()) {
-                        consecutiveEmpty++
-                        addLog("第 $pageNum 页: 未发现作品链接 (连续空页 $consecutiveEmpty)")
-                        // 仅在连续空页 + 登录表单存在时才判定 Cookie 失效
-                        if (consecutiveEmpty >= 2 && html.contains("id=\"login-form\"") && state.isLoggedIn) {
-                            addLog("Cookie 可能已失效（连续空页且含登录表单）")
-                            markCookieExpired()
-                            _uiState.update { it.copy(isCollecting = false, statusMessage = "Cookie 失效") }
-                            channel.close()
-                            return@launch
-                        }
-                        if (consecutiveEmpty >= 4) {
-                            addLog("连续 4 页无内容，停止收集")
-                            break
-                        }
-                        // 尝试下一页（优先从 Next 按钮解析，回退到页码递增）
-                        val nextUrl = parseNextPageUrl(html, currentUrl)
-                        if (nextUrl != null) {
-                            currentUrl = nextUrl; pageNum++
-                        } else {
-                            pageNum++
-                            currentUrl = "$FA_BASE/${state.downloadType}/${state.author}/$pageNum"
-                        }
+                        addLog("第 $pageNum 页: 无链接，跳过")
                         continue
                     }
-                    consecutiveEmpty = 0
 
                     addLog("第 $pageNum 页: 发现 ${pages.size} 个链接，开始抓取详情...")
 
@@ -598,9 +651,6 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
                     val pageCollected = allTasks.size - countBeforePage
                     addPageSummary("第${pageNum}页（${pages.size}个链接），本页${pageCollected}个，累计${allTasks.size}个")
-                    // 手动递增页码（不依赖 Next 按钮解析，更可靠）
-                    pageNum++
-                    currentUrl = "$FA_BASE/${state.downloadType}/${state.author}/$pageNum"
                 }
             } catch (e: Exception) {
                 addLog("收集任务异常: ${e.message}")

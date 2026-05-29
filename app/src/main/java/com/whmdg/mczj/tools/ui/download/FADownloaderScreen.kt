@@ -520,9 +520,17 @@ fun FADownloaderScreen(
                     Button(
                         onClick = { viewModel.startDownload() },
                         modifier = Modifier.weight(1f),
-                        enabled = !state.isDownloading && !state.isCollecting
+                        enabled = !state.isDownloading && !state.isCollecting && !state.isScanning
                     ) {
-                        if (state.isCollecting) {
+                        if (state.isScanning) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("扫描中...")
+                        } else if (state.isCollecting) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(18.dp),
                                 strokeWidth = 2.dp,
@@ -537,9 +545,9 @@ fun FADownloaderScreen(
                         }
                     }
                     OutlinedButton(
-                        onClick = { viewModel.stopDownload() },
+                        onClick = { if (state.isScanning) viewModel.cancelScan() else viewModel.stopDownload() },
                         modifier = Modifier.weight(1f),
-                        enabled = state.isDownloading || state.isCollecting
+                        enabled = state.isDownloading || state.isCollecting || state.isScanning
                     ) {
                         Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
@@ -696,6 +704,42 @@ fun FADownloaderScreen(
             // Bottom spacer
             item { Spacer(modifier = Modifier.height(16.dp)) }
         }
+    }
+
+    // ── Scan result dialog ──
+    if (state.showScanResult) {
+        val totalLinks = state.scanResults.sumOf { it.linkCount }
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelScan() },
+            icon = {
+                Icon(
+                    Icons.Default.Visibility,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            title = { Text("发现 ${state.scanResults.size} 页，共 $totalLinks 个链接") },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    state.scanResults.forEach { info ->
+                        Text(
+                            "第${info.pageNum}页: ${info.linkCount} 个链接",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { viewModel.confirmScanAndCollect() }) {
+                    Text("确定下载")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.cancelScan() }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 
     // ── Fatal error dialog ──
