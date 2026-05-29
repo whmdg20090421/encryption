@@ -1424,7 +1424,6 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             // 直接在原文件名前加序号，不重建文件名（避免重复作者名等问题）
             data class RenameOp(val docFile: androidx.documentfile.provider.DocumentFile, val from: String, val to: String)
             val ops = mutableListOf<RenameOp>()
-            val entryByName = entries.associateBy { it.name }
 
             for (i in (firstDiff - 1) until sorted.size) {
                 val entry = sorted[i]
