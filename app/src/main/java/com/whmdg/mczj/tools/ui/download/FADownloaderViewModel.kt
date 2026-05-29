@@ -611,7 +611,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             addLog("保存目录: ${state.author}/${if (state.downloadType == "scraps") "scraps/" else ""}")
 
             // Producer-consumer: read from channel, download in parallel, save in order
-            val buffer = ConcurrentHashMap<Int, ByteArray?>()
+            val buffer = HashMap<Int, ByteArray?>()
             val fileNameMap = ConcurrentHashMap<Int, String>()
             val semaphore = Semaphore(threadCount)
             var nextSeq = 1
