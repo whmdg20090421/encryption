@@ -1450,7 +1450,6 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             }
 
             // ── Step 5: 两步重命名（先 → .tmp，再 → 最终名） ──
-            // 先全部改名为 .tmp 避免冲突
             var renamed = 0
             for (op in ops) {
                 try {
@@ -1458,11 +1457,13 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                     renamed++
                 } catch (_: Exception) {}
             }
-            // 再从 .tmp 改为最终名（重新 listFiles 一次获取更新后的文件引用）
-            val tmpFiles = dirDoc.listFiles().filter { it.name?.endsWith(".tmp") == true }
+            // HashMap 查找 O(1)，替代 firstOrNull 的 O(m)
+            val tmpMap = dirDoc.listFiles()
+                .filter { it.name?.endsWith(".tmp") == true }
+                .associateBy { it.name }
             for (op in ops) {
                 try {
-                    tmpFiles.firstOrNull { it.name == "${op.to}.tmp" }?.renameTo(op.to)
+                    tmpMap["${op.to}.tmp"]?.renameTo(op.to)
                 } catch (_: Exception) {
                     addLog("  重命名失败: ${op.to}")
                 }
