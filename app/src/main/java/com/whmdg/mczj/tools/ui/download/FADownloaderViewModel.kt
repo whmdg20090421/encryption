@@ -80,7 +80,10 @@ data class FAUiState(
     val saveDir: Uri? = null,
     val saveDirPath: String = "",
     val startPage: String = "1",
+    val endPage: String = "0",
     val maxDownload: String = "0",
+    val partialDownload: Boolean = false,
+    val reverseOrder: Boolean = false,
     val skipExisting: Boolean = true,
     val useCache: Boolean = true,
     val downloadThreads: Int = 1,
@@ -208,6 +211,9 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         prefs.edit().putInt("download_threads", t).apply()
         _uiState.update { it.copy(downloadThreads = t) }
     }
+    fun updateEndPage(page: String) = _uiState.update { it.copy(endPage = page) }
+    fun updatePartialDownload(enabled: Boolean) = _uiState.update { it.copy(partialDownload = enabled) }
+    fun updateReverseOrder(enabled: Boolean) = _uiState.update { it.copy(reverseOrder = enabled) }
 
     // ── 作者历史管理 ──
 
@@ -504,8 +510,14 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             var pageNum = startPage
             var consecutiveEmpty = 0
 
+            val endPage = state.endPage.toIntOrNull() ?: 0
+
             try {
                 while (!isStopped) {
+                    if (endPage > 0 && pageNum > endPage) {
+                        addLog("已到达结束页 $endPage，停止扫描")
+                        break
+                    }
                     val url = "$FA_BASE/${state.downloadType}/${state.author}/$pageNum"
                     addLog("扫描第 $pageNum 页...")
                     val html = fetchHtml(url, cookie)
@@ -604,7 +616,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         collectJob = viewModelScope.launch(Dispatchers.IO) {
             val maxDownload = state.maxDownload.toIntOrNull() ?: 0
             val cookie = loadCookie()
-            val pagesToScan = state.scanResults
+            val pagesToScan = if (state.reverseOrder) state.scanResults.reversed() else state.scanResults
 
             val allTasks = mutableListOf<PreviewItem>()
 

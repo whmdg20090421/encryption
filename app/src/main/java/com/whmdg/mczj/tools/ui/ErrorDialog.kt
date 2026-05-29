@@ -16,17 +16,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import java.io.File
+import kotlin.system.exitProcess
 
 /**
- * 统一报错弹窗。布局策略：
- * - confirmButton 只放"关闭"，避免被 M3 actions 槽位挤掉
- * - "复制"和"Debug"放进正文区，占完整对话框宽度
- * - 错误出现时自动落盘到外部 + 内部双目录，toast 显示实际路径
+ * 统一报错弹窗。
+ * - 非致命模式：复制 + Debug + 关闭
+ * - 致命模式（fatal=true）：复制 + 退出应用（终止进程）
  */
 @Composable
 fun ErrorDialog(
     error: Throwable?,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    fatal: Boolean = false
 ) {
     val context = LocalContext.current
     var savedFile by remember(error) { mutableStateOf<File?>(null) }
@@ -52,11 +53,11 @@ fun ErrorDialog(
 
     if (error != null) {
         AlertDialog(
-            onDismissRequest = onDismiss,
+            onDismissRequest = { if (!fatal) onDismiss() },
             shape = RoundedCornerShape(28.dp),
             title = {
                 Text(
-                    text = "报错信息",
+                    text = if (fatal) "致命错误" else "报错信息",
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.error
                 )
@@ -77,30 +78,32 @@ fun ErrorDialog(
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace
                             )
-                            Spacer(Modifier.height(12.dp))
-                            val f = savedFile
-                            when {
-                                f != null -> Text(
-                                    text = "Debug 报告:\n${f.absolutePath}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                saveAttempted -> Text(
-                                    text = "(Debug 报告写入失败，请看 logcat)",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                                else -> Text(
-                                    text = "(Debug 报告写入中…)",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                            if (!fatal) {
+                                Spacer(Modifier.height(12.dp))
+                                val f = savedFile
+                                when {
+                                    f != null -> Text(
+                                        text = "Debug 报告:\n${f.absolutePath}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    saveAttempted -> Text(
+                                        text = "(Debug 报告写入失败，请看 logcat)",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    else -> Text(
+                                        text = "(Debug 报告写入中…)",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                     }
                     Spacer(Modifier.height(12.dp))
-                    // 操作按钮（放正文区，占满宽度，永远可见）
+                    // 操作按钮
                     Row(modifier = Modifier.fillMaxWidth()) {
                         OutlinedButton(
                             onClick = {
@@ -114,30 +117,45 @@ fun ErrorDialog(
                         ) {
                             Text("复制")
                         }
-                        Spacer(Modifier.width(8.dp))
-                        OutlinedButton(
-                            onClick = {
-                                val f = savedFile
-                                if (f != null) {
-                                    try {
-                                        val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                                        cb.setPrimaryClip(ClipData.newPlainText("Debug Path", f.absolutePath))
-                                        Toast.makeText(context, "Debug 路径已复制", Toast.LENGTH_LONG).show()
-                                    } catch (_: Exception) {}
-                                } else {
-                                    Toast.makeText(context, "诊断尚未写入完成", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Debug")
+                        if (!fatal) {
+                            Spacer(Modifier.width(8.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    val f = savedFile
+                                    if (f != null) {
+                                        try {
+                                            val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                            cb.setPrimaryClip(ClipData.newPlainText("Debug Path", f.absolutePath))
+                                            Toast.makeText(context, "Debug 路径已复制", Toast.LENGTH_LONG).show()
+                                        } catch (_: Exception) {}
+                                    } else {
+                                        Toast.makeText(context, "诊断尚未写入完成", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Debug")
+                            }
                         }
                     }
                 }
             },
             confirmButton = {
-                Button(onClick = onDismiss) {
-                    Text("关闭")
+                if (fatal) {
+                    Button(
+                        onClick = {
+                            onDismiss()
+                            // 终止进程
+                            exitProcess(0)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("退出应用")
+                    }
+                } else {
+                    Button(onClick = onDismiss) {
+                        Text("关闭")
+                    }
                 }
             }
         )

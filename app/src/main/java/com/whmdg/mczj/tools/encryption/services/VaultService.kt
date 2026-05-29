@@ -1,6 +1,8 @@
 package com.whmdg.mczj.tools.encryption.services
 
 import android.content.Context
+import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.compose.runtime.mutableStateListOf
 import com.whmdg.mczj.tools.auth.Feature
 import com.whmdg.mczj.tools.auth.SecurityEnforcer
@@ -164,48 +166,6 @@ class VaultService(private val context: Context) {
         vaults.addAll(_db.vaults)
     }
 
-    fun importVault(
-        name: String,
-        location: StorageLocation,
-        relativePath: String
-    ): VaultRecord {
-        // 业务层权限检查（第二道防线）
-        if (!SecurityEnforcer.checkOrDie(context, Feature.ENCRYPTION_VAULT, "VaultService.importVault")) {
-            throw SecurityException("权限不足：无法导入保险箱")
-        }
-
-        if (_db.isNameTaken(name)) {
-            throw IllegalArgumentException("保险箱名称已存在: $name")
-        }
-        val dir = VaultPaths.resolveVault(context, location, relativePath)
-        if (!dir.exists()) {
-            throw IllegalArgumentException("目录不存在: ${dir.absolutePath}")
-        }
-        val cfg = VaultConfig.readWithFallback(context, dir)
-
-        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
-        sdf.timeZone = TimeZone.getTimeZone("UTC")
-
-        val rec = VaultRecord(
-            id = 0,
-            name = name,
-            location = location,
-            relativePath = relativePath,
-            encryptFilename = cfg.configFlags.encryptFilename,
-            encryptMetadata = cfg.configFlags.encryptMetadata,
-            customEncryption = cfg.configFlags.customEncryption,
-            algorithm = cfg.algorithm,
-            createdAt = sdf.format(Date())
-        )
-        val assigned = _db.addVault(rec)
-        _db.save(context)
-
-        vaults.clear()
-        vaults.addAll(_db.vaults)
-
-        return assigned
-    }
-
     fun importVaultWithPassword(
         name: String,
         vaultPath: String,
@@ -233,12 +193,16 @@ class VaultService(private val context: Context) {
                 kek.fill(0)
             }
         } catch (e: Exception) {
-            val fallback = if (cfg.kdfType == KdfType.ARGON2ID) KdfType.PBKDF2_SHA256 else KdfType.ARGON2ID
-            val kek2 = KeyDerivation.derive(password, saltBytes, fallback, cfg.argonParams)
             try {
-                dek = AesGcm256.decrypt(kek2, kekIvBytes, encDekBytes)
-            } finally {
-                kek2.fill(0)
+                val fallback = if (cfg.kdfType == KdfType.ARGON2ID) KdfType.PBKDF2_SHA256 else KdfType.ARGON2ID
+                val kek2 = KeyDerivation.derive(password, saltBytes, fallback, cfg.argonParams)
+                try {
+                    dek = AesGcm256.decrypt(kek2, kekIvBytes, encDekBytes)
+                } finally {
+                    kek2.fill(0)
+                }
+            } catch (_: Exception) {
+                throw Exception("密码错误或保险箱数据损坏")
             }
         }
         dek.fill(0) // 清零验证后的 DEK
@@ -251,6 +215,96 @@ class VaultService(private val context: Context) {
             name = name,
             location = StorageLocation.EXTERNAL,
             relativePath = vaultPath,
+            encryptFilename = cfg.configFlags.encryptFilename,
+            encryptMetadata = cfg.configFlags.encryptMetadata,
+            customEncryption = cfg.configFlags.customEncryption,
+            algorithm = cfg.algorithm,
+            createdAt = sdf.format(Date())
+        )
+        val assigned = _db.addVault(rec)
+        _db.save(context)
+
+        vaults.clear()
+        vaults.addAll(_db.vaults)
+
+        return assigned
+    }
+
+    /**
+     * 通过 SAF 导入保险箱（无需所有文件访问权限）。
+     * 用 ContentResolver 从 treeUri 读取 vault_config.json，验证密码后注册。
+     */
+    fun importVaultWithPasswordSaf(
+        name: String,
+        treeUri: Uri,
+        password: String
+    ): VaultRecord {
+        if (_db.isNameTaken(name)) {
+            throw IllegalArgumentException("保险箱名称已存在: $name")
+        }
+
+        // 构建 vault_config.json 的 child URI
+        val treeDocId = DocumentsContract.getTreeDocumentId(treeUri)
+        val configDocId = "$treeDocId/vault_config.json"
+        val configUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, configDocId)
+
+        // 通过 ContentResolver 读取 JSON
+        val jsonStr = try {
+            context.contentResolver.openInputStream(configUri)?.use { it.bufferedReader().readText() }
+                ?: throw Exception("无法读取 vault_config.json")
+        } catch (e: Exception) {
+            throw Exception("读取 vault_config.json 失败: ${e.message}")
+        }
+
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val cfg = try {
+            json.decodeFromString<VaultConfig>(jsonStr)
+        } catch (e: Exception) {
+            throw Exception("vault_config.json 格式错误: ${e.message}")
+        }
+
+        // HMAC 完整性校验
+        if (cfg.integrityHmac != null && cfg.computeHmac() != cfg.integrityHmac) {
+            throw Exception("vault_config.json 完整性校验失败（HMAC 不匹配）")
+        }
+
+        // 密码验证：尝试解密 DEK
+        val saltBytes = HexCodec.decode(cfg.salt)
+        val kekIvBytes = HexCodec.decode(cfg.kekIv)
+        val encDekBytes = HexCodec.decode(cfg.encDek)
+
+        try {
+            val kek = KeyDerivation.derive(password, saltBytes, cfg.kdfType, cfg.argonParams)
+            try {
+                val dek = AesGcm256.decrypt(kek, kekIvBytes, encDekBytes)
+                dek.fill(0)
+            } finally {
+                kek.fill(0)
+            }
+        } catch (e: Exception) {
+            try {
+                // 回退尝试另一种 KDF
+                val fallback = if (cfg.kdfType == KdfType.ARGON2ID) KdfType.PBKDF2_SHA256 else KdfType.ARGON2ID
+                val kek2 = KeyDerivation.derive(password, saltBytes, fallback, cfg.argonParams)
+                try {
+                    val dek = AesGcm256.decrypt(kek2, kekIvBytes, encDekBytes)
+                    dek.fill(0)
+                } finally {
+                    kek2.fill(0)
+                }
+            } catch (_: Exception) {
+                throw Exception("密码错误或保险箱数据损坏")
+            }
+        }
+
+        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+        sdf.timeZone = TimeZone.getTimeZone("UTC")
+
+        val rec = VaultRecord(
+            id = 0,
+            name = name,
+            location = StorageLocation.EXTERNAL,
+            relativePath = treeUri.toString(),  // 存 SAF URI 字符串
             encryptFilename = cfg.configFlags.encryptFilename,
             encryptMetadata = cfg.configFlags.encryptMetadata,
             customEncryption = cfg.configFlags.customEncryption,

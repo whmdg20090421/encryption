@@ -1,6 +1,9 @@
 package com.whmdg.mczj.tools
 
 import android.content.Context
+import android.net.Uri
+import android.os.Environment
+import android.provider.DocumentsContract
 import java.io.File
 
 /**
@@ -69,4 +72,29 @@ object AppDataPaths {
 
     /** 批量下载器 SharedPreferences */
     const val PREFS_BATCH_DOWNLOADER = "batch_downloader_prefs"
+
+    /**
+     * 将 SAF tree URI 转换为绝对文件路径。
+     * 解析 content://com.android.externalstorage.documents/tree/primary:加密/TF图
+     * → /storage/emulated/0/加密/TF图
+     *
+     * @return 绝对路径，解析失败返回 null
+     */
+    fun safUriToAbsolutePath(context: Context, uri: Uri): String? {
+        try {
+            val docId = DocumentsContract.getTreeDocumentId(uri)
+            // docId 格式: "primary:加密/TF图" 或 "XXXX-XXXX:加密/TF图"
+            val parts = docId.split(":", limit = 2)
+            if (parts.size != 2) return null
+            val volume = parts[0]
+            val subPath = parts[1]
+            val basePath = when (volume) {
+                "primary" -> Environment.getExternalStorageDirectory().absolutePath
+                else -> "/storage/$volume"
+            }
+            return "$basePath/$subPath"
+        } catch (_: Exception) {
+            return null
+        }
+    }
 }

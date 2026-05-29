@@ -563,19 +563,28 @@ fun EncryptionHomeScreen(
 
     val context = LocalContext.current
     var showImportDialog by remember { mutableStateOf(false) }
-    var importFolderUri by remember { mutableStateOf<String?>(null) }
+    var importFolderUri by remember { mutableStateOf<Uri?>(null) }
     var importFolderName by remember { mutableStateOf("") }
     var importPassword by remember { mutableStateOf("") }
+    var importUseSaf by remember { mutableStateOf(false) }
     var encryptionError by remember { mutableStateOf<Throwable?>(null) }
+    var fatalError by remember { mutableStateOf<Throwable?>(null) }
+    var showImportPermissionDialog by remember { mutableStateOf(false) }
 
     val folderPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
         uri?.let {
-            // 在真正的应用中需要解析 Uri，但这里为了鲁棒，允许用户选择并且使用默认转换
-            importFolderUri = it.path
+            importFolderUri = it
             importFolderName = it.lastPathSegment?.split(":")?.lastOrNull() ?: "ImportedVault"
-            showImportDialog = true
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
+                !android.os.Environment.isExternalStorageManager()) {
+                // 无所有文件访问权限，弹窗建议授予
+                showImportPermissionDialog = true
+            } else {
+                importUseSaf = false
+                showImportDialog = true
+            }
         }
     }
 
@@ -666,6 +675,61 @@ fun EncryptionHomeScreen(
                 )
             }
 
+            // 导入权限建议弹窗
+            if (showImportPermissionDialog) {
+                AlertDialog(
+                    onDismissRequest = {
+                        showImportPermissionDialog = false
+                        importUseSaf = true
+                        showImportDialog = true
+                    },
+                    icon = {
+                        Icon(
+                            Icons.Default.Folder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    title = { Text("建议授予所有文件访问权限") },
+                    text = {
+                        Text("授予「所有文件访问」权限后，导入速度更快且兼容性更好。\n\n如不授予，将使用 SAF 模式导入（功能相同但速度较慢）。")
+                    },
+                    confirmButton = {
+                        Button(onClick = {
+                            showImportPermissionDialog = false
+                            try {
+                                val intent = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                                    android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                        data = Uri.parse("package:${context.packageName}")
+                                    }
+                                } else {
+                                    android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                                }
+                                context.startActivity(intent)
+                            } catch (_: Exception) {
+                                try {
+                                    val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                                    context.startActivity(intent)
+                                } catch (_: Exception) {
+                                    encryptionError = Exception("无法跳转权限设置页面，请手动前往系统设置开启「所有文件访问」权限")
+                                }
+                            }
+                        }) {
+                            Text("前往设置")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = {
+                            showImportPermissionDialog = false
+                            importUseSaf = true
+                            showImportDialog = true
+                        }) {
+                            Text("取消，使用SAF")
+                        }
+                    }
+                )
+            }
+
             if (showImportDialog) {
                 AlertDialog(
                     onDismissRequest = { showImportDialog = false },
@@ -699,17 +763,52 @@ fun EncryptionHomeScreen(
                     },
                     confirmButton = {
                         Button(onClick = {
-                            val path = importFolderUri ?: ""
+                            val uri = importFolderUri
+                            if (uri == null) {
+                                encryptionError = Exception("未选择文件夹")
+                                return@Button
+                            }
                             try {
-                                vaultService.importVaultWithPassword(
-                                    name = importFolderName,
-                                    vaultPath = path,
-                                    password = importPassword
-                                )
+                                if (importUseSaf) {
+                                    vaultService.importVaultWithPasswordSaf(
+                                        name = importFolderName,
+                                        treeUri = uri,
+                                        password = importPassword
+                                    )
+                                } else {
+                                    val absPath = com.whmdg.mczj.tools.AppDataPaths.safUriToAbsolutePath(context, uri)
+                                        ?: throw Exception("无法解析文件夹路径，请尝试授予所有文件访问权限后重试")
+                                    vaultService.importVaultWithPassword(
+                                        name = importFolderName,
+                                        vaultPath = absPath,
+                                        password = importPassword
+                                    )
+                                }
                                 Toast.makeText(context, "导入成功", Toast.LENGTH_SHORT).show()
                                 showImportDialog = false
                             } catch (e: Exception) {
-                                encryptionError = e
+                                val msg = e.message ?: ""
+                                // 可恢复：密码错误、名称冲突、路径解析失败
+                                val isRecoverable = msg.contains("密码错误")
+                                    || msg.contains("已存在")
+                                    || msg.contains("无法解析")
+                                    || msg.contains("未选择")
+                                // 致命：配置损坏/丢失/格式错误/完整性失败
+                                val isFatal = !isRecoverable && (
+                                    e is java.io.FileNotFoundException
+                                    || msg.contains("不存在")
+                                    || msg.contains("损坏")
+                                    || msg.contains("丢失")
+                                    || msg.contains("格式错误")
+                                    || msg.contains("完整性校验失败")
+                                    || e is java.io.IOError
+                                    || e is kotlinx.serialization.SerializationException
+                                )
+                                if (isFatal) {
+                                    fatalError = e
+                                } else {
+                                    encryptionError = e
+                                }
                             }
                         }) {
                             Text("验证并导入")
@@ -724,6 +823,7 @@ fun EncryptionHomeScreen(
             }
 
             ErrorDialog(error = encryptionError, onDismiss = { encryptionError = null })
+            ErrorDialog(error = fatalError, onDismiss = { fatalError = null }, fatal = true)
         }
     }
 }

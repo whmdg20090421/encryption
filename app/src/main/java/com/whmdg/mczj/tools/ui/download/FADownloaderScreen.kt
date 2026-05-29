@@ -8,8 +8,10 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -444,35 +446,9 @@ fun FADownloaderScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Start page & max download
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            OutlinedTextField(
-                                value = state.startPage,
-                                onValueChange = { viewModel.updateStartPage(it) },
-                                label = { Text("起始页") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f),
-                                enabled = !state.isDownloading
-                            )
-                            OutlinedTextField(
-                                value = state.maxDownload,
-                                onValueChange = { viewModel.updateMaxDownload(it) },
-                                label = { Text("最大下载量") },
-                                placeholder = { Text("0 = 不限") },
-                                singleLine = true,
-                                modifier = Modifier.weight(1f),
-                                enabled = !state.isDownloading
-                            )
-                        }
-
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Switches
+                        // Switches row 1
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -512,6 +488,86 @@ fun FADownloaderScreen(
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }
+                                }
+                            }
+                        }
+
+                        // Switches row 2: 部分下载 + 逆向排序
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Switch(
+                                    checked = state.partialDownload,
+                                    onCheckedChange = { viewModel.updatePartialDownload(it) },
+                                    enabled = !state.isDownloading
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("部分下载", style = MaterialTheme.typography.bodySmall)
+                            }
+                            AnimatedVisibility(
+                                visible = state.partialDownload,
+                                enter = fadeIn() + expandVertically(),
+                                exit = fadeOut() + shrinkVertically(),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Switch(
+                                        checked = state.reverseOrder,
+                                        onCheckedChange = { viewModel.updateReverseOrder(it) },
+                                        enabled = !state.isDownloading
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("逆向排序", style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+
+                        // 部分下载页码范围 + 最大下载量
+                        AnimatedVisibility(
+                            visible = state.partialDownload,
+                            enter = fadeIn() + expandVertically(),
+                            exit = fadeOut() + shrinkVertically()
+                        ) {
+                            Column {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedTextField(
+                                        value = state.startPage,
+                                        onValueChange = { viewModel.updateStartPage(it) },
+                                        label = { Text("起始页") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                        enabled = !state.isDownloading
+                                    )
+                                    OutlinedTextField(
+                                        value = state.endPage,
+                                        onValueChange = { viewModel.updateEndPage(it) },
+                                        label = { Text("结束页") },
+                                        placeholder = { Text("0 = 不限") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                        enabled = !state.isDownloading
+                                    )
+                                    OutlinedTextField(
+                                        value = state.maxDownload,
+                                        onValueChange = { viewModel.updateMaxDownload(it) },
+                                        label = { Text("最大下载量") },
+                                        placeholder = { Text("0 = 不限") },
+                                        singleLine = true,
+                                        modifier = Modifier.weight(1f),
+                                        enabled = !state.isDownloading
+                                    )
                                 }
                             }
                         }
