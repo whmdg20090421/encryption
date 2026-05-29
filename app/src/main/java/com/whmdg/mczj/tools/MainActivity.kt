@@ -1,15 +1,22 @@
 package com.whmdg.mczj.tools
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.theme.LocalOnToggleTheme
 import com.whmdg.mczj.tools.ui.theme.工具箱Theme
@@ -61,6 +68,24 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val themePrefs = remember { getSharedPreferences("theme_prefs", MODE_PRIVATE) }
+
+            // ── 首次启动申请通知权限 ──
+            val notifRequested = remember { themePrefs.getBoolean("notif_permission_requested", false) }
+            val notifLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { _ ->
+                themePrefs.edit().putBoolean("notif_permission_requested", true).apply()
+            }
+            LaunchedEffect(Unit) {
+                if (!notifRequested && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    if (ContextCompat.checkSelfPermission(
+                            this@MainActivity, Manifest.permission.POST_NOTIFICATIONS
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+            }
 
             // ── 白天/黑夜 ──
             var isDarkMode by remember { mutableStateOf(themePrefs.getBoolean("is_dark_mode", true)) }
