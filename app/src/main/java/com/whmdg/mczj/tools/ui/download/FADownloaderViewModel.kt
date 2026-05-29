@@ -548,11 +548,23 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                                         if (detailHtml != null) parseSubmissionInfo(detailHtml) else null
                                     }
                                     val m = meta ?: SubmissionMeta(imageUrl = cachedUrl, faId = pageId)
+                                    // 校验缓存的图片 URL 必须包含作者名称
+                                    val checkAuthor = m.author.ifEmpty { state.author }.lowercase()
+                                    if (checkAuthor.isNotEmpty() && !cachedUrl.lowercase().contains(checkAuthor)) {
+                                        addLog("  ⚠ 缓存URL不含作者「$checkAuthor」，跳过: $cachedUrl")
+                                        return@async null
+                                    }
                                     DetailResult(pageId, cachedUrl, extractFileName(cachedUrl), m.title, m)
                                 } else {
                                     val detailHtml = fetchHtml(pageUrl, cookie)
                                     if (detailHtml == null) return@async null
                                     val info = parseSubmissionInfo(detailHtml) ?: return@async null
+                                    // 校验图片 URL 必须包含作者名称（防止翻页错误导致抓到其他作者的作品）
+                                    val checkAuthor = info.author.ifEmpty { state.author }.lowercase()
+                                    if (checkAuthor.isNotEmpty() && !info.imageUrl.lowercase().contains(checkAuthor)) {
+                                        addLog("  ⚠ 跳过: 图片URL不含作者「$checkAuthor」: ${info.imageUrl}")
+                                        return@async null
+                                    }
                                     if (state.useCache) cacheUrl(state.author, pageId, info.imageUrl)
                                     DetailResult(pageId, info.imageUrl, extractFileName(info.imageUrl), info.title, info)
                                 }
@@ -945,8 +957,8 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     /** 从页面解析下一页 URL（参考 furaffinity-dl: 从 Next 按钮的 form action 提取） */
     private fun parseNextPageUrl(html: String, currentUrl: String): String? {
-        // 方式1: 从 Next 按钮的 form action 提取
-        val nextPattern = Pattern.compile("""<form[^>]+action="([^"]*)"[^>]*>.*?<button[^>]*>[^<]*[Nn]ext""", Pattern.DOTALL)
+        // 方式1: 从 Next 按钮的 form action 提取（限定 class="button standard" + 精确匹配 "Next"，与 Python 版对齐）
+        val nextPattern = Pattern.compile("""<form[^>]+action="([^"]*)"[^>]*>.*?<button[^>]*class="button standard"[^>]*>[^<]*\sNext\s*<""", Pattern.DOTALL)
         val nextMatcher = nextPattern.matcher(html)
         if (nextMatcher.find()) {
             val action = nextMatcher.group(1) ?: ""
