@@ -40,12 +40,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.whmdg.mczj.tools.encryption.data.StorageLocation
 import com.whmdg.mczj.tools.encryption.data.VaultConfig
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.encryption.services.VaultService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.animation.AnimatedVisibility
@@ -382,7 +387,8 @@ fun MainAppContainer() {
         is Screen.VaultOpen -> {
             VaultOpenScreen(
                 session = currentScreen.session,
-                onBack = { navigateBack() }
+                onBack = { navigateBack() },
+                vaultService = vaultService
             )
         }
         is Screen.VaultChangePassword -> {
@@ -899,9 +905,9 @@ fun VaultsListTab(
                                 if (verifyResult.isTampered) {
                                     showWarningDialog = Pair(vault, verifyResult)
                                 } else {
-                                    if (settings.enableTeeQuickUnlock && 
+                                    if (settings.enableTeeQuickUnlock &&
                                         com.whmdg.mczj.tools.security.TeeManager.isVaultPasswordSaved(context, vault.id)) {
-                                        
+
                                         val cipher = com.whmdg.mczj.tools.security.TeeManager.getDecryptCipher(context, vault.id)
                                         if (cipher != null) {
                                             val activity = context as android.app.Activity
@@ -941,16 +947,19 @@ fun VaultsListTab(
                                 activeVaultForMenu = vault
                             }
                             ),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.Top
                     ) {
                         Icon(
                             imageVector = Icons.Default.Lock,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier
+                                .size(20.dp)
+                                .padding(top = 2.dp)
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
+                            // 第一行：保险箱名称
                             Text(
                                 text = vault.name,
                                 style = MaterialTheme.typography.bodyMedium,
@@ -958,20 +967,66 @@ fun VaultsListTab(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            Text(
-                                text = if (vault.location == StorageLocation.INTERNAL) "内部存储" else "外部存储",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            // 第二行：路径 | 大小占位
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = vault.relativePath.let { path ->
+                                        if (path.startsWith("content://")) "SAF: $path" else path
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "-- MB",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            // 第三行：最后更改时间 | 最后打开时间
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                fun formatIsoTime(iso: String?): String? {
+                                    if (iso == null) return null
+                                    return try {
+                                        val sdfIn = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
+                                            timeZone = TimeZone.getTimeZone("UTC")
+                                        }
+                                        val sdfOut = SimpleDateFormat("yyyy年MM月dd日 HH:mm:ss", Locale.CHINA)
+                                        sdfOut.format(sdfIn.parse(iso)!!)
+                                    } catch (_: Exception) { null }
+                                }
+
+                                Text(
+                                    text = "最后更改时间: ${formatIsoTime(vault.lastModifiedAt) ?: "未知(Null)"}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "最后打开时间: ${formatIsoTime(vault.lastOpenedAt) ?: "未知(Null)"}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
-                        Icon(
-                            imageVector = Icons.Default.ChevronRight,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
-                        )
                     }
                 }
             }

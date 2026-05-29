@@ -44,7 +44,8 @@ data class DisplayEntry(
 @Composable
 fun VaultOpenScreen(
     session: VaultSession,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    vaultService: com.whmdg.mczj.tools.encryption.services.VaultService? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -199,6 +200,7 @@ fun VaultOpenScreen(
                     progressPercent = null
                     progressTitle = ""
                     Toast.makeText(context, "导入完成", Toast.LENGTH_SHORT).show()
+                    vaultService?.markModified(session.record.id)
                     refresh()
                 }
             }
@@ -229,6 +231,7 @@ fun VaultOpenScreen(
                     progressPercent = null
                     progressTitle = ""
                     Toast.makeText(context, "文件夹导入完成", Toast.LENGTH_SHORT).show()
+                    vaultService?.markModified(session.record.id)
                     refresh()
                 }
             }
@@ -843,6 +846,7 @@ fun VaultOpenScreen(
                                             showRenameDialog = null
                                             renameNewName = ""
                                             Toast.makeText(context, "重命名成功", Toast.LENGTH_SHORT).show()
+                                            vaultService?.markModified(session.record.id)
                                             refresh()
                                         }
                                     } catch (e: Exception) {
@@ -892,6 +896,7 @@ fun VaultOpenScreen(
                                         }
                                         withContext(Dispatchers.Main) {
                                             Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
+                                            vaultService?.markModified(session.record.id)
                                             refresh()
                                         }
                                     } catch (e: Exception) {

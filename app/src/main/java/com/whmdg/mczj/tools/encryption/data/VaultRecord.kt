@@ -16,5 +16,7 @@ data class VaultRecord(
     @SerialName("encrypt_metadata") val encryptMetadata: Boolean,
     @SerialName("custom_encryption") val customEncryption: Boolean,
     val algorithm: String = "AES-256-GCM",
-    val createdAt: String // 存 ISO8601 字符串
+    val createdAt: String, // 存 ISO8601 字符串
+    @SerialName("last_opened_at") val lastOpenedAt: String? = null,
+    @SerialName("last_modified_at") val lastModifiedAt: String? = null
 )

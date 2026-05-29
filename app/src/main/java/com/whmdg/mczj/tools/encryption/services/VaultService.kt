@@ -139,12 +139,33 @@ class VaultService(private val context: Context) {
             }
         }
 
+        // 记录最后打开时间
+        val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }.format(Date())
+        _db.replaceVault(rec.copy(lastOpenedAt = now))
+        _db.save(context)
+        vaults.clear()
+        vaults.addAll(_db.vaults)
+
         return VaultSession(
-            record = rec,
+            record = rec.copy(lastOpenedAt = now),
             vaultDir = dir,
             config = cfg,
             dek = dek
         )
+    }
+
+    /** 标记保险箱内容已修改（导入/重命名/删除文件后调用） */
+    fun markModified(id: Int) {
+        val rec = _db.vaults.find { it.id == id } ?: return
+        val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }.format(Date())
+        _db.replaceVault(rec.copy(lastModifiedAt = now))
+        _db.save(context)
+        vaults.clear()
+        vaults.addAll(_db.vaults)
     }
 
     fun removeVault(id: Int, deleteFiles: Boolean) {
