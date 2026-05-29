@@ -72,6 +72,7 @@ data class FAUiState(
     val currentProgress: Float = 0f,
     val statusMessage: String = "准备就绪",
     val errorMessage: String? = null,
+    val isPaused: Boolean = false,
     // 作者历史
     val authorHistory: List<AuthorHistoryEntry> = emptyList(),
     val showAuthorHistory: Boolean = false,
@@ -390,6 +391,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
         _uiState.update {
             it.copy(
+                isPaused = false,
                 isCollecting = true,
                 showPreview = true,
                 collectionComplete = false,
@@ -628,6 +630,11 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 val deferred = async {
                     semaphore.withPermit {
                         if (isStopped) return@async
+                        // 暂停等待
+                        while (_uiState.value.isPaused && !isStopped) {
+                            delay(200)
+                        }
+                        if (isStopped) return@async
                         if (state.skipExisting && state.namingMode == "original") {
                             if (checkFileExists(targetDir, task.fileName)) {
                                 addLog("  ⏭ 跳过: ${task.fileName}")
@@ -717,11 +724,18 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             it.copy(
                 isDownloading = false,
                 isCollecting = false,
+                isPaused = false,
                 pendingTasks = emptyList(),
                 statusMessage = "已停止"
             )
         }
         addLog("用户停止下载")
+    }
+
+    fun togglePause() {
+        val wasPaused = _uiState.value.isPaused
+        _uiState.update { it.copy(isPaused = !wasPaused) }
+        addLog(if (wasPaused) "下载已继续" else "下载已暂停")
     }
 
     private fun addLog(message: String) {

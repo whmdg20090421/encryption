@@ -616,7 +616,23 @@ fun FADownloaderScreen(
 
             // ── Log Section ──
             item {
-                SectionLabel("下载日志", Icons.Default.Terminal)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SectionLabel("下载日志", Icons.Default.Terminal)
+                    if (state.isDownloading) {
+                        IconButton(onClick = { viewModel.togglePause() }) {
+                            Icon(
+                                if (state.isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                contentDescription = if (state.isPaused) "继续" else "暂停",
+                                tint = if (state.isPaused) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
             }
 
             item {
