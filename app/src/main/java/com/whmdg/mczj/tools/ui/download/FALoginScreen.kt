@@ -35,6 +35,32 @@ fun FALoginScreen(
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var cookiesDetected by remember { mutableStateOf(false) }
 
+    /** 提取 Cookie 并弹出确认对话框 */
+    fun extractAndShowCookie() {
+        val cookieManager = CookieManager.getInstance()
+        val cookies = cookieManager.getCookie("furaffinity.net")
+        if (cookies == null || !hasFACookies(cookies)) {
+            statusText = "未检测到有效登录，请先完成登录"
+            cookiesDetected = false
+            return
+        }
+        extractedCookies = cookies
+        try {
+            webViewRef?.evaluateJavascript(
+                "(function() { " +
+                    "var el = document.querySelector('.my-username, .username, a[href*=\"/user/\"]');" +
+                    "return el ? el.textContent.trim() : '';" +
+                    "})()"
+            ) { result ->
+                extractedUsername = result?.removeSurrounding("\"") ?: ""
+                showCookieDialog = true
+            }
+        } catch (_: Exception) {
+            extractedUsername = ""
+            showCookieDialog = true
+        }
+    }
+
     // Cookie confirmation dialog
     if (showCookieDialog) {
         AlertDialog(
@@ -114,29 +140,7 @@ fun FALoginScreen(
                     }
                 },
                 actions = {
-                    // Get Cookie button - extract cookies and show dialog
-                    IconButton(
-                        onClick = {
-                            val cookieManager = CookieManager.getInstance()
-                            val cookies = cookieManager.getCookie("furaffinity.net")
-                            if (cookies != null && hasFACookies(cookies)) {
-                                extractedCookies = cookies
-                                // Try to extract username from WebView page
-                                webViewRef?.evaluateJavascript(
-                                    "(function() { " +
-                                        "var el = document.querySelector('.my-username, .username, a[href*=\"/user/\"]');" +
-                                        "return el ? el.textContent.trim() : '';" +
-                                        "})()"
-                                ) { result ->
-                                    extractedUsername = result.removeSurrounding("\"")
-                                    showCookieDialog = true
-                                }
-                            } else {
-                                statusText = "未检测到有效登录，请先完成登录"
-                                cookiesDetected = false
-                            }
-                        }
-                    ) {
+                    IconButton(onClick = { extractAndShowCookie() }) {
                         Icon(
                             Icons.Default.Check,
                             contentDescription = "获取Cookie",
@@ -147,75 +151,15 @@ fun FALoginScreen(
             )
         }
     ) { innerPadding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            AndroidView(
-                factory = { context ->
-                    WebView(context).apply {
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
-                        settings.userAgentString =
-                            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36"
-
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                super.onPageFinished(view, url)
-                                isLoading = false
-
-                                // Check for FA session cookies (a + b)
-                                val cookieManager = CookieManager.getInstance()
-                                val cookies = cookieManager.getCookie("furaffinity.net")
-                                if (cookies != null && hasFACookies(cookies)) {
-                                    cookiesDetected = true
-                                    statusText = "登录成功，请点击右上角「确定」保存"
-                                }
-                            }
-
-                            override fun shouldOverrideUrlLoading(
-                                view: WebView?,
-                                request: WebResourceRequest?
-                            ): Boolean {
-                                return false
-                            }
-                        }
-
-                        webViewRef = this
-                        // Load FA homepage, not /login/ — homepage works whether logged in or not
-                        loadUrl("https://www.furaffinity.net")
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-
-            // Loading indicator
-            if (isLoading) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    CircularProgressIndicator()
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        statusText,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            // Status bar at top - show cookie detection status
+            // 状态栏 — 固定在 WebView 上方，不遮挡
             if (!isLoading) {
                 Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter),
+                    modifier = Modifier.fillMaxWidth(),
                     color = if (cookiesDetected)
                         MaterialTheme.colorScheme.primaryContainer
                     else
@@ -238,27 +182,69 @@ fun FALoginScreen(
                                 MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         if (cookiesDetected) {
-                            TextButton(
-                                onClick = {
-                                    val cookieManager = CookieManager.getInstance()
-                                    val cookies = cookieManager.getCookie("furaffinity.net")
-                                    if (cookies != null && hasFACookies(cookies)) {
-                                        extractedCookies = cookies
-                                        webViewRef?.evaluateJavascript(
-                                            "(function() { " +
-                                                "var el = document.querySelector('.my-username, .username, a[href*=\"/user/\"]');" +
-                                                "return el ? el.textContent.trim() : '';" +
-                                                "})()"
-                                        ) { result ->
-                                            extractedUsername = result.removeSurrounding("\"")
-                                            showCookieDialog = true
-                                        }
-                                    }
-                                }
-                            ) {
+                            TextButton(onClick = { extractAndShowCookie() }) {
                                 Text("获取Cookie")
                             }
                         }
+                    }
+                }
+            }
+
+            // WebView — 填充剩余空间
+            Box(modifier = Modifier.fillMaxSize()) {
+                AndroidView(
+                    factory = { context ->
+                        WebView(context).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+                            settings.userAgentString =
+                                "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36"
+
+                            webViewClient = object : WebViewClient() {
+                                override fun onPageFinished(view: WebView?, url: String?) {
+                                    super.onPageFinished(view, url)
+                                    isLoading = false
+
+                                    val cookieManager = CookieManager.getInstance()
+                                    val cookies = cookieManager.getCookie("furaffinity.net")
+                                    if (cookies != null && hasFACookies(cookies)) {
+                                        cookiesDetected = true
+                                        statusText = "登录成功，请点击右上角「确定」保存"
+                                    }
+                                }
+
+                                override fun shouldOverrideUrlLoading(
+                                    view: WebView?,
+                                    request: WebResourceRequest?
+                                ): Boolean {
+                                    return false
+                                }
+                            }
+
+                            webViewRef = this
+                            loadUrl("https://www.furaffinity.net")
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // 加载指示器
+                if (isLoading) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            statusText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
