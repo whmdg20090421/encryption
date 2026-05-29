@@ -12,9 +12,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.auth.PasswordDialog
 import com.whmdg.mczj.tools.auth.PermissionManager
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,16 +61,17 @@ fun AuthManagementScreen(onBack: () -> Unit) {
                     PasswordDialog(
                         onDismiss = { phase = 0 },
                         onVerify = { pw ->
-                            val derived = withContext(Dispatchers.Default) {
-                                com.whmdg.mczj.tools.auth.NativeAuth.verifyPassword(pw)
-                            }
-                            if (derived != null) {
-                                derived.fill(0)
+                            val res = PermissionManager.tryAuthenticate(context, pw)
+                            if (res.isSuccess) {
+                                val features = res.getOrNull() ?: emptySet()
+                                val state = PermissionManager.state.value
+                                val keyId = (state as? PermissionManager.AuthState.Authed)?.keyId ?: "?"
                                 currentPw = pw
+                                resultMsg = "密钥已激活: keyId=$keyId, features=${features.joinToString { it.name }}, state=$state"
                                 phase = 2
                                 true
                             } else {
-                                resultMsg = "密码错误"
+                                resultMsg = "密码错误: ${res.exceptionOrNull()?.message}"
                                 phase = 0
                                 false
                             }
