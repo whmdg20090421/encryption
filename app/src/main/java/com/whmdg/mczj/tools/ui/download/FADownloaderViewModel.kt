@@ -638,7 +638,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                                     return@async
                                 }
                             }
-                            val data = downloadToBytes(task.imageUrl)
+                            val data = downloadToBytes(task.imageUrl, cookie)
                             buffer[task.seq] = data
                         }
                     }
@@ -971,16 +971,21 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    private suspend fun downloadToBytes(imageUrl: String): ByteArray? = withContext(Dispatchers.IO) {
+    private suspend fun downloadToBytes(imageUrl: String, cookie: String = ""): ByteArray? = withContext(Dispatchers.IO) {
         try {
             val conn = URL(imageUrl).openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
             conn.setRequestProperty("User-Agent", USER_AGENT)
             conn.setRequestProperty("Referer", REFERER)
+            if (cookie.isNotEmpty()) {
+                conn.setRequestProperty("Cookie", cookie)
+            }
             conn.connectTimeout = CONNECT_TIMEOUT
             conn.readTimeout = READ_TIMEOUT
 
-            if (conn.responseCode != 200) {
+            val code = conn.responseCode
+            if (code != 200) {
+                addLog("  HTTP $code: $imageUrl")
                 conn.disconnect()
                 return@withContext null
             }
