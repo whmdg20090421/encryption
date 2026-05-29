@@ -1133,59 +1133,55 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     /**
-     * 自定义编号模式重排序：按 FA ID 匹配已有文件，重新从 0001 编号。
-     * 文件名格式: 0001_author_title_FAID.ext → 按 FAID 匹配后重命名为 0001_...FAID.ext
+     * 重排序：按标题分组 → 组间按最早 FAID 排序 → 组内按 FAID 排序 → 从 0001 重新编号。
+     * 文件名格式: 0001_author_title_FAID.ext
      */
     private suspend fun reorderFiles(dirUri: Uri, author: String) = withContext(Dispatchers.IO) {
         try {
             val app = getApplication<Application>()
             val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri) ?: return@withContext
 
-            // 收集所有匹配 FAID 格式的文件: *_FAID.ext
-            val faIdPattern = Regex("""_(\d+)\.\w+$""")
-            data class FileEntry(val faId: String, val docFile: androidx.documentfile.provider.DocumentFile)
+            val safeAuthor = author.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            // 匹配格式: 0001_author_title_FAID.ext
+            val filePattern = Regex("""^\d{4}_([^_]+)_(.+)_(\d+)\.(\w+)$""")
+
+            data class FileEntry(
+                val title: String, val faId: Long, val ext: String,
+                val docFile: androidx.documentfile.provider.DocumentFile, val oldName: String
+            )
             val entries = mutableListOf<FileEntry>()
 
             for (file in dirDoc.listFiles()) {
                 if (!file.isFile) continue
                 val name = file.name ?: continue
-                val match = faIdPattern.find(name)
-                if (match != null) {
-                    entries.add(FileEntry(match.groupValues[1], file))
-                }
+                val match = filePattern.matchEntire(name) ?: continue
+                val title = match.groupValues[2]
+                val faId = match.groupValues[3].toLongOrNull() ?: continue
+                val ext = match.groupValues[4]
+                entries.add(FileEntry(title, faId, ext, file, name))
             }
 
             if (entries.isEmpty()) return@withContext
 
-            // 按 FA ID 排序（保持原始顺序）
-            entries.sortBy { it.faId.toLongOrNull() ?: 0L }
+            // 分组 → 组间按最早 FAID 排序 → 组内按 FAID 排序
+            val grouped = entries.groupBy { it.title }
+            val sorted = grouped.entries
+                .sortedBy { (_, group) -> group.minOf { it.faId } }
+                .flatMap { (_, group) -> group.sortedBy { it.faId } }
 
-            addLog("重排序: 发现 ${entries.size} 个文件，开始重命名...")
+            addLog("重排序: 发现 ${entries.size} 个文件，${grouped.size} 组，开始重命名...")
 
-            // 重命名: 0001_author_title_FAID.ext
-            val safeAuthor = author.replace(Regex("[^a-zA-Z0-9_-]"), "_")
             var seq = 0
             var renamed = 0
-            for (entry in entries) {
+            for (entry in sorted) {
                 seq++
-                val oldName = entry.docFile.name ?: continue
-                val ext = oldName.substringAfterLast(".")
-                // 格式: 0001_author_title_FAID.ext → 提取 title 部分
-                // 去掉开头 "0001_" (4位数字+下划线)，去掉末尾 "_FAID.ext"
-                val withoutSeq = oldName.replaceFirst(Regex("^\\d{4}_"), "")
-                val faIdSuffix = "_${entry.faId}.$ext"
-                val titlePart = if (withoutSeq.endsWith(faIdSuffix)) {
-                    withoutSeq.removeSuffix(faIdSuffix)
-                        .removePrefix("${safeAuthor}_")  // 去掉作者前缀
-                } else ""
-                val newName = "${String.format("%04d", seq)}_${safeAuthor}_${titlePart}_${entry.faId}.$ext"
-
-                if (oldName != newName) {
+                val newName = "${String.format("%04d", seq)}_${safeAuthor}_${entry.title}_${entry.faId}.${entry.ext}"
+                if (entry.oldName != newName) {
                     try {
                         entry.docFile.renameTo(newName)
                         renamed++
                     } catch (e: Exception) {
-                        addLog("  重命名失败: $oldName → $newName")
+                        addLog("  重命名失败: ${entry.oldName} → $newName")
                     }
                 }
             }
