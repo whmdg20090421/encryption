@@ -735,13 +735,10 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                             delay(200)
                         }
                         if (isStopped) return@async
-                        // 增量跳过：按 FAID + 作者 + 标题匹配已有文件
+                        // 增量跳过：按 FAID 匹配已有文件
                         if (state.skipExisting) {
                             val existing = existingFiles[task.faId]
-                            if (existing != null &&
-                                existing.author.equals(task.meta.author.ifEmpty { state.author }, ignoreCase = true) &&
-                                existing.title.equals(task.title, ignoreCase = true)
-                            ) {
+                            if (existing != null) {
                                 saveMutex.lock()
                                 val cur = totalDownloaded + totalSkipped + totalFailed + 1
                                 totalSkipped++
@@ -1251,10 +1248,11 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             val app = getApplication<Application>()
             val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri)
                 ?: return result
-            // 带序号: 0001_author_title_FAID.ext
-            val numberedPattern = Regex("""^\d{4}_([^_]+)_(.+)_(\d+)\.\w+$""")
-            // 无序号: author_title_FAID.ext
-            val unnumberedPattern = Regex("""^([^_]+)_(.+)_(\d+)\.\w+$""")
+            // 从右往左解析，兼容 author 含下划线的情况
+            // 带序号: 0001_anything_FAID.ext
+            val numberedPattern = Regex("""^\d{4}_(.+)_(\d+)\.\w+$""")
+            // 无序号: anything_FAID.ext
+            val unnumberedPattern = Regex("""^(.+)_(\d+)\.\w+$""")
             for (file in dirDoc.listFiles()) {
                 if (!file.isFile) continue
                 val name = file.name ?: continue
@@ -1262,18 +1260,16 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 if (name.endsWith(".tmp")) continue
                 val numbered = numberedPattern.matchEntire(name)
                 if (numbered != null) {
-                    val author = numbered.groupValues[1]
-                    val title = numbered.groupValues[2]
-                    val faId = numbered.groupValues[3]
-                    result[faId] = ExistingFileInfo(faId, author, title, name)
+                    val prefix = numbered.groupValues[1]
+                    val faId = numbered.groupValues[2]
+                    result[faId] = ExistingFileInfo(faId, "", prefix, name)
                     continue
                 }
                 val unnumbered = unnumberedPattern.matchEntire(name)
                 if (unnumbered != null) {
-                    val author = unnumbered.groupValues[1]
-                    val title = unnumbered.groupValues[2]
-                    val faId = unnumbered.groupValues[3]
-                    result[faId] = ExistingFileInfo(faId, author, title, name)
+                    val prefix = unnumbered.groupValues[1]
+                    val faId = unnumbered.groupValues[2]
+                    result[faId] = ExistingFileInfo(faId, "", prefix, name)
                 }
             }
         } catch (_: Exception) {}
@@ -1295,19 +1291,29 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     private suspend fun renumberFiles(dirUri: Uri, author: String) = withContext(Dispatchers.IO) {
         try {
             val app = getApplication<Application>()
-            val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri) ?: return@withContext
+            addLog("重排序开始: URI=$dirUri")
+            val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri)
+            if (dirDoc == null) {
+                addLog("重排序失败: 无法打开目录 DocumentFile")
+                return@withContext
+            }
+            val fileCount = dirDoc.listFiles().size
+            addLog("重排序: 目录内共 $fileCount 个文件")
             val safeAuthor = author.replace(Regex("[^a-zA-Z0-9_-]"), "_")
 
-            // 匹配模式
-            val numberedPattern = Regex("""^\d{4}_([^_]+)_(.+)_(\d+)\.(\w+)$""")
-            val unnumberedPattern = Regex("""^([^_]+)_(.+)_(\d+)\.(\w+)$""")
+            // 从右往左解析：FA ID 总是在扩展名之前
+            // 带序号: 0001_anything_FAID.ext  →  seq=0001, prefix="anything", faId, ext
+            // 无序号: anything_FAID.ext        →  prefix="anything", faId, ext
+            val numberedPattern = Regex("""^(\d{4})_(.+)_(\d+)\.(\w+)$""")
+            val unnumberedPattern = Regex("""^(.+)_(\d+)\.(\w+)$""")
 
-            data class FileIdentity(val title: String, val faId: Long, val ext: String)
+            data class FileIdentity(val prefix: String, val faId: Long, val ext: String)
             data class OldEntry(val seq: Int, val identity: FileIdentity, val docFile: androidx.documentfile.provider.DocumentFile, val name: String)
 
             val oldEntries = mutableListOf<OldEntry>()
             val newDownloads = mutableListOf<androidx.documentfile.provider.DocumentFile>()
             val allIdentities = mutableSetOf<FileIdentity>()
+            var unmatched = 0
 
             // ── Step 1: 扫描目录 ──
             for (file in dirDoc.listFiles()) {
@@ -1317,29 +1323,35 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
                 val numbered = numberedPattern.matchEntire(name)
                 if (numbered != null) {
-                    val title = numbered.groupValues[1]
-                    val faId = numbered.groupValues[2].toLongOrNull() ?: continue
-                    val ext = numbered.groupValues[3]
-                    val seq = name.substringBefore("_").toIntOrNull() ?: 0
-                    val identity = FileIdentity(title, faId, ext)
+                    val prefix = numbered.groupValues[2]
+                    val faId = numbered.groupValues[3].toLongOrNull() ?: continue
+                    val ext = numbered.groupValues[4]
+                    val seq = numbered.groupValues[1].toIntOrNull() ?: 0
+                    val identity = FileIdentity(prefix, faId, ext)
                     oldEntries.add(OldEntry(seq, identity, file, name))
                     allIdentities.add(identity)
                     continue
                 }
                 val unnumbered = unnumberedPattern.matchEntire(name)
                 if (unnumbered != null) {
-                    val title = unnumbered.groupValues[1]
+                    val prefix = unnumbered.groupValues[1]
                     val faId = unnumbered.groupValues[2].toLongOrNull() ?: continue
                     val ext = unnumbered.groupValues[3]
-                    allIdentities.add(FileIdentity(title, faId, ext))
+                    allIdentities.add(FileIdentity(prefix, faId, ext))
                     newDownloads.add(file)
+                } else {
+                    unmatched++
                 }
             }
 
-            if (allIdentities.isEmpty()) return@withContext
+            addLog("重排序扫描: 带序号${oldEntries.size}个, 新下载${newDownloads.size}个, 未匹配${unmatched}个")
+            if (allIdentities.isEmpty()) {
+                addLog("重排序: 无匹配文件，跳过")
+                return@withContext
+            }
 
-            // ── Step 2: 排序（标题分组 → 组间最早FAID → 组内FAID） ──
-            val grouped = allIdentities.groupBy { it.title }
+            // ── Step 2: 排序（prefix 分组 → 组间最早FAID → 组内FAID） ──
+            val grouped = allIdentities.groupBy { it.prefix }
             val sorted = grouped.entries
                 .sortedBy { (_, group) -> group.minOf { it.faId } }
                 .flatMap { (_, group) -> group.sortedBy { it.faId } }
@@ -1380,15 +1392,15 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             for (file in newDownloads) {
                 val name = file.name ?: continue
                 val match = unnumberedPattern.matchEntire(name) ?: continue
-                val title = match.groupValues[1]
+                val prefix = match.groupValues[1]
                 val faId = match.groupValues[2].toLongOrNull() ?: continue
                 val ext = match.groupValues[3]
-                newFileByIdentity[FileIdentity(title, faId, ext)] = file
+                newFileByIdentity[FileIdentity(prefix, faId, ext)] = file
             }
 
             for (i in firstDiff..maxNew) {
                 val identity = newNumbering.getOrNull(i - 1)?.second ?: continue
-                val newName = "${String.format("%04d", i)}_${safeAuthor}_${identity.title}_${identity.faId}.${identity.ext}"
+                val newName = "${String.format("%04d", i)}_${safeAuthor}_${identity.prefix}_${identity.faId}.${identity.ext}"
 
                 val oldEntry = oldByIdentity[identity]
                 if (oldEntry != null) {
