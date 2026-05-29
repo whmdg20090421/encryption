@@ -66,6 +66,17 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.graphics.vector.ImageVector
 
+/** 鉴权调试开关：true = 显示详细变量值，false = 仅显示权限列表 */
+const val DEBUG_AUTH = false
+
+fun featureDisplayName(f: Feature): String = when (f) {
+    Feature.ENCRYPTION_VAULT -> "加密"
+    Feature.FILE_MANAGER -> "文件管理器"
+    Feature.APP_PERMISSIONS -> "应用权限管理"
+    Feature.BATCH_DOWNLOADER -> "批量下载器"
+    Feature.SECURITY_SETTINGS -> "安全"
+}
+
 sealed class Screen {
     object Dashboard : Screen()
     object Settings : Screen()
@@ -194,21 +205,31 @@ fun NavigateGate(
         )
     }
 
-    // DEBUG: 认证成功后的调试弹窗
+    // 认证成功弹窗（DEBUG_AUTH=true 时显示详细调试信息，否则显示简洁权限列表）
     debugInfo?.let { info ->
         AlertDialog(
             onDismissRequest = { debugInfo = null },
             title = { Text("密钥已激活") },
             text = {
                 Column {
-                    Text("当前已激活权限：", style = MaterialTheme.typography.titleSmall)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("keyId = \"${info.keyId}\"")
-                    Text("features = ${info.features.joinToString { it.name }}")
-                    Text("neededFeature = ${info.neededFeature.name}")
-                    Text("hasPerm = ${info.hasPerm}")
-                    Text("authState = ${info.authState}")
-                    Text("targetScreen = ${info.targetScreen::class.simpleName}")
+                    if (DEBUG_AUTH) {
+                        // DEBUG 模式：显示全部变量值
+                        Text("当前已激活权限：", style = MaterialTheme.typography.titleSmall)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("keyId = \"${info.keyId}\"")
+                        Text("features = ${info.features.joinToString { it.name }}")
+                        Text("neededFeature = ${info.neededFeature.name}")
+                        Text("hasPerm = ${info.hasPerm}")
+                        Text("authState = ${info.authState}")
+                        Text("targetScreen = ${info.targetScreen::class.simpleName}")
+                    } else {
+                        // 生产模式：简洁权限列表
+                        Text("你拥有以下权限：")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        info.features.forEach { f ->
+                            Text("· ${featureDisplayName(f)}")
+                        }
+                    }
                 }
             },
             confirmButton = {

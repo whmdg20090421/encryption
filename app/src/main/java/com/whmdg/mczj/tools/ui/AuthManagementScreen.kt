@@ -64,10 +64,14 @@ fun AuthManagementScreen(onBack: () -> Unit) {
                             val res = PermissionManager.tryAuthenticate(context, pw)
                             if (res.isSuccess) {
                                 val features = res.getOrNull() ?: emptySet()
-                                val state = PermissionManager.state.value
-                                val keyId = (state as? PermissionManager.AuthState.Authed)?.keyId ?: "?"
                                 currentPw = pw
-                                resultMsg = "密钥已激活: keyId=$keyId, features=${features.joinToString { it.name }}, state=$state"
+                                resultMsg = if (DEBUG_AUTH) {
+                                    val state = PermissionManager.state.value
+                                    val keyId = (state as? PermissionManager.AuthState.Authed)?.keyId ?: "?"
+                                    "密钥已激活: keyId=$keyId, features=${features.joinToString { it.name }}, state=$state"
+                                } else {
+                                    "密钥已激活，你拥有：${features.joinToString("、") { featureDisplayName(it) }}"
+                                }
                                 phase = 2
                                 true
                             } else {
