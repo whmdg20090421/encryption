@@ -451,7 +451,6 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             val allTasks = mutableListOf<PreviewItem>()
             var currentUrl = "$FA_BASE/${state.downloadType}/${state.author}/${startPage}"
             var consecutiveEmpty = 0
-            var firstPageCount = 0
             var pageNum = startPage
 
             try {
@@ -519,11 +518,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                     }
                     consecutiveEmpty = 0
 
-                    // First page done → 记录每页作品数
-                    if (pageNum == startPage) {
-                        firstPageCount = pages.size
-                        addLog("第一页发现 $firstPageCount 个作品，开始逐页爬取...")
-                    }
+                    addLog("第 $pageNum 页: 发现 ${pages.size} 个链接，开始抓取详情...")
 
                     // 并行抓取详情页，复用 downloadThreads 作为并发数
                     data class DetailResult(val pageId: String, val imageUrl: String, val fileName: String, val title: String, val meta: SubmissionMeta = SubmissionMeta())
@@ -574,6 +569,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                     }
 
                     // 收集结果并更新进度
+                    val countBeforePage = allTasks.size
                     for (deferred in deferreds) {
                         if (isStopped) break
                         val result = deferred.await() ?: continue
@@ -598,7 +594,8 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                         }
                     }
 
-                    addLog("第 $pageNum 页: 已收集 ${allTasks.size} 个任务")
+                    val pageCollected = allTasks.size - countBeforePage
+                    addLog("第 $pageNum 页: 本页 $pageCollected/${pages.size} 个，累计 ${allTasks.size} 个")
                     // 从页面解析下一页 URL（参考 furaffinity-dl: 从 Next 按钮提取）
                     val nextUrl = parseNextPageUrl(html, currentUrl)
                     if (nextUrl != null) {
