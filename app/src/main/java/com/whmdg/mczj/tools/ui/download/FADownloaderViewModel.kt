@@ -107,7 +107,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         val username = prefs.getString("username", "") ?: ""
         _uiState.update {
             it.copy(
-                isLoggedIn = cookie.isNotEmpty() && cookie.contains("a=") && cookie.contains("b=") && cookie.contains("cf_clearance="),
+                isLoggedIn = cookie.isNotEmpty() && cookie.contains("a=") && cookie.contains("b="),
                 username = username
             )
         }
@@ -130,7 +130,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             .apply()
         _uiState.update {
             it.copy(
-                isLoggedIn = cookie.contains("a=") && cookie.contains("b=") && cookie.contains("cf_clearance="),
+                isLoggedIn = cookie.contains("a=") && cookie.contains("b="),
                 cookieExpired = false,
                 cookieRefreshAttempts = 0,
                 username = username.ifEmpty { it.username }

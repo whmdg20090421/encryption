@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,6 +35,7 @@ fun FALoginScreen(
     var extractedUsername by remember { mutableStateOf("") }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var cookiesDetected by remember { mutableStateOf(false) }
+    var showNoCookieDialog by remember { mutableStateOf(false) }
 
     /** 提取 Cookie 并弹出确认对话框 */
     fun extractAndShowCookie() {
@@ -42,6 +44,7 @@ fun FALoginScreen(
         if (cookies == null || !hasFACookies(cookies)) {
             statusText = "未检测到有效登录，请先完成登录"
             cookiesDetected = false
+            showNoCookieDialog = true
             return
         }
         extractedCookies = cookies
@@ -59,6 +62,29 @@ fun FALoginScreen(
             extractedUsername = ""
             showCookieDialog = true
         }
+    }
+
+    // No cookie detected dialog
+    if (showNoCookieDialog) {
+        AlertDialog(
+            onDismissRequest = { showNoCookieDialog = false },
+            icon = {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("未检测到登录凭证") },
+            text = {
+                Text("当前未检测到有效的 FA 登录 Cookie。请在下方 WebView 中完成登录操作后，再次点击右上角的勾勾按钮。")
+            },
+            confirmButton = {
+                Button(onClick = { showNoCookieDialog = false }) {
+                    Text("知道了")
+                }
+            }
+        )
     }
 
     // Cookie confirmation dialog
@@ -254,9 +280,9 @@ fun FALoginScreen(
 
 /**
  * Check if cookies contain FA authentication tokens.
- * FA uses cookies 'a' and 'b' (both UUIDs) for session auth,
- * plus 'cf_clearance' for Cloudflare bypass.
+ * FA uses cookies 'a' and 'b' (both UUIDs) for session auth.
+ * 'cf_clearance' (Cloudflare) is optional.
  */
 private fun hasFACookies(cookies: String): Boolean {
-    return cookies.contains("a=") && cookies.contains("b=") && cookies.contains("cf_clearance=")
+    return cookies.contains("a=") && cookies.contains("b=")
 }

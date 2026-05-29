@@ -94,7 +94,7 @@ fun FADownloaderScreen(
                                 // Check for valid cookies
                                 val cookieManager = CookieManager.getInstance()
                                 val cookies = cookieManager.getCookie("furaffinity.net")
-                                if (cookies != null && cookies.contains("a=") && cookies.contains("b=") && cookies.contains("cf_clearance=")) {
+                                if (cookies != null && cookies.contains("a=") && cookies.contains("b=")) {
                                     // Cookie refreshed successfully
                                     showSilentRefresh = false
                                     viewModel.onCookieRefreshSuccess(cookies)
