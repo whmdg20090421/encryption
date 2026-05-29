@@ -1338,135 +1338,109 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     /**
      * 智能差量重命名：
      * 1. 扫描带序号旧文件 + 无序号新文件
-     * 2. 合并所有标识，按标题分组排序
+     * 2. 合并所有标识，按 prefix 分组排序
      * 3. 差量比对旧编号与新编号，找到第一个差异位置
      * 4. 只重命名从该位置开始的文件（两步法避免冲突）
      */
     private suspend fun renumberFiles(dirUri: Uri, author: String) = withContext(Dispatchers.IO) {
         try {
             val app = getApplication<Application>()
-            addLog("重排序开始: URI=$dirUri")
             val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri)
             if (dirDoc == null) {
-                addLog("重排序失败: 无法打开目录 DocumentFile")
+                addLog("重排序失败: 无法打开目录")
                 return@withContext
             }
-            val fileCount = dirDoc.listFiles().size
-            addLog("重排序: 目录内共 $fileCount 个文件")
-            val safeAuthor = author.replace(Regex("[^a-zA-Z0-9_-]"), "_")
 
             // 从右往左解析：FA ID 总是在扩展名之前
-            // 带序号: 0001_anything_FAID.ext  →  seq=0001, prefix="anything", faId, ext
-            // 无序号: anything_FAID.ext        →  prefix="anything", faId, ext
+            // 带序号: 0001_rest_FAID.ext  →  seq=0001, restOfName, faId, ext
+            // 无序号: rest_FAID.ext        →  restOfName, faId, ext
             val numberedPattern = Regex("""^(\d{4})_(.+)_(\d+)\.(\w+)$""")
             val unnumberedPattern = Regex("""^(.+)_(\d+)\.(\w+)$""")
 
-            data class FileIdentity(val prefix: String, val faId: Long, val ext: String)
-            data class OldEntry(val seq: Int, val identity: FileIdentity, val docFile: androidx.documentfile.provider.DocumentFile, val name: String)
+            data class FileEntry(val seq: Int, val restOfName: String, val faId: Long, val ext: String,
+                                 val docFile: androidx.documentfile.provider.DocumentFile, val name: String)
 
-            val oldEntries = mutableListOf<OldEntry>()
-            val newDownloads = mutableListOf<androidx.documentfile.provider.DocumentFile>()
-            val allIdentities = mutableSetOf<FileIdentity>()
+            val allFiles = dirDoc.listFiles()
+            val entries = mutableListOf<FileEntry>()
             var unmatched = 0
 
-            // ── Step 1: 扫描目录 ──
-            for (file in dirDoc.listFiles()) {
+            // ── Step 1: 一次性扫描目录 ──
+            for (file in allFiles) {
                 if (!file.isFile) continue
                 val name = file.name ?: continue
                 if (name.endsWith(".tmp")) continue
 
                 val numbered = numberedPattern.matchEntire(name)
                 if (numbered != null) {
-                    val prefix = numbered.groupValues[2]
+                    val seq = numbered.groupValues[1].toIntOrNull() ?: 0
+                    val restOfName = numbered.groupValues[2]
                     val faId = numbered.groupValues[3].toLongOrNull() ?: continue
                     val ext = numbered.groupValues[4]
-                    val seq = numbered.groupValues[1].toIntOrNull() ?: 0
-                    val identity = FileIdentity(prefix, faId, ext)
-                    oldEntries.add(OldEntry(seq, identity, file, name))
-                    allIdentities.add(identity)
+                    entries.add(FileEntry(seq, restOfName, faId, ext, file, name))
                     continue
                 }
                 val unnumbered = unnumberedPattern.matchEntire(name)
                 if (unnumbered != null) {
-                    val prefix = unnumbered.groupValues[1]
+                    val restOfName = unnumbered.groupValues[1]
                     val faId = unnumbered.groupValues[2].toLongOrNull() ?: continue
                     val ext = unnumbered.groupValues[3]
-                    allIdentities.add(FileIdentity(prefix, faId, ext))
-                    newDownloads.add(file)
+                    entries.add(FileEntry(0, restOfName, faId, ext, file, name))
                 } else {
                     unmatched++
                 }
             }
 
-            addLog("重排序扫描: 带序号${oldEntries.size}个, 新下载${newDownloads.size}个, 未匹配${unmatched}个")
-            if (allIdentities.isEmpty()) {
+            addLog("重排序扫描: ${entries.size} 个匹配, $unmatched 个未匹配")
+            if (entries.isEmpty()) {
                 addLog("重排序: 无匹配文件，跳过")
                 return@withContext
             }
 
-            // ── Step 2: 排序（prefix 分组 → 组间最早FAID → 组内FAID） ──
-            val grouped = allIdentities.groupBy { it.prefix }
+            // ── Step 2: 按 restOfName 分组 → 组间最早FAID → 组内FAID 排序 ──
+            val grouped = entries.groupBy { it.restOfName }
             val sorted = grouped.entries
                 .sortedBy { (_, group) -> group.minOf { it.faId } }
                 .flatMap { (_, group) -> group.sortedBy { it.faId } }
 
-            // ── Step 3: 新编号映射 ──
-            val newNumbering = sorted.mapIndexed { idx, identity -> (idx + 1) to identity }
-
-            // ── Step 4: 旧编号映射 ──
-            val oldNumbering = oldEntries.associate { it.seq to it.identity }
-
-            // ── Step 5: 差量比对 ──
-            val maxOld = oldNumbering.keys.maxOrNull() ?: 0
-            val maxNew = newNumbering.size
-            val maxSize = maxOf(maxOld, maxNew)
-            var firstDiff = maxSize + 1
-            for (i in 1..maxSize) {
-                val oldId = oldNumbering[i]
-                val newId = newNumbering.getOrNull(i - 1)?.second
-                if (oldId != newId) {
-                    firstDiff = i
+            // ── Step 3: 差量比对 ──
+            val oldSeqMap = entries.filter { it.seq > 0 }.associate { it.seq to it.faId }
+            var firstDiff = sorted.size + 1
+            for (i in sorted.indices) {
+                val seq = i + 1
+                if (oldSeqMap[seq] != sorted[i].faId) {
+                    firstDiff = seq
                     break
                 }
             }
 
-            if (firstDiff > maxSize) {
+            if (firstDiff > sorted.size) {
                 addLog("重排序: 无变化")
                 return@withContext
             }
 
-            addLog("重排序: ${allIdentities.size} 个文件，${grouped.size} 组，从第 $firstDiff 个开始重命名...")
+            addLog("重排序: ${entries.size} 个文件, ${grouped.size} 组, 从第 $firstDiff 个开始...")
 
-            // ── Step 6: 构建重命名操作列表 ──
+            // ── Step 4: 构建重命名操作列表 ──
+            // 直接在原文件名前加序号，不重建文件名（避免重复作者名等问题）
             data class RenameOp(val docFile: androidx.documentfile.provider.DocumentFile, val from: String, val to: String)
             val ops = mutableListOf<RenameOp>()
+            val entryByName = entries.associateBy { it.name }
 
-            val oldByIdentity = oldEntries.associateBy { it.identity }
-            val newFileByIdentity = mutableMapOf<FileIdentity, androidx.documentfile.provider.DocumentFile>()
-            for (file in newDownloads) {
-                val name = file.name ?: continue
-                val match = unnumberedPattern.matchEntire(name) ?: continue
-                val prefix = match.groupValues[1]
-                val faId = match.groupValues[2].toLongOrNull() ?: continue
-                val ext = match.groupValues[3]
-                newFileByIdentity[FileIdentity(prefix, faId, ext)] = file
-            }
-
-            for (i in firstDiff..maxNew) {
-                val identity = newNumbering.getOrNull(i - 1)?.second ?: continue
-                val newName = "${String.format("%04d", i)}_${safeAuthor}_${identity.prefix}_${identity.faId}.${identity.ext}"
-
-                val oldEntry = oldByIdentity[identity]
-                if (oldEntry != null) {
-                    if (oldEntry.name != newName) {
-                        ops.add(RenameOp(oldEntry.docFile, oldEntry.name, newName))
-                    }
+            for (i in (firstDiff - 1) until sorted.size) {
+                val entry = sorted[i]
+                val seq = i + 1
+                val seqStr = String.format("%04d", seq)
+                // 原文件名: 0001_rest_faId.ext 或 rest_faId.ext
+                // 新文件名: 0001_rest_faId.ext（序号可能变化）
+                val newName = if (entry.seq > 0) {
+                    // 已有序号：替换序号前缀
+                    "${seqStr}_${entry.restOfName}_${entry.faId}.${entry.ext}"
                 } else {
-                    val newFile = newFileByIdentity[identity]
-                    if (newFile != null) {
-                        val currentName = newFile.name ?: continue
-                        ops.add(RenameOp(newFile, currentName, newName))
-                    }
+                    // 无序号：加序号前缀
+                    "${seqStr}_${entry.name}"
+                }
+                if (entry.name != newName) {
+                    ops.add(RenameOp(entry.docFile, entry.name, newName))
                 }
             }
 
@@ -1475,27 +1449,26 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 return@withContext
             }
 
-            // ── Step 7: 两步重命名（先 → .tmp，再 → 最终名） ──
+            // ── Step 5: 两步重命名（先 → .tmp，再 → 最终名） ──
+            // 先全部改名为 .tmp 避免冲突
             var renamed = 0
             for (op in ops) {
                 try {
                     op.docFile.renameTo("${op.to}.tmp")
                     renamed++
-                } catch (e: Exception) {
-                    addLog("  重命名失败: ${op.from}")
-                }
+                } catch (_: Exception) {}
             }
+            // 再从 .tmp 改为最终名（重新 listFiles 一次获取更新后的文件引用）
+            val tmpFiles = dirDoc.listFiles().filter { it.name?.endsWith(".tmp") == true }
             for (op in ops) {
                 try {
-                    dirDoc.listFiles()
-                        .firstOrNull { it.name == "${op.to}.tmp" }
-                        ?.renameTo(op.to)
-                } catch (e: Exception) {
-                    addLog("  最终重命名失败: ${op.to}.tmp")
+                    tmpFiles.firstOrNull { it.name == "${op.to}.tmp" }?.renameTo(op.to)
+                } catch (_: Exception) {
+                    addLog("  重命名失败: ${op.to}")
                 }
             }
 
-            addLog("重排序完成: 重命名 $renamed 个文件（从第 $firstDiff 个开始）")
+            addLog("重排序完成: 重命名 $renamed 个文件")
         } catch (e: Exception) {
             addLog("重排序异常: ${e.message}")
         }
