@@ -1533,8 +1533,12 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     /**
      * 检测同名作品并按系列区分。
-     * 当发现多个作品标题相同时，去掉标题末尾5个字符作为系列前缀，
+     * 当发现多个作品标题相同时，从文件名中提取作品名部分，去掉末尾5个字符作为系列前缀，
      * 按FAID排序分为系列A（旧）和系列B（新），添加 _A/_B 后缀。
+     *
+     * 文件名格式：${safeAuthor}_${safeTitle}_${pageId}.$ext
+     * 例如：tsubasa9940_Trick_or_Treat___02p_62814770.jpg
+     * 提取 safeTitle = Trick_or_Treat___02p，去掉末5位 = Trick_or_Treat_
      */
     private fun detectAndResolveSeries(tasks: List<PreviewItem>, author: String): SeriesDetectionResult {
         // 按标题分组（忽略大小写和前后空格）
@@ -1557,9 +1561,20 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         for ((_, group) in duplicateTitles) {
             duplicateCount++
 
-            // 获取标题并去掉末尾5个字符作为系列前缀
-            val title = group.first().title.trim()
-            val seriesPrefix = if (title.length > 5) title.dropLast(5).trim() else title
+            // 从文件名中提取作品名部分（safeTitle）
+            // 文件名格式：${safeAuthor}_${safeTitle}_${pageId}.$ext
+            val firstFileName = group.first().fileName
+            val ext = firstFileName.substringAfterLast(".")
+            val nameWithoutExt = firstFileName.substringBeforeLast(".")
+            // 从右往左找，最后一个是 pageId，再往前是 safeTitle
+            val lastUnderscore = nameWithoutExt.lastIndexOf("_")
+            val nameWithoutPageId = if (lastUnderscore > 0) nameWithoutExt.substring(0, lastUnderscore) else nameWithoutExt
+            // 再从右往左找，分离 safeAuthor 和 safeTitle
+            val secondUnderscore = nameWithoutPageId.lastIndexOf("_")
+            val safeTitle = if (secondUnderscore > 0) nameWithoutPageId.substring(secondUnderscore + 1) else nameWithoutPageId
+
+            // 去掉作品名末尾5个字符作为系列前缀
+            val seriesPrefix = if (safeTitle.length > 5) safeTitle.dropLast(5) else safeTitle
 
             // 按FAID排序（旧的在前）
             val sortedGroup = group.sortedBy { it.faId.toLongOrNull() ?: 0L }
@@ -1576,16 +1591,16 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 val seriesA = sortedGroup.take(halfSize)
                 val seriesB = sortedGroup.drop(halfSize)
 
-                addLog("  同名作品「$title」发现新系列，前缀「$seriesPrefix」")
+                addLog("  同名作品「${group.first().title}」发现新系列，前缀「$seriesPrefix」")
 
                 // 重命名系列A
                 for (task in seriesA) {
                     val index = updatedTasks.indexOfFirst { it.faId == task.faId }
                     if (index >= 0) {
                         val oldName = updatedTasks[index].fileName
-                        val ext = oldName.substringAfterLast(".")
-                        val nameWithoutExt = oldName.substringBeforeLast(".")
-                        val newName = "${nameWithoutExt}_A.$ext"
+                        val fileExt = oldName.substringAfterLast(".")
+                        val fileNameWithoutExt = oldName.substringBeforeLast(".")
+                        val newName = "${fileNameWithoutExt}_A.$fileExt"
                         updatedTasks[index] = updatedTasks[index].copy(fileName = newName)
                         renamedCount++
                         addLog("    系列A: $oldName → $newName")
@@ -1597,9 +1612,9 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                     val index = updatedTasks.indexOfFirst { it.faId == task.faId }
                     if (index >= 0) {
                         val oldName = updatedTasks[index].fileName
-                        val ext = oldName.substringAfterLast(".")
-                        val nameWithoutExt = oldName.substringBeforeLast(".")
-                        val newName = "${nameWithoutExt}_B.$ext"
+                        val fileExt = oldName.substringAfterLast(".")
+                        val fileNameWithoutExt = oldName.substringBeforeLast(".")
+                        val newName = "${fileNameWithoutExt}_B.$fileExt"
                         updatedTasks[index] = updatedTasks[index].copy(fileName = newName)
                         renamedCount++
                         addLog("    系列B: $oldName → $newName")
@@ -1610,15 +1625,15 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 val nextLabel = ('A' + existingLabels.size).toString()
                 existingLabels.add(nextLabel)
 
-                addLog("  同名作品「$title」归入已有系列，新增系列$nextLabel")
+                addLog("  同名作品「${group.first().title}」归入已有系列，新增系列$nextLabel")
 
                 for (task in sortedGroup) {
                     val index = updatedTasks.indexOfFirst { it.faId == task.faId }
                     if (index >= 0) {
                         val oldName = updatedTasks[index].fileName
-                        val ext = oldName.substringAfterLast(".")
-                        val nameWithoutExt = oldName.substringBeforeLast(".")
-                        val newName = "${nameWithoutExt}_$nextLabel.$ext"
+                        val fileExt = oldName.substringAfterLast(".")
+                        val fileNameWithoutExt = oldName.substringBeforeLast(".")
+                        val newName = "${fileNameWithoutExt}_$nextLabel.$fileExt"
                         updatedTasks[index] = updatedTasks[index].copy(fileName = newName)
                         renamedCount++
                         addLog("    系列$nextLabel: $oldName → $newName")
