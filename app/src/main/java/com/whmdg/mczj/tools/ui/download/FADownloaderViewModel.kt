@@ -24,6 +24,7 @@ import java.net.CookieManager
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.regex.Pattern
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
@@ -32,6 +33,8 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
 data class DownloadLog(val message: String, val timestamp: Long = System.currentTimeMillis())
+
+enum class DirConflictAction { RENAME, MERGE, DELETE }
 
 /** 预览列表中的单个下载任务 */
 data class PreviewItem(
@@ -73,6 +76,11 @@ data class FAUiState(
     val statusMessage: String = "准备就绪",
     val errorMessage: String? = null,
     val isPaused: Boolean = false,
+    // 目录冲突对话框
+    val showDirConflict: Boolean = false,
+    val conflictDirName: String = "",
+    // 二次删除确认
+    val showDeleteConfirm: Boolean = false,
     // 作者历史
     val authorHistory: List<AuthorHistoryEntry> = emptyList(),
     val showAuthorHistory: Boolean = false,
@@ -100,6 +108,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     /** 收集→下载的生产者-消费者通道 */
     private var downloadChannel: Channel<PreviewItem>? = null
+    private var dirConflictDeferred: CompletableDeferred<DirConflictAction>? = null
 
     private val prefs = application.getSharedPreferences(AppDataPaths.PREFS_BATCH_DOWNLOADER, Context.MODE_PRIVATE)
     private val cachePrefs = application.getSharedPreferences("fa_download_cache", Context.MODE_PRIVATE)
@@ -604,13 +613,20 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             val cookie = loadCookie()
             val threadCount = state.downloadThreads
 
-            val authorDir = createSubdirectory(state.saveDir!!, state.author)
+            val authorDir = checkAndCreateDirectory(state.saveDir!!, state.author)
+            if (authorDir == null) {
+                _uiState.update { it.copy(isDownloading = false, statusMessage = "已取消") }
+                return@launch
+            }
             val targetDir = if (state.downloadType == "scraps") {
-                createSubdirectory(authorDir, "scraps")
+                checkAndCreateDirectory(authorDir, "scraps") ?: run {
+                    _uiState.update { it.copy(isDownloading = false, statusMessage = "已取消") }
+                    return@launch
+                }
             } else {
                 authorDir
             }
-            addLog("保存目录: ${state.author}/${if (state.downloadType == "scraps") "scraps/" else ""}")
+            addLog("保存目录: ${state.saveDirPath}/${state.author}/${if (state.downloadType == "scraps") "scraps/" else ""}")
 
             // 每个任务独立：下载→保存→立即输出日志
             val semaphore = Semaphore(threadCount)
@@ -635,9 +651,14 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                             delay(200)
                         }
                         if (isStopped) return@async
-                        if (state.skipExisting && state.namingMode == "original") {
-                            if (checkFileExists(targetDir, task.fileName)) {
-                                addLog("  ⏭ 跳过: ${task.fileName}")
+                        if (state.skipExisting) {
+                            val shouldSkip = when (state.namingMode) {
+                                "original" -> checkFileExists(targetDir, task.fileName)
+                                "sequential" -> checkFaIdExists(targetDir, task.faId)
+                                else -> false
+                            }
+                            if (shouldSkip) {
+                                addLog("  (${totalDownloaded + totalSkipped + totalFailed + 1}/$totalTasks) ⏭ 跳过: ${task.fileName}")
                                 saveMutex.lock()
                                 totalSkipped++
                                 _uiState.update { it.copy(skippedCount = totalSkipped) }
@@ -650,7 +671,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                         if (data == null) {
                             saveMutex.lock()
                             totalFailed++
-                            addLog("  ✗ 下载失败: ${task.fileName}")
+                            addLog("  (${totalDownloaded + totalSkipped + totalFailed}/$totalTasks) ✗ 下载失败: ${task.fileName}")
                             _uiState.update { it.copy(failedCount = totalFailed) }
                             nextSeq++
                             saveMutex.unlock()
@@ -660,11 +681,11 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                         saveMutex.lock()
                         if (saveToFile(targetDir, task.fileName, data)) {
                             totalDownloaded++
-                            addLog("  ✓ ${task.fileName}")
+                            addLog("  (${totalDownloaded + totalSkipped + totalFailed}/$totalTasks) ✓ ${task.fileName}")
                             _uiState.update { it.copy(downloadedCount = totalDownloaded) }
                         } else {
                             totalFailed++
-                            addLog("  ✗ 保存失败: ${task.fileName}")
+                            addLog("  (${totalDownloaded + totalSkipped + totalFailed}/$totalTasks) ✗ 保存失败: ${task.fileName}")
                             _uiState.update { it.copy(failedCount = totalFailed) }
                         }
                         _uiState.update { it.copy(currentProgress = nextSeq.toFloat() / totalTasks.coerceAtLeast(1)) }
@@ -899,14 +920,80 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         val app = getApplication<Application>()
         val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, parentUri)
             ?: return parentUri
-        // 大小写不敏感匹配：遍历已有文件夹，忽略大小写比较
         for (file in parentDoc.listFiles()) {
-            if (file.isDirectory && file.name?.equals(name, ignoreCase = true) == true) {
+            if (file.isDirectory && file.name == name) {
                 return file.uri
             }
         }
         val newDir = parentDoc.createDirectory(name)
         return newDir?.uri ?: parentUri
+    }
+
+    /** 检查目录是否存在（大小写敏感），存在则弹出冲突对话框，返回最终目录 URI */
+    private suspend fun checkAndCreateDirectory(parentUri: Uri, name: String): Uri? {
+        val app = getApplication<Application>()
+        val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, parentUri)
+            ?: return parentUri
+        val existing = parentDoc.listFiles().firstOrNull {
+            it.isDirectory && it.name == name
+        }
+        if (existing == null) {
+            val newDir = parentDoc.createDirectory(name)
+            return newDir?.uri ?: parentUri
+        }
+        // 目录已存在，弹出对话框等待用户选择
+        val deferred = CompletableDeferred<DirConflictAction>()
+        dirConflictDeferred = deferred
+        _uiState.update { it.copy(showDirConflict = true, conflictDirName = name) }
+        val action = deferred.await()
+        dirConflictDeferred = null
+        return when (action) {
+            DirConflictAction.MERGE -> existing.uri
+            DirConflictAction.RENAME -> {
+                var seq = 1
+                var newName: String
+                var conflict: Boolean
+                do {
+                    newName = "$name($seq)"
+                    conflict = parentDoc.listFiles().any {
+                        it.isDirectory && it.name == newName
+                    }
+                    seq++
+                } while (conflict)
+                val newDir = parentDoc.createDirectory(newName)
+                addLog("目录已重命名: $newName")
+                newDir?.uri ?: parentUri
+            }
+            DirConflictAction.DELETE -> {
+                existing.delete()
+                addLog("已删除旧目录: $name")
+                val newDir = parentDoc.createDirectory(name)
+                newDir?.uri ?: parentUri
+            }
+        }
+    }
+
+    fun resolveDirConflict(action: DirConflictAction) {
+        if (action == DirConflictAction.DELETE) {
+            _uiState.update { it.copy(showDirConflict = false, showDeleteConfirm = true) }
+        } else {
+            _uiState.update { it.copy(showDirConflict = false) }
+            dirConflictDeferred?.complete(action)
+        }
+    }
+
+    fun confirmDeleteDir() {
+        _uiState.update { it.copy(showDeleteConfirm = false) }
+        dirConflictDeferred?.complete(DirConflictAction.DELETE)
+    }
+
+    fun cancelDeleteDir() {
+        _uiState.update { it.copy(showDeleteConfirm = false, showDirConflict = true) }
+    }
+
+    fun dismissDirConflict() {
+        _uiState.update { it.copy(showDirConflict = false, showDeleteConfirm = false) }
+        dirConflictDeferred?.complete(DirConflictAction.MERGE)
     }
 
     private fun checkFileExists(dirUri: Uri, fileName: String): Boolean {
@@ -915,6 +1002,19 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri)
             val file = dirDoc?.findFile(fileName)
             file != null && file.exists()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** 检查目录中是否已存在包含指定 FAID 的文件（格式: *_FAID.ext） */
+    private fun checkFaIdExists(dirUri: Uri, faId: String): Boolean {
+        return try {
+            val app = getApplication<Application>()
+            val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri)
+                ?: return false
+            val pattern = Regex("""_${faId}\.\w+$""")
+            dirDoc.listFiles().any { it.isFile && it.name?.let { name -> pattern.containsMatchIn(name) } == true }
         } catch (_: Exception) {
             false
         }
@@ -963,14 +1063,14 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 seq++
                 val oldName = entry.docFile.name ?: continue
                 val ext = oldName.substringAfterLast(".")
-                // 提取标题部分（去掉旧序号和FAID）
-                val titlePart = oldName
-                    .removePrefix(Regex("^\\d{4}_").replace(oldName, "").let { oldName.removePrefix(oldName.take(4)) })
-                    .let { name ->
-                        // 提取 _FAID.ext 之前的部分作为标题
-                        val idx = name.lastIndexOf("_${entry.faId}")
-                        if (idx > 0) name.substring(0, idx) else ""
-                    }
+                // 格式: 0001_author_title_FAID.ext → 提取 title 部分
+                // 去掉开头 "0001_" (4位数字+下划线)，去掉末尾 "_FAID.ext"
+                val withoutSeq = oldName.replaceFirst(Regex("^\\d{4}_"), "")
+                val faIdSuffix = "_${entry.faId}.$ext"
+                val titlePart = if (withoutSeq.endsWith(faIdSuffix)) {
+                    withoutSeq.removeSuffix(faIdSuffix)
+                        .removePrefix("${safeAuthor}_")  // 去掉作者前缀
+                } else ""
                 val newName = "${String.format("%04d", seq)}_${safeAuthor}_${titlePart}_${entry.faId}.$ext"
 
                 if (oldName != newName) {

@@ -1,6 +1,8 @@
 name: Build arm64-v8a Release APK
 
 on:
+  push:
+    branches: [main, master]
   workflow_dispatch:
 
 jobs:

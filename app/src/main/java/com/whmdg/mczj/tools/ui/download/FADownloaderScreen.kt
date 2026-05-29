@@ -699,6 +699,64 @@ fun FADownloaderScreen(
         )
     }
 
+    // ── Directory conflict dialog ──
+    if (state.showDirConflict) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissDirConflict() },
+            icon = {
+                Icon(
+                    Icons.Default.CreateNewFolder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            title = { Text("目录已存在") },
+            text = { Text("文件夹「${state.conflictDirName}」已存在，请选择处理方式：") },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { viewModel.resolveDirConflict(DirConflictAction.RENAME) }) {
+                        Text("重命名")
+                    }
+                    Button(onClick = { viewModel.resolveDirConflict(DirConflictAction.MERGE) }) {
+                        Text("合并")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.resolveDirConflict(DirConflictAction.DELETE) }) {
+                    Text("删除重建", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        )
+    }
+
+    // ── Delete confirmation dialog ──
+    if (state.showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelDeleteDir() },
+            icon = {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("确认删除") },
+            text = { Text("将删除文件夹「${state.conflictDirName}」及其所有内容，此操作不可撤销！") },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.confirmDeleteDir() },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("确认删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.cancelDeleteDir() }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
     // ── Early confirm warning dialog ──
     var showEarlyConfirmWarning by remember { mutableStateOf(false) }
     if (showEarlyConfirmWarning) {

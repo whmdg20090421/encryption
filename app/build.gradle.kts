@@ -19,7 +19,7 @@ android {
         targetSdk = 36
         val ts = System.currentTimeMillis() / 1000
         versionCode = (1200000000L + ts % 100000000).toInt()
-        versionName = "1.7.%d".format(ts)
+        versionName = "1.8.%d".format(ts)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -49,8 +49,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            isShrinkResources = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             val envOk = System.getenv("KEYSTORE_PASSWORD")?.isNotEmpty() == true &&
                         System.getenv("KEY_ALIAS")?.isNotEmpty() == true
             signingConfig = if (envOk) signingConfigs.getByName("release")

@@ -1,3 +1,9 @@
+# ── 全局保留：不混淆、不裁剪，仅配合 shrinkResources 移除未使用资源 ──
+-dontobfuscate
+-keep class ** { *; }
+-keepclassmembers class ** { *; }
+-keepattributes *
+
 # ── JNI native methods ──
 -keepclasseswithmembernames class com.whmdg.mczj.tools.auth.NativeAuth {
     native <methods>;
