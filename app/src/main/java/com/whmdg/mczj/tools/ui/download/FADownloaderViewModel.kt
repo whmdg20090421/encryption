@@ -657,6 +657,12 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
             }
             addLog("保存目录: ${state.saveDirPath}/${state.author}/${if (state.downloadType == "scraps") "scraps/" else ""}")
 
+            // 扫描已有文件，构建 FAID 索引用于增量跳过
+            val existingFiles = buildExistingFileIndex(targetDir)
+            if (existingFiles.isNotEmpty()) {
+                addLog("发现 ${existingFiles.size} 个已有文件，将按 FAID+作者+标题匹配跳过")
+            }
+
             // 每个任务独立：下载→保存→立即输出日志
             val semaphore = Semaphore(threadCount)
             val saveMutex = Mutex()
@@ -680,10 +686,17 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                             delay(200)
                         }
                         if (isStopped) return@async
-                        if (state.skipExisting && checkFaIdExists(targetDir, task.faId)) {
-                                addLog("  (${totalDownloaded + totalSkipped + totalFailed + 1}/$totalTasks) ⏭ 跳过: ${task.fileName}")
+                        // 增量跳过：按 FAID + 作者 + 标题匹配已有文件
+                        if (state.skipExisting) {
+                            val existing = existingFiles[task.faId]
+                            if (existing != null &&
+                                existing.author.equals(task.meta.author.ifEmpty { state.author }, ignoreCase = true) &&
+                                existing.title.equals(task.title, ignoreCase = true)
+                            ) {
                                 saveMutex.lock()
+                                val cur = totalDownloaded + totalSkipped + totalFailed + 1
                                 totalSkipped++
+                                addLog("  ($cur/$totalTasks) ⏭ 已存在，跳过: ${existing.fileName}")
                                 _uiState.update { it.copy(skippedCount = totalSkipped) }
                                 nextSeq++
                                 saveMutex.unlock()
@@ -1084,28 +1097,34 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         dirConflictDeferred?.complete(DirConflictAction.MERGE)
     }
 
-    private fun checkFileExists(dirUri: Uri, fileName: String): Boolean {
-        return try {
-            val app = getApplication<Application>()
-            val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri)
-            val file = dirDoc?.findFile(fileName)
-            file != null && file.exists()
-        } catch (_: Exception) {
-            false
-        }
-    }
+    /** 已有文件解析结果 */
+    private data class ExistingFileInfo(val faId: String, val author: String, val title: String, val fileName: String)
 
-    /** 检查目录中是否已存在包含指定 FAID 的文件（格式: *_FAID.ext） */
-    private fun checkFaIdExists(dirUri: Uri, faId: String): Boolean {
-        return try {
+    /** 扫描目录中所有符合命名格式的文件，构建 FAID 索引 */
+    private fun buildExistingFileIndex(dirUri: Uri): Map<String, ExistingFileInfo> {
+        val result = mutableMapOf<String, ExistingFileInfo>()
+        try {
             val app = getApplication<Application>()
             val dirDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, dirUri)
-                ?: return false
-            val pattern = Regex("""_${faId}\.\w+$""")
-            dirDoc.listFiles().any { it.isFile && it.name?.let { name -> pattern.containsMatchIn(name) } == true }
-        } catch (_: Exception) {
-            false
-        }
+                ?: return result
+            // 匹配格式: 0001_author_title_FAID.ext
+            val pattern = Regex("""^\d{4}_(.+?)_(\d+)\.\w+$""")
+            for (file in dirDoc.listFiles()) {
+                if (!file.isFile) continue
+                val name = file.name ?: continue
+                val match = pattern.matchEntire(name) ?: continue
+                val authorTitle = match.groupValues[1]
+                val faId = match.groupValues[2]
+                // 从 author_title 中分离：第一个 _ 之前是作者，之后是标题
+                val sepIdx = authorTitle.indexOf('_')
+                if (sepIdx > 0) {
+                    val author = authorTitle.substring(0, sepIdx)
+                    val title = authorTitle.substring(sepIdx + 1)
+                    result[faId] = ExistingFileInfo(faId, author, title, name)
+                }
+            }
+        } catch (_: Exception) {}
+        return result
     }
 
     private fun getFileExtension(url: String): String {
