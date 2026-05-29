@@ -87,6 +87,7 @@ data class FAUiState(
     val collectionLoaded: Int = 0,
     val collectionTotal: Int = 0,
     val logs: List<DownloadLog> = emptyList(),
+    val pageSummaries: List<String> = emptyList(),
     val downloadedCount: Int = 0,
     val skippedCount: Int = 0,
     val failedCount: Int = 0,
@@ -596,7 +597,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                     }
 
                     val pageCollected = allTasks.size - countBeforePage
-                    addLog("第 $pageNum 页: 本页 $pageCollected/${pages.size} 个，累计 ${allTasks.size} 个")
+                    addPageSummary("第${pageNum}页（${pages.size}个链接），本页${pageCollected}个，累计${allTasks.size}个")
                     // 从页面解析下一页 URL（参考 furaffinity-dl: 从 Next 按钮提取）
                     val nextUrl = parseNextPageUrl(html, currentUrl)
                     if (nextUrl != null) {
@@ -887,8 +888,12 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         _uiState.update { it.copy(logs = listOf(DownloadLog(message)) + it.logs) }
     }
 
+    private fun addPageSummary(summary: String) {
+        _uiState.update { it.copy(pageSummaries = it.pageSummaries + summary) }
+    }
+
     private fun clearLogs() {
-        _uiState.update { it.copy(logs = emptyList()) }
+        _uiState.update { it.copy(logs = emptyList(), pageSummaries = emptyList()) }
     }
 
     // ── HTTP（参考 furaffinity-dl: 统一 session，自动带 Cookie） ──
