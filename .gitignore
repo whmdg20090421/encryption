@@ -17,3 +17,6 @@ local.properties
 build-output/
 app/src/main/cpp/obf_key.h
 app/src/main/cpp/hashes.inc
+apk_output/
+artifact.zip
+AUTH_SYSTEM_REVIEW.md
