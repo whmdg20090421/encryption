@@ -934,21 +934,51 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         val app = getApplication<Application>()
         val parentDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(app, parentUri)
             ?: return parentUri
-        val existing = parentDoc.listFiles().firstOrNull {
+
+        // 检查是否存在同名目录（精确匹配 or 大小写不同）
+        val exactMatch = parentDoc.listFiles().firstOrNull {
             it.isDirectory && it.name == name
         }
-        if (existing == null) {
+        val caseVariant = if (exactMatch == null) {
+            parentDoc.listFiles().firstOrNull {
+                it.isDirectory && it.name != null &&
+                    it.name!!.equals(name, ignoreCase = true) && it.name != name
+            }
+        } else null
+
+        // 完全不存在 → 创建并验证
+        if (exactMatch == null && caseVariant == null) {
             val newDir = parentDoc.createDirectory(name)
+            val createdName = newDir?.name
+            if (createdName != null && createdName != name) {
+                // 底层存储大小写不敏感：createDirectory("Gryf") 返回了已有的 "gryf"
+                // 删除这个误创建的引用，当作冲突处理
+                return handleDirConflict(parentDoc, name, newDir)
+            }
             return newDir?.uri ?: parentUri
         }
-        // 目录已存在，弹出对话框等待用户选择
+
+        // 精确匹配 → 直接合并
+        if (exactMatch != null) {
+            return exactMatch.uri
+        }
+
+        // 大小写变体 → 冲突对话框
+        return handleDirConflict(parentDoc, name, caseVariant!!)
+    }
+
+    private suspend fun handleDirConflict(
+        parentDoc: androidx.documentfile.provider.DocumentFile,
+        name: String,
+        existingDir: androidx.documentfile.provider.DocumentFile
+    ): Uri? {
         val deferred = CompletableDeferred<DirConflictAction>()
         dirConflictDeferred = deferred
-        _uiState.update { it.copy(showDirConflict = true, conflictDirName = name) }
+        _uiState.update { it.copy(showDirConflict = true, conflictDirName = "$name（已存在: ${existingDir.name}）") }
         val action = deferred.await()
         dirConflictDeferred = null
         return when (action) {
-            DirConflictAction.MERGE -> existing.uri
+            DirConflictAction.MERGE -> existingDir.uri
             DirConflictAction.RENAME -> {
                 var seq = 1
                 var newName: String
@@ -956,19 +986,23 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 do {
                     newName = "$name($seq)"
                     conflict = parentDoc.listFiles().any {
-                        it.isDirectory && it.name == newName
+                        it.isDirectory && it.name?.equals(newName, ignoreCase = true) == true
                     }
                     seq++
                 } while (conflict)
                 val newDir = parentDoc.createDirectory(newName)
                 addLog("目录已重命名: $newName")
-                newDir?.uri ?: parentUri
+                newDir?.uri ?: parentDoc.uri
             }
             DirConflictAction.DELETE -> {
-                existing.delete()
-                addLog("已删除旧目录: $name")
+                existingDir.delete()
+                addLog("已删除旧目录: ${existingDir.name}")
                 val newDir = parentDoc.createDirectory(name)
-                newDir?.uri ?: parentUri
+                // 删除后重新创建，再次验证大小写
+                if (newDir?.name != name) {
+                    addLog("警告: 目录名大小写不一致: 期望 $name, 实际 ${newDir?.name}")
+                }
+                newDir?.uri ?: parentDoc.uri
             }
         }
     }
