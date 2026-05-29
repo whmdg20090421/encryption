@@ -960,7 +960,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     /** 从页面解析下一页 URL（参考 furaffinity-dl: 从 Next 按钮的 form action 提取） */
     private fun parseNextPageUrl(html: String, currentUrl: String): String? {
         // 方式1: 从 Next 按钮的 form action 提取（限定 class="button standard" + 精确匹配 "Next"，与 Python 版对齐）
-        val nextPattern = Pattern.compile("""<form[^>]+action="([^"]*)"[^>]*>.*?<button[^>]*class="button standard"[^>]*>[^<]*\sNext\s*<""", Pattern.DOTALL)
+        val nextPattern = Pattern.compile("""<form[^>]+action="([^"]*)"[^>]*>.*?<button[^>]*class="button standard"[^>]*>[^<]*\s*Next\s*<""", Pattern.DOTALL)
         val nextMatcher = nextPattern.matcher(html)
         if (nextMatcher.find()) {
             val action = nextMatcher.group(1) ?: ""
