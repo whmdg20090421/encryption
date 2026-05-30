@@ -308,6 +308,7 @@ fun MainAppContainer() {
 
     val vaultService = remember { VaultService(context).apply { load() } }
     val encryptionSettings = remember { EncryptionSettings(context) }
+    val themeSettings = remember { ThemeSettings(context) }
 
     LaunchedEffect(Unit) {
         val sp = context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE)
@@ -415,6 +416,7 @@ fun MainAppContainer() {
         }
         is Screen.ThemeSettings -> {
             ThemeSettingsScreen(
+                themeSettings = themeSettings,
                 onBack = { navigateBack() }
             )
         }
@@ -422,6 +424,7 @@ fun MainAppContainer() {
             EncryptionHomeScreen(
                 vaultService = vaultService,
                 settings = encryptionSettings,
+                themeSettings = themeSettings,
                 onBack = { navigateBack() },
                 onNavigate = { navigateTo(it) }
             )
@@ -609,6 +612,7 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
 fun EncryptionHomeScreen(
     vaultService: VaultService,
     settings: EncryptionSettings,
+    themeSettings: ThemeSettings,
     onBack: () -> Unit,
     onNavigate: (Screen) -> Unit
 ) {
@@ -696,7 +700,7 @@ fun EncryptionHomeScreen(
                     .padding(innerPadding)
             ) {
                 when (subTab) {
-                    0 -> VaultsListTab(vaultService = vaultService, settings = settings, onNavigate = onNavigate)
+                    0 -> VaultsListTab(vaultService = vaultService, settings = settings, themeSettings = themeSettings, onNavigate = onNavigate)
                     1 -> CloudTab()
                     2 -> EncryptionSettingsTab(settings = settings)
             }
@@ -887,6 +891,7 @@ fun EncryptionHomeScreen(
 fun VaultsListTab(
     vaultService: VaultService,
     settings: EncryptionSettings,
+    themeSettings: ThemeSettings,
     onNavigate: (Screen) -> Unit
 ) {
     val context = LocalContext.current
@@ -929,20 +934,30 @@ fun VaultsListTab(
         LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 12.dp)) {
             items(list) { vault ->
                 // ── 保险箱卡片（参考 encryption_card_reference.jsx 设计风格） ──
-                // 外层 padding 给光晕扩散留空间
+                // 外层 padding 给光晕扩散留空间（仅开启光晕时需要）
+                val glowEnabled = themeSettings.enableGlowEffect
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 14.dp)  // 额外垂直空间给光晕
+                        .padding(
+                            horizontal = 16.dp,
+                            vertical = if (glowEnabled) 14.dp else 6.dp
+                        )
                 ) {
                     // 卡片主体 + 光晕效果
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .glowEffect(
-                                glowColor = Color(0xFF00C8FF),
-                                glowRadius = 16.dp,
-                                cornerRadius = 20.dp
+                            .then(
+                                if (glowEnabled) {
+                                    Modifier.glowEffect(
+                                        glowColor = Color(0xFF00C8FF),
+                                        glowRadius = 16.dp,
+                                        cornerRadius = 20.dp
+                                    )
+                                } else {
+                                    Modifier
+                                }
                             )
                             .drawBehind {
                                 // 青色边框（用 drawRoundRect 模拟，兼容圆角）
@@ -951,12 +966,14 @@ fun VaultsListTab(
                                     cornerRadius = CornerRadius(20.dp.toPx()),
                                     style = Stroke(width = 1.5.dp.toPx())
                                 )
-                                // 外晕
-                                drawRoundRect(
-                                    color = Color(0x1F008CC8),
-                                    cornerRadius = CornerRadius(21.5.dp.toPx()),
-                                    style = Stroke(width = 3.dp.toPx())
-                                )
+                                // 外晕（仅开启光晕时显示）
+                                if (glowEnabled) {
+                                    drawRoundRect(
+                                        color = Color(0x1F008CC8),
+                                        cornerRadius = CornerRadius(21.5.dp.toPx()),
+                                        style = Stroke(width = 3.dp.toPx())
+                                    )
+                                }
                             }
                             .combinedClickable(
                                 onClick = {
@@ -1427,7 +1444,7 @@ fun EncryptionSettingsTab(settings: EncryptionSettings) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ThemeSettingsScreen(onBack: () -> Unit) {
+fun ThemeSettingsScreen(themeSettings: ThemeSettings, onBack: () -> Unit) {
     val isDarkMode = com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode.current
     val onToggleTheme = com.whmdg.mczj.tools.ui.theme.LocalOnToggleTheme.current
 
@@ -1472,6 +1489,35 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
                         Switch(
                             checked = isDarkMode,
                             onCheckedChange = { onToggleTheme(it) }
+                        )
+                    }
+                )
+            }
+
+            item {
+                Text(
+                    text = "卡片效果",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp)
+                )
+            }
+            item {
+                ListItem(
+                    headlineContent = { Text("光晕扩散") },
+                    supportingContent = {
+                        Text(if (themeSettings.enableGlowEffect) "卡片边框带有青色光晕扩散效果" else "仅显示线条边框，无光晕")
+                    },
+                    leadingContent = {
+                        Icon(
+                            Icons.Default.Flare,
+                            contentDescription = null
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = themeSettings.enableGlowEffect,
+                            onCheckedChange = { themeSettings.setEnableGlowEffect(it) }
                         )
                     }
                 )
