@@ -90,16 +90,18 @@ fun GlowCard(
     val borderAlpha = if (isDarkMode) 0.35f else 0.25f
     val outerGlowAlpha = if (isDarkMode) 0.09f else 0.06f
     val backgroundColors = if (isDarkMode) {
+        // 暗青色渐变到黑色
         listOf(
-            Color(0xFF111827),
-            Color(0xFF0D1525),
-            Color(0xFF0A1020)
+            Color(0xFF0A2525),
+            Color(0xFF061A1A),
+            Color(0xFF020E0E)
         )
     } else {
+        // 亮青色渐变到白色
         listOf(
-            Color(0xFFF8FAFC),
-            Color(0xFFF1F5F9),
-            Color(0xFFE2E8F0)
+            Color(0xFFE0F7FA),
+            Color(0xFFE8F5E9),
+            Color(0xFFF5F5F5)
         )
     }
     val shadowAlpha = if (isDarkMode) 4.dp else 2.dp
