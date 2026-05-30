@@ -72,9 +72,9 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.CornerRadius
-import androidx.compose.ui.graphics.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.em
 
 /** 鉴权调试开关：true = 显示详细变量值，false = 仅显示权限列表 */
