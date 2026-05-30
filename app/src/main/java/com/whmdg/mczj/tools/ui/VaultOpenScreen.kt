@@ -27,7 +27,10 @@ import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.encryption.core.FileConstants
 import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import com.whmdg.mczj.tools.encryption.services.CryptoService
+import com.whmdg.mczj.tools.encryption.services.EncryptionTaskManager
 import com.whmdg.mczj.tools.encryption.services.VaultSession
+import com.whmdg.mczj.tools.ui.encryption.EncryptionProgressIcon
+import com.whmdg.mczj.tools.ui.encryption.EncryptionProgressPanel
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -142,6 +145,10 @@ fun VaultOpenScreen(
     var progressTitle by remember { mutableStateOf("") }
     var progressPercent by remember { mutableStateOf<Float?>(null) }
 
+    // ── Encryption progress state ──
+    var showProgressPanel by remember { mutableStateOf(false) }
+    var showEncryptionSnackbar by remember { mutableStateOf(false) }
+
     // ── Long-press context menu state ──
     var contextMenuEntry by remember { mutableStateOf<DisplayEntry?>(null) }
 
@@ -166,27 +173,27 @@ fun VaultOpenScreen(
         if (uris.isNotEmpty()) {
             coroutineScope.launch(Dispatchers.Default) {
                 withContext(Dispatchers.Main) {
-                    progressTitle = "正在导入文件..."
+                    progressTitle = "正在准备导入文件..."
                     progressPercent = 0.0f
                 }
 
                 val total = uris.size
                 var done = 0
+                val relative = if (isRoot) "" else File(currentPath).relativeTo(session.vaultDir).path
 
                 for (uri in uris) {
                     try {
                         val tempFile = uriToTempFile(context, uri)
-                        val relative = if (isRoot) "" else File(currentPath).relativeTo(session.vaultDir).path
 
-                        CryptoService.encryptIntoVault(
-                            context = context,
+                        // 使用 EncryptionTaskManager 创建后台加密任务
+                        EncryptionTaskManager.createEncryptionTask(
+                            file = tempFile,
                             session = session,
-                            srcFile = tempFile,
                             subDir = relative,
-                            overwrite = true,
-                            onProgress = { _, _ -> }
+                            onComplete = {
+                                tempFile.delete()
+                            }
                         )
-                        tempFile.delete()
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
@@ -199,7 +206,7 @@ fun VaultOpenScreen(
                 withContext(Dispatchers.Main) {
                     progressPercent = null
                     progressTitle = ""
-                    Toast.makeText(context, "导入完成", Toast.LENGTH_SHORT).show()
+                    showEncryptionSnackbar = true
                     vaultService?.markModified(session.record.id)
                     refresh()
                 }
@@ -230,7 +237,7 @@ fun VaultOpenScreen(
                 withContext(Dispatchers.Main) {
                     progressPercent = null
                     progressTitle = ""
-                    Toast.makeText(context, "文件夹导入完成", Toast.LENGTH_SHORT).show()
+                    showEncryptionSnackbar = true
                     vaultService?.markModified(session.record.id)
                     refresh()
                 }
@@ -342,9 +349,9 @@ fun VaultOpenScreen(
                                 Icon(Icons.Default.ArrowUpward, contentDescription = "返回上级")
                             }
                         }
-                        IconButton(onClick = { /* TODO: 加密进度功能待开发 */ }) {
-                            Icon(Icons.Default.Shield, contentDescription = "加密进度")
-                        }
+                        EncryptionProgressIcon(
+                            onShowPanel = { showProgressPanel = true }
+                        )
                     }
                 }
             )
@@ -921,6 +928,43 @@ fun VaultOpenScreen(
                         }
                     }
                 )
+            }
+
+            // ── Encryption Progress Panel ──
+            if (showProgressPanel) {
+                EncryptionProgressPanel(
+                    onDismiss = { showProgressPanel = false }
+                )
+            }
+
+            // ── Encryption Snackbar ──
+            if (showEncryptionSnackbar) {
+                Snackbar(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .align(Alignment.BottomCenter),
+                    action = {
+                        Row {
+                            TextButton(onClick = { showEncryptionSnackbar = false }) {
+                                Text("知道了")
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            TextButton(onClick = {
+                                showEncryptionSnackbar = false
+                                showProgressPanel = true
+                            }) {
+                                Text("查看加密进度")
+                            }
+                        }
+                    },
+                    dismissAction = {
+                        IconButton(onClick = { showEncryptionSnackbar = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "关闭")
+                        }
+                    }
+                ) {
+                    Text("正在后台加密...")
+                }
             }
 
             ErrorDialog(error = vaultOpenError, onDismiss = { vaultOpenError = null })

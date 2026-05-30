@@ -25,6 +25,7 @@ import com.whmdg.mczj.tools.ui.theme.工具箱Theme
 import com.whmdg.mczj.tools.ui.MainAppContainer
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.auth.PermissionManager
+import com.whmdg.mczj.tools.encryption.services.EncryptionTaskManager
 import com.whmdg.mczj.tools.security.CrashMonitor
 
 class MainActivity : ComponentActivity() {
@@ -71,6 +72,7 @@ class MainActivity : ComponentActivity() {
         DiagnosticLog.log("MainActivity", "NativeCrashMonitor 已安装")
 
         PermissionManager.init(applicationContext)
+        EncryptionTaskManager.init(applicationContext)
 
         enableEdgeToEdge()
         setContent {
