@@ -112,6 +112,8 @@ sealed class Screen {
     object BatchDownloader : Screen()
     object FADownloader : Screen()
     object FALogin : Screen()
+    object DeviantDownloader : Screen()
+    object DeviantLogin : Screen()
     object ThemeSettings : Screen()
     object EncryptionHome : Screen()
     object VaultCreate : Screen()
@@ -454,6 +456,23 @@ fun MainAppContainer() {
                 onLoginSuccess = { cookie, username ->
                     com.whmdg.mczj.tools.ui.download.FADownloaderViewModel.saveCookieStatic(
                         context, cookie, username
+                    )
+                    navigateBack()
+                }
+            )
+        }
+        is Screen.DeviantDownloader -> {
+            com.whmdg.mczj.tools.ui.download.Deviant.DeviantDownloaderScreen(
+                onBack = { navigateBack() },
+                onLogin = { navigateTo(Screen.DeviantLogin) }
+            )
+        }
+        is Screen.DeviantLogin -> {
+            com.whmdg.mczj.tools.ui.download.Deviant.DeviantLoginScreen(
+                onBack = { navigateBack() },
+                onLoginSuccess = { cookie ->
+                    com.whmdg.mczj.tools.ui.download.Deviant.DeviantDownloaderViewModel.saveCookieStatic(
+                        context, cookie
                     )
                     navigateBack()
                 }
