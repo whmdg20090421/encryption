@@ -896,7 +896,8 @@ fun VaultsListTab(
                     Box(
                         modifier = Modifier
                             .matchParentSize()
-                            .padding(top = 10.dp, start = 6.dp, end = 6.dp, bottom = -6.dp)
+                            .padding(top = 10.dp, start = 6.dp, end = 6.dp)
+                            .offset(y = 6.dp)
                             .drawBehind {
                                 drawRoundRect(
                                     color = Color(0x1400C8FF),
