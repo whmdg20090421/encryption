@@ -426,7 +426,7 @@ private fun FourColorProgressBar(
         if (totalSize <= 0) return@Canvas
 
         // 计算各段宽度
-        val minWidth = width * 0.01
+        val minWidth = (width * 0.01).toFloat()
         var completedWidth = if (completedSize > 0) {
             (completedSize.toFloat() / totalSize * width).coerceAtLeast(minWidth)
         } else 0f

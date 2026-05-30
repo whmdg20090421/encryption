@@ -2,7 +2,11 @@ package com.whmdg.mczj.tools.encryption.services
 
 import android.content.Context
 import android.util.Log
+import com.whmdg.mczj.tools.encryption.data.Argon2Params
+import com.whmdg.mczj.tools.encryption.data.ConfigFlags
+import com.whmdg.mczj.tools.encryption.data.KdfType
 import com.whmdg.mczj.tools.encryption.data.StorageLocation
+import com.whmdg.mczj.tools.encryption.data.VaultConfig
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.encryption.models.EncryptionNode
 import com.whmdg.mczj.tools.encryption.models.FileNode
@@ -12,6 +16,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.json.Json
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -91,7 +96,8 @@ object EncryptionTaskManager {
             dek = session.dek.clone(),
             subDir = subDir,
             encryptFilename = session.record.encryptFilename,
-            customEncryption = session.record.customEncryption
+            customEncryption = session.record.customEncryption,
+            configJson = Json.encodeToString(VaultConfig.serializer(), session.config)
         )
 
         synchronized(_tasks) {
@@ -187,17 +193,21 @@ object EncryptionTaskManager {
 
                     val context = appContext ?: throw Exception("EncryptionTaskManager not initialized")
 
+                    // 反序列化 config
+                    val config = Json.decodeFromString(VaultConfig.serializer(), taskArgs.configJson)
+
                     // 创建 VaultSession 用于加密
                     val session = VaultSession(
                         vaultDir = File(taskArgs.vaultDir),
                         dek = taskArgs.dek,
+                        config = config,
                         record = VaultRecord(
                             id = 0,
                             name = "",
                             location = StorageLocation.INTERNAL,
                             relativePath = taskArgs.vaultDir,
                             encryptFilename = taskArgs.encryptFilename,
-                            encryptMetadata = false,
+                            encryptMetadata = config.configFlags.encryptMetadata,
                             customEncryption = taskArgs.customEncryption,
                             createdAt = ""
                         )
@@ -605,6 +615,7 @@ object EncryptionTaskManager {
         val dek: ByteArray,
         val subDir: String,
         val encryptFilename: Boolean,
-        val customEncryption: Boolean
+        val customEncryption: Boolean,
+        val configJson: String // VaultConfig 的 JSON 序列化
     )
 }
