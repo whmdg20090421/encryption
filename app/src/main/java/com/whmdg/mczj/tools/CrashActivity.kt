@@ -4,6 +4,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
+import androidx.activity.OnBackPressedCallback
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -46,9 +48,11 @@ class CrashActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         /* 禁用返回键 */
-        onBackPressedDispatcher.addCallback(this) {
-            /* 不做任何事，阻止返回 */
-        }
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                /* 不做任何事，阻止返回 */
+            }
+        })
 
         val crashInfo = intent.getStringExtra(EXTRA_CRASH_INFO) ?: "未知崩溃"
         val exitWriteFd = intent.getIntExtra(EXTRA_EXIT_WRITE_FD, -1)
@@ -260,8 +264,10 @@ private fun InfoRow(label: String, value: String) {
 private fun notifyNativeAndExit(exitWriteFd: Int) {
     try {
         if (exitWriteFd >= 0) {
-            /* 直接通过 fd 写入退出信号 */
-            android.system.Os.write(exitWriteFd, byteArrayOf(1), 0, 1)
+            /* 通过 ParcelFileDescriptor 获取 FileDescriptor，写入退出信号 */
+            val pfd = ParcelFileDescriptor.fromFd(exitWriteFd)
+            android.system.Os.write(pfd.fileDescriptor, byteArrayOf(1), 0, 1)
+            pfd.close()
         }
     } catch (_: Exception) {
         /* 如果 pipe 写入失败，兜底直接退出 */
