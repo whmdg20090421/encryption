@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.theme.LocalIsGlowEnabled
 
 /**
@@ -38,9 +39,9 @@ import com.whmdg.mczj.tools.ui.theme.LocalIsGlowEnabled
  */
 fun Modifier.glowEffect(
     glowColor: Color,
-    glowRadius: Dp = 16.dp,
+    glowRadius: Dp = 11.dp,
     cornerRadius: Dp = 20.dp,
-    glowAlpha: Float = 0.6f,
+    glowAlpha: Float = 0.42f,
 ) = this.drawWithContent {
     drawIntoCanvas { canvas ->
         val glowPx = glowRadius.toPx()
@@ -83,6 +84,25 @@ fun GlowCard(
     content: @Composable () -> Unit
 ) {
     val glowEnabled = LocalIsGlowEnabled.current
+    val isDarkMode = LocalIsDarkMode.current
+
+    // 根据主题模式选择颜色
+    val borderAlpha = if (isDarkMode) 0.35f else 0.25f
+    val outerGlowAlpha = if (isDarkMode) 0.09f else 0.06f
+    val backgroundColors = if (isDarkMode) {
+        listOf(
+            Color(0xFF111827),
+            Color(0xFF0D1525),
+            Color(0xFF0A1020)
+        )
+    } else {
+        listOf(
+            Color(0xFFF8FAFC),
+            Color(0xFFF1F5F9),
+            Color(0xFFE2E8F0)
+        )
+    }
+    val shadowAlpha = if (isDarkMode) 4.dp else 2.dp
 
     Box(
         modifier = modifier.padding(
@@ -97,7 +117,7 @@ fun GlowCard(
                     if (glowEnabled) {
                         Modifier.glowEffect(
                             glowColor = glowColor,
-                            glowRadius = 16.dp,
+                            glowRadius = 11.dp,
                             cornerRadius = cornerRadius
                         )
                     } else {
@@ -105,16 +125,16 @@ fun GlowCard(
                     }
                 )
                 .drawBehind {
-                    // 青色边框
+                    // 边框
                     drawRoundRect(
-                        color = Color(0x8C00D2FF),
+                        color = Color(0xFF00D2FF).copy(alpha = borderAlpha),
                         cornerRadius = CornerRadius(cornerRadius.toPx()),
                         style = Stroke(width = 1.5.dp.toPx())
                     )
                     // 外晕（仅开启光晕时显示）
                     if (glowEnabled) {
                         drawRoundRect(
-                            color = Color(0x1F008CC8),
+                            color = Color(0xFF008CC8).copy(alpha = outerGlowAlpha),
                             cornerRadius = CornerRadius((cornerRadius + 1.5.dp).toPx()),
                             style = Stroke(width = 3.dp.toPx())
                         )
@@ -122,17 +142,11 @@ fun GlowCard(
                 },
             shape = RoundedCornerShape(cornerRadius),
             color = Color.Transparent,
-            shadowElevation = 4.dp
+            shadowElevation = shadowAlpha
         ) {
             Box(
                 modifier = Modifier.background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            Color(0xFF111827),
-                            Color(0xFF0D1525),
-                            Color(0xFF0A1020)
-                        )
-                    )
+                    Brush.linearGradient(colors = backgroundColors)
                 )
             ) {
                 content()
@@ -194,7 +208,13 @@ fun GlowListItem(
     onClick: (() -> Unit)? = null,
     enabled: Boolean = true
 ) {
+    val isDarkMode = LocalIsDarkMode.current
     val alpha = if (enabled) 1f else 0.5f
+
+    // 根据主题模式选择颜色
+    val titleColor = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
+    val subtitleColor = if (isDarkMode) Color(0x9964B4D2) else Color(0x9964748B)
+    val arrowColor = if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF0EA5E9)
 
     Row(
         modifier = Modifier
@@ -214,7 +234,7 @@ fun GlowListItem(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (enabled) iconTint else Color(0xFF38D4F5).copy(alpha = 0.38f),
+                tint = if (enabled) iconTint else iconTint.copy(alpha = 0.38f),
                 modifier = Modifier.size(20.dp)
             )
             Spacer(modifier = Modifier.width(12.dp))
@@ -224,7 +244,7 @@ fun GlowListItem(
                 text = title,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
-                color = if (enabled) Color(0xFFE8F4FF) else Color(0xFFE8F4FF).copy(alpha = 0.38f),
+                color = if (enabled) titleColor else titleColor.copy(alpha = 0.38f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -232,7 +252,7 @@ fun GlowListItem(
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (enabled) Color(0x9964B4D2) else Color(0x9964B4D2).copy(alpha = 0.38f),
+                    color = if (enabled) subtitleColor else subtitleColor.copy(alpha = 0.38f),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -244,7 +264,7 @@ fun GlowListItem(
             Icon(
                 imageVector = Icons.Default.ChevronRight,
                 contentDescription = null,
-                tint = if (enabled) Color(0xFF38D4F5) else Color(0xFF38D4F5).copy(alpha = 0.38f),
+                tint = if (enabled) arrowColor else arrowColor.copy(alpha = 0.38f),
                 modifier = Modifier.size(16.dp)
             )
         }
@@ -263,6 +283,13 @@ fun GlowToggleItem(
     onCheckedChange: (Boolean) -> Unit,
     enabled: Boolean = true
 ) {
+    val isDarkMode = LocalIsDarkMode.current
+
+    // 根据主题模式选择颜色
+    val iconColor = if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF0EA5E9)
+    val titleColor = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
+    val subtitleColor = if (isDarkMode) Color(0x9964B4D2) else Color(0x9964748B)
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -273,7 +300,7 @@ fun GlowToggleItem(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = if (enabled) Color(0xFF38D4F5) else Color(0xFF38D4F5).copy(alpha = 0.38f),
+                tint = if (enabled) iconColor else iconColor.copy(alpha = 0.38f),
                 modifier = Modifier.size(20.dp)
             )
             Spacer(modifier = Modifier.width(12.dp))
@@ -283,7 +310,7 @@ fun GlowToggleItem(
                 text = title,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
-                color = if (enabled) Color(0xFFE8F4FF) else Color(0xFFE8F4FF).copy(alpha = 0.38f),
+                color = if (enabled) titleColor else titleColor.copy(alpha = 0.38f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -291,7 +318,7 @@ fun GlowToggleItem(
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (enabled) Color(0x9964B4D2) else Color(0x9964B4D2).copy(alpha = 0.38f),
+                    color = if (enabled) subtitleColor else subtitleColor.copy(alpha = 0.38f),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -311,6 +338,12 @@ fun GlowToggleItem(
  */
 @Composable
 fun GlowInfoRow(label: String, value: String) {
+    val isDarkMode = LocalIsDarkMode.current
+
+    // 根据主题模式选择颜色
+    val labelColor = if (isDarkMode) Color(0x9964B4D2) else Color(0x9964748B)
+    val valueColor = if (isDarkMode) Color(0xFFA8D4F0) else Color(0xFF0EA5E9)
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -319,7 +352,7 @@ fun GlowInfoRow(label: String, value: String) {
         Text(
             text = label,
             fontSize = 11.sp,
-            color = Color(0x9964B4D2),
+            color = labelColor,
             fontFamily = FontFamily.Monospace,
             letterSpacing = 0.03.em
         )
@@ -327,7 +360,7 @@ fun GlowInfoRow(label: String, value: String) {
             text = value,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
-            color = Color(0xFFA8D4F0),
+            color = valueColor,
             fontFamily = FontFamily.Monospace,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
