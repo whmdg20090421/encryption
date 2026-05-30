@@ -227,7 +227,46 @@ fun VaultOpenScreen(
 
                 try {
                     val relative = if (isRoot) "" else File(currentPath).relativeTo(session.vaultDir).path
-                    importDocumentTree(context, session, treeUri, relative)
+
+                    // 获取文件夹名称并创建目标子目录
+                    val docId = DocumentsContract.getTreeDocumentId(treeUri)
+                    val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                    val folderName: String
+                    val nameCursor = context.contentResolver.query(
+                        docUri,
+                        arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                        null, null, null
+                    )
+                    folderName = nameCursor?.use {
+                        if (it.moveToFirst()) it.getString(0) else "imported_folder"
+                    } ?: "imported_folder"
+
+                    val targetSubDir = if (relative.isEmpty()) folderName else "$relative/$folderName"
+                    File(session.vaultDir, targetSubDir).mkdirs()
+
+                    // 收集所有文件
+                    val files = collectDocumentTreeFiles(context, treeUri, docId, targetSubDir)
+                    val total = files.size
+                    var done = 0
+
+                    // 逐个创建加密任务（走 EncryptionTaskManager）
+                    for ((uri, displayName, subDir) in files) {
+                        try {
+                            EncryptionTaskManager.createEncryptionTaskFromUri(
+                                context = context,
+                                uri = uri,
+                                displayName = displayName,
+                                session = session,
+                                subDir = subDir
+                            )
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                        done++
+                        withContext(Dispatchers.Main) {
+                            progressPercent = done.toFloat() / total.toFloat()
+                        }
+                    }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
                         vaultOpenError = e
@@ -344,14 +383,18 @@ fun VaultOpenScreen(
                 },
                 actions = {
                     if (moveOrCopyMode == null || !showDestPicker) {
-                        if (!isRoot) {
+                        val hasEncryptionTasks = EncryptionTaskManager.stateFlow.collectAsState().value.let {
+                            EncryptionTaskManager.tasks.isNotEmpty()
+                        }
+                        if (hasEncryptionTasks) {
+                            EncryptionProgressIcon(
+                                onShowPanel = { showProgressPanel = true }
+                            )
+                        } else if (!isRoot) {
                             IconButton(onClick = { goUp() }) {
                                 Icon(Icons.Default.ArrowUpward, contentDescription = "返回上级")
                             }
                         }
-                        EncryptionProgressIcon(
-                            onShowPanel = { showProgressPanel = true }
-                        )
                     }
                 }
             )
@@ -575,7 +618,23 @@ fun VaultOpenScreen(
                             }
                         }
                     },
-                    confirmButton = {}
+                    dismissButton = {
+                        TextButton(onClick = {
+                            progressTitle = ""
+                            progressPercent = null
+                        }) {
+                            Text("取消")
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            progressTitle = ""
+                            progressPercent = null
+                            showProgressPanel = true
+                        }) {
+                            Text("查看加密进度")
+                        }
+                    }
                 )
             }
 
@@ -1009,6 +1068,47 @@ private fun compactSize(bytes: Long): String {
         v < 1024 * 1024 * 1024 -> "%.1f M".format(v / (1024 * 1024))
         else -> "%.1f G".format(v / (1024 * 1024 * 1024))
     }
+}
+
+/**
+ * 递归收集 SAF DocumentTree 中所有文件的 URI 信息
+ * 返回 List<Triple<Uri, 文件名, 相对子目录路径>>
+ */
+private fun collectDocumentTreeFiles(
+    context: Context,
+    treeUri: Uri,
+    parentDocId: String,
+    subDir: String
+): List<Triple<Uri, String, String>> {
+    val result = mutableListOf<Triple<Uri, String, String>>()
+    val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+    val cursor = context.contentResolver.query(
+        childrenUri,
+        arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE
+        ),
+        null, null, null
+    ) ?: return result
+
+    cursor.use {
+        while (it.moveToNext()) {
+            val childDocId = it.getString(0)
+            val childName = it.getString(1) ?: "file_${System.currentTimeMillis()}"
+            val mimeType = it.getString(2)
+            val isDir = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
+
+            if (isDir) {
+                val childSubDir = "$subDir/$childName"
+                result.addAll(collectDocumentTreeFiles(context, treeUri, childDocId, childSubDir))
+            } else {
+                val childUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocId)
+                result.add(Triple(childUri, childName, subDir))
+            }
+        }
+    }
+    return result
 }
 
 /**

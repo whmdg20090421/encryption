@@ -114,6 +114,30 @@ object EncryptionTaskManager {
     }
 
     /**
+     * 通过 content URI 创建加密任务（用于 SAF 文件夹导入）
+     * 会将 URI 内容复制到临时文件，加密完成后自动删除
+     */
+    fun createEncryptionTaskFromUri(
+        context: Context,
+        uri: android.net.Uri,
+        displayName: String,
+        session: VaultSession,
+        subDir: String
+    ): EncryptionNode {
+        val tempFile = File(context.cacheDir, "import_${System.currentTimeMillis()}_$displayName")
+        val inputStream = context.contentResolver.openInputStream(uri)
+            ?: throw Exception("无法读取文件: $displayName")
+        tempFile.outputStream().use { os -> inputStream.copyTo(os) }
+
+        return createEncryptionTask(
+            file = tempFile,
+            session = session,
+            subDir = subDir,
+            onComplete = { tempFile.delete() }
+        )
+    }
+
+    /**
      * 构建文件节点
      */
     private fun buildFileNode(file: File, taskId: String): FileNode {

@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **语言**：Kotlin  
 **UI 框架**：Jetpack Compose + Material 3  
 **Min SDK**：24 | **Target SDK**：36 | **Compile SDK**：36 (minorApiLevel=1)
-**AGP**：9.2.1 | **Kotlin**：2.2.10 | **Compose BOM**：2026.02.01
+**AGP**：9.2.1 | **Kotlin**：2.2.10 | **Compose BOM**：2026.02.01 | **NDK**：27.0.12077973
 
 ---
 
@@ -44,8 +44,22 @@ KEYSTORE_PASSWORD=xxx KEY_ALIAS=xxx KEY_PASSWORD=xxx ./gradlew assembleRelease
 app/src/main/java/com/whmdg/mczj/tools/
 ├── AppDataPaths.kt                    # 应用数据路径解析
 ├── MainActivity.kt                    # 入口，启用 Edge-to-Edge
+├── CrashActivity.kt                   # Native 崩溃显示界面（从 pipe 接收崩溃信息）
 ├── util/
 │   └── DiagnosticLog.kt               # 诊断日志工具
+├── auth/                              # 认证/授权模块（密钥→功能特性门控）
+│   ├── Feature.kt                     # 功能枚举（ENCRYPTION_VAULT, FILE_MANAGER, BATCH_DOWNLOADER 等）
+│   ├── NativeAuth.kt                  # JNI 接口，调用 authcore 验证密码（返回派生密钥）
+│   ├── KeyProfile.kt                  # 密钥 ID → Feature 集合映射（3 组预置密钥）
+│   ├── PermissionManager.kt           # 全局认证状态管理（StateFlow<AuthState>）
+│   ├── TokenCodec.kt                  # Token 编解码（JSON + HMAC-SHA256 签名）
+│   ├── TokenStorage.kt                # Token 持久化（SharedPreferences + AES-GCM 加密）
+│   ├── KeystoreMaster.kt              # Android Keystore AES-256-GCM 密钥包装（StrongBox 优先）
+│   ├── SecurityEnforcer.kt            # 业务层权限检查失败时的安全自杀机制
+│   ├── LocalPermissionGate.kt         # CompositionLocal<Boolean> UI 权限门控
+│   ├── ReadOnlyGate.kt                # 只读模式包装组件（透明遮罩拦截触摸）
+│   ├── PasswordDialog.kt              # 密码输入对话框
+│   └── NoPermissionScreen.kt          # 无权限提示页面
 ├── encryption/
 │   ├── core/                          # 密码学原语层
 │   │   ├── AesGcm.kt                  # AES-256-GCM 加密/解密
@@ -73,6 +87,8 @@ app/src/main/java/com/whmdg/mczj/tools/
 ├── security/
 │   ├── TeeManager.kt                  # Android Keystore RSA TEE + 生物识别快速解锁
 │   ├── SpecialPermissionVerifier.kt   # 检测 & 提权运行（无障碍/ADB/管理员/Root）
+│   ├── ShizukuAuthorizer.kt           # Shizuku 授权（privileged shell 命令执行）
+│   ├── AndroidPermissionLevel.kt      # 权限级别枚举（STANDARD → ROOT 六级）
 │   ├── MyAccessibilityService.kt      # 无障碍服务声明
 │   └── MyDeviceAdminReceiver.kt       # 设备管理器接收器
 └── ui/
@@ -81,10 +97,32 @@ app/src/main/java/com/whmdg/mczj/tools/
     ├── VaultOpenScreen.kt             # 保险箱文件浏览器（加密导入/解密导出/重命名/移动/复制/删除）
     ├── VaultChangePasswordScreen.kt   # 修改保险箱密码
     ├── EncryptionSettings.kt          # 加密模块偏好（SharedPreferences 响应式）
+    ├── FileManagerScreen.kt           # 文件管理器
+    ├── AuthManagementScreen.kt        # 认证管理（切换密钥、清除授权）
     ├── SecurityScreen.kt              # 安全设置入口菜单
     ├── SpecialPermissionsScreen.kt    # 特殊权限管理 + 能力矩阵对比
     ├── PermissionSettingsScreen.kt    # Android 运行时权限管理
+    ├── AppPermissionsScreen.kt        # 应用权限详情
+    ├── PermissionManagementConfigScreen.kt  # 权限管理配置
+    ├── PermissionGuideViewModel.kt    # 权限引导 ViewModel
+    ├── ErrorDialog.kt                 # 错误对话框组件
+    ├── download/                      # 下载器模块
+    │   ├── BatchDownloaderScreen.kt   # 批量下载器界面
+    │   ├── FADownloaderScreen.kt      # FA 下载器界面
+    │   ├── FADownloaderViewModel.kt   # FA 下载器 ViewModel
+    │   └── FALoginScreen.kt           # FA 登录界面
     └── theme/                         # Color / Theme / Type
+```
+
+**Native 代码** (`app/src/main/cpp/`)：
+```
+CMakeLists.txt                         # 构建 authcore 共享库
+auth_jni.cpp                           # JNI 入口（verifyPassword / keyIdOf）
+obf.c / obf.h / obf_key.h             # 密码混淆层
+crash_handler.c / crash_handler.h      # Native 信号崩溃处理（pipe → CrashActivity）
+crash_monitor_jni.c                    # 崩溃监控 JNI 接口
+hashes.inc                             # 预计算哈希表
+third_party/argon2/                    # 内嵌 Argon2 实现（供 JNI 直接调用）
 ```
 
 ---
@@ -143,6 +181,40 @@ app/src/main/java/com/whmdg/mczj/tools/
 
 打开时：HMAC-SHA256 校验 → 多数投票选最可信副本 → 不一致时弹出篡改警告。
 
+### 认证/授权系统（auth 模块）
+
+应用采用**密钥→功能特性**的门控模型，而非传统的用户角色：
+
+```
+用户输入密码
+    │ NativeAuth.verifyPassword() [JNI → authcore.so → 内嵌 Argon2]
+    ▼
+派生密钥 (32 字节) + keyId 索引
+    │ KeyProfile.featuresFor(keyId)
+    ▼
+Feature 集合（ENCRYPTION_VAULT / FILE_MANAGER / BATCH_DOWNLOADER 等）
+    │ TokenCodec.encode() + KeystoreMaster.wrap()
+    ▼
+Token 持久化（SharedPreferences 中存储 AES-GCM 加密的 Token）
+    │ PermissionManager.state: StateFlow<AuthState>
+    ▼
+UI 门控：LocalPermissionGate (CompositionLocal<Boolean>)
+    ├── true  → 正常访问
+    └── false → ReadOnlyWrapper（透明遮罩 + 只读提示）
+```
+
+**3 组预置密钥**（KeyProfile.kt）：
+| 密钥 | 权限范围 |
+|------|---------|
+| k1 | 全部功能 |
+| k2 | 保险箱 + 批量下载 + 安全设置 |
+| k3 | 批量下载 + 安全设置 |
+
+**安全分层**：
+1. **UI 门控**：`LocalPermissionGate` + `ReadOnlyWrapper` 阻止未授权操作
+2. **业务层检查**：`SecurityEnforcer.checkOrDie()` — 若 UI 门控被绕过，清除授权状态并自杀进程
+3. **Native 验证**：密码验证在 JNI 层完成，派生密钥不暴露给 Java 层
+
 ### TEE 快速解锁
 
 1. 生成 RSA 密钥对存入 Android Keystore（私钥需生物认证，绑定指纹列表变更）
@@ -158,7 +230,7 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 - **环境**：JDK 21，Gradle cache disabled（确保干净构建）
 - **签名**：release 签名通过 secrets 注入（`KEYSTORE_B64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`），缺失时自动回退到 debug 签名
 - **ABI**：仅构建 `arm64-v8a`
-- **版本号**：`versionCode` 基于时间戳动态生成，`versionName` 格式 `1.3.<timestamp>`
+- **版本号**：`versionCode` 基于时间戳动态生成，`versionName` 格式 `1.9.<timestamp>`
 - **产物**：重命名为 `工具箱-v<版本>-<日期时间>-arm64-v8a-release.apk`，保留 30 天
 
 ---
@@ -173,10 +245,17 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 | Compose BOM | 2026.02.01 | UI 全套（含 Material 3 + Icons Extended） |
 | `activity-compose` | 1.13.0 | ComponentActivity 集成 |
 | `lifecycle-runtime-ktx` | 2.10.0 | 生命周期 |
+| Shizuku `api` + `provider` | — | 特权 shell 命令执行 |
 
 ---
 
 ## 重要约定
+
+### 认证安全
+- `NativeAuth` 的 JNI 层使用内嵌 Argon2 验证密码，派生密钥仅在内存中短暂存在
+- `TokenCodec` 使用 HMAC-SHA256 签名 Token，解码时使用 `MessageDigest.isEqual()` 恒定时间比较防时序攻击
+- `KeystoreMaster` 优先使用 StrongBox 硬件安全模块，不可用时回退到普通 Android Keystore
+- `SecurityEnforcer.checkOrDie()` 是最后防线：业务层权限检查失败时自杀进程
 
 ### 密钥安全
 - KEK 和 DEK 在使用后必须 `fill(0)` 清零，参见 `VaultService.open()` / `changePassword()`
@@ -196,6 +275,14 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 
 ### CanonicalJson
 所有 HMAC 计算使用 `CanonicalJson.encode()`（键排序、无空格、UTF-8），与 Python `json.dumps(sort_keys=True)` 兼容。
+
+### Native 崩溃处理
+
+Native 层（`crash_handler.c`）注册信号处理器捕获 SIGSEGV/SIGABRT 等，通过 pipe 将崩溃信息传递给 `CrashActivity`，用户可复制崩溃详情或退出应用。退出时通过 pipe2 通知 Native 层执行 `_exit()`。
+
+### Shizuku 集成
+
+`ShizukuAuthorizer` 提供通过 Shizuku 服务执行特权 shell 命令的能力（反射调用 `IShizukuService.newProcess`）。支持 Sui 后端回退。
 
 ### 特殊权限提权
 `SpecialPermissionVerifier.runWithPrivilegeElevation()` 支持"非必要时不使用权限"模式：

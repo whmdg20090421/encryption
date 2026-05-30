@@ -9,8 +9,12 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.whmdg.mczj.tools.encryption.models.*
 import com.whmdg.mczj.tools.encryption.services.EncryptionTaskManager
 import com.whmdg.mczj.tools.util.FormatUtils
@@ -31,9 +35,14 @@ fun EncryptionProgressIcon(
         calculateStats()
     }
 
+    val density = LocalDensity.current
+    val fontSizeSp = 9.sp
+    val borderColor = Color(0xFF444444)
+    val borderWidth = 1.5f
+
     Canvas(
         modifier = modifier
-            .size(width = 80.dp, height = 12.dp)
+            .size(width = 80.dp, height = 16.dp)
             .pointerInput(Unit) {
                 detectTapGestures {
                     onShowPanel()
@@ -48,6 +57,30 @@ fun EncryptionProgressIcon(
         drawRoundRect(
             color = Color.Gray.copy(alpha = 0.3f),
             cornerRadius = cornerRadius
+        )
+
+        // 无任务时显示"无任务"文字
+        if (stats.totalSize <= 0) {
+            val paint = android.graphics.Paint().apply {
+                color = 0xFF888888.toInt()
+                textSize = with(density) { fontSizeSp.toPx() }
+                textAlign = android.graphics.Paint.Align.CENTER
+                isAntiAlias = true
+            }
+            val textY = height / 2f - (paint.descent() + paint.ascent()) / 2f
+            drawContext.canvas.nativeCanvas.drawText(
+                "无任务",
+                width / 2f,
+                textY,
+                paint
+            )
+        }
+
+        // 绘制边框
+        drawRoundRect(
+            color = borderColor,
+            cornerRadius = cornerRadius,
+            style = Stroke(width = borderWidth)
         )
 
         if (stats.totalSize <= 0) return@Canvas

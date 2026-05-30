@@ -250,7 +250,8 @@ class DeviantDownloaderViewModel(application: Application) : AndroidViewModel(ap
                         if (meta != null && meta.imageUrl.isNotEmpty()) {
                             val ext = getFileExtension(meta.imageUrl)
                             val safeAuthor = meta.author.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-                            val fileName = "${safeAuthor}_${meta.deviationId}.$ext"
+                            val safeTitle = meta.title.replace(Regex("[^a-zA-Z0-9_\\u4e00-\\u9fff-]"), "_").take(80)
+                            val fileName = "${safeAuthor}_${safeTitle}_${meta.deviationId}.$ext"
 
                             val task = DeviantPreviewItem(
                                 seq = allTasks.size + 1,
@@ -675,7 +676,7 @@ class DeviantDownloaderViewModel(application: Application) : AndroidViewModel(ap
     private fun buildExistingFileIndex(dirDoc: androidx.documentfile.provider.DocumentFile): Map<String, String> {
         val result = mutableMapOf<String, String>()
         try {
-            // 文件名格式: {author}_{deviationId}.{ext}
+            // 文件名格式: {author}_{title}_{deviationId}.{ext}
             val pattern = Regex("""^.+_(\d+)\.\w+$""")
             for (file in dirDoc.listFiles()) {
                 if (!file.isFile) continue
