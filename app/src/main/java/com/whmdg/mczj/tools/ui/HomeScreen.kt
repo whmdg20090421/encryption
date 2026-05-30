@@ -70,12 +70,53 @@ import com.whmdg.mczj.tools.auth.PermissionManager
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.em
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
+
+/**
+ * 光晕扩散效果 Modifier
+ * 使用 BlurMaskFilter 在 Canvas 上越界绘制，全版本可用
+ */
+fun Modifier.glowEffect(
+    glowColor: Color,
+    glowRadius: Dp = 16.dp,
+    cornerRadius: Dp = 20.dp,
+) = this.drawWithContent {
+    drawIntoCanvas { canvas ->
+        val glowPx = glowRadius.toPx()
+        val cornerPx = cornerRadius.toPx()
+
+        val paint = Paint().asFrameworkPaint().apply {
+            isAntiAlias = true
+            // BlurMaskFilter 全版本可用，不依赖 API 31
+            maskFilter = android.graphics.BlurMaskFilter(glowPx, android.graphics.BlurMaskFilter.Blur.NORMAL)
+            color = glowColor.copy(alpha = 0.6f).toArgb()
+        }
+
+        // 越界绘制：向外扩展 glowPx/2
+        canvas.nativeCanvas.drawRoundRect(
+            -glowPx / 2,
+            -glowPx / 2,
+            size.width + glowPx / 2,
+            size.height + glowPx / 2,
+            cornerPx,
+            cornerPx,
+            paint
+        )
+
+        // 绘制原有内容
+        drawContent()
+    }
+}
 
 /** 鉴权调试开关：true = 显示详细变量值，false = 仅显示权限列表 */
 const val DEBUG_AUTH = false
@@ -887,32 +928,21 @@ fun VaultsListTab(
         LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 12.dp)) {
             items(list) { vault ->
                 // ── 保险箱卡片（参考 encryption_card_reference.jsx 设计风格） ──
+                // 外层 padding 给光晕扩散留空间
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .padding(horizontal = 16.dp, vertical = 14.dp)  // 额外垂直空间给光晕
                 ) {
-                    // 底层光晕（营造悬浮感）
-                    // 参考 CSS: inset: 12px 8px -8px 8px → top=12, left/right=8, bottom=-8（向下溢出）
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(top = 12.dp, start = 8.dp, end = 8.dp, bottom = 0.dp)
-                            .offset(y = 8.dp)
-                            .drawBehind {
-                                drawRoundRect(
-                                    color = Color(0x1400C8FF),
-                                    cornerRadius = CornerRadius(24.dp.toPx()),
-                                    size = size
-                                )
-                            }
-                            .blur(16.dp)
-                    )
-
-                    // 卡片主体
+                    // 卡片主体 + 光晕效果
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .glowEffect(
+                                glowColor = Color(0xFF00C8FF),
+                                glowRadius = 16.dp,
+                                cornerRadius = 20.dp
+                            )
                             .drawBehind {
                                 // 青色边框（用 drawRoundRect 模拟，兼容圆角）
                                 drawRoundRect(
