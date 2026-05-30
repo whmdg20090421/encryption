@@ -893,11 +893,12 @@ fun VaultsListTab(
                         .padding(horizontal = 16.dp, vertical = 6.dp)
                 ) {
                     // 底层光晕（营造悬浮感）
+                    // 参考 CSS: inset: 12px 8px -8px 8px → top=12, left/right=8, bottom=-8（向下溢出）
                     Box(
                         modifier = Modifier
-                            .matchParentSize()
-                            .padding(top = 10.dp, start = 6.dp, end = 6.dp)
-                            .offset(y = 6.dp)
+                            .fillMaxSize()
+                            .padding(top = 12.dp, start = 8.dp, end = 8.dp, bottom = 0.dp)
+                            .offset(y = 8.dp)
                             .drawBehind {
                                 drawRoundRect(
                                     color = Color(0x1400C8FF),
