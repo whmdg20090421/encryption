@@ -308,7 +308,6 @@ fun MainAppContainer() {
 
     val vaultService = remember { VaultService(context).apply { load() } }
     val encryptionSettings = remember { EncryptionSettings(context) }
-    val themeSettings = remember { ThemeSettings(context) }
 
     LaunchedEffect(Unit) {
         val sp = context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE)
@@ -416,7 +415,6 @@ fun MainAppContainer() {
         }
         is Screen.ThemeSettings -> {
             ThemeSettingsScreen(
-                themeSettings = themeSettings,
                 onBack = { navigateBack() }
             )
         }
@@ -424,7 +422,6 @@ fun MainAppContainer() {
             EncryptionHomeScreen(
                 vaultService = vaultService,
                 settings = encryptionSettings,
-                themeSettings = themeSettings,
                 onBack = { navigateBack() },
                 onNavigate = { navigateTo(it) }
             )
@@ -612,7 +609,6 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
 fun EncryptionHomeScreen(
     vaultService: VaultService,
     settings: EncryptionSettings,
-    themeSettings: ThemeSettings,
     onBack: () -> Unit,
     onNavigate: (Screen) -> Unit
 ) {
@@ -700,7 +696,7 @@ fun EncryptionHomeScreen(
                     .padding(innerPadding)
             ) {
                 when (subTab) {
-                    0 -> VaultsListTab(vaultService = vaultService, settings = settings, themeSettings = themeSettings, onNavigate = onNavigate)
+                    0 -> VaultsListTab(vaultService = vaultService, settings = settings, onNavigate = onNavigate)
                     1 -> CloudTab()
                     2 -> EncryptionSettingsTab(settings = settings)
             }
@@ -891,11 +887,11 @@ fun EncryptionHomeScreen(
 fun VaultsListTab(
     vaultService: VaultService,
     settings: EncryptionSettings,
-    themeSettings: ThemeSettings,
     onNavigate: (Screen) -> Unit
 ) {
     val context = LocalContext.current
     val list = vaultService.vaults
+    val glowEnabled = com.whmdg.mczj.tools.ui.theme.LocalIsGlowEnabled.current
 
     var activeVaultForMenu by remember { mutableStateOf<VaultRecord?>(null) }
     var activeVaultForDelete by remember { mutableStateOf<VaultRecord?>(null) }
@@ -935,7 +931,6 @@ fun VaultsListTab(
             items(list) { vault ->
                 // ── 保险箱卡片（参考 encryption_card_reference.jsx 设计风格） ──
                 // 外层 padding 给光晕扩散留空间（仅开启光晕时需要）
-                val glowEnabled = themeSettings.enableGlowEffect
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1444,9 +1439,11 @@ fun EncryptionSettingsTab(settings: EncryptionSettings) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ThemeSettingsScreen(themeSettings: ThemeSettings, onBack: () -> Unit) {
+fun ThemeSettingsScreen(onBack: () -> Unit) {
     val isDarkMode = com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode.current
     val onToggleTheme = com.whmdg.mczj.tools.ui.theme.LocalOnToggleTheme.current
+    val isGlowEnabled = com.whmdg.mczj.tools.ui.theme.LocalIsGlowEnabled.current
+    val onToggleGlow = com.whmdg.mczj.tools.ui.theme.LocalOnToggleGlow.current
 
     Scaffold(
         topBar = {
@@ -1506,7 +1503,7 @@ fun ThemeSettingsScreen(themeSettings: ThemeSettings, onBack: () -> Unit) {
                 ListItem(
                     headlineContent = { Text("光晕扩散") },
                     supportingContent = {
-                        Text(if (themeSettings.enableGlowEffect) "卡片边框带有青色光晕扩散效果" else "仅显示线条边框，无光晕")
+                        Text(if (isGlowEnabled) "卡片边框带有青色光晕扩散效果" else "仅显示线条边框，无光晕")
                     },
                     leadingContent = {
                         Icon(
@@ -1516,8 +1513,8 @@ fun ThemeSettingsScreen(themeSettings: ThemeSettings, onBack: () -> Unit) {
                     },
                     trailingContent = {
                         Switch(
-                            checked = themeSettings.enableGlowEffect,
-                            onCheckedChange = { themeSettings.setEnableGlowEffect(it) }
+                            checked = isGlowEnabled,
+                            onCheckedChange = { onToggleGlow(it) }
                         )
                     }
                 )

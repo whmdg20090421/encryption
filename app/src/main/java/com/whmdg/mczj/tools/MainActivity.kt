@@ -19,6 +19,8 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.theme.LocalOnToggleTheme
+import com.whmdg.mczj.tools.ui.theme.LocalIsGlowEnabled
+import com.whmdg.mczj.tools.ui.theme.LocalOnToggleGlow
 import com.whmdg.mczj.tools.ui.theme.工具箱Theme
 import com.whmdg.mczj.tools.ui.MainAppContainer
 import com.whmdg.mczj.tools.util.DiagnosticLog
@@ -101,9 +103,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            // ── 光晕效果 ──
+            var isGlowEnabled by remember { mutableStateOf(themePrefs.getBoolean("enable_glow_effect", true)) }
+            val onToggleGlow: (Boolean) -> Unit = remember {
+                { value ->
+                    themePrefs.edit().putBoolean("enable_glow_effect", value).apply()
+                    isGlowEnabled = value
+                }
+            }
+
             CompositionLocalProvider(
                 LocalIsDarkMode provides isDarkMode,
-                LocalOnToggleTheme provides onToggleTheme
+                LocalOnToggleTheme provides onToggleTheme,
+                LocalIsGlowEnabled provides isGlowEnabled,
+                LocalOnToggleGlow provides onToggleGlow
             ) {
                 工具箱Theme(darkTheme = isDarkMode) {
                     MainAppContainer()

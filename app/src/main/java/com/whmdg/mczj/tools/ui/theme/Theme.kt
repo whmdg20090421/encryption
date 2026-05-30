@@ -25,6 +25,8 @@ private val LightColorScheme = lightColorScheme(
 
 val LocalIsDarkMode = compositionLocalOf { true }
 val LocalOnToggleTheme = compositionLocalOf<((Boolean) -> Unit)> { {} }
+val LocalIsGlowEnabled = compositionLocalOf { true }
+val LocalOnToggleGlow = compositionLocalOf<((Boolean) -> Unit)> { {} }
 
 private val dynamicColor = true
 
