@@ -194,7 +194,8 @@ fun DeviantLoginScreen(
             // WebView
             AndroidView(
                 factory = { context ->
-                    WebView(context).apply {
+                    val webView = WebView(context)
+                    webView.apply {
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
@@ -208,7 +209,7 @@ fun DeviantLoginScreen(
 
                         CookieManager.getInstance().apply {
                             setAcceptCookie(true)
-                            setAcceptThirdPartyCookies(this@apply, true)
+                            setAcceptThirdPartyCookies(webView, true)
                         }
 
                         webViewClient = object : WebViewClient() {
