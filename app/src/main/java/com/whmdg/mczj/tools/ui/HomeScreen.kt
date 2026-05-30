@@ -68,8 +68,14 @@ import com.whmdg.mczj.tools.auth.NoPermissionDialog
 import com.whmdg.mczj.tools.auth.PasswordDialog
 import com.whmdg.mczj.tools.auth.PermissionManager
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CornerRadius
+import androidx.compose.ui.graphics.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.em
 
 /** 鉴权调试开关：true = 显示详细变量值，false = 仅显示权限列表 */
 const val DEBUG_AUTH = false
@@ -878,124 +884,190 @@ fun VaultsListTab(
             }
         }
     } else {
-        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
+        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 12.dp)) {
             items(list) { vault ->
-                Card(
+                // ── 保险箱卡片（参考 encryption_card_reference.jsx 设计风格） ──
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                    )
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
                 ) {
-                    Row(
+                    // 底层光晕（营造悬浮感）
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .padding(top = 10.dp, start = 6.dp, end = 6.dp, bottom = -6.dp)
+                            .drawBehind {
+                                drawRoundRect(
+                                    color = Color(0x1400C8FF),
+                                    cornerRadius = CornerRadius(24.dp.toPx()),
+                                    size = size
+                                )
+                            }
+                            .blur(16.dp)
+                    )
+
+                    // 卡片主体
+                    Surface(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .drawBehind {
+                                // 青色边框（用 drawRoundRect 模拟，兼容圆角）
+                                drawRoundRect(
+                                    color = Color(0x8C00D2FF),
+                                    cornerRadius = CornerRadius(20.dp.toPx()),
+                                    style = Stroke(width = 1.5.dp.toPx())
+                                )
+                                // 外晕
+                                drawRoundRect(
+                                    color = Color(0x1F008CC8),
+                                    cornerRadius = CornerRadius(21.5.dp.toPx()),
+                                    style = Stroke(width = 3.dp.toPx())
+                                )
+                            }
                             .combinedClickable(
                                 onClick = {
-                                // 第一步：三副本校验
-                                val vaultDir = File(vault.relativePath)
-                                val verifyResult = try {
-                                    VaultConfig.verifyAllCopies(context, vaultDir)
-                                } catch (e: Exception) {
-                                    VaultConfig.VerifyResult(null, true)
-                                }
+                                    val vaultDir = File(vault.relativePath)
+                                    val verifyResult = try {
+                                        VaultConfig.verifyAllCopies(context, vaultDir)
+                                    } catch (e: Exception) {
+                                        VaultConfig.VerifyResult(null, true)
+                                    }
 
-                                if (verifyResult.isTampered) {
-                                    showWarningDialog = Pair(vault, verifyResult)
-                                } else {
-                                    if (settings.enableTeeQuickUnlock &&
-                                        com.whmdg.mczj.tools.security.TeeManager.isVaultPasswordSaved(context, vault.id)) {
+                                    if (verifyResult.isTampered) {
+                                        showWarningDialog = Pair(vault, verifyResult)
+                                    } else {
+                                        if (settings.enableTeeQuickUnlock &&
+                                            com.whmdg.mczj.tools.security.TeeManager.isVaultPasswordSaved(context, vault.id)) {
 
-                                        val cipher = com.whmdg.mczj.tools.security.TeeManager.getDecryptCipher(context, vault.id)
-                                        if (cipher != null) {
-                                            val activity = context as android.app.Activity
-                                            val crypto = android.hardware.biometrics.BiometricPrompt.CryptoObject(cipher as javax.crypto.Cipher)
-                                            com.whmdg.mczj.tools.security.TeeManager.showBiometricPrompt(
-                                                activity = activity,
-                                                cryptoObject = crypto,
-                                                title = "快速解锁「${vault.name}」",
-                                                description = "请验证指纹以安全解锁保险箱",
-                                                onSuccess = { result ->
-                                                    val authenticatedCipher = result.cryptoObject!!.cipher!!
-                                                    val decrypted = com.whmdg.mczj.tools.security.TeeManager.decryptPassword(context, vault.id, authenticatedCipher)
-                                                    if (!decrypted.isNullOrEmpty()) {
-                                                        openVault(vault, decrypted)
-                                                    } else {
-                                                        Toast.makeText(context, "指纹密匙读取失败，请手动解锁", Toast.LENGTH_SHORT).show()
+                                            val cipher = com.whmdg.mczj.tools.security.TeeManager.getDecryptCipher(context, vault.id)
+                                            if (cipher != null) {
+                                                val activity = context as android.app.Activity
+                                                val crypto = android.hardware.biometrics.BiometricPrompt.CryptoObject(cipher as javax.crypto.Cipher)
+                                                com.whmdg.mczj.tools.security.TeeManager.showBiometricPrompt(
+                                                    activity = activity,
+                                                    cryptoObject = crypto,
+                                                    title = "快速解锁「${vault.name}」",
+                                                    description = "请验证指纹以安全解锁保险箱",
+                                                    onSuccess = { result ->
+                                                        val authenticatedCipher = result.cryptoObject!!.cipher!!
+                                                        val decrypted = com.whmdg.mczj.tools.security.TeeManager.decryptPassword(context, vault.id, authenticatedCipher)
+                                                        if (!decrypted.isNullOrEmpty()) {
+                                                            openVault(vault, decrypted)
+                                                        } else {
+                                                            Toast.makeText(context, "指纹密匙读取失败，请手动解锁", Toast.LENGTH_SHORT).show()
+                                                            showPasswordDialog = vault
+                                                        }
+                                                    },
+                                                    onFailure = { err ->
+                                                        if (err != "用户取消") {
+                                                            Toast.makeText(context, "快速解锁失败: $err", Toast.LENGTH_SHORT).show()
+                                                        }
                                                         showPasswordDialog = vault
                                                     }
-                                                },
-                                                onFailure = { err ->
-                                                    if (err != "用户取消") {
-                                                        Toast.makeText(context, "快速解锁失败: $err", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                    showPasswordDialog = vault
-                                                }
-                                            )
+                                                )
+                                            } else {
+                                                Toast.makeText(context, "安全环境发生变化，指纹密钥已失效，请手动解锁以重新绑定", Toast.LENGTH_LONG).show()
+                                                showPasswordDialog = vault
+                                            }
                                         } else {
-                                            Toast.makeText(context, "安全环境发生变化，指纹密钥已失效，请手动解锁以重新绑定", Toast.LENGTH_LONG).show()
                                             showPasswordDialog = vault
                                         }
-                                    } else {
-                                        showPasswordDialog = vault
+                                    }
+                                },
+                                onLongClick = {
+                                    activeVaultForMenu = vault
+                                }
+                            ),
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color.Transparent,
+                        shadowElevation = 4.dp
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .background(
+                                    Brush.linearGradient(
+                                        colors = listOf(
+                                            Color(0xFF111827),
+                                            Color(0xFF0D1525),
+                                            Color(0xFF0A1020)
+                                        )
+                                    )
+                                )
+                        ) {
+                            Column(modifier = Modifier.padding(24.dp)) {
+                                // ── 头部：图标 + 名称 ──
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    // 图标容器
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .drawBehind {
+                                                drawRoundRect(
+                                                    brush = Brush.linearGradient(
+                                                        colors = listOf(Color(0xFF0E2A40), Color(0xFF091825))
+                                                    ),
+                                                    cornerRadius = CornerRadius(13.dp.toPx())
+                                                )
+                                                drawRoundRect(
+                                                    color = Color(0x4000C8FF),
+                                                    cornerRadius = CornerRadius(13.dp.toPx()),
+                                                    style = Stroke(width = 1.dp.toPx())
+                                                )
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Lock,
+                                            contentDescription = null,
+                                            tint = Color(0xFF38D4F5),
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(14.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "加密保险箱",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            letterSpacing = 0.12.em,
+                                            color = Color(0x8C00C8FF)
+                                        )
+                                        Text(
+                                            text = vault.name,
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFFE8F4FF),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
                                     }
                                 }
-                            },
-                            onLongClick = {
-                                activeVaultForMenu = vault
-                            }
-                            ),
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .size(20.dp)
-                                .padding(top = 2.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            // 第一行：保险箱名称
-                            Text(
-                                text = vault.name,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            // 第二行：路径 | 大小占位
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = vault.relativePath.let { path ->
-                                        if (path.startsWith("content://")) "SAF: $path" else path
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
+
+                                Spacer(modifier = Modifier.height(18.dp))
+
+                                // ── 分隔线（渐变） ──
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(1.dp)
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                colors = listOf(
+                                                    Color(0x3300B4E6),
+                                                    Color(0x0D00B4E6),
+                                                    Color.Transparent
+                                                )
+                                            )
+                                        )
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "-- MB",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(2.dp))
-                            // 第三行：最后更改时间 | 最后打开时间
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                // ── 信息行 ──
                                 fun formatIsoTime(iso: String?): String? {
                                     if (iso == null) return null
                                     return try {
@@ -1007,24 +1079,21 @@ fun VaultsListTab(
                                     } catch (_: Exception) { null }
                                 }
 
-                                Text(
-                                    text = "最后更改时间: ${formatIsoTime(vault.lastModifiedAt) ?: "未知(Null)"}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 10.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "最后打开时间: ${formatIsoTime(vault.lastOpenedAt) ?: "未知(Null)"}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 10.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                val pathDisplay = vault.relativePath.let { path ->
+                                    if (path.startsWith("content://")) "SAF 模式" else path
+                                }
+
+                                // 路径
+                                VaultInfoRow("存储路径", pathDisplay)
+                                Spacer(modifier = Modifier.height(10.dp))
+                                // 大小占位
+                                VaultInfoRow("存储用量", "-- MB")
+                                Spacer(modifier = Modifier.height(10.dp))
+                                // 最后更改时间
+                                VaultInfoRow("最后更改时间", formatIsoTime(vault.lastModifiedAt) ?: "未知(Null)")
+                                Spacer(modifier = Modifier.height(10.dp))
+                                // 最后打开时间
+                                VaultInfoRow("最后打开时间", formatIsoTime(vault.lastOpenedAt) ?: "未知(Null)")
                             }
                         }
                     }
@@ -1630,6 +1699,32 @@ fun ToolTile(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+@Composable
+fun VaultInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            color = Color(0x9964B4D2),
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            letterSpacing = 0.03.em
+        )
+        Text(
+            text = value,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Color(0xFFA8D4F0),
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
