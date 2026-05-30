@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdatomic.h>
+#include <time.h>
 
 #include "crash_handler.h"
 

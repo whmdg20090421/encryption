@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <unistd.h>
+#include <errno.h>
 #include <android/log.h>
 
 #include "crash_handler.h"
