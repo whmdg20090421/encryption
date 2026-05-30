@@ -128,15 +128,17 @@ fun GlowCard(
                 )
                 .drawBehind {
                     // 边框
+                    val borderColor = if (isDarkMode) Color(0xFF00D2FF) else Color(0xFF00BCD4)
                     drawRoundRect(
-                        color = Color(0xFF00D2FF).copy(alpha = borderAlpha),
+                        color = borderColor.copy(alpha = borderAlpha),
                         cornerRadius = CornerRadius(cornerRadius.toPx()),
                         style = Stroke(width = 1.5.dp.toPx())
                     )
                     // 外晕（仅开启光晕时显示）
                     if (glowEnabled) {
+                        val outerGlowColor = if (isDarkMode) Color(0xFF008CC8) else Color(0xFF00838F)
                         drawRoundRect(
-                            color = Color(0xFF008CC8).copy(alpha = outerGlowAlpha),
+                            color = outerGlowColor.copy(alpha = outerGlowAlpha),
                             cornerRadius = CornerRadius((cornerRadius + 1.5.dp).toPx()),
                             style = Stroke(width = 3.dp.toPx())
                         )

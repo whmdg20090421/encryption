@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.ui.components.GlowCard
+import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -355,10 +356,13 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
                             val totalPerms = selectedAppPermissions.size
                             val grantedPerms = selectedAppPermissions.count { it.granted }
                             val dangerousPerms = selectedAppPermissions.count { it.dangerous }
+                            val isDarkMode = LocalIsDarkMode.current
+                            val overviewTitleColor = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
+
                             GlowCard(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                                 Column(modifier = Modifier.padding(16.dp)) {
                                     Text("权限概览", style = MaterialTheme.typography.titleMedium,
-                                        color = Color(0xFFE8F4FF))
+                                        color = overviewTitleColor)
                                     Spacer(modifier = Modifier.height(16.dp))
                                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                                         PermissionStat(totalPerms, "总权限", Icons.Default.List, Color(0xFF38D4F5))
@@ -631,6 +635,10 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
 
 @Composable
 private fun PermissionStat(count: Int, label: String, icon: ImageVector, iconTint: Color) {
+    val isDarkMode = LocalIsDarkMode.current
+    val countColor = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
+    val labelColor = if (isDarkMode) Color(0x9964B4D2) else Color(0x9964748B)
+
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier.size(48.dp).background(iconTint.copy(alpha = 0.1f), CircleShape),
@@ -640,15 +648,22 @@ private fun PermissionStat(count: Int, label: String, icon: ImageVector, iconTin
         }
         Spacer(modifier = Modifier.height(8.dp))
         Text(count.toString(), style = MaterialTheme.typography.titleLarge,
-            color = Color(0xFFE8F4FF), fontWeight = FontWeight.Bold)
+            color = countColor, fontWeight = FontWeight.Bold)
         Text(label, style = MaterialTheme.typography.bodySmall,
-            color = Color(0x9964B4D2))
+            color = labelColor)
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppItem(app: AppInfo, onClick: () -> Unit) {
+    val isDarkMode = LocalIsDarkMode.current
+    val iconBgColor = if (isDarkMode) Color(0xFF0E2A40) else Color(0xFFB2EBF2)
+    val iconTint = if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF00838F)
+    val titleColor = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
+    val subtitleColor = if (isDarkMode) Color(0x9964B4D2) else Color(0x9964748B)
+    val buttonBgColor = if (isDarkMode) Color(0xFF0E2A40) else Color(0xFFE0F7FA)
+
     GlowCard(
         modifier = Modifier.clickable(onClick = onClick)
     ) {
@@ -658,7 +673,7 @@ private fun AppItem(app: AppInfo, onClick: () -> Unit) {
         ) {
             Box(
                 modifier = Modifier.size(52.dp).padding(end = 8.dp)
-                    .background(Color(0xFF0E2A40), CircleShape)
+                    .background(iconBgColor, CircleShape)
                     .padding(4.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -668,15 +683,15 @@ private fun AppItem(app: AppInfo, onClick: () -> Unit) {
                         modifier = Modifier.size(48.dp).clip(CircleShape))
                 } else {
                     Icon(Icons.Default.Android, contentDescription = app.name,
-                        modifier = Modifier.size(32.dp), tint = Color(0xFF38D4F5))
+                        modifier = Modifier.size(32.dp), tint = iconTint)
                 }
             }
             Column(modifier = Modifier.weight(1f).padding(horizontal = 8.dp)) {
                 Text(app.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color(0xFFE8F4FF))
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, color = titleColor)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(app.packageName, style = MaterialTheme.typography.bodySmall,
-                    color = Color(0x9964B4D2),
+                    color = subtitleColor,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (app.isSystemApp) {
                     Spacer(modifier = Modifier.height(4.dp))
@@ -691,10 +706,10 @@ private fun AppItem(app: AppInfo, onClick: () -> Unit) {
             FilledIconButton(
                 onClick = onClick, modifier = Modifier.size(40.dp),
                 colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = Color(0xFF0E2A40))
+                    containerColor = buttonBgColor)
             ) {
                 Icon(Icons.Default.Security, contentDescription = "查看权限",
-                    tint = Color(0xFF38D4F5), modifier = Modifier.size(18.dp))
+                    tint = iconTint, modifier = Modifier.size(18.dp))
             }
         }
     }

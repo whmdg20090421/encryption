@@ -84,6 +84,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 
 import com.whmdg.mczj.tools.ui.components.GlowCard
+import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.components.GlowSection
 import com.whmdg.mczj.tools.ui.components.GlowListItem
 import com.whmdg.mczj.tools.ui.components.GlowToggleItem
@@ -881,6 +882,7 @@ fun VaultsListTab(
     val context = LocalContext.current
     val list = vaultService.vaults
     val glowEnabled = com.whmdg.mczj.tools.ui.theme.LocalIsGlowEnabled.current
+    val isDarkMode = LocalIsDarkMode.current
 
     var activeVaultForMenu by remember { mutableStateOf<VaultRecord?>(null) }
     var activeVaultForDelete by remember { mutableStateOf<VaultRecord?>(null) }
@@ -1021,11 +1023,19 @@ fun VaultsListTab(
                             modifier = Modifier
                                 .background(
                                     Brush.linearGradient(
-                                        colors = listOf(
-                                            Color(0xFF111827),
-                                            Color(0xFF0D1525),
-                                            Color(0xFF0A1020)
-                                        )
+                                        colors = if (isDarkMode) {
+                                            listOf(
+                                                Color(0xFF111827),
+                                                Color(0xFF0D1525),
+                                                Color(0xFF0A1020)
+                                            )
+                                        } else {
+                                            listOf(
+                                                Color(0xFFE0F7FA),
+                                                Color(0xFFE8F5E9),
+                                                Color(0xFFF5F5F5)
+                                            )
+                                        }
                                     )
                                 )
                         ) {
@@ -1042,12 +1052,16 @@ fun VaultsListTab(
                                             .drawBehind {
                                                 drawRoundRect(
                                                     brush = Brush.linearGradient(
-                                                        colors = listOf(Color(0xFF0E2A40), Color(0xFF091825))
+                                                        colors = if (isDarkMode) {
+                                                            listOf(Color(0xFF0E2A40), Color(0xFF091825))
+                                                        } else {
+                                                            listOf(Color(0xFFB2EBF2), Color(0xFF80DEEA))
+                                                        }
                                                     ),
                                                     cornerRadius = CornerRadius(13.dp.toPx())
                                                 )
                                                 drawRoundRect(
-                                                    color = Color(0x4000C8FF),
+                                                    color = if (isDarkMode) Color(0x4000C8FF) else Color(0x4000BCD4),
                                                     cornerRadius = CornerRadius(13.dp.toPx()),
                                                     style = Stroke(width = 1.dp.toPx())
                                                 )
@@ -1057,7 +1071,7 @@ fun VaultsListTab(
                                         Icon(
                                             imageVector = Icons.Default.Lock,
                                             contentDescription = null,
-                                            tint = Color(0xFF38D4F5),
+                                            tint = if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF00838F),
                                             modifier = Modifier.size(24.dp)
                                         )
                                     }
@@ -1068,13 +1082,13 @@ fun VaultsListTab(
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.SemiBold,
                                             letterSpacing = 0.12.em,
-                                            color = Color(0x8C00C8FF)
+                                            color = if (isDarkMode) Color(0x8C00C8FF) else Color(0x8C00838F)
                                         )
                                         Text(
                                             text = vault.name,
                                             fontSize = 16.sp,
                                             fontWeight = FontWeight.SemiBold,
-                                            color = Color(0xFFE8F4FF),
+                                            color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B),
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
@@ -1672,6 +1686,10 @@ fun ToolTile(
 
 @Composable
 fun VaultInfoRow(label: String, value: String) {
+    val isDarkMode = LocalIsDarkMode.current
+    val labelColor = if (isDarkMode) Color(0x9964B4D2) else Color(0x9964748B)
+    val valueColor = if (isDarkMode) Color(0xFFA8D4F0) else Color(0xFF0EA5E9)
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1680,7 +1698,7 @@ fun VaultInfoRow(label: String, value: String) {
         Text(
             text = label,
             fontSize = 11.sp,
-            color = Color(0x9964B4D2),
+            color = labelColor,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
             letterSpacing = 0.03.em
         )
@@ -1688,7 +1706,7 @@ fun VaultInfoRow(label: String, value: String) {
             text = value,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
-            color = Color(0xFFA8D4F0),
+            color = valueColor,
             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
