@@ -86,6 +86,14 @@
             </intent-filter>
         </activity>
 
+        <!-- Native 崩溃显示 Activity（全屏，不可返回） -->
+        <activity
+            android:name=".CrashActivity"
+            android:exported="false"
+            android:label="Native Crash"
+            android:launchMode="singleInstance"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
+
         <receiver
             android:name=".security.MyDeviceAdminReceiver"
             android:label="@string/app_name"

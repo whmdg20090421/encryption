@@ -4,6 +4,8 @@ project(authcore C CXX)
 add_library(authcore SHARED
     auth_jni.cpp
     obf.c
+    crash_handler.c
+    crash_monitor_jni.c
     third_party/argon2/argon2.c
     third_party/argon2/core.c
     third_party/argon2/encoding.c

@@ -55,7 +55,9 @@ while true; do
             echo "❌ [$TIMESTAMP] 构建失败: $CONCLUSION"
             echo "🔗 $RUN_URL"
             echo ""
-            echo "查看日志: gh run view $RUN_ID --log-failed"
+            echo "━━━ 自动抓取失败日志 ━━━"
+            gh run view "$RUN_ID" --log-failed 2>/dev/null || echo "(无法获取日志)"
+            echo "━━━ 日志结束 ━━━"
             exit 1
         fi
         break
@@ -93,3 +95,5 @@ else
     echo "⚠️ 下载完成但未找到 APK 文件，请检查: $OUTPUT_DIR"
     ls -la "$OUTPUT_DIR"
 fi
+
+exit 0

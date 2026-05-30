@@ -514,91 +514,41 @@ fun VaultOpenScreen(
                 ) {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(entries) { entry ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(60.dp)
-                                .combinedClickable(
-                                    onClick = {
-                                        if (entry.isDirectory) {
-                                            currentPath = entry.file.absolutePath
-                                        }
-                                    },
-                                    onLongClick = { contextMenuEntry = entry }
+                        ListItem(
+                            headlineContent = {
+                                Text(
+                                    text = entry.displayName,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
-                                .padding(horizontal = 16.dp)
-                        ) {
-                            // Icon aligned to top 2/3 (matching text center)
-                            Column(
-                                modifier = Modifier.fillMaxHeight(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Box(
-                                    modifier = Modifier.weight(1f),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.Shield,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(22.dp),
-                                        tint = if (entry.isDirectory) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                                Spacer(modifier = Modifier.weight(0.5f))
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            // Right content: 3 sections
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                            ) {
-                                // Top 2/3: filename, always centered
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxWidth(),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = entry.displayName,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        textAlign = TextAlign.Center,
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                }
-                                // Bottom 1/3: file size (files only)
-                                if (!entry.isDirectory) {
-                                    Row(
-                                        modifier = Modifier
-                                            .weight(0.5f)
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 4.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Spacer(modifier = Modifier)
-                                        Text(
-                                            text = compactSize(entry.file.length()),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                            },
+                            supportingContent = if (!entry.isDirectory) {
+                                { Text(compactSize(entry.file.length())) }
+                            } else null,
+                            leadingContent = {
+                                Icon(
+                                    imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.Shield,
+                                    contentDescription = null,
+                                    tint = if (entry.isDirectory) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            trailingContent = if (!entry.isDirectory) {
+                                {
+                                    IconButton(onClick = { showDecryptDialog = entry.file }) {
+                                        Icon(Icons.Default.ArrowDownward, contentDescription = "解密到...")
                                     }
-                                } else {
-                                    Spacer(modifier = Modifier.weight(0.5f))
                                 }
-                            }
-                            // Trailing decrypt button (files only)
-                            if (!entry.isDirectory) {
-                                IconButton(onClick = { showDecryptDialog = entry.file },
-                                    modifier = Modifier.size(36.dp)) {
-                                    Icon(Icons.Default.ArrowDownward, contentDescription = "解密到...",
-                                        modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        }
-                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                            } else null,
+                            modifier = Modifier.combinedClickable(
+                                onClick = {
+                                    if (entry.isDirectory) {
+                                        currentPath = entry.file.absolutePath
+                                    }
+                                },
+                                onLongClick = { contextMenuEntry = entry }
+                            )
+                        )
+                        HorizontalDivider()
                     }
                 }
             }
@@ -694,6 +644,7 @@ fun VaultOpenScreen(
                                     Toast.makeText(context, "创建成功", Toast.LENGTH_SHORT).show()
                                     showCreateFolderDialog = false
                                     newFolderName = ""
+                                    vaultService?.markModified(session.record.id)
                                     refresh()
                                 } catch (e: Exception) {
                                     vaultOpenError = e
