@@ -22,10 +22,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import android.widget.Toast
+import com.whmdg.mczj.tools.ui.components.GlowCard
+import com.whmdg.mczj.tools.ui.components.GlowListItem
 
 data class PermissionEntry(
     val name: String,
@@ -206,16 +209,43 @@ fun PermissionSettingsScreen(onBack: () -> Unit) {
                 .padding(innerPadding),
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
-            items(permissionList) { entry ->
-                PermissionRow(
-                    entry = entry,
-                    onTap = {
-                        if (!entry.granted) {
-                            requestPermission(entry.androidName)
+            item {
+                GlowCard {
+                    Column {
+                        permissionList.forEachIndexed { index, entry ->
+                            GlowListItem(
+                                title = entry.name,
+                                subtitle = entry.androidName,
+                                onClick = {
+                                    if (!entry.granted) {
+                                        requestPermission(entry.androidName)
+                                    }
+                                },
+                                trailing = {
+                                    if (entry.granted) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = "已授权",
+                                            tint = Color(0xFF38D4F5)
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "未授权",
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                            )
+                            if (index < permissionList.size - 1) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(horizontal = 16.dp),
+                                    color = Color(0x3300B4E6)
+                                )
+                            }
                         }
                     }
-                )
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                }
             }
         }
     }
@@ -223,37 +253,27 @@ fun PermissionSettingsScreen(onBack: () -> Unit) {
 
 @Composable
 fun PermissionRow(entry: PermissionEntry, onTap: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onTap)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(entry.icon, style = MaterialTheme.typography.headlineMedium)
-        Spacer(modifier = Modifier.width(16.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(entry.name, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                entry.androidName,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+    // 已迁移到 GlowListItem，保留此函数以兼容其他可能的调用
+    GlowListItem(
+        title = entry.name,
+        subtitle = entry.androidName,
+        onClick = onTap,
+        trailing = {
+            if (entry.granted) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = "已授权",
+                    tint = Color(0xFF38D4F5)
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "未授权",
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
         }
-        if (entry.granted) {
-            Icon(
-                imageVector = Icons.Default.CheckCircle,
-                contentDescription = "已授权",
-                tint = MaterialTheme.colorScheme.primary
-            )
-        } else {
-            Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = "未授权",
-                tint = MaterialTheme.colorScheme.error
-            )
-        }
-    }
+    )
 }
 
 fun checkAllPermissions(context: Context): List<PermissionEntry> {

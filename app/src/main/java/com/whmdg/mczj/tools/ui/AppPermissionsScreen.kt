@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+import com.whmdg.mczj.tools.ui.components.GlowCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -354,18 +355,13 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
                             val totalPerms = selectedAppPermissions.size
                             val grantedPerms = selectedAppPermissions.count { it.granted }
                             val dangerousPerms = selectedAppPermissions.count { it.dangerous }
-                            Card(
-                                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                shape = RoundedCornerShape(16.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f))
-                            ) {
+                            GlowCard(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                                 Column(modifier = Modifier.padding(16.dp)) {
                                     Text("权限概览", style = MaterialTheme.typography.titleMedium,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer)
+                                        color = Color(0xFFE8F4FF))
                                     Spacer(modifier = Modifier.height(16.dp))
                                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                                        PermissionStat(totalPerms, "总权限", Icons.Default.List, MaterialTheme.colorScheme.onPrimaryContainer)
+                                        PermissionStat(totalPerms, "总权限", Icons.Default.List, Color(0xFF38D4F5))
                                         PermissionStat(grantedPerms, "已授权", Icons.Default.Check, Color(0xFF4CAF50))
                                         PermissionStat(dangerousPerms, "危险权限", Icons.Default.Warning, Color(0xFFFF9800))
                                     }
@@ -644,20 +640,17 @@ private fun PermissionStat(count: Int, label: String, icon: ImageVector, iconTin
         }
         Spacer(modifier = Modifier.height(8.dp))
         Text(count.toString(), style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.Bold)
+            color = Color(0xFFE8F4FF), fontWeight = FontWeight.Bold)
         Text(label, style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+            color = Color(0x9964B4D2))
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppItem(app: AppInfo, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        shape = RoundedCornerShape(12.dp)
+    GlowCard(
+        modifier = Modifier.clickable(onClick = onClick)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -665,7 +658,7 @@ private fun AppItem(app: AppInfo, onClick: () -> Unit) {
         ) {
             Box(
                 modifier = Modifier.size(52.dp).padding(end = 8.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), CircleShape)
+                    .background(Color(0xFF0E2A40), CircleShape)
                     .padding(4.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -675,15 +668,15 @@ private fun AppItem(app: AppInfo, onClick: () -> Unit) {
                         modifier = Modifier.size(48.dp).clip(CircleShape))
                 } else {
                     Icon(Icons.Default.Android, contentDescription = app.name,
-                        modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.primary)
+                        modifier = Modifier.size(32.dp), tint = Color(0xFF38D4F5))
                 }
             }
             Column(modifier = Modifier.weight(1f).padding(horizontal = 8.dp)) {
                 Text(app.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color(0xFFE8F4FF))
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(app.packageName, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                    color = Color(0x9964B4D2),
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (app.isSystemApp) {
                     Spacer(modifier = Modifier.height(4.dp))
@@ -698,10 +691,10 @@ private fun AppItem(app: AppInfo, onClick: () -> Unit) {
             FilledIconButton(
                 onClick = onClick, modifier = Modifier.size(40.dp),
                 colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer)
+                    containerColor = Color(0xFF0E2A40))
             ) {
                 Icon(Icons.Default.Security, contentDescription = "查看权限",
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(18.dp))
+                    tint = Color(0xFF38D4F5), modifier = Modifier.size(18.dp))
             }
         }
     }

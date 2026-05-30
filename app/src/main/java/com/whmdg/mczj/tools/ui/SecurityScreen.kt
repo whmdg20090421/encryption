@@ -13,6 +13,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.whmdg.mczj.tools.ui.components.GlowCard
+import com.whmdg.mczj.tools.ui.components.GlowListItem
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,28 +41,28 @@ fun SecurityScreen(
             contentPadding = PaddingValues(vertical = 12.dp)
         ) {
             item {
-                ListItem(
-                    headlineContent = { Text("权限设置") },
-                    leadingContent = { Icon(Icons.Default.Info, contentDescription = "权限设置") },
-                    trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "进入") },
-                    modifier = Modifier.clickable { onNavigate(Screen.PermissionSettings) }
-                )
-            }
-            item {
-                ListItem(
-                    headlineContent = { Text("特殊权限") },
-                    leadingContent = { Icon(Icons.Default.Lock, contentDescription = "特殊权限") },
-                    trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "进入") },
-                    modifier = Modifier.clickable { onNavigate(Screen.SpecialPermissions) }
-                )
-            }
-            item {
-                ListItem(
-                    headlineContent = { Text("应用权限管理配置") },
-                    leadingContent = { Icon(Icons.Default.Settings, contentDescription = "应用权限管理配置") },
-                    trailingContent = { Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "进入") },
-                    modifier = Modifier.clickable { onNavigate(Screen.PermissionManagementConfig) }
-                )
+                GlowCard {
+                    Column {
+                        GlowListItem(
+                            title = "权限设置",
+                            subtitle = "查看和管理应用权限",
+                            icon = Icons.Default.Info,
+                            onClick = { onNavigate(Screen.PermissionSettings) }
+                        )
+                        GlowListItem(
+                            title = "特殊权限",
+                            subtitle = "无障碍、ADB、Root 等特殊权限",
+                            icon = Icons.Default.Lock,
+                            onClick = { onNavigate(Screen.SpecialPermissions) }
+                        )
+                        GlowListItem(
+                            title = "应用权限管理配置",
+                            subtitle = "配置权限管理策略",
+                            icon = Icons.Default.Settings,
+                            onClick = { onNavigate(Screen.PermissionManagementConfig) }
+                        )
+                    }
+                }
             }
         }
     }

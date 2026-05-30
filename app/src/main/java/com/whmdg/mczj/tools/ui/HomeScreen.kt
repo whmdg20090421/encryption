@@ -83,41 +83,11 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 
-/**
- * 光晕扩散效果 Modifier
- * 使用 BlurMaskFilter 在 Canvas 上越界绘制，全版本可用
- */
-fun Modifier.glowEffect(
-    glowColor: Color,
-    glowRadius: Dp = 16.dp,
-    cornerRadius: Dp = 20.dp,
-) = this.drawWithContent {
-    drawIntoCanvas { canvas ->
-        val glowPx = glowRadius.toPx()
-        val cornerPx = cornerRadius.toPx()
-
-        val paint = Paint().asFrameworkPaint().apply {
-            isAntiAlias = true
-            // BlurMaskFilter 全版本可用，不依赖 API 31
-            maskFilter = android.graphics.BlurMaskFilter(glowPx, android.graphics.BlurMaskFilter.Blur.NORMAL)
-            color = glowColor.copy(alpha = 0.6f).toArgb()
-        }
-
-        // 越界绘制：向外扩展 glowPx/2
-        canvas.nativeCanvas.drawRoundRect(
-            -glowPx / 2,
-            -glowPx / 2,
-            size.width + glowPx / 2,
-            size.height + glowPx / 2,
-            cornerPx,
-            cornerPx,
-            paint
-        )
-
-        // 绘制原有内容
-        drawContent()
-    }
-}
+import com.whmdg.mczj.tools.ui.components.GlowCard
+import com.whmdg.mczj.tools.ui.components.GlowSection
+import com.whmdg.mczj.tools.ui.components.GlowListItem
+import com.whmdg.mczj.tools.ui.components.GlowToggleItem
+import com.whmdg.mczj.tools.ui.components.glowEffect
 
 /** 鉴权调试开关：true = 显示详细变量值，false = 仅显示权限列表 */
 const val DEBUG_AUTH = false
@@ -1571,37 +1541,11 @@ private fun SettingsSection(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(vertical = 6.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-            )
-        ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                content = content
-            )
-        }
-    }
+    GlowSection(
+        title = title,
+        icon = icon,
+        content = content
+    )
 }
 
 @Composable
@@ -1612,55 +1556,13 @@ private fun CompactSettingsItem(
     onClick: () -> Unit,
     enabled: Boolean = true
 ) {
-    val alpha = if (enabled) 1f else 0.5f
-    val iconTint = if (enabled) MaterialTheme.colorScheme.primary
-                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-    val textColor = if (enabled) Color.Unspecified
-                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-    val subtitleColor = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick)
-            .alpha(alpha)
-            .padding(vertical = 12.dp, horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = iconTint,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = textColor,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = subtitleColor,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-            )
-        }
-        Icon(
-            imageVector = Icons.Default.ChevronRight,
-            contentDescription = null,
-            tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
-                   else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-            modifier = Modifier.size(16.dp)
-        )
-    }
+    GlowListItem(
+        title = title,
+        subtitle = subtitle,
+        icon = icon,
+        onClick = onClick,
+        enabled = enabled
+    )
 }
 
 @Composable
@@ -1671,42 +1573,13 @@ private fun CompactSettingsToggle(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .padding(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-            )
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            modifier = Modifier.padding(start = 8.dp)
-        )
-    }
+    GlowToggleItem(
+        title = title,
+        subtitle = subtitle,
+        icon = icon,
+        checked = checked,
+        onCheckedChange = onCheckedChange
+    )
 }
 
 @Composable
@@ -1741,12 +1614,8 @@ fun ToolTile(
     subtitle: String,
     onTap: () -> Unit
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .clickable(onClick = onTap),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    GlowCard(
+        modifier = Modifier.clickable(onClick = onTap)
     ) {
         Row(
             modifier = Modifier
@@ -1757,22 +1626,26 @@ fun ToolTile(
             Icon(
                 imageVector = icon,
                 contentDescription = title,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = Color(0xFF38D4F5),
                 modifier = Modifier.size(32.dp)
             )
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color(0xFFE8F4FF)
+                )
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = Color(0x9964B4D2)
                 )
             }
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                 contentDescription = "进入",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                tint = Color(0xFF38D4F5)
             )
         }
     }

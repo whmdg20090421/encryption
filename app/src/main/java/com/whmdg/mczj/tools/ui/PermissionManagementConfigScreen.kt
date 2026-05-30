@@ -11,10 +11,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+import com.whmdg.mczj.tools.ui.components.GlowCard
 
 data class PermissionMode(
     val key: String,
@@ -128,21 +130,15 @@ fun PermissionManagementConfigScreen(onBack: () -> Unit) {
                     val isAvailable = checkModeAvailability(context, mode.key)
                     val isSelected = selectedMode == mode.key
 
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                if (isAvailable) {
-                                    selectedMode = mode.key
-                                    prefs.edit().putString("mode", mode.key).apply()
-                                } else {
-                                    showErrorDialog = mode.key
-                                }
-                            },
-                        shape = MaterialTheme.shapes.medium,
-                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-                        else MaterialTheme.colorScheme.surface,
-                        tonalElevation = if (isSelected) 2.dp else 0.dp
+                    GlowCard(
+                        modifier = Modifier.clickable {
+                            if (isAvailable) {
+                                selectedMode = mode.key
+                                prefs.edit().putString("mode", mode.key).apply()
+                            } else {
+                                showErrorDialog = mode.key
+                            }
+                        }
                     ) {
                         Row(
                             modifier = Modifier
@@ -169,7 +165,8 @@ fun PermissionManagementConfigScreen(onBack: () -> Unit) {
                                     Text(
                                         mode.title,
                                         style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Medium
+                                        fontWeight = FontWeight.Medium,
+                                        color = Color(0xFFE8F4FF)
                                     )
                                     if (!isAvailable) {
                                         Spacer(modifier = Modifier.width(8.dp))
@@ -190,13 +187,13 @@ fun PermissionManagementConfigScreen(onBack: () -> Unit) {
                                 Text(
                                     mode.description,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = Color(0x9964B4D2)
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     mode.requiredPermission,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = if (isAvailable) MaterialTheme.colorScheme.primary
+                                    color = if (isAvailable) Color(0xFF38D4F5)
                                     else MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
                                 )
                             }
@@ -207,17 +204,13 @@ fun PermissionManagementConfigScreen(onBack: () -> Unit) {
 
             item {
                 Spacer(modifier = Modifier.height(8.dp))
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    )
-                ) {
+                GlowCard {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
                             "提示",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = Color(0xFFE8F4FF)
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
@@ -225,7 +218,7 @@ fun PermissionManagementConfigScreen(onBack: () -> Unit) {
                             "• AppOps 模式：需 Root 或 Shizuku 权限，支持细粒度的权限状态控制\n" +
                             "• 高级模式：需 Root 权限，支持最细粒度的权限控制",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = Color(0x9964B4D2)
                         )
                     }
                 }
