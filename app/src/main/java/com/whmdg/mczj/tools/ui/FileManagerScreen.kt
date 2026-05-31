@@ -9,6 +9,7 @@ import android.webkit.MimeTypeMap
 import android.widget.Toast
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
+import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -168,6 +169,21 @@ fun FileManagerScreen(onBack: () -> Unit) {
         FolderSizeDb.load(context.filesDir)
     }
 
+    /** 计算目录直接内容大小：直接子文件 + 子文件夹 DB 值 */
+    fun calcDirDirectSize(db: FolderSizeDb, dir: File): Long {
+        val children = dir.listFiles() ?: return 0L
+        var total = 0L
+        for (child in children) {
+            if (child.isFile) {
+                total += child.length()
+            } else if (child.isDirectory) {
+                val childInfo = db.get(child.absolutePath)
+                if (childInfo != null) total += childInfo.size
+            }
+        }
+        return total
+    }
+
     /**
      * 刷新指定目录的文件夹大小（增量、自底向上冒泡）。
      * 使用绝对路径作为 key，存储在应用内部目录的 folder_sizes.json 中。
@@ -209,20 +225,6 @@ fun FileManagerScreen(onBack: () -> Unit) {
         db.put(dirPath, FolderSizeInfo(targetSize, targetMtime))
 
         db.save(context.filesDir)
-    }
-
-    fun calcDirDirectSize(db: FolderSizeDb, dir: File): Long {
-        val children = dir.listFiles() ?: return 0L
-        var total = 0L
-        for (child in children) {
-            if (child.isFile) {
-                total += child.length()
-            } else if (child.isDirectory) {
-                val childInfo = db.get(child.absolutePath)
-                if (childInfo != null) total += childInfo.size
-            }
-        }
-        return total
     }
 
     // ── 普通引擎：File.listFiles（公开 API，无 hidden API 限制） ──
@@ -703,7 +705,8 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                 selectedEntry = entry
                                 focusedPanel = FocusedPanel.LEFT
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            folderSizeDb = folderSizeDb
                         )
 
                         VerticalDivider(
@@ -732,7 +735,8 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                 selectedEntry = entry
                                 focusedPanel = FocusedPanel.RIGHT
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            folderSizeDb = folderSizeDb
                         )
                     }
                 }
@@ -1313,7 +1317,8 @@ private fun FileBrowserPanel(
     onFolderClick: (FileEntry) -> Unit,
     onFileClick: (FileEntry) -> Unit,
     onLongClick: (FileEntry) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    folderSizeDb: FolderSizeDb = FolderSizeDb()
 ) {
     Box(
         modifier = modifier

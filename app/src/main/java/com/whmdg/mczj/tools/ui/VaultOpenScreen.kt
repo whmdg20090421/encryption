@@ -119,6 +119,12 @@ fun VaultOpenScreen(
         }
     }
 
+    // 保险箱文件夹大小数据库（VaultOpenScreen 专用）
+    var folderSizeVersion by remember { mutableStateOf(0L) }
+    val folderSizeDb = remember(folderSizeVersion) {
+        com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(session.vaultDir)
+    }
+
     // 异步刷新当前目录的文件夹大小（不阻塞 UI）
     fun refreshFolderSize() {
         if (vaultService == null) return
@@ -127,12 +133,6 @@ fun VaultOpenScreen(
             vaultService.refreshFolderSize(session.vaultDir, rel)
             withContext(Dispatchers.Main) { folderSizeVersion++ }
         }
-    }
-
-    // 保险箱文件夹大小数据库（VaultOpenScreen 专用）
-    var folderSizeVersion by remember { mutableStateOf(0L) }
-    val folderSizeDb = remember(folderSizeVersion) {
-        com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(session.vaultDir)
     }
 
     LaunchedEffect(currentPath) {
@@ -628,14 +628,13 @@ fun VaultOpenScreen(
                             },
                             supportingContent = if (!entry.isDirectory) {
                                 { Text(compactSize(entry.file.length())) }
-                            } else {
-                                // 保险箱文件夹：显示修改日期 + 大小
+                            } else {{ // 保险箱文件夹：显示修改日期 + 大小
                                 val rel = entry.file.relativeTo(session.vaultDir).path
                                 val dirSize = folderSizeDb.get(rel)?.size
                                 val sizeStr = if (dirSize != null) compactSize(dirSize) else "--"
                                 val dateStr = compactDate(entry.lastModified)
-                                { Text("$dateStr  $sizeStr") }
-                            },
+                                Text("$dateStr  $sizeStr")
+                            }},
                             leadingContent = {
                                 Icon(
                                     imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.Shield,
