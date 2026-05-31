@@ -8,6 +8,11 @@ import android.provider.Settings
 import android.webkit.MimeTypeMap
 import android.widget.Toast
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -100,6 +105,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
     val isRootEngine = remember {
         permissionLevel == "ROOT" && SpecialPermissionVerifier.isRootAvailable()
     }
+    val coroutineScope = rememberCoroutineScope()
 
     // 文件管理器专用设置（同一个界面的设置存在同一个 XML）
     val fmPrefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE) }
@@ -153,6 +159,69 @@ fun FileManagerScreen(onBack: () -> Unit) {
     var renameText by remember { mutableStateOf("") }
     var recycleBinEnabled by remember {
         mutableStateOf(fmPrefs.getBoolean("recycle_bin_enabled", false))
+    }
+
+    // ── 文件夹大小数据库（存储在应用内部目录） ──
+    var folderSizeVersion by remember { mutableStateOf(0L) }
+    val folderSizeDb = remember(folderSizeVersion) {
+        FolderSizeDb.load(context.filesDir)
+    }
+
+    /**
+     * 刷新指定目录的文件夹大小（增量、自底向上冒泡）。
+     * 使用绝对路径作为 key，存储在应用内部目录的 folder_sizes.json 中。
+     */
+    fun refreshFolderSize(dirPath: String) {
+        val baseDir = File(dirPath)
+        if (!baseDir.exists() || !baseDir.isDirectory) return
+        val db = FolderSizeDb.load(context.filesDir)
+
+        // 收集所有子文件夹
+        val subdirs = mutableListOf<String>()
+        fun collectSubdirs(dir: File) {
+            val children = dir.listFiles() ?: return
+            for (child in children) {
+                if (child.isDirectory) {
+                    subdirs.add(child.absolutePath)
+                    collectSubdirs(child)
+                }
+            }
+        }
+        collectSubdirs(baseDir)
+
+        // 按深度降序排序
+        subdirs.sortByDescending { it.count { c -> c == '/' } }
+
+        // 自底向上计算
+        for (absPath in subdirs) {
+            val dir = File(absPath)
+            val currentMtime = dir.lastModified()
+            val cached = db.get(absPath)
+            if (cached != null && cached.lastModified == currentMtime) continue
+            val size = calcDirDirectSize(db, dir)
+            db.put(absPath, FolderSizeInfo(size, currentMtime))
+        }
+
+        // 计算目标目录自身
+        val targetMtime = baseDir.lastModified()
+        val targetSize = calcDirDirectSize(db, baseDir)
+        db.put(dirPath, FolderSizeInfo(targetSize, targetMtime))
+
+        db.save(context.filesDir)
+    }
+
+    fun calcDirDirectSize(db: FolderSizeDb, dir: File): Long {
+        val children = dir.listFiles() ?: return 0L
+        var total = 0L
+        for (child in children) {
+            if (child.isFile) {
+                total += child.length()
+            } else if (child.isDirectory) {
+                val childInfo = db.get(child.absolutePath)
+                if (childInfo != null) total += childInfo.size
+            }
+        }
+        return total
     }
 
     // ── 普通引擎：File.listFiles（公开 API，无 hidden API 限制） ──
@@ -961,6 +1030,46 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                     }
                                 }
                             }
+                            // ── 第四行：大小刷新（仅文件夹） ──
+                            if (selectedEntry?.isDirectory == true) {
+                                HorizontalDivider(
+                                    thickness = 0.5.dp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                val entry = selectedEntry ?: return@clickable
+                                                selectedEntry = null
+                                                Toast.makeText(context, "正在计算大小...", Toast.LENGTH_SHORT).show()
+                                                coroutineScope.launch(Dispatchers.IO) {
+                                                    refreshFolderSize(entry.path)
+                                                    withContext(Dispatchers.Main) {
+                                                        folderSizeVersion++
+                                                        leftEntries = listDirectory(leftPath)
+                                                        rightEntries = listDirectory(rightPath)
+                                                    }
+                                                }
+                                            }
+                                            .padding(vertical = 16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.FolderSpecial,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text("大小刷新", style = MaterialTheme.typography.bodyLarge)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1236,6 +1345,9 @@ private fun FileBrowserPanel(
                 contentPadding = PaddingValues(vertical = 4.dp)
             ) {
                 items(entries, key = { it.path }) { entry ->
+                    val dirSize = if (entry.isDirectory) {
+                        folderSizeDb.get(entry.path)?.size?.let { compactSize(it) } ?: ""
+                    } else ""
                     FileEntryRow(
                         entry = entry,
                         isFocused = isFocused,
@@ -1243,7 +1355,8 @@ private fun FileBrowserPanel(
                             if (entry.isDirectory) onFolderClick(entry)
                             else onFileClick(entry)
                         },
-                        onLongClick = { onLongClick(entry) }
+                        onLongClick = { onLongClick(entry) },
+                        folderSize = dirSize
                     )
                 }
             }
@@ -1256,7 +1369,8 @@ private fun FileEntryRow(
     entry: FileEntry,
     isFocused: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    folderSize: String = ""
 ) {
     Row(
         modifier = Modifier
@@ -1321,7 +1435,7 @@ private fun FileEntryRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "--",
+                        text = folderSize.ifEmpty { "--" },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
