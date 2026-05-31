@@ -20,9 +20,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.rounded.Add as RoundedAdd
-import androidx.compose.material.icons.rounded.ArrowUpward as RoundedArrowUpward
-import androidx.compose.material.icons.rounded.Lock as RoundedLock
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Lock
@@ -704,7 +701,7 @@ fun EncryptionHomeScreen(
                         Column {
                             ListItem(
                                 headlineContent = { Text("添加保险箱") },
-                                leadingContent = { Icon(RoundedAdd, contentDescription = null) },
+                                leadingContent = { Icon(Icons.Filled.Add, contentDescription = null) },
                                 modifier = Modifier.clickable {
                                     showMenu = false
                                     onNavigate(Screen.VaultCreate)
@@ -712,7 +709,7 @@ fun EncryptionHomeScreen(
                             )
                             ListItem(
                                 headlineContent = { Text("导入保险箱") },
-                                leadingContent = { Icon(RoundedArrowUpward, contentDescription = null) },
+                                leadingContent = { Icon(Icons.Filled.ArrowUpward, contentDescription = null) },
                                 modifier = Modifier.clickable {
                                     showMenu = false
                                     folderPicker.launch(null)
@@ -978,7 +975,7 @@ fun VaultsListTab(
                         .putString("cached_iv_${vault.id}", android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP))
                         .apply()
                     // 立即写入加密 deadline（防止被杀时丢失）
-                    writeDeadline(vault.id, durationMs)
+                    writeDeadline(vault.id.toString(), durationMs)
                 } catch (_: Exception) {}
             }
             onNavigate(Screen.VaultOpen(session))
@@ -1231,7 +1228,7 @@ fun VaultsListTab(
                                             lockPrefs.edit().putLong("duration_${vault.id}", newDuration).apply()
                                             // 切换到"立即锁定"时清除所有缓存
                                             if (min == 0) {
-                                                clearDeadline(vault.id)
+                                                clearDeadline(vault.id.toString())
                                             }
                                         },
                                     color = if (isSelected) MaterialTheme.colorScheme.primaryContainer
@@ -1312,7 +1309,7 @@ fun VaultsListTab(
                             showTimerPicker = false
 
                             // 检查是否在保持打开期内（deadline 未过期）
-                            if (isVaultUnlocked(v.id)) {
+                            if (isVaultUnlocked(v.id.toString())) {
                                 try {
                                     // 解密缓存的密码
                                     val cachedCipher = lockPrefs.getString("cached_pwd_${v.id}", null)
@@ -1327,12 +1324,12 @@ fun VaultsListTab(
                                     onNavigate(Screen.VaultOpen(session))
                                 } catch (e: Exception) {
                                     // 缓存密码解密失败，清除所有缓存
-                                    clearDeadline(v.id)
+                                    clearDeadline(v.id.toString())
                                     showPasswordDialog = v
                                 }
                             } else {
                                 // 需要密码验证（deadline 已过期或不存在）
-                                clearDeadline(v.id)
+                                clearDeadline(v.id.toString())
                                 val vaultDir = File(v.relativePath)
                                 val verifyResult = try {
                                     VaultConfig.verifyAllCopies(context, vaultDir)

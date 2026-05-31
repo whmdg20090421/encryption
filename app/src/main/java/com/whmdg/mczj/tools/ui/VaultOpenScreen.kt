@@ -64,6 +64,8 @@ fun VaultOpenScreen(
 
     val isRoot = currentPath == session.vaultDir.absolutePath
 
+    var folderSizeVersion by remember { mutableStateOf(0L) }
+
     fun refresh() {
         loading = true
         coroutineScope.launch(Dispatchers.Default) {
@@ -129,7 +131,6 @@ fun VaultOpenScreen(
     }
 
     // 保险箱文件夹大小数据库（VaultOpenScreen 专用）
-    var folderSizeVersion by remember { mutableStateOf(0L) }
     val folderSizeDb = remember(folderSizeVersion) {
         com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(session.vaultDir)
     }
@@ -187,7 +188,7 @@ fun VaultOpenScreen(
                 val (cipher, iv) = com.whmdg.mczj.tools.auth.KeystoreMaster.wrap(
                     deadlineStr.toByteArray(Charsets.UTF_8)
                 )
-                val proof = com.whmdg.mczj.tools.auth.NativeAuth.computeDeadlineHmac(deadlineStr, session.record.id)
+                val proof = com.whmdg.mczj.tools.auth.NativeAuth.computeDeadlineHmac(deadlineStr, session.record.id.toString())
                 lockPrefs.edit()
                     .putString("deadline_${session.record.id}", android.util.Base64.encodeToString(cipher, android.util.Base64.NO_WRAP))
                     .putString("deadline_iv_${session.record.id}", android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP))
