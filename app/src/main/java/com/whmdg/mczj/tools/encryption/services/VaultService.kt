@@ -364,11 +364,10 @@ class VaultService(private val context: Context) {
         val kekIvBytes = HexCodec.decode(cfg.kekIv)
         val encDekBytes = HexCodec.decode(cfg.encDek)
 
-        val dek: ByteArray
-        try {
+        val dek: ByteArray = try {
             val oldKek = KeyDerivation.derive(oldPassword, saltBytes, cfg.kdfType, cfg.argonParams)
             try {
-                dek = AesGcm256.decrypt(oldKek, kekIvBytes, encDekBytes)
+                AesGcm256.decrypt(oldKek, kekIvBytes, encDekBytes)
             } finally {
                 oldKek.fill(0)
             }
@@ -377,7 +376,7 @@ class VaultService(private val context: Context) {
                 val fallback = if (cfg.kdfType == KdfType.ARGON2ID) KdfType.PBKDF2_SHA256 else KdfType.ARGON2ID
                 val oldKek2 = KeyDerivation.derive(oldPassword, saltBytes, fallback, cfg.argonParams)
                 try {
-                    dek = AesGcm256.decrypt(oldKek2, kekIvBytes, encDekBytes)
+                    AesGcm256.decrypt(oldKek2, kekIvBytes, encDekBytes)
                 } finally {
                     oldKek2.fill(0)
                 }

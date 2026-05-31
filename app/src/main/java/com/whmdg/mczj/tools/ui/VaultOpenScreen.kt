@@ -119,6 +119,9 @@ fun VaultOpenScreen(
         refresh()
     }
 
+    // ── Storage size calculation state ──
+    var calculatingSize by remember { mutableStateOf(false) }
+
     // 首次打开时统计存储用量
     LaunchedEffect(Unit) {
         if (vaultService != null && session.record.storageSize == 0L) {
@@ -166,9 +169,6 @@ fun VaultOpenScreen(
     // ── Encryption progress state ──
     var showProgressPanel by remember { mutableStateOf(false) }
     var showEncryptionSnackbar by remember { mutableStateOf(false) }
-
-    // ── Storage size calculation state ──
-    var calculatingSize by remember { mutableStateOf(false) }
 
     // ── Long-press context menu state ──
     var contextMenuEntry by remember { mutableStateOf<DisplayEntry?>(null) }
