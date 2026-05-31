@@ -46,7 +46,8 @@ app/src/main/java/com/whmdg/mczj/tools/
 ├── MainActivity.kt                    # 入口，启用 Edge-to-Edge
 ├── CrashActivity.kt                   # Native 崩溃显示界面（从 pipe 接收崩溃信息）
 ├── util/
-│   └── DiagnosticLog.kt               # 诊断日志工具
+│   ├── DiagnosticLog.kt               # 诊断日志工具
+│   └── FormatUtils.kt                 # 格式化工具（文件大小等）
 ├── auth/                              # 认证/授权模块（密钥→功能特性门控）
 │   ├── Feature.kt                     # 功能枚举（ENCRYPTION_VAULT, FILE_MANAGER, BATCH_DOWNLOADER 等）
 │   ├── NativeAuth.kt                  # JNI 接口，调用 authcore 验证密码（返回派生密钥）
@@ -80,10 +81,13 @@ app/src/main/java/com/whmdg/mczj/tools/
 │   │   ├── NameMapping.kt             # 文件名哈希→Hex 映射持久化
 │   │   ├── StorageLocation.kt         # INTERNAL / EXTERNAL 枚举
 │   │   └── CanonicalJson.kt           # Python json.dumps(sort_keys=True) 的 Kotlin 等价
+│   ├── models/
+│   │   └── EncryptionNode.kt          # 加密文件树节点模型
 │   └── services/                      # 业务逻辑层
 │       ├── VaultService.kt            # 保险箱 CRUD（创建/打开/删除/导入/改密）
 │       ├── VaultSession.kt            # 解锁后的在线会话（持有 DEK）
-│       └── CryptoService.kt           # 高级加密/解密文件入/出保险箱
+│       ├── CryptoService.kt           # 高级加密/解密文件入/出保险箱
+│       └── EncryptionTaskManager.kt   # 加密任务队列管理（并发控制/进度回调）
 ├── security/
 │   ├── TeeManager.kt                  # Android Keystore RSA TEE + 生物识别快速解锁
 │   ├── SpecialPermissionVerifier.kt   # 检测 & 提权运行（无障碍/ADB/管理员/Root）
@@ -106,12 +110,28 @@ app/src/main/java/com/whmdg/mczj/tools/
     ├── PermissionManagementConfigScreen.kt  # 权限管理配置
     ├── PermissionGuideViewModel.kt    # 权限引导 ViewModel
     ├── ErrorDialog.kt                 # 错误对话框组件
+    ├── components/
+    │   └── GlowCard.kt               # 青色光晕边框卡片组件
+    ├── encryption/
+    │   ├── EncryptionProgressIcon.kt  # 加密进度动画图标
+    │   └── EncryptionProgressPanel.kt # 加密进度面板（任务列表/统计）
     ├── download/                      # 下载器模块
     │   ├── BatchDownloaderScreen.kt   # 批量下载器界面
     │   ├── FADownloaderScreen.kt      # FA 下载器界面
     │   ├── FADownloaderViewModel.kt   # FA 下载器 ViewModel
-    │   └── FALoginScreen.kt           # FA 登录界面
+    │   ├── FALoginScreen.kt           # FA 登录界面
+    │   └── Deviant/                   # DeviantArt 下载器
+    │       ├── DeviantDownloaderScreen.kt
+    │       ├── DeviantDownloaderViewModel.kt
+    │       ├── DeviantLoginScreen.kt
+    │       └── DeviantModels.kt
     └── theme/                         # Color / Theme / Type
+```
+
+**构建工具** (`tools/`)：
+```
+gen_password_hashes.py                 # 预生成 Argon2id 密码哈希 → hashes.inc + obf_key.h
+wait_and_download.sh                   # CI 产物下载辅助脚本
 ```
 
 **Native 代码** (`app/src/main/cpp/`)：
@@ -226,11 +246,12 @@ UI 门控：LocalPermissionGate (CompositionLocal<Boolean>)
 ## CI/CD
 
 GitHub Actions workflow `.github/workflows/build.yml`:
-- **触发**：push 到 `main`/`master`，或手动 `workflow_dispatch`
+- **触发**：仅手动 `workflow_dispatch`
 - **环境**：JDK 21，Gradle cache disabled（确保干净构建）
+- **预构建**：`python3 tools/gen_password_hashes.py` 生成 Native 认证哈希（`hashes.inc` + `obf_key.h`，均 gitignored）
 - **签名**：release 签名通过 secrets 注入（`KEYSTORE_B64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`），缺失时自动回退到 debug 签名
 - **ABI**：仅构建 `arm64-v8a`
-- **版本号**：`versionCode` 基于时间戳动态生成，`versionName` 格式 `1.9.<timestamp>`
+- **版本号**：`versionCode` 基于时间戳动态生成，`versionName` 格式 `2.1.<timestamp>`
 - **产物**：重命名为 `工具箱-v<版本>-<日期时间>-arm64-v8a-release.apk`，保留 30 天
 
 ---

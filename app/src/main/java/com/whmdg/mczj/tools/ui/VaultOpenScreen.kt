@@ -70,7 +70,8 @@ fun VaultOpenScreen(
                     val name = f.name
                     name != "vault_config.json" &&
                     name != "vault_config.backup.json" &&
-                    name != "name_mappings.json"
+                    name != "name_mappings.json" &&
+                    name != "folder_sizes.json"
                 }.toTypedArray()
 
                 // Sort directories first, then files alphabetically
@@ -112,6 +113,15 @@ fun VaultOpenScreen(
                     loading = false
                 }
             }
+        }
+    }
+
+    // 异步刷新当前目录的文件夹大小（不阻塞 UI）
+    fun refreshFolderSize() {
+        if (vaultService == null) return
+        coroutineScope.launch(Dispatchers.Default) {
+            val rel = if (isRoot) "" else File(currentPath).relativeTo(session.vaultDir).path
+            vaultService.refreshFolderSize(session.vaultDir, rel)
         }
     }
 
@@ -230,6 +240,7 @@ fun VaultOpenScreen(
                     showEncryptionSnackbar = true
                     vaultService?.markModified(session.record.id)
                     refresh()
+                    refreshFolderSize()
                 }
 
                 // 更新存储用量
@@ -311,6 +322,7 @@ fun VaultOpenScreen(
                     showEncryptionSnackbar = true
                     vaultService?.markModified(session.record.id)
                     refresh()
+                    refreshFolderSize()
                 }
 
                 // 更新存储用量
@@ -395,6 +407,7 @@ fun VaultOpenScreen(
                 moveOrCopyMode = null
                 showDestPicker = false
                 refresh()
+                refreshFolderSize()
             }
         }
     }
@@ -757,6 +770,7 @@ fun VaultOpenScreen(
                                     newFolderName = ""
                                     vaultService?.markModified(session.record.id)
                                     refresh()
+                                    refreshFolderSize()
                                 } catch (e: Exception) {
                                     vaultOpenError = e
                                 }
@@ -824,6 +838,23 @@ fun VaultOpenScreen(
                                     onLongClick = {}
                                 )
                             )
+                            if (entry.isDirectory && vaultService != null) {
+                                ListItem(
+                                    headlineContent = { Text("大小刷新") },
+                                    leadingContent = { Icon(Icons.Default.FolderSpecial, contentDescription = null) },
+                                    modifier = Modifier.combinedClickable(
+                                        onClick = {
+                                            contextMenuEntry = null
+                                            coroutineScope.launch(Dispatchers.Default) {
+                                                val rel = entry.file.relativeTo(session.vaultDir).path
+                                                vaultService.refreshFolderSize(session.vaultDir, rel)
+                                                withContext(Dispatchers.Main) { refresh() }
+                                            }
+                                        },
+                                        onLongClick = {}
+                                    )
+                                )
+                            }
                             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                             ListItem(
                                 headlineContent = {
@@ -910,6 +941,7 @@ fun VaultOpenScreen(
                                             Toast.makeText(context, "重命名成功", Toast.LENGTH_SHORT).show()
                                             vaultService?.markModified(session.record.id)
                                             refresh()
+                                            refreshFolderSize()
                                         }
                                     } catch (e: Exception) {
                                         withContext(Dispatchers.Main) { vaultOpenError = e }
@@ -973,6 +1005,7 @@ fun VaultOpenScreen(
                                             Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
                                             vaultService?.markModified(session.record.id)
                                             refresh()
+                                            refreshFolderSize()
                                         }
                                     } catch (e: Exception) {
                                         withContext(Dispatchers.Main) { vaultOpenError = e }

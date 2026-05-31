@@ -47,7 +47,8 @@ data class FileEntry(
     val name: String,
     val isDirectory: Boolean,
     val permission: String = "",
-    val size: Long = 0
+    val size: Long = 0,
+    val lastModified: Long = 0
 )
 
 /**
@@ -201,7 +202,8 @@ fun FileManagerScreen(onBack: () -> Unit) {
             if (isDir) dirCount++ else fileCount++
             val perm = try { formatPermission(Os.stat(child.absolutePath).st_mode) } catch (_: Exception) { "" }
             val sz = if (isDir) 0L else try { child.length() } catch (_: Exception) { 0L }
-            entries.add(FileEntry(child.absolutePath, name, isDir, perm, sz))
+            val modified = try { child.lastModified() } catch (_: Exception) { 0L }
+            entries.add(FileEntry(child.absolutePath, name, isDir, perm, sz, modified))
         }
         DiagnosticLog.log("FileEngine", "统计: dirs=$dirCount, files=$fileCount, hidden 过滤=$skipHidden")
 
@@ -214,7 +216,8 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     parentFile.canRead()
                 } catch (_: Exception) { false }
                 if (parentAccessible) {
-                    entries.add(0, FileEntry(parentPath, "..", true))
+                    val parentModified = try { parentFile.lastModified() } catch (_: Exception) { 0L }
+                    entries.add(0, FileEntry(parentPath, "..", true, lastModified = parentModified))
                 } else {
                     DiagnosticLog.log("FileEngine", "父目录不可读: $parentPath")
                 }
@@ -279,7 +282,8 @@ fun FileManagerScreen(onBack: () -> Unit) {
             val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
             val perm = try { formatPermission(Os.stat(childPath).st_mode) } catch (_: Exception) { "" }
             val sz = if (isDir) 0L else try { File(childPath).length() } catch (_: Exception) { 0L }
-            entries.add(FileEntry(childPath, name, isDir, perm, sz))
+            val modified = try { File(childPath).lastModified() } catch (_: Exception) { 0L }
+            entries.add(FileEntry(childPath, name, isDir, perm, sz, modified))
         }
         DiagnosticLog.log(tag, "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
 
@@ -287,7 +291,8 @@ fun FileManagerScreen(onBack: () -> Unit) {
         if (normalizedPath != effectiveRoot && normalizedPath.contains('/')) {
             val parentPath = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
             if (parentPath != normalizedPath) {
-                entries.add(0, FileEntry(parentPath, "..", true))
+                val parentModified = try { File(parentPath).lastModified() } catch (_: Exception) { 0L }
+                entries.add(0, FileEntry(parentPath, "..", true, lastModified = parentModified))
             }
         }
 
@@ -1260,13 +1265,13 @@ private fun FileEntryRow(
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp)
     ) {
-        // Icon aligned to top 2/3 (matching text center)
+        // Icon aligned to top 4/5 (matching text center)
         Column(
             modifier = Modifier.fillMaxHeight(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(4f),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -1277,7 +1282,7 @@ private fun FileEntryRow(
                            else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Spacer(modifier = Modifier.weight(0.5f))
+            Spacer(modifier = Modifier.weight(1f))
         }
         Spacer(modifier = Modifier.width(12.dp))
         Column(
@@ -1285,10 +1290,10 @@ private fun FileEntryRow(
                 .weight(1f)
                 .fillMaxHeight()
         ) {
-            // Top 2/3: filename, always centered
+            // Top 4/5: filename, always centered
             Box(
                 modifier = Modifier
-                    .weight(1f)
+                    .weight(4f)
                     .fillMaxWidth(),
                 contentAlignment = Alignment.Center
             ) {
@@ -1300,11 +1305,31 @@ private fun FileEntryRow(
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
-            // Bottom 1/3: permission + size (files only)
-            if (!entry.isDirectory && entry.permission.isNotEmpty()) {
+            // Bottom 1/5: permission + size (files) or date + size placeholder (folders)
+            if (entry.isDirectory) {
                 Row(
                     modifier = Modifier
-                        .weight(0.5f)
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = compactDate(entry.lastModified),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "--",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else if (entry.permission.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1322,7 +1347,7 @@ private fun FileEntryRow(
                     )
                 }
             } else {
-                Spacer(modifier = Modifier.weight(0.5f))
+                Spacer(modifier = Modifier.weight(1f))
             }
         }
     }
@@ -1357,6 +1382,12 @@ private fun compactSize(bytes: Long): String {
         v < 1024 * 1024 * 1024 -> "%.1f M".format(v / (1024 * 1024))
         else -> "%.1f G".format(v / (1024 * 1024 * 1024))
     }
+}
+
+private fun compactDate(millis: Long): String {
+    if (millis <= 0) return ""
+    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+    return sdf.format(java.util.Date(millis))
 }
 
 @Composable

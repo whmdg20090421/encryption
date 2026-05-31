@@ -408,7 +408,7 @@ class VaultService(private val context: Context) {
     }
 
     private val excludedFiles = setOf(
-        "vault_config.json", "vault_config.backup.json", "name_mappings.json"
+        "vault_config.json", "vault_config.backup.json", "name_mappings.json", "folder_sizes.json"
     )
 
     /**
@@ -461,5 +461,99 @@ class VaultService(private val context: Context) {
         _db.save(context)
         vaults.clear()
         vaults.addAll(_db.vaults)
+    }
+
+    /**
+     * 刷新指定文件夹的大小（增量、自底向上冒泡）。
+     *
+     * 算法：
+     * 1. 收集 folder 下所有子文件夹路径
+     * 2. 按路径深度降序排序（叶子在前）
+     * 3. 从最深的文件夹开始：
+     *    a. 读取该文件夹当前 mtime
+     *    b. 若 mtime 未变且 DB 中已有记录 → 跳过
+     *    c. 否则：直接子文件大小之和 + DB 中子文件夹 size 之和
+     *    d. 写入 DB
+     * 4. 最终计算 folder 自身的大小
+     * 5. 保存 DB
+     *
+     * @return folder 的最终大小
+     */
+    fun refreshFolderSize(vaultDir: File, relativePath: String): Long {
+        val db = FolderSizeDb.load(vaultDir)
+        val targetDir = if (relativePath.isEmpty()) vaultDir else File(vaultDir, relativePath)
+
+        if (!targetDir.exists() || !targetDir.isDirectory) {
+            db.removeDescendants(relativePath)
+            db.save(vaultDir)
+            return 0L
+        }
+
+        // 收集所有子文件夹的相对路径
+        val subdirs = mutableListOf<String>()
+        fun collectSubdirs(dir: File, relBase: String) {
+            val children = dir.listFiles() ?: return
+            for (child in children) {
+                if (child.isDirectory && child.name !in excludedFiles) {
+                    val childRel = if (relBase.isEmpty()) child.name else "$relBase/${child.name}"
+                    subdirs.add(childRel)
+                    collectSubdirs(child, childRel)
+                }
+            }
+        }
+        collectSubdirs(targetDir, relativePath)
+
+        // 按深度降序排序（叶子在前）
+        subdirs.sortByDescending { it.count { c -> c == '/' } }
+
+        // 自底向上计算
+        for (rel in subdirs) {
+            val dir = File(vaultDir, rel)
+            val currentMtime = dir.lastModified()
+            val cached = db.get(rel)
+            if (cached != null && cached.lastModified == currentMtime) {
+                continue // 未变化，跳过
+            }
+            val size = calcFolderDirectSize(db, vaultDir, rel)
+            db.put(rel, FolderSizeInfo(size, currentMtime))
+        }
+
+        // 计算目标文件夹自身的大小
+        val targetMtime = targetDir.lastModified()
+        val targetSize = calcFolderDirectSize(db, vaultDir, relativePath)
+        db.put(relativePath, FolderSizeInfo(targetSize, targetMtime))
+
+        db.save(vaultDir)
+        return targetSize
+    }
+
+    /**
+     * 计算文件夹直接内容的大小：直接子文件大小之和 + 子文件夹在 DB 中的 size 之和
+     */
+    private fun calcFolderDirectSize(db: FolderSizeDb, vaultDir: File, relativePath: String): Long {
+        val dir = if (relativePath.isEmpty()) vaultDir else File(vaultDir, relativePath)
+        val children = dir.listFiles() ?: return 0L
+        var total = 0L
+        for (child in children) {
+            if (child.name in excludedFiles) continue
+            if (child.isFile) {
+                total += child.length()
+            } else if (child.isDirectory) {
+                val childRel = if (relativePath.isEmpty()) child.name else "$relativePath/${child.name}"
+                val childInfo = db.get(childRel)
+                if (childInfo != null) {
+                    total += childInfo.size
+                }
+                // 子文件夹未在 DB 中时跳过（尚未计算）
+            }
+        }
+        return total
+    }
+
+    /**
+     * 更新保险箱中所有文件夹的大小（全量刷新，用于批量操作后）
+     */
+    fun refreshAllFolderSizes(vaultDir: File) {
+        refreshFolderSize(vaultDir, "")
     }
 }
