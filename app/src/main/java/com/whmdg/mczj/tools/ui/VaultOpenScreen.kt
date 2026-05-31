@@ -37,12 +37,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+// 保险箱文件列表条目（VaultOpenScreen 专用，不要与 FileManagerScreen 的 FileEntry 混淆）
 data class DisplayEntry(
     val file: File,
     val displayName: String,
-    val isDirectory: Boolean
+    val isDirectory: Boolean,
+    val lastModified: Long = 0
 )
 
+// 保险箱文件浏览器（VaultOpenScreen）—— 不要与 FileManagerScreen（系统文件管理器）混淆
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun VaultOpenScreen(
@@ -100,7 +103,7 @@ fun VaultOpenScreen(
                             }
                         }
                     }
-                    DisplayEntry(f, displayName, f.isDirectory)
+                    DisplayEntry(f, displayName, f.isDirectory, f.lastModified())
                 }
 
                 withContext(Dispatchers.Main) {
@@ -122,7 +125,14 @@ fun VaultOpenScreen(
         coroutineScope.launch(Dispatchers.Default) {
             val rel = if (isRoot) "" else File(currentPath).relativeTo(session.vaultDir).path
             vaultService.refreshFolderSize(session.vaultDir, rel)
+            withContext(Dispatchers.Main) { folderSizeVersion++ }
         }
+    }
+
+    // 保险箱文件夹大小数据库（VaultOpenScreen 专用）
+    var folderSizeVersion by remember { mutableStateOf(0L) }
+    val folderSizeDb = remember(folderSizeVersion) {
+        com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(session.vaultDir)
     }
 
     LaunchedEffect(currentPath) {
@@ -618,7 +628,14 @@ fun VaultOpenScreen(
                             },
                             supportingContent = if (!entry.isDirectory) {
                                 { Text(compactSize(entry.file.length())) }
-                            } else null,
+                            } else {
+                                // 保险箱文件夹：显示修改日期 + 大小
+                                val rel = entry.file.relativeTo(session.vaultDir).path
+                                val dirSize = folderSizeDb.get(rel)?.size
+                                val sizeStr = if (dirSize != null) compactSize(dirSize) else "--"
+                                val dateStr = compactDate(entry.lastModified)
+                                { Text("$dateStr  $sizeStr") }
+                            },
                             leadingContent = {
                                 Icon(
                                     imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.Shield,
@@ -1159,6 +1176,12 @@ private fun compactSize(bytes: Long): String {
         v < 1024 * 1024 * 1024 -> "%.1f M".format(v / (1024 * 1024))
         else -> "%.1f G".format(v / (1024 * 1024 * 1024))
     }
+}
+
+private fun compactDate(millis: Long): String {
+    if (millis <= 0) return ""
+    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+    return sdf.format(java.util.Date(millis))
 }
 
 /**

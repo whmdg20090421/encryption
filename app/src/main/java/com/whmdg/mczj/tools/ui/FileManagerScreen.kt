@@ -86,6 +86,7 @@ data class PanelNavState(
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
+// 系统文件管理器（FileManagerScreen）—— 不要与 VaultOpenScreen（保险箱文件浏览器）混淆
 @Composable
 fun FileManagerScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -286,7 +287,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                 } catch (_: Exception) { false }
                 if (parentAccessible) {
                     val parentModified = try { parentFile.lastModified() } catch (_: Exception) { 0L }
-                    entries.add(0, FileEntry(parentPath, "..", true, lastModified = parentModified))
+                    entries.add(0, FileEntry(parentPath, "返回上一级", true, lastModified = parentModified))
                 } else {
                     DiagnosticLog.log("FileEngine", "父目录不可读: $parentPath")
                 }
@@ -361,7 +362,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
             val parentPath = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
             if (parentPath != normalizedPath) {
                 val parentModified = try { File(parentPath).lastModified() } catch (_: Exception) { 0L }
-                entries.add(0, FileEntry(parentPath, "..", true, lastModified = parentModified))
+                entries.add(0, FileEntry(parentPath, "返回上一级", true, lastModified = parentModified))
             }
         }
 
@@ -1389,7 +1390,11 @@ private fun FileEntryRow(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                    imageVector = when {
+                        entry.name == "返回上一级" -> Icons.Default.ArrowUpward
+                        entry.isDirectory -> Icons.Default.Folder
+                        else -> Icons.Default.InsertDriveFile
+                    },
                     contentDescription = null,
                     modifier = Modifier.size(22.dp),
                     tint = if (isFocused) MaterialTheme.colorScheme.primary
