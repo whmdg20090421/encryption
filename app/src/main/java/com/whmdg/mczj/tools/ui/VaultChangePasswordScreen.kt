@@ -76,58 +76,65 @@ fun VaultChangePasswordScreen(
             )
         }
     ) { innerPadding ->
-        LazyColumn(
+        Card(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(16.dp)
+                .padding(innerPadding)
+                .padding(16.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
         ) {
-            item {
-                OutlinedTextField(
-                    value = oldPwd,
-                    onValueChange = { oldPwd = it },
-                    label = { Text("旧密码") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-            }
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp)
+            ) {
+                item {
+                    OutlinedTextField(
+                        value = oldPwd,
+                        onValueChange = { oldPwd = it },
+                        label = { Text("旧密码") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
 
-            item {
-                OutlinedTextField(
-                    value = newPwd1,
-                    onValueChange = { newPwd1 = it },
-                    label = { Text("新密码") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-            }
+                item {
+                    OutlinedTextField(
+                        value = newPwd1,
+                        onValueChange = { newPwd1 = it },
+                        label = { Text("新密码") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
 
-            item {
-                OutlinedTextField(
-                    value = newPwd2,
-                    onValueChange = { newPwd2 = it },
-                    label = { Text("再次输入新密码") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-            }
+                item {
+                    OutlinedTextField(
+                        value = newPwd2,
+                        onValueChange = { newPwd2 = it },
+                        label = { Text("再次输入新密码") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                }
 
-            item {
-                Button(
-                    onClick = { onSubmit() },
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    if (busy) {
-                        CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary)
-                    } else {
-                        Icon(Icons.Default.Check, contentDescription = null)
+                item {
+                    Button(
+                        onClick = { onSubmit() },
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (busy) {
+                            CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary)
+                        } else {
+                            Icon(Icons.Default.Check, contentDescription = null)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("确定修改")
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("确定修改")
                 }
             }
         }

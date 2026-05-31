@@ -3,6 +3,7 @@ package com.whmdg.mczj.tools.encryption.services
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
+import androidx.documentfile.provider.DocumentFile
 import androidx.compose.runtime.mutableStateListOf
 import com.whmdg.mczj.tools.auth.Feature
 import com.whmdg.mczj.tools.auth.SecurityEnforcer
@@ -130,12 +131,16 @@ class VaultService(private val context: Context) {
                 kek.fill(0)
             }
         } catch (e: Exception) {
-            val fallback = if (cfg.kdfType == KdfType.ARGON2ID) KdfType.PBKDF2_SHA256 else KdfType.ARGON2ID
-            val kek2 = KeyDerivation.derive(password, saltBytes, fallback, cfg.argonParams)
             try {
-                dek = AesGcm256.decrypt(kek2, kekIvBytes, encDekBytes)
-            } finally {
-                kek2.fill(0)
+                val fallback = if (cfg.kdfType == KdfType.ARGON2ID) KdfType.PBKDF2_SHA256 else KdfType.ARGON2ID
+                val kek2 = KeyDerivation.derive(password, saltBytes, fallback, cfg.argonParams)
+                try {
+                    dek = AesGcm256.decrypt(kek2, kekIvBytes, encDekBytes)
+                } finally {
+                    kek2.fill(0)
+                }
+            } catch (_: Exception) {
+                throw Exception("密码错误或保险箱数据损坏")
             }
         }
 
@@ -359,11 +364,26 @@ class VaultService(private val context: Context) {
         val kekIvBytes = HexCodec.decode(cfg.kekIv)
         val encDekBytes = HexCodec.decode(cfg.encDek)
 
-        val oldKek = KeyDerivation.derive(oldPassword, saltBytes, cfg.kdfType, cfg.argonParams)
-        val dek = try {
-            AesGcm256.decrypt(oldKek, kekIvBytes, encDekBytes)
-        } finally {
-            oldKek.fill(0)
+        val dek: ByteArray
+        try {
+            val oldKek = KeyDerivation.derive(oldPassword, saltBytes, cfg.kdfType, cfg.argonParams)
+            try {
+                dek = AesGcm256.decrypt(oldKek, kekIvBytes, encDekBytes)
+            } finally {
+                oldKek.fill(0)
+            }
+        } catch (e: Exception) {
+            try {
+                val fallback = if (cfg.kdfType == KdfType.ARGON2ID) KdfType.PBKDF2_SHA256 else KdfType.ARGON2ID
+                val oldKek2 = KeyDerivation.derive(oldPassword, saltBytes, fallback, cfg.argonParams)
+                try {
+                    dek = AesGcm256.decrypt(oldKek2, kekIvBytes, encDekBytes)
+                } finally {
+                    oldKek2.fill(0)
+                }
+            } catch (_: Exception) {
+                throw Exception("原密码错误")
+            }
         }
 
         val newSalt = SecureRandom.bytes(16)
@@ -386,5 +406,61 @@ class VaultService(private val context: Context) {
             algorithm = cfg.algorithm
         )
         newCfg.saveWithBackup(context, dir)
+    }
+
+    private val excludedFiles = setOf(
+        "vault_config.json", "vault_config.backup.json", "name_mappings.json"
+    )
+
+    /**
+     * 递归计算普通目录大小（字节），排除配置文件
+     */
+    fun calculateDirSize(dir: File): Long {
+        if (!dir.exists()) return 0L
+        return dir.walkTopDown()
+            .filter { it.isFile && it.name !in excludedFiles }
+            .sumOf { it.length() }
+    }
+
+    /**
+     * SAF 模式下递归计算目录大小
+     */
+    fun calculateDirSizeSaf(treeUri: Uri): Long {
+        val docFile = DocumentFile.fromTreeUri(context, treeUri) ?: return 0L
+        return calculateDocFileSize(docFile)
+    }
+
+    private fun calculateDocFileSize(doc: DocumentFile): Long {
+        if (doc.isFile) {
+            return if (doc.name in excludedFiles) 0L else doc.length()
+        }
+        var total = 0L
+        for (child in doc.listFiles()) {
+            total += calculateDocFileSize(child)
+        }
+        return total
+    }
+
+    /**
+     * 更新保险箱存储用量（delta 可正可负）
+     */
+    fun updateStorageSize(id: Int, delta: Long) {
+        val rec = _db.vaults.find { it.id == id } ?: return
+        val newSize = (rec.storageSize + delta).coerceAtLeast(0)
+        _db.replaceVault(rec.copy(storageSize = newSize))
+        _db.save(context)
+        vaults.clear()
+        vaults.addAll(_db.vaults)
+    }
+
+    /**
+     * 直接设置保险箱存储用量（用于首次统计）
+     */
+    fun setStorageSize(id: Int, size: Long) {
+        val rec = _db.vaults.find { it.id == id } ?: return
+        _db.replaceVault(rec.copy(storageSize = size))
+        _db.save(context)
+        vaults.clear()
+        vaults.addAll(_db.vaults)
     }
 }

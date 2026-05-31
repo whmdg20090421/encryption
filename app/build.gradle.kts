@@ -19,7 +19,7 @@ android {
         targetSdk = 36
         val ts = System.currentTimeMillis() / 1000
         versionCode = (1200000000L + ts % 100000000).toInt()
-        versionName = "2.0.%d".format(ts)
+        versionName = "2.1.%d".format(ts)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

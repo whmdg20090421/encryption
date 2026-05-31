@@ -778,6 +778,7 @@ fun EncryptionHomeScreen(
                 AlertDialog(
                     onDismissRequest = { showImportDialog = false },
                     title = { Text("导入保险箱") },
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
                     text = {
                         Column {
                             OutlinedTextField(
@@ -896,6 +897,10 @@ fun VaultsListTab(
     var vaultListError by remember { mutableStateOf<Throwable?>(null) }
 
     fun openVault(vault: VaultRecord, pwd: String) {
+        if (pwd.isEmpty()) {
+            vaultListError = Exception("密码不能为空")
+            return
+        }
         try {
             val session = vaultService.open(vault.id, pwd)
             if (settings.enableTeeQuickUnlock) {
@@ -1135,7 +1140,7 @@ fun VaultsListTab(
                                 VaultInfoRow("存储路径", pathDisplay)
                                 Spacer(modifier = Modifier.height(10.dp))
                                 // 大小占位
-                                VaultInfoRow("存储用量", "-- MB")
+                                VaultInfoRow("存储用量", if (vault.storageSize > 0) com.whmdg.mczj.tools.util.FormatUtils.formatBytes(vault.storageSize) else "未统计")
                                 Spacer(modifier = Modifier.height(10.dp))
                                 // 最后更改时间
                                 VaultInfoRow("最后更改时间", formatIsoTime(vault.lastModifiedAt) ?: "未知(Null)")
@@ -1187,12 +1192,15 @@ fun VaultsListTab(
                 )
             },
             confirmButton = {
-                Button(onClick = {
-                    val pwd = passwordInput
-                    showPasswordDialog = null
-                    passwordInput = ""
-                    openVault(vault, pwd)
-                }) {
+                Button(
+                    onClick = {
+                        val pwd = passwordInput
+                        showPasswordDialog = null
+                        passwordInput = ""
+                        openVault(vault, pwd)
+                    },
+                    enabled = passwordInput.isNotEmpty()
+                ) {
                     Text("打开")
                 }
             },

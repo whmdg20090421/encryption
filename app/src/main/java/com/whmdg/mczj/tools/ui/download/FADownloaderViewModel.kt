@@ -85,7 +85,7 @@ data class FAUiState(
     val partialDownload: Boolean = false,
     val reverseOrder: Boolean = false,
     val skipExisting: Boolean = true,
-    val useCache: Boolean = true,
+    val recordCache: Boolean = true,
     val downloadThreads: Int = 1,
     val isLoggedIn: Boolean = false,
     val username: String = "",
@@ -128,14 +128,21 @@ data class FAUiState(
     // 页面预扫描
     val isScanning: Boolean = false,
     val showScanResult: Boolean = false,
-    val scanResults: List<ScanPageInfo> = emptyList()
+    val scanResults: List<ScanPageInfo> = emptyList(),
+    // 匹配模式
+    val matchMode: Boolean = false,
+    val useRegex: Boolean = false,
+    val matchPattern: String = "",
+    // 缓存确认对话框
+    val showCacheCheckDialog: Boolean = false,
+    val cachedAuthorCount: Int = 0
 )
 
 data class ScanPageInfo(val pageNum: Int, val linkCount: Int)
 
 data class AuthorHistoryEntry(val author: String, val timestamp: Long)
 data class CachedAuthorInfo(val author: String, val count: Int, val timestamp: Long)
-data class CachedLinkInfo(val pageId: String, val imageUrl: String)
+data class CachedLinkInfo(val pageId: String, val title: String, val imageUrl: String)
 
 class FADownloaderViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -205,7 +212,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         prefs.edit().putBoolean("skip_existing", skip).apply()
         _uiState.update { it.copy(skipExisting = skip) }
     }
-    fun updateUseCache(use: Boolean) = _uiState.update { it.copy(useCache = use) }
+    fun updateRecordCache(record: Boolean) = _uiState.update { it.copy(recordCache = record) }
     fun updateDownloadThreads(threads: Int) {
         val t = threads.coerceIn(1, 4)
         prefs.edit().putInt("download_threads", t).apply()
@@ -214,6 +221,11 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     fun updateEndPage(page: String) = _uiState.update { it.copy(endPage = page) }
     fun updatePartialDownload(enabled: Boolean) = _uiState.update { it.copy(partialDownload = enabled) }
     fun updateReverseOrder(enabled: Boolean) = _uiState.update { it.copy(reverseOrder = enabled) }
+
+    // ── 匹配模式 ──
+    fun toggleMatchMode() = _uiState.update { it.copy(matchMode = !it.matchMode, useRegex = false, matchPattern = "") }
+    fun toggleUseRegex() = _uiState.update { it.copy(useRegex = !it.useRegex) }
+    fun updateMatchPattern(pattern: String) = _uiState.update { it.copy(matchPattern = pattern) }
 
     // ── 作者历史管理 ──
 
@@ -300,14 +312,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun selectCachedAuthor(author: String) {
-        val allEntries = cachePrefs.all
-        val links = mutableListOf<CachedLinkInfo>()
-        for ((key, value) in allEntries) {
-            if (value is String && key.startsWith("$author/")) {
-                val pageId = key.removePrefix("$author/")
-                links.add(CachedLinkInfo(pageId, value))
-            }
-        }
+        val links = getAuthorCachedEntries(author)
         _uiState.update { it.copy(selectedCachedAuthor = author, cachedLinks = links, selectedCacheLinks = emptySet()) }
     }
 
@@ -595,6 +600,30 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
         _uiState.update { it.copy(showScanResult = false) }
 
         val state = _uiState.value
+        // 检查是否有缓存
+        val cachedEntries = getAuthorCachedEntries(state.author)
+        if (cachedEntries.isNotEmpty()) {
+            _uiState.update { it.copy(showCacheCheckDialog = true, cachedAuthorCount = cachedEntries.size) }
+            return
+        }
+
+        doCollect(useCache = false)
+    }
+
+    /** 用户选择使用缓存 */
+    fun collectFromCache() {
+        _uiState.update { it.copy(showCacheCheckDialog = false) }
+        doCollect(useCache = true)
+    }
+
+    /** 用户选择重新抓取 */
+    fun collectFromNetwork() {
+        _uiState.update { it.copy(showCacheCheckDialog = false) }
+        doCollect(useCache = false)
+    }
+
+    private fun doCollect(useCache: Boolean) {
+        val state = _uiState.value
         isStopped = false
         val channel = Channel<PreviewItem>(Channel.UNLIMITED)
         downloadChannel = channel
@@ -608,99 +637,44 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                 collectionLoaded = 0,
                 collectionTotal = 0,
                 pendingTasks = emptyList(),
-                statusMessage = "正在收集任务..."
+                statusMessage = if (useCache) "正在从缓存加载..." else "正在收集任务..."
             )
         }
-        addLog("开始收集 ${state.author} 的 ${state.downloadType}...")
+        addLog(if (useCache) "使用缓存加载 ${state.author} 的 ${state.downloadType}..." else "开始收集 ${state.author} 的 ${state.downloadType}...")
 
         collectJob = viewModelScope.launch(Dispatchers.IO) {
             val maxDownload = state.maxDownload.toIntOrNull() ?: 0
-            val cookie = loadCookie()
-            val pagesToScan = if (state.reverseOrder) state.scanResults.reversed() else state.scanResults
-
             val allTasks = mutableListOf<PreviewItem>()
 
             try {
-                for (scanInfo in pagesToScan) {
-                    if (isStopped) break
-                    if (maxDownload > 0 && allTasks.size >= maxDownload) break
+                if (useCache) {
+                    // ── 缓存模式：直接从缓存加载 ──
+                    val cachedEntries = getAuthorCachedEntries(state.author)
+                    addLog("从缓存加载 ${cachedEntries.size} 个条目...")
 
-                    val pageNum = scanInfo.pageNum
-                    val url = "$FA_BASE/${state.downloadType}/${state.author}/$pageNum"
-                    val html = fetchHtml(url, cookie)
-                    if (html == null) {
-                        addLog("第 $pageNum 页: 请求失败，跳过")
-                        continue
-                    }
-
-                    val pages = parseGalleryPages(html)
-                    if (pages.isEmpty()) {
-                        addLog("第 $pageNum 页: 无链接，跳过")
-                        continue
-                    }
-
-                    addLog("第 $pageNum 页: 发现 ${pages.size} 个链接，开始抓取详情...")
-
-                    // 并行抓取详情页，复用 downloadThreads 作为并发数
-                    data class DetailResult(val pageId: String, val imageUrl: String, val fileName: String, val title: String, val meta: SubmissionMeta = SubmissionMeta())
-                    val semaphore = Semaphore(state.downloadThreads)
-                    val deferreds = mutableListOf<kotlinx.coroutines.Deferred<DetailResult?>>()
-                    val seenPageIds = mutableSetOf<String>()  // 去重
-
-                    for (pageUrl in pages) {
+                    for (entry in cachedEntries) {
                         if (isStopped) break
                         if (maxDownload > 0 && allTasks.size >= maxDownload) break
 
-                        val pageId = extractPageId(pageUrl)
-                        if (!seenPageIds.add(pageId)) continue  // 跳过重复
+                        val title = entry.title
+                        val imageUrl = entry.imageUrl
+                        val pageId = entry.pageId
 
-                        val deferred = async {
-                            semaphore.withPermit {
-                                val cachedUrl = if (state.useCache) getCachedUrl(state.author, pageId) else null
-                                if (cachedUrl != null) {
-                                    // 缓存命中：仍需获取元数据（命名格式依赖标题）
-                                    val meta = run {
-                                        val detailHtml = fetchHtml(pageUrl, cookie)
-                                        if (detailHtml != null) parseSubmissionInfo(detailHtml) else null
-                                    }
-                                    val m = meta ?: SubmissionMeta(imageUrl = cachedUrl, faId = pageId)
-                                    // 校验缓存的图片 URL 必须包含作者名称
-                                    val checkAuthor = state.author.lowercase()
-                                    if (checkAuthor.isNotEmpty() && !cachedUrl.lowercase().contains(checkAuthor)) {
-                                        addLog("  ⚠ 缓存URL不含作者「$checkAuthor」，跳过: $cachedUrl")
-                                        return@async null
-                                    }
-                                    DetailResult(pageId, cachedUrl, extractFileName(cachedUrl), m.title, m)
-                                } else {
-                                    val detailHtml = fetchHtml(pageUrl, cookie)
-                                    if (detailHtml == null) return@async null
-                                    val info = parseSubmissionInfo(detailHtml) ?: return@async null
-                                    // 校验图片 URL 必须包含作者名称（防止翻页错误导致抓到其他作者的作品）
-                                    val checkAuthor = state.author.lowercase()
-                                    if (checkAuthor.isNotEmpty() && !info.imageUrl.lowercase().contains(checkAuthor)) {
-                                        addLog("  ⚠ 跳过: 图片URL不含作者「$checkAuthor」: ${info.imageUrl}")
-                                        return@async null
-                                    }
-                                    if (state.useCache) cacheUrl(state.author, pageId, info.imageUrl)
-                                    DetailResult(pageId, info.imageUrl, extractFileName(info.imageUrl), info.title, info)
-                                }
+                        // 匹配模式过滤
+                        if (state.matchMode && state.matchPattern.isNotEmpty()) {
+                            val matched = if (state.useRegex) {
+                                try { Regex(state.matchPattern).containsMatchIn(title) } catch (_: Exception) { false }
+                            } else {
+                                title.contains(state.matchPattern, ignoreCase = true)
                             }
+                            if (!matched) continue
                         }
-                        deferreds.add(deferred)
-                    }
 
-                    // 收集结果并更新进度
-                    val countBeforePage = allTasks.size
-                    for (deferred in deferreds) {
-                        if (isStopped) break
-                        val result = deferred.await() ?: continue
-
-                        val (pageId, imageUrl, _, title, meta) = result
                         val ext = getFileExtension(imageUrl)
                         val safeTitle = title.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50)
-                        val authorName = meta.author.ifEmpty { state.author }
-                        val safeAuthor = authorName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                        val safeAuthor = state.author.replace(Regex("[^a-zA-Z0-9_-]"), "_")
                         val saveFileName = "${safeAuthor}_${safeTitle}_${pageId}.$ext"
+                        val meta = SubmissionMeta(imageUrl = imageUrl, faId = pageId, title = title, author = state.author)
 
                         val task = PreviewItem(allTasks.size + 1, saveFileName, imageUrl, title, pageId, state.author, meta)
                         allTasks.add(task)
@@ -710,13 +684,112 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
                             it.copy(
                                 pendingTasks = it.pendingTasks + task,
                                 collectionLoaded = allTasks.size,
-                                collectionTotal = it.collectionTotal.coerceAtLeast(allTasks.size)
+                                collectionTotal = cachedEntries.size
                             )
                         }
                     }
+                    addLog("缓存加载完成: ${allTasks.size} 个任务")
+                } else {
+                    // ── 网络抓取模式 ──
+                    val cookie = loadCookie()
+                    val pagesToScan = if (state.reverseOrder) state.scanResults.reversed() else state.scanResults
 
-                    val pageCollected = allTasks.size - countBeforePage
-                    addPageSummary("第${pageNum}页（${pages.size}个链接），本页${pageCollected}个，累计${allTasks.size}个")
+                    for (scanInfo in pagesToScan) {
+                        if (isStopped) break
+                        if (maxDownload > 0 && allTasks.size >= maxDownload) break
+
+                        val pageNum = scanInfo.pageNum
+                        val url = "$FA_BASE/${state.downloadType}/${state.author}/$pageNum"
+                        val html = fetchHtml(url, cookie)
+                        if (html == null) {
+                            addLog("第 $pageNum 页: 请求失败，跳过")
+                            continue
+                        }
+
+                        val pages = parseGalleryPages(html)
+                        if (pages.isEmpty()) {
+                            addLog("第 $pageNum 页: 无链接，跳过")
+                            continue
+                        }
+
+                        addLog("第 $pageNum 页: 发现 ${pages.size} 个链接，开始抓取详情...")
+
+                        // 并行抓取详情页
+                        data class DetailResult(val pageId: String, val imageUrl: String, val fileName: String, val title: String, val meta: SubmissionMeta = SubmissionMeta())
+                        val semaphore = Semaphore(state.downloadThreads)
+                        val deferreds = mutableListOf<kotlinx.coroutines.Deferred<DetailResult?>>()
+                        val seenPageIds = mutableSetOf<String>()
+
+                        for (pageUrl in pages) {
+                            if (isStopped) break
+                            if (maxDownload > 0 && allTasks.size >= maxDownload) break
+
+                            val pageId = extractPageId(pageUrl)
+                            if (!seenPageIds.add(pageId)) continue
+
+                            val deferred = async {
+                                semaphore.withPermit {
+                                    val detailHtml = fetchHtml(pageUrl, cookie)
+                                    if (detailHtml == null) return@async null
+                                    val info = parseSubmissionInfo(detailHtml) ?: return@async null
+                                    val checkAuthor = state.author.lowercase()
+                                    if (checkAuthor.isNotEmpty() && !info.imageUrl.lowercase().contains(checkAuthor)) {
+                                        addLog("  ⚠ 跳过: 图片URL不含作者「$checkAuthor」: ${info.imageUrl}")
+                                        return@async null
+                                    }
+                                    // 记录缓存
+                                    if (state.recordCache) {
+                                        cacheEntry(state.author, pageId, info.title, info.imageUrl)
+                                    }
+                                    DetailResult(pageId, info.imageUrl, extractFileName(info.imageUrl), info.title, info)
+                                }
+                            }
+                            deferreds.add(deferred)
+                        }
+
+                        // 收集结果并更新进度
+                        val countBeforePage = allTasks.size
+                        for (deferred in deferreds) {
+                            if (isStopped) break
+                            val result = deferred.await() ?: continue
+
+                            val (pageId, imageUrl, _, title, meta) = result
+
+                            // 匹配模式过滤
+                            if (state.matchMode && state.matchPattern.isNotEmpty()) {
+                                val matched = if (state.useRegex) {
+                                    try { Regex(state.matchPattern).containsMatchIn(title) } catch (_: Exception) { false }
+                                } else {
+                                    title.contains(state.matchPattern, ignoreCase = true)
+                                }
+                                if (!matched) {
+                                    addLog("  ✗ 标题不匹配，跳过: $title")
+                                    continue
+                                }
+                            }
+
+                            val ext = getFileExtension(imageUrl)
+                            val safeTitle = title.replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50)
+                            val authorName = meta.author.ifEmpty { state.author }
+                            val safeAuthor = authorName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                            val saveFileName = "${safeAuthor}_${safeTitle}_${pageId}.$ext"
+
+                            val task = PreviewItem(allTasks.size + 1, saveFileName, imageUrl, title, pageId, state.author, meta)
+                            allTasks.add(task)
+                            channel.send(task)
+
+                            _uiState.update {
+                                it.copy(
+                                    pendingTasks = it.pendingTasks + task,
+                                    collectionLoaded = allTasks.size,
+                                    collectionTotal = it.collectionTotal.coerceAtLeast(allTasks.size)
+                                )
+                            }
+                        }
+
+                        val pageCollected = allTasks.size - countBeforePage
+                        addPageSummary("第${pageNum}页（${pages.size}个链接），本页${pageCollected}个，累计${allTasks.size}个")
+                    }
                 }
             } catch (e: Exception) {
                 addLog("收集任务异常: ${e.message}")
@@ -1201,25 +1274,52 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     // ── Cache ──
 
-    private fun getCachedUrl(author: String, pageId: String): String? {
-        // 新格式: author/pageId
+    private fun getCachedEntry(author: String, pageId: String): Pair<String, String>? {
         val newKey = "$author/$pageId"
-        val url = cachePrefs.getString(newKey, null)
-        if (!url.isNullOrEmpty()) return url
-        // 兼容旧格式: pageId（自动迁移）
+        val raw = cachePrefs.getString(newKey, null)
+        if (!raw.isNullOrEmpty()) {
+            return parseCacheValue(raw)
+        }
+        // 兼容旧格式: pageId → url（无 title）
         val oldUrl = cachePrefs.getString(pageId, null)
         if (!oldUrl.isNullOrEmpty()) {
             cachePrefs.edit().putString(newKey, oldUrl).remove(pageId).apply()
-            return oldUrl
+            return "" to oldUrl
         }
         return null
     }
 
-    private fun cacheUrl(author: String, pageId: String, imageUrl: String) {
-        // 只缓存 d.furaffinity.net 格式的链接
+    private fun getCachedUrl(author: String, pageId: String): String? {
+        return getCachedEntry(author, pageId)?.second
+    }
+
+    private fun cacheEntry(author: String, pageId: String, title: String, imageUrl: String) {
         if (imageUrl.matches(Regex("""https://d\.furaffinity\.net/art/[^/]+/\d+.*"""))) {
-            cachePrefs.edit().putString("$author/$pageId", imageUrl).apply()
+            val value = "${title.replace("\n", " ").replace("|", "/")}|$imageUrl"
+            cachePrefs.edit().putString("$author/$pageId", value).apply()
         }
+    }
+
+    private fun parseCacheValue(raw: String): Pair<String, String> {
+        val idx = raw.lastIndexOf('|')
+        return if (idx > 0) {
+            raw.substring(0, idx) to raw.substring(idx + 1)
+        } else {
+            "" to raw  // 兼容旧格式（纯 URL）
+        }
+    }
+
+    /** 检查某作者是否有缓存 */
+    private fun getAuthorCachedEntries(author: String): List<CachedLinkInfo> {
+        val results = mutableListOf<CachedLinkInfo>()
+        for ((key, value) in cachePrefs.all) {
+            if (value is String && key.startsWith("$author/")) {
+                val pageId = key.removePrefix("$author/")
+                val (title, url) = parseCacheValue(value)
+                results.add(CachedLinkInfo(pageId, title, url))
+            }
+        }
+        return results
     }
 
     // ── File Operations ──

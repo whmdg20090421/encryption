@@ -295,32 +295,18 @@ fun DeviantDownloaderScreen(
                         }
 
                         // 线程数
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("下载线程", style = MaterialTheme.typography.bodyMedium)
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(
-                                    onClick = { viewModel.updateDownloadThreads(state.downloadThreads - 1) },
-                                    enabled = state.downloadThreads > 1 && !state.isDownloading
-                                ) {
-                                    Icon(Icons.Default.Remove, contentDescription = null)
-                                }
-                                Text(
-                                    "${state.downloadThreads}",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                IconButton(
-                                    onClick = { viewModel.updateDownloadThreads(state.downloadThreads + 1) },
-                                    enabled = state.downloadThreads < 4 && !state.isDownloading
-                                ) {
-                                    Icon(Icons.Default.Add, contentDescription = null)
-                                }
-                            }
-                        }
+                        Text(
+                            "下载线程: ${state.downloadThreads}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Slider(
+                            value = state.downloadThreads.toFloat(),
+                            onValueChange = { viewModel.updateDownloadThreads(it.toInt()) },
+                            valueRange = 1f..4f,
+                            steps = 2,
+                            enabled = !state.isDownloading
+                        )
                     }
                 }
             }

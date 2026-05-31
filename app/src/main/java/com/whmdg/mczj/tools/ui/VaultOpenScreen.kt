@@ -119,6 +119,24 @@ fun VaultOpenScreen(
         refresh()
     }
 
+    // 首次打开时统计存储用量
+    LaunchedEffect(Unit) {
+        if (vaultService != null && session.record.storageSize == 0L) {
+            calculatingSize = true
+            kotlinx.coroutines.withContext(Dispatchers.Default) {
+                val size = if (session.record.relativePath.startsWith("content://")) {
+                    vaultService.calculateDirSizeSaf(android.net.Uri.parse(session.record.relativePath))
+                } else {
+                    vaultService.calculateDirSize(session.vaultDir)
+                }
+                withContext(Dispatchers.Main) {
+                    vaultService.setStorageSize(session.record.id, size)
+                    calculatingSize = false
+                }
+            }
+        }
+    }
+
     fun goUp() {
         val parent = File(currentPath).parentFile
         if (parent != null && parent.absolutePath.length >= session.vaultDir.absolutePath.length) {
@@ -148,6 +166,9 @@ fun VaultOpenScreen(
     // ── Encryption progress state ──
     var showProgressPanel by remember { mutableStateOf(false) }
     var showEncryptionSnackbar by remember { mutableStateOf(false) }
+
+    // ── Storage size calculation state ──
+    var calculatingSize by remember { mutableStateOf(false) }
 
     // ── Long-press context menu state ──
     var contextMenuEntry by remember { mutableStateOf<DisplayEntry?>(null) }
@@ -209,6 +230,17 @@ fun VaultOpenScreen(
                     showEncryptionSnackbar = true
                     vaultService?.markModified(session.record.id)
                     refresh()
+                }
+
+                // 更新存储用量
+                if (vaultService != null && session.record.storageSize > 0) {
+                    val newSize = vaultService.calculateDirSize(session.vaultDir)
+                    val delta = newSize - session.record.storageSize
+                    if (delta != 0L) {
+                        withContext(Dispatchers.Main) {
+                            vaultService.updateStorageSize(session.record.id, delta)
+                        }
+                    }
                 }
             }
         }
@@ -279,6 +311,17 @@ fun VaultOpenScreen(
                     showEncryptionSnackbar = true
                     vaultService?.markModified(session.record.id)
                     refresh()
+                }
+
+                // 更新存储用量
+                if (vaultService != null && session.record.storageSize > 0) {
+                    val newSize = vaultService.calculateDirSize(session.vaultDir)
+                    val delta = newSize - session.record.storageSize
+                    if (delta != 0L) {
+                        withContext(Dispatchers.Main) {
+                            vaultService.updateStorageSize(session.record.id, delta)
+                        }
+                    }
                 }
             }
         }
@@ -383,18 +426,9 @@ fun VaultOpenScreen(
                 },
                 actions = {
                     if (moveOrCopyMode == null || !showDestPicker) {
-                        val hasEncryptionTasks = EncryptionTaskManager.stateFlow.collectAsState().value.let {
-                            EncryptionTaskManager.tasks.isNotEmpty()
-                        }
-                        if (hasEncryptionTasks) {
-                            EncryptionProgressIcon(
-                                onShowPanel = { showProgressPanel = true }
-                            )
-                        } else if (!isRoot) {
-                            IconButton(onClick = { goUp() }) {
-                                Icon(Icons.Default.ArrowUpward, contentDescription = "返回上级")
-                            }
-                        }
+                        EncryptionProgressIcon(
+                            onShowPanel = { showProgressPanel = true }
+                        )
                     }
                 }
             )
@@ -469,9 +503,6 @@ fun VaultOpenScreen(
                                 .padding(horizontal = 16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.ArrowUpward, contentDescription = null,
-                                modifier = Modifier.size(22.dp))
-                            Spacer(modifier = Modifier.width(12.dp))
                             Column(
                                 modifier = Modifier
                                     .weight(1f)
@@ -635,6 +666,20 @@ fun VaultOpenScreen(
                             Text("查看加密进度")
                         }
                     }
+                )
+            }
+
+            // ── Size Calculation Dialog ──
+            if (calculatingSize) {
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text("正在统计存储用量...") },
+                    text = {
+                        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    },
+                    confirmButton = {}
                 )
             }
 
@@ -906,11 +951,24 @@ fun VaultOpenScreen(
                                 showDeleteConfirm = null
                                 coroutineScope.launch(Dispatchers.Default) {
                                     try {
+                                        // 删除前计算大小
+                                        val deletedSize = if (target.isDirectory) {
+                                            vaultService?.calculateDirSize(target) ?: 0L
+                                        } else {
+                                            target.length()
+                                        }
+
                                         if (target.isDirectory) {
                                             target.deleteRecursively()
                                         } else {
                                             target.delete()
                                         }
+
+                                        // 删除后减去大小
+                                        if (vaultService != null && deletedSize > 0) {
+                                            vaultService.updateStorageSize(session.record.id, -deletedSize)
+                                        }
+
                                         withContext(Dispatchers.Main) {
                                             Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
                                             vaultService?.markModified(session.record.id)

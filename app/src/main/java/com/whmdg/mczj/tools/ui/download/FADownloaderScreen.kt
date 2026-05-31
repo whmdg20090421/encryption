@@ -256,6 +256,10 @@ fun FADownloaderScreen(
             )
         }
     ) { innerPadding ->
+        val isValidRegex = !state.useRegex || state.matchPattern.isEmpty() || try {
+            Regex(state.matchPattern); true
+        } catch (_: Exception) { false }
+
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -308,6 +312,36 @@ fun FADownloaderScreen(
                         SectionLabel("作者设置", Icons.Default.Person)
                         Spacer(modifier = Modifier.height(12.dp))
 
+                        // 匹配模式行
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FilterChip(
+                                selected = state.matchMode,
+                                onClick = { viewModel.toggleMatchMode() },
+                                label = { Text("匹配模式") },
+                                leadingIcon = if (state.matchMode) {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                                } else null,
+                                enabled = !state.isDownloading
+                            )
+                            if (state.matchMode) {
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("正则表达式", style = MaterialTheme.typography.bodySmall)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Switch(
+                                        checked = state.useRegex,
+                                        onCheckedChange = { viewModel.toggleUseRegex() },
+                                        enabled = !state.isDownloading
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
                         OutlinedTextField(
                             value = state.author,
                             onValueChange = { viewModel.updateAuthor(it) },
@@ -323,6 +357,32 @@ fun FADownloaderScreen(
                             modifier = Modifier.fillMaxWidth(),
                             enabled = !state.isDownloading
                         )
+
+                        // 匹配模式输入框
+                        if (state.matchMode) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            val regexError = if (state.useRegex && state.matchPattern.isNotEmpty()) {
+                                try {
+                                    Regex(state.matchPattern)
+                                    null
+                                } catch (e: Exception) {
+                                    e.message?.substringAfter(":")?.trim() ?: "正则表达式不合法"
+                                }
+                            } else null
+
+                            OutlinedTextField(
+                                value = state.matchPattern,
+                                onValueChange = { viewModel.updateMatchPattern(it) },
+                                label = { Text(if (state.useRegex) "正则表达式" else "匹配关键词") },
+                                placeholder = { Text(if (state.useRegex) "例如: ^风景.*$" else "输入标题关键词") },
+                                singleLine = true,
+                                leadingIcon = { Icon(Icons.Default.FilterList, contentDescription = null) },
+                                isError = regexError != null,
+                                supportingText = regexError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !state.isDownloading
+                            )
+                        }
 
                         // 作者历史下拉列表
                         if (state.showAuthorHistory && state.authorHistory.isNotEmpty()) {
@@ -470,24 +530,22 @@ fun FADownloaderScreen(
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Switch(
-                                    checked = state.useCache,
-                                    onCheckedChange = { viewModel.updateUseCache(it) },
+                                    checked = state.recordCache,
+                                    onCheckedChange = { viewModel.updateRecordCache(it) },
                                     enabled = !state.isDownloading
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("使用缓存", style = MaterialTheme.typography.bodySmall)
-                                if (state.useCache) {
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    IconButton(
-                                        onClick = { viewModel.toggleCacheViewer() },
-                                        modifier = Modifier.size(24.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.List,
-                                            contentDescription = "查看缓存",
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
+                                Text("记录缓存", style = MaterialTheme.typography.bodySmall)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = { viewModel.toggleCacheViewer() },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.List,
+                                        contentDescription = "查看缓存",
+                                        modifier = Modifier.size(18.dp)
+                                    )
                                 }
                             }
                         }
@@ -615,7 +673,7 @@ fun FADownloaderScreen(
                     Button(
                         onClick = { viewModel.startDownload() },
                         modifier = Modifier.weight(1f),
-                        enabled = !state.isDownloading && !state.isCollecting && !state.isScanning
+                        enabled = !state.isDownloading && !state.isCollecting && !state.isScanning && isValidRegex
                     ) {
                         if (state.isScanning) {
                             CircularProgressIndicator(
@@ -832,6 +890,32 @@ fun FADownloaderScreen(
             dismissButton = {
                 TextButton(onClick = { viewModel.cancelScan() }) {
                     Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── Cache check dialog ──
+    if (state.showCacheCheckDialog) {
+        AlertDialog(
+            onDismissRequest = { viewModel.collectFromNetwork() },
+            icon = {
+                Icon(
+                    Icons.Default.Cached,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            title = { Text("检测到缓存") },
+            text = { Text("当前已有 ${state.cachedAuthorCount} 个缓存条目，是否直接使用缓存？") },
+            confirmButton = {
+                Button(onClick = { viewModel.collectFromCache() }) {
+                    Text("使用缓存")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.collectFromNetwork() }) {
+                    Text("重新抓取")
                 }
             }
         )
