@@ -101,6 +101,7 @@ fun featureDisplayName(f: Feature): String = when (f) {
     Feature.APP_PERMISSIONS -> "应用权限管理"
     Feature.BATCH_DOWNLOADER -> "批量下载器"
     Feature.SECURITY_SETTINGS -> "安全"
+    Feature.RP_HUB -> "RP-Hub"
 }
 
 sealed class Screen {
@@ -123,6 +124,7 @@ sealed class Screen {
     data class VaultOpen(val session: VaultSession) : Screen()
     data class VaultChangePassword(val vault: VaultRecord) : Screen()
     object AuthManagement : Screen()
+    object RpHub : Screen()
 }
 
 enum class ModuleId {
@@ -130,7 +132,8 @@ enum class ModuleId {
     FILE_MANAGER,
     APP_PERMISSIONS,
     BATCH_DOWNLOADER,
-    SECURITY
+    SECURITY,
+    RP_HUB
 }
 
 data class ModuleEntry(
@@ -146,7 +149,8 @@ val MODULE_REGISTRY: Map<ModuleId, ModuleEntry> = mapOf(
     ModuleId.FILE_MANAGER to ModuleEntry("文件管理器", "双面板文件浏览工具", Icons.Default.Folder, Feature.FILE_MANAGER, Screen.FileManager),
     ModuleId.APP_PERMISSIONS to ModuleEntry("应用权限管理", "查看和管理应用权限", Icons.Default.Security, Feature.APP_PERMISSIONS, Screen.AppPermissions),
     ModuleId.BATCH_DOWNLOADER to ModuleEntry("批量下载器", "FA 图片批量下载等工具", Icons.Default.Download, Feature.BATCH_DOWNLOADER, Screen.BatchDownloader),
-    ModuleId.SECURITY to ModuleEntry("安全", "权限设置与特殊权限管理", Icons.Default.Lock, Feature.SECURITY_SETTINGS, Screen.Security)
+    ModuleId.SECURITY to ModuleEntry("安全", "权限设置与特殊权限管理", Icons.Default.Lock, Feature.SECURITY_SETTINGS, Screen.Security),
+    ModuleId.RP_HUB to ModuleEntry("RP-Hub", "本地角色扮演对话工具", Icons.Default.SmartToy, Feature.RP_HUB, Screen.RpHub)
 )
 
 /**
@@ -486,6 +490,11 @@ fun MainAppContainer() {
                 onBack = { navigateBack() }
             )
         }
+        is Screen.RpHub -> {
+            RpHubScreen(
+                onBack = { navigateBack() }
+            )
+        }
     }
 }
 
@@ -592,6 +601,20 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
                     onClick = { navigateToModule(moduleId) }
                 )
             }
+        }
+
+        SettingsSection(
+            title = "应用",
+            icon = Icons.Default.Apps
+        ) {
+            val rpHubEntry = MODULE_REGISTRY[ModuleId.RP_HUB]!!
+            CompactSettingsItem(
+                title = rpHubEntry.title,
+                subtitle = rpHubEntry.subtitle,
+                icon = rpHubEntry.icon,
+                enabled = PermissionManager.has(rpHubEntry.feature),
+                onClick = { navigateToModule(ModuleId.RP_HUB) }
+            )
         }
     }
 }

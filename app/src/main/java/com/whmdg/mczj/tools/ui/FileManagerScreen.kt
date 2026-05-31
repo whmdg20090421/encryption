@@ -1431,7 +1431,7 @@ private fun FileEntryRow(
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp)
     ) {
-        // Icon aligned to top 4/5 (matching text center)
+        // Icon column: icon on top, date/permission below
         Column(
             modifier = Modifier.fillMaxHeight(),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -1452,7 +1452,26 @@ private fun FileEntryRow(
                            else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Spacer(modifier = Modifier.weight(1f))
+            // Bottom 1/5: date (folders) or permission (files) under icon
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                val label = when {
+                    entry.isDirectory -> compactDate(entry.lastModified)
+                    entry.permission.isNotEmpty() -> entry.permission
+                    else -> ""
+                }
+                if (label.isNotEmpty()) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
         Spacer(modifier = Modifier.width(12.dp))
         Column(
@@ -1475,41 +1494,31 @@ private fun FileEntryRow(
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
-            // Bottom 1/5: permission + size (files) or date + size placeholder (folders)
+            // Bottom 1/5: size
             if (entry.isDirectory) {
                 Row(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = compactDate(entry.lastModified),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                     Text(
                         text = folderSize.ifEmpty { "--" },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-            } else if (entry.permission.isNotEmpty()) {
+            } else if (entry.size > 0) {
                 Row(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = entry.permission,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                     Text(
                         text = compactSize(entry.size),
                         style = MaterialTheme.typography.bodySmall,
