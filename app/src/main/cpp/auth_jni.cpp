@@ -4,9 +4,15 @@
 #include <android/log.h>
 
 #include "obf.h"
+#include "obf_key.h"
+#include "deadline_hmac_key.h"
 #include "hashes.inc"
 #include "argon2.h"
 #include "blake2.h"
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
 
 #define LOG_TAG "authcore"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -124,6 +130,151 @@ JNIEXPORT jint JNICALL
 Java_com_whmdg_mczj_tools_auth_NativeAuth_keyIdOf(
         JNIEnv *env, jclass /* clazz */, jstring /* jpw */) {
     return (jint)g_last_key_id;
+}
+
+/* 计算 deadline HMAC（用于存储，不做验证） */
+JNIEXPORT jstring JNICALL
+Java_com_whmdg_mczj_tools_auth_NativeAuth_computeDeadlineHmac(
+        JNIEnv *env, jclass /* clazz */,
+        jstring jDeadline, jstring jVaultId) {
+
+    if (!jDeadline || !jVaultId) return env->NewStringUTF("");
+
+    const char *deadline = env->GetStringUTFChars(jDeadline, nullptr);
+    const char *vaultId = env->GetStringUTFChars(jVaultId, nullptr);
+    if (!deadline || !vaultId) {
+        if (deadline) env->ReleaseStringUTFChars(jDeadline, deadline);
+        if (vaultId) env->ReleaseStringUTFChars(jVaultId, vaultId);
+        return env->NewStringUTF("");
+    }
+
+    uint8_t hmac_key[32];
+    deobf(DEADLINE_HMAC_KEY_OBF, hmac_key, 32);
+
+    size_t dl_len = strlen(deadline);
+    size_t vi_len = strlen(vaultId);
+    size_t msg_len = dl_len + vi_len;
+    uint8_t *msg = (uint8_t *)malloc(msg_len);
+    if (!msg) {
+        secure_zero(hmac_key, 32);
+        env->ReleaseStringUTFChars(jDeadline, deadline);
+        env->ReleaseStringUTFChars(jVaultId, vaultId);
+        return env->NewStringUTF("");
+    }
+    memcpy(msg, deadline, dl_len);
+    memcpy(msg + dl_len, vaultId, vi_len);
+
+    uint8_t mac[32];
+    blake2b(mac, 32, msg, msg_len, hmac_key, 32);
+    secure_zero(hmac_key, 32);
+    secure_zero(msg, msg_len);
+    free(msg);
+
+    char mac_hex[65];
+    for (int i =  0; i < 32; i++) {
+        snprintf(mac_hex + i * 2, 3, "%02x", mac[i]);
+    }
+    mac_hex[64] = '\0';
+    secure_zero(mac, 32);
+
+    env->ReleaseStringUTFChars(jDeadline, deadline);
+    env->ReleaseStringUTFChars(jVaultId, vaultId);
+
+    return env->NewStringUTF(mac_hex);
+}
+
+/* 验证 deadline：HMAC 匹配 + 未过期 → 返回 proof；否则空字符串 */
+JNIEXPORT jstring JNICALL
+Java_com_whmdg_mczj_tools_auth_NativeAuth_verifyDeadline(
+        JNIEnv *env, jclass /* clazz */,
+        jstring jDeadline, jstring jVaultId, jstring jStoredProof) {
+
+    if (!jDeadline || !jVaultId || !jStoredProof) {
+        return env->NewStringUTF("");
+    }
+
+    const char *deadline = env->GetStringUTFChars(jDeadline, nullptr);
+    const char *vaultId = env->GetStringUTFChars(jVaultId, nullptr);
+    const char *storedProof = env->GetStringUTFChars(jStoredProof, nullptr);
+    if (!deadline || !vaultId || !storedProof) {
+        if (deadline) env->ReleaseStringUTFChars(jDeadline, deadline);
+        if (vaultId) env->ReleaseStringUTFChars(jVaultId, vaultId);
+        if (storedProof) env->ReleaseStringUTFChars(jStoredProof, storedProof);
+        return env->NewStringUTF("");
+    }
+
+    /* 还原 HMAC 密钥 */
+    uint8_t hmac_key[32];
+    deobf(DEADLINE_HMAC_KEY_OBF, hmac_key, 32);
+
+    /* 拼接 deadline + vaultId */
+    size_t dl_len = strlen(deadline);
+    size_t vi_len = strlen(vaultId);
+    size_t msg_len = dl_len + vi_len;
+    uint8_t *msg = (uint8_t *)malloc(msg_len);
+    if (!msg) {
+        secure_zero(hmac_key, 32);
+        env->ReleaseStringUTFChars(jDeadline, deadline);
+        env->ReleaseStringUTFChars(jVaultId, vaultId);
+        env->ReleaseStringUTFChars(jStoredProof, storedProof);
+        return env->NewStringUTF("");
+    }
+    memcpy(msg, deadline, dl_len);
+    memcpy(msg + dl_len, vaultId, vi_len);
+
+    /* 计算 Blake2b-MAC */
+    uint8_t mac[32];
+    blake2b(mac, 32, msg, msg_len, hmac_key, 32);
+    secure_zero(hmac_key, 32);
+    secure_zero(msg, msg_len);
+    free(msg);
+
+    /* 转 hex */
+    char mac_hex[65];
+    for (int i = 0; i < 32; i++) {
+        snprintf(mac_hex + i * 2, 3, "%02x", mac[i]);
+    }
+    mac_hex[64] = '\0';
+    secure_zero(mac, 32);
+
+    /* 比较 storedProof 与计算出的 MAC（恒定时间） */
+    size_t sp_len = strlen(storedProof);
+    if (sp_len != 64) {
+        env->ReleaseStringUTFChars(jDeadline, deadline);
+        env->ReleaseStringUTFChars(jVaultId, vaultId);
+        env->ReleaseStringUTFChars(jStoredProof, storedProof);
+        return env->NewStringUTF("");
+    }
+
+    volatile uint8_t diff = 0;
+    for (size_t i = 0; i < 64; i++) {
+        diff |= (uint8_t)mac_hex[i] ^ (uint8_t)storedProof[i];
+    }
+
+    env->ReleaseStringUTFChars(jVaultId, vaultId);
+    env->ReleaseStringUTFChars(jStoredProof, storedProof);
+
+    if (diff != 0) {
+        /* HMAC 不匹配 → 数据被篡改 */
+        env->ReleaseStringUTFChars(jDeadline, deadline);
+        return env->NewStringUTF("");
+    }
+
+    /* HMAC 匹配 → 检查时间 */
+    long long dl_val = strtoll(deadline, nullptr, 10);
+    env->ReleaseStringUTFChars(jDeadline, deadline);
+
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    long long now_ms = (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+
+    if (now_ms < dl_val) {
+        /* 未过期 → 返回 MAC 作为 proof */
+        return env->NewStringUTF(mac_hex);
+    }
+
+    /* 已过期 */
+    return env->NewStringUTF("");
 }
 
 }

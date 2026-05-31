@@ -14,6 +14,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -162,6 +163,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
     var recycleBinEnabled by remember {
         mutableStateOf(fmPrefs.getBoolean("recycle_bin_enabled", false))
     }
+    var refreshVersion by remember { mutableStateOf(0L) }
 
     // ── 文件夹大小数据库（存储在应用内部目录） ──
     var folderSizeVersion by remember { mutableStateOf(0L) }
@@ -454,12 +456,12 @@ fun FileManagerScreen(onBack: () -> Unit) {
         }
     }
 
-    LaunchedEffect(leftPath, showHiddenFiles) {
+    LaunchedEffect(leftPath, showHiddenFiles, refreshVersion) {
         DiagnosticLog.log("FileMgr", "LaunchedEffect[LEFT] 触发 path=$leftPath showHidden=$showHiddenFiles")
         leftEntries = listDirectory(leftPath)
         DiagnosticLog.log("FileMgr", "LaunchedEffect[LEFT] 完成 entries=${leftEntries.size}")
     }
-    LaunchedEffect(rightPath, showHiddenFiles) {
+    LaunchedEffect(rightPath, showHiddenFiles, refreshVersion) {
         DiagnosticLog.log("FileMgr", "LaunchedEffect[RIGHT] 触发 path=$rightPath showHidden=$showHiddenFiles")
         rightEntries = listDirectory(rightPath)
         DiagnosticLog.log("FileMgr", "LaunchedEffect[RIGHT] 完成 entries=${rightEntries.size}")
@@ -484,6 +486,34 @@ fun FileManagerScreen(onBack: () -> Unit) {
         }
         if (legacySp.contains("target_permission_level") && !secPrefs.contains("target_permission_level")) {
             secPrefs.edit().putString("target_permission_level", legacySp.getString("target_permission_level", null)).apply()
+        }
+    }
+
+    // 返回手势：子目录 → 回上一级，根目录 → 退出文件管理器
+    BackHandler {
+        val current = when (focusedPanel) {
+            FocusedPanel.LEFT -> leftPath
+            FocusedPanel.RIGHT -> rightPath
+        }
+        val effectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
+        if (current != effectiveRoot && current.contains('/')) {
+            val parent = current.substringBeforeLast('/').ifEmpty { "/" }
+            if (parent != current) {
+                when (focusedPanel) {
+                    FocusedPanel.LEFT -> {
+                        leftNavState = leftNavState.navigate(parent)
+                        leftPath = parent
+                    }
+                    FocusedPanel.RIGHT -> {
+                        rightNavState = rightNavState.navigate(parent)
+                        rightPath = parent
+                    }
+                }
+            } else {
+                onBack()
+            }
+        } else {
+            onBack()
         }
     }
 
@@ -630,11 +660,27 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             Icon(Icons.Default.SwapHoriz, contentDescription = "同步路径")
                         }
                     }
-                    // 右侧预留 2 个图标位（各 1/6 = 共 1/3）
+                    // 刷新按钮（重算文件夹大小 + 刷新列表）
                     Box(
                         modifier = Modifier.fillMaxWidth(1f / 6f),
                         contentAlignment = Alignment.Center
-                    ) { /* 预留 */ }
+                    ) {
+                        IconButton(onClick = {
+                            val targetPath = when (focusedPanel) {
+                                FocusedPanel.LEFT -> leftPath
+                                FocusedPanel.RIGHT -> rightPath
+                            }
+                            coroutineScope.launch(Dispatchers.IO) {
+                                refreshFolderSize(targetPath)
+                                withContext(Dispatchers.Main) {
+                                    folderSizeVersion++
+                                    refreshVersion++
+                                }
+                            }
+                        }) {
+                            Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                        }
+                    }
                     Box(
                         modifier = Modifier.fillMaxWidth(1f / 6f),
                         contentAlignment = Alignment.Center

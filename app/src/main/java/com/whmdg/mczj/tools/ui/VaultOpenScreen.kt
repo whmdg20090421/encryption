@@ -1,5 +1,6 @@
 package com.whmdg.mczj.tools.ui
 
+import androidx.activity.compose.BackHandler
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
@@ -110,6 +111,14 @@ fun VaultOpenScreen(
                     entries = resolved
                     loading = false
                 }
+
+                // 刷新后自动重算当前目录的文件夹大小（自底向上冒泡）
+                if (vaultService != null) {
+                    val rel = if (currentDir.absolutePath == session.vaultDir.absolutePath) ""
+                    else currentDir.relativeTo(session.vaultDir).path
+                    vaultService.refreshFolderSize(session.vaultDir, rel)
+                    withContext(Dispatchers.Main) { folderSizeVersion++ }
+                }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     vaultOpenError = e
@@ -168,8 +177,35 @@ fun VaultOpenScreen(
     }
 
     fun onClose() {
+        // 刷新 deadline（正常退出时重置计时起点）
+        val lockPrefs = context.getSharedPreferences("vault_lock_prefs", android.content.Context.MODE_PRIVATE)
+        val durationMs = lockPrefs.getLong("duration_${session.record.id}", 0L)
+        if (durationMs > 0) {
+            try {
+                val deadline = System.currentTimeMillis() + durationMs
+                val deadlineStr = deadline.toString()
+                val (cipher, iv) = com.whmdg.mczj.tools.auth.KeystoreMaster.wrap(
+                    deadlineStr.toByteArray(Charsets.UTF_8)
+                )
+                val proof = com.whmdg.mczj.tools.auth.NativeAuth.computeDeadlineHmac(deadlineStr, session.record.id)
+                lockPrefs.edit()
+                    .putString("deadline_${session.record.id}", android.util.Base64.encodeToString(cipher, android.util.Base64.NO_WRAP))
+                    .putString("deadline_iv_${session.record.id}", android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP))
+                    .putString("deadline_proof_${session.record.id}", proof)
+                    .commit()
+            } catch (_: Exception) {}
+        }
         session.dispose()
         onBack()
+    }
+
+    // 返回手势：子目录 → 回上一级，根目录 → 退出保险箱
+    BackHandler {
+        if (!isRoot) {
+            goUp()
+        } else {
+            onClose()
+        }
     }
 
     // ── UI state ──

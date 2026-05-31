@@ -66,29 +66,60 @@ data class PermOpMapping(
 )
 
 val permToOpMap = mapOf(
+    // ── 标准 Android 权限 ──
     "android.permission.CAMERA" to PermOpMapping("android:camera", "相机", "控制应用能否使用摄像头拍照或录像"),
     "android.permission.READ_CONTACTS" to PermOpMapping("android:read_contacts", "读取联系人", "控制应用能否读取通讯录中的联系人信息"),
     "android.permission.WRITE_CONTACTS" to PermOpMapping("android:write_contacts", "写入联系人", "控制应用能否新增、修改或删除联系人"),
+    "android.permission.GET_ACCOUNTS" to PermOpMapping("android:get_accounts", "获取账户", "控制应用能否获取设备上已登录的账户列表"),
     "android.permission.ACCESS_FINE_LOCATION" to PermOpMapping("android:fine_location", "精确位置", "控制应用能否通过 GPS 获取精确地理位置"),
     "android.permission.ACCESS_COARSE_LOCATION" to PermOpMapping("android:coarse_location", "粗略位置", "控制应用能否通过基站或 Wi-Fi 获取大致位置"),
+    "android.permission.ACCESS_BACKGROUND_LOCATION" to PermOpMapping("android:coarse_location", "后台位置", "控制应用能否在后台持续获取位置信息"),
     "android.permission.READ_PHONE_STATE" to PermOpMapping("android:read_phone_state", "读取手机状态", "控制应用能否读取设备标识、通话状态等信息"),
+    "android.permission.READ_PHONE_NUMBERS" to PermOpMapping("android:read_phone_numbers", "读取手机号码", "控制应用能否读取本机电话号码"),
     "android.permission.CALL_PHONE" to PermOpMapping("android:call_phone", "拨打电话", "控制应用能否直接拨出电话（无需用户确认）"),
+    "android.permission.ANSWER_PHONE_CALLS" to PermOpMapping("android:answer_phone_calls", "接听电话", "控制应用能否代为接听来电"),
+    "android.permission.ADD_VOICEMAIL" to PermOpMapping("android:add_voicemail", "添加语音信箱", "控制应用能否添加语音信箱"),
+    "android.permission.USE_SIP" to PermOpMapping("android:use_sip", "使用 SIP", "控制应用能否使用 SIP 进行网络通话"),
+    "android.permission.ACCEPT_HANDOVER" to PermOpMapping("android:accept_handover", "通话转移", "控制应用能否继续其他应用正在进行的通话"),
     "android.permission.READ_SMS" to PermOpMapping("android:read_sms", "读取短信", "控制应用能否读取收到的短信内容"),
     "android.permission.SEND_SMS" to PermOpMapping("android:send_sms", "发送短信", "控制应用能否发送短信"),
+    "android.permission.RECEIVE_SMS" to PermOpMapping("android:receive_sms", "接收短信", "控制应用能否接收短信"),
+    "android.permission.RECEIVE_MMS" to PermOpMapping("android:receive_mms", "接收彩信", "控制应用能否接收彩信"),
+    "android.permission.RECEIVE_WAP_PUSH" to PermOpMapping("android:receive_wap_push", "接收 WAP 推送", "控制应用能否接收 WAP 推送消息"),
     "android.permission.RECORD_AUDIO" to PermOpMapping("android:record_audio", "录音", "控制应用能否使用麦克风录制音频"),
     "android.permission.READ_CALENDAR" to PermOpMapping("android:read_calendar", "读取日历", "控制应用能否读取日历事件和提醒"),
     "android.permission.WRITE_CALENDAR" to PermOpMapping("android:write_calendar", "写入日历", "控制应用能否新增、修改或删除日历事件"),
     "android.permission.READ_EXTERNAL_STORAGE" to PermOpMapping("android:read_external_storage", "读取存储", "控制应用能否读取外部存储中的文件"),
     "android.permission.WRITE_EXTERNAL_STORAGE" to PermOpMapping("android:write_external_storage", "写入存储", "控制应用能否在外部存储中创建或修改文件"),
+    "android.permission.MANAGE_EXTERNAL_STORAGE" to PermOpMapping("android:manage_external_storage", "管理存储", "控制应用能否访问和管理外部存储中的所有文件"),
     "android.permission.READ_MEDIA_IMAGES" to PermOpMapping("android:read_media_images", "读取图片", "控制应用能否访问设备上的图片文件"),
     "android.permission.READ_MEDIA_VIDEO" to PermOpMapping("android:read_media_video", "读取视频", "控制应用能否访问设备上的视频文件"),
     "android.permission.READ_MEDIA_AUDIO" to PermOpMapping("android:read_media_audio", "读取音频", "控制应用能否访问设备上的音频文件"),
     "android.permission.BODY_SENSORS" to PermOpMapping("android:body_sensors", "身体传感器", "控制应用能否读取心率、血氧等身体传感器数据"),
+    "android.permission.BODY_SENSORS_BACKGROUND" to PermOpMapping("android:body_sensors", "后台身体传感器", "控制应用能否在后台持续读取身体传感器数据"),
     "android.permission.ACTIVITY_RECOGNITION" to PermOpMapping("android:activity_recognition", "活动识别", "控制应用能否检测用户的步行、跑步等运动状态"),
     "android.permission.READ_CALL_LOG" to PermOpMapping("android:read_call_log", "读取通话记录", "控制应用能否读取通话历史记录"),
     "android.permission.WRITE_CALL_LOG" to PermOpMapping("android:write_call_log", "写入通话记录", "控制应用能否修改或删除通话记录"),
-    "android.permission.READ_PHONE_NUMBERS" to PermOpMapping("android:read_phone_numbers", "读取手机号码", "控制应用能否读取本机电话号码"),
-    "android.permission.ANSWER_PHONE_CALLS" to PermOpMapping("android:answer_phone_calls", "接听电话", "控制应用能否代为接听来电")
+    "android.permission.PROCESS_OUTGOING_CALLS" to PermOpMapping("android:process_outgoing_calls", "处理外拨电话", "控制应用能否监视、修改或阻止外拨电话"),
+    // ── 系统级权限 ──
+    "android.permission.SYSTEM_ALERT_WINDOW" to PermOpMapping("android:system_alert_window", "悬浮窗", "控制应用能否在其他应用上方显示悬浮窗"),
+    "android.permission.REQUEST_INSTALL_PACKAGES" to PermOpMapping("android:request_install_packages", "安装应用", "控制应用能否安装其他应用（APK）"),
+    "android.permission.REQUEST_DELETE_PACKAGES" to PermOpMapping("android:request_delete_packages", "卸载应用", "控制应用能否请求删除其他应用"),
+    "android.permission.PACKAGE_USAGE_STATS" to PermOpMapping("android:package_usage_stats", "使用情况统计", "控制应用能否读取其他应用的使用统计数据"),
+    "android.permission.POST_NOTIFICATIONS" to PermOpMapping("android:post_notifications", "发送通知", "控制应用能否向通知栏推送消息"),
+    "android.permission.WRITE_SETTINGS" to PermOpMapping("android:write_settings", "修改系统设置", "控制应用能否修改系统设置"),
+    "android.permission.NEARBY_WIFI_DEVICES" to PermOpMapping("android:nearby_wifi_devices", "附近 Wi-Fi 设备", "控制应用能否发现和连接附近的 Wi-Fi 设备"),
+    "android.permission.BLUETOOTH_CONNECT" to PermOpMapping("android:bluetooth_connect", "蓝牙连接", "控制应用能否连接已配对的蓝牙设备"),
+    "android.permission.BLUETOOTH_SCAN" to PermOpMapping("android:bluetooth_scan", "蓝牙扫描", "控制应用能否扫描附近的蓝牙设备"),
+    "android.permission.BLUETOOTH_ADVERTISE" to PermOpMapping("android:bluetooth_advertise", "蓝牙广播", "控制应用能否让自身可被蓝牙发现"),
+    // ── 厂商特殊权限 ──
+    "com.huawei.permission.external_apps.BROADCAST" to PermOpMapping("android:auto_start", "自启动（华为）", "控制应用能否在开机或被杀后自动启动（华为设备）"),
+    "com.miui.permission.AUTO_START" to PermOpMapping("android:auto_start", "自启动（小米）", "控制应用能否在开机或被杀后自动启动（小米设备）"),
+    "com.oplus.permission.safe.AUTO_START" to PermOpMapping("android:auto_start", "自启动（OPPO/一加）", "控制应用能否在开机或被杀后自动启动（OPPO/一加设备）"),
+    "com.vivo.permission.AUTO_START" to PermOpMapping("android:auto_start", "自启动（Vivo）", "控制应用能否在开机或被杀后自动启动（Vivo设备）"),
+    "com.miui.securitycenter.permission.SYSTEM_ALERT_WINDOW" to PermOpMapping("android:background_popup", "后台弹窗（小米）", "控制应用能否在后台弹出界面（小米设备）"),
+    "com.oplus.permission.safe.BACKGROUND_POPUP" to PermOpMapping("android:background_popup", "后台弹窗（OPPO/一加）", "控制应用能否在后台弹出界面（OPPO/一加设备）"),
+    "com.vivo.permission.BACKGROUND_POPUP" to PermOpMapping("android:background_popup", "后台弹窗（Vivo）", "控制应用能否在后台弹出界面（Vivo设备）")
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
@@ -288,7 +319,7 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 items(items = filteredApps, key = { it.packageName }) { app ->
                                     AppItem(app = app) {
@@ -336,7 +367,14 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
                                                 SpecialPermissionVerifier.executeRootCommandFull("pm reset-permissions $pkg")
                                             }
                                             if (result.third == 0) loadAppPermissions(pkg) else {
-                                                errorMessage = "重置失败: ${result.second}"
+                                                val stderr = result.second.lowercase()
+                                                errorMessage = when {
+                                                    stderr.contains("permission denied") ||
+                                                    stderr.contains("insufficient") ||
+                                                    stderr.contains("not allowed") ->
+                                                        "当前应用所获得权限不足，无法进行此操作。"
+                                                    else -> "重置失败: ${result.second}"
+                                                }
                                                 showError = true
                                             }
                                         }
@@ -452,22 +490,46 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
                                                     opsSheetPermission = permission
                                                     showOpsSheet = true
                                                 } else {
-                                                    // 普通模式：pm grant/revoke
+                                                    // 普通模式：pm grant/revoke + 0.2s 后验证
                                                     coroutineScope.launch {
                                                         val pkg = selectedApp?.packageName ?: return@launch
+                                                        val expectedGranted = !permission.granted
                                                         val action = if (permission.granted) "revoke" else "grant"
                                                         val result = withContext(Dispatchers.IO) {
                                                             SpecialPermissionVerifier.executeRootCommandFull("pm $action $pkg ${permission.rawName}")
                                                         }
-                                                        if (result.third == 0) {
+                                                        if (result.third != 0) {
+                                                            val stderr = result.second.lowercase()
+                                                            errorMessage = when {
+                                                                stderr.contains("permission denied") ||
+                                                                stderr.contains("insufficient") ||
+                                                                stderr.contains("not allowed") ->
+                                                                    "当前应用所获得权限不足，无法进行此操作。"
+                                                                else -> "修改失败: ${result.second}"
+                                                            }
+                                                            showError = true
+                                                            return@launch
+                                                        }
+                                                        // 等待 0.2 秒后验证权限状态
+                                                        kotlinx.coroutines.delay(200)
+                                                        val verifyResult = withContext(Dispatchers.IO) {
+                                                            SpecialPermissionVerifier.executeRootCommandFull("dumpsys package $pkg | grep '${permission.rawName}'")
+                                                        }
+                                                        val verifyOutput = verifyResult.first
+                                                        val actuallyGranted = verifyOutput.contains("granted=true")
+                                                        if (actuallyGranted == expectedGranted) {
+                                                            // 生效，更新 UI
                                                             val updated = selectedAppPermissions.toMutableList()
                                                             val idx = updated.indexOfFirst { it.rawName == permission.rawName }
                                                             if (idx != -1) {
-                                                                updated[idx] = permission.copy(granted = !permission.granted)
+                                                                updated[idx] = permission.copy(granted = expectedGranted)
                                                                 selectedAppPermissions = updated
                                                             }
                                                         } else {
-                                                            errorMessage = "修改失败: ${result.second}"
+                                                            errorMessage = "权限修改未生效\n\n" +
+                                                                "应用「${selectedApp?.name}」的「${permission.name}」权限" +
+                                                                "仍为${if (actuallyGranted) "已授权" else "未授权"}状态。\n\n" +
+                                                                "可能原因：该应用通过设备管理员或其他策略锁定了此权限。"
                                                             showError = true
                                                         }
                                                     }
@@ -915,15 +977,39 @@ private suspend fun getAppPermissions(packageName: String, context: Context): Li
 
         val permDescriptions = mapOf(
             "android.permission.CAMERA" to "允许应用使用相机拍摄照片和录制视频",
-            "android.permission.READ_CONTACTS" to "允许应用读取您的联系人数据",
-            "android.permission.WRITE_CONTACTS" to "允许应用修改您的联系人数据",
-            "android.permission.ACCESS_FINE_LOCATION" to "允许应用获取精确的位置信息",
-            "android.permission.ACCESS_COARSE_LOCATION" to "允许应用获取粗略的位置信息",
-            "android.permission.RECORD_AUDIO" to "允许应用使用麦克风录音",
-            "android.permission.READ_PHONE_STATE" to "允许应用读取手机状态和身份",
-            "android.permission.CALL_PHONE" to "允许应用直接拨打电话",
-            "android.permission.READ_SMS" to "允许应用读取短信内容",
-            "android.permission.SEND_SMS" to "允许应用发送短信"
+            "android.permission.READ_CONTACTS" to "允许应用读取您的通讯录联系人信息",
+            "android.permission.WRITE_CONTACTS" to "允许应用新增、修改或删除通讯录联系人",
+            "android.permission.GET_ACCOUNTS" to "允许应用获取设备上已登录的账户列表",
+            "android.permission.ACCESS_FINE_LOCATION" to "允许应用通过 GPS 获取精确的地理位置",
+            "android.permission.ACCESS_COARSE_LOCATION" to "允许应用通过基站或 Wi-Fi 获取大致位置",
+            "android.permission.ACCESS_BACKGROUND_LOCATION" to "允许应用在后台持续获取位置信息",
+            "android.permission.READ_CALL_LOG" to "允许应用读取通话历史记录",
+            "android.permission.WRITE_CALL_LOG" to "允许应用修改或删除通话记录",
+            "android.permission.PROCESS_OUTGOING_CALLS" to "允许应用监视、修改或阻止外拨电话",
+            "android.permission.READ_PHONE_STATE" to "允许应用读取设备标识、网络运营商和通话状态",
+            "android.permission.READ_PHONE_NUMBERS" to "允许应用读取本机电话号码",
+            "android.permission.CALL_PHONE" to "允许应用直接拨出电话，无需用户确认",
+            "android.permission.ANSWER_PHONE_CALLS" to "允许应用代为接听来电",
+            "android.permission.ADD_VOICEMAIL" to "允许应用添加语音信箱",
+            "android.permission.USE_SIP" to "允许应用使用 SIP 进行网络通话",
+            "android.permission.ACCEPT_HANDOVER" to "允许应用继续其他应用正在进行的通话",
+            "android.permission.BODY_SENSORS" to "允许应用读取心率、血氧等身体传感器数据",
+            "android.permission.BODY_SENSORS_BACKGROUND" to "允许应用在后台持续读取身体传感器数据",
+            "android.permission.ACTIVITY_RECOGNITION" to "允许应用检测步行、跑步、骑行等运动状态",
+            "android.permission.READ_CALENDAR" to "允许应用读取日历事件和提醒",
+            "android.permission.WRITE_CALENDAR" to "允许应用新增、修改或删除日历事件",
+            "android.permission.READ_EXTERNAL_STORAGE" to "允许应用读取外部存储中的文件",
+            "android.permission.WRITE_EXTERNAL_STORAGE" to "允许应用在外部存储中创建或修改文件",
+            "android.permission.MANAGE_EXTERNAL_STORAGE" to "允许应用访问和管理外部存储中的所有文件",
+            "android.permission.READ_MEDIA_IMAGES" to "允许应用访问设备上的图片和照片文件",
+            "android.permission.READ_MEDIA_VIDEO" to "允许应用访问设备上的视频文件",
+            "android.permission.READ_MEDIA_AUDIO" to "允许应用访问设备上的音频文件",
+            "android.permission.RECORD_AUDIO" to "允许应用使用麦克风录制音频",
+            "android.permission.SEND_SMS" to "允许应用发送短信，可能产生费用",
+            "android.permission.RECEIVE_SMS" to "允许应用接收和读取收到的短信",
+            "android.permission.READ_SMS" to "允许应用读取设备上存储的短信内容",
+            "android.permission.RECEIVE_WAP_PUSH" to "允许应用接收 WAP 推送消息",
+            "android.permission.RECEIVE_MMS" to "允许应用接收彩信"
         )
 
         for ((permName, group) in importantPermGroups) {
