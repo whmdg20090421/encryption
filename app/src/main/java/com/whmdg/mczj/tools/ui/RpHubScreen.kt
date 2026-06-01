@@ -64,6 +64,7 @@ fun RpHubScreen(onBack: () -> Unit) {
     var showDownloadPanel by remember { mutableStateOf(false) }
     var showDebugPanel by remember { mutableStateOf(false) }
     var pendingSaveAsEntry by remember { mutableStateOf<DownloadEntry?>(null) }
+    var pendingFileChooserCallback by remember { mutableStateOf<android.webkit.ValueCallback<Array<android.net.Uri>>?>(null) }
     val isDebugMode = remember {
         context.getSharedPreferences(AppDataPaths.PREFS_RP_HUB, android.content.Context.MODE_PRIVATE)
             .getBoolean("debug_mode", false)
@@ -93,6 +94,38 @@ fun RpHubScreen(onBack: () -> Unit) {
                 Toast.makeText(context, "保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    // WebView 文件选择器 launcher
+    val fileChooserLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            // 备份 PNG 角色卡到内部存储
+            val mimeType = context.contentResolver.getType(uri) ?: ""
+            val isPng = mimeType == "image/png" || uri.toString().lowercase().endsWith(".png")
+            if (isPng) {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val backupDir = File(AppDataPaths.rpHub(context), "characters/imported").apply { mkdirs() }
+                        val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
+                        val backupFile = File(backupDir, "card_${timestamp}.png")
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            backupFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        DiagnosticLog.log("RP-Hub", "角色卡已备份: ${backupFile.absolutePath}")
+                    } catch (e: Exception) {
+                        DiagnosticLog.log("RP-Hub/ERROR", "角色卡备份失败: ${e.message}")
+                    }
+                }
+            }
+            // 将选中的文件 URI 传回 WebView
+            pendingFileChooserCallback?.onReceiveValue(arrayOf(uri))
+        } else {
+            // 用户取消选择
+            pendingFileChooserCallback?.onReceiveValue(null)
+        }
+        pendingFileChooserCallback = null
     }
 
     DisposableEffect(Unit) {
@@ -189,6 +222,20 @@ fun RpHubScreen(onBack: () -> Unit) {
                                 }
                                 DiagnosticLog.log("WebView/$level", "[${it.sourceId()}:${it.lineNumber()}] $msg")
                             }
+                            return true
+                        }
+
+                        override fun onShowFileChooser(
+                            webView: WebView?,
+                            filePathCallback: android.webkit.ValueCallback<Array<android.net.Uri>>?,
+                            fileChooserParams: FileChooserParams?
+                        ): Boolean {
+                            // 取消之前的未完成请求
+                            pendingFileChooserCallback?.onReceiveValue(null)
+                            pendingFileChooserCallback = filePathCallback
+                            val acceptTypes = fileChooserParams?.acceptTypes?.filter { it.isNotEmpty() } ?: emptyArray()
+                            val mimeTypes = if (acceptTypes.isEmpty()) arrayOf("*/*") else acceptTypes
+                            fileChooserLauncher.launch(mimeTypes)
                             return true
                         }
                     }
