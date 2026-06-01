@@ -233,9 +233,10 @@ fun RpHubScreen(onBack: () -> Unit) {
                             // 取消之前的未完成请求
                             pendingFileChooserCallback?.onReceiveValue(null)
                             pendingFileChooserCallback = filePathCallback
-                            val acceptTypes = fileChooserParams?.acceptTypes?.filter { it.isNotEmpty() } ?: emptyArray()
-                            val mimeTypes = if (acceptTypes.isEmpty()) arrayOf("*/*") else acceptTypes
-                            fileChooserLauncher.launch(mimeTypes)
+                            val types = fileChooserParams?.acceptTypes ?: emptyArray()
+                            val filtered = types.filter { it.isNotEmpty() }
+                            val mime: Array<String> = if (filtered.isEmpty()) arrayOf("*/*") else filtered.toTypedArray()
+                            fileChooserLauncher.launch(mime)
                             return true
                         }
                     }
