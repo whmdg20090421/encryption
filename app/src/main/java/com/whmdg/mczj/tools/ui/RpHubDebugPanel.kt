@@ -314,8 +314,16 @@ private fun JsErrorCard(err: JsError) {
 
 private fun parseDebugSnapshot(json: String?): DebugSnapshot? {
     if (json == null || json == "null") return null
+    // evaluateJavascript 返回的字符串被额外包裹了一层引号: "{...}" → {...}
+    val clean = if (json.startsWith("\"") && json.endsWith("\"")) {
+        json.substring(1, json.length - 1)
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+    } else json
     return try {
-        val obj = JSONObject(json)
+        val obj = JSONObject(clean)
         val cdnArr = obj.optJSONArray("cdn") ?: org.json.JSONArray()
         val cdn = (0 until cdnArr.length()).map { i ->
             val o = cdnArr.getJSONObject(i)
