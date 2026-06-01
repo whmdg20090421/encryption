@@ -1427,9 +1427,9 @@ private fun FileEntryRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(60.dp)
+            .height(66.dp)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = 16.dp, vertical = 3.dp)
     ) {
         // Top 4/5: icon (left 2/5) + filename (right 3/5)
         Row(modifier = Modifier.weight(4f)) {
