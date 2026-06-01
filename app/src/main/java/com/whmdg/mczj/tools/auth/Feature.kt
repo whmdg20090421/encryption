@@ -6,5 +6,6 @@ enum class Feature {
     BATCH_DOWNLOADER,
     APP_PERMISSIONS,
     SECURITY_SETTINGS,
-    RP_HUB
+    RP_HUB,
+    DEBUG_MODE
 }

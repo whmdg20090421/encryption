@@ -102,6 +102,7 @@ fun featureDisplayName(f: Feature): String = when (f) {
     Feature.APP_PERMISSIONS -> "应用权限管理"
     Feature.BATCH_DOWNLOADER -> "批量下载器"
     Feature.SECURITY_SETTINGS -> "安全"
+    Feature.DEBUG_MODE -> "调试模式"
     Feature.RP_HUB -> "RP-Hub"
 }
 
@@ -1799,6 +1800,7 @@ fun FunctionalTestScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_RP_HUB, Context.MODE_PRIVATE) }
     var debugMode by remember { mutableStateOf(prefs.getBoolean("debug_mode", false)) }
+    val hasDebugPerm = PermissionManager.has(Feature.DEBUG_MODE)
 
     Scaffold(
         topBar = {
@@ -1819,20 +1821,33 @@ fun FunctionalTestScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
-            SettingsSection(
-                title = "RP-Hub",
-                icon = Icons.Default.BugReport
-            ) {
-                CompactSettingsToggle(
-                    title = "Debug 模式",
-                    subtitle = "显示 CDN 加载诊断面板：资源状态、全局变量、JS 错误",
-                    icon = Icons.Default.BugReport,
-                    checked = debugMode,
-                    onCheckedChange = {
-                        debugMode = it
-                        prefs.edit().putBoolean("debug_mode", it).apply()
+            if (!hasDebugPerm) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                ) {
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        Text("无权限", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                        Spacer(Modifier.height(8.dp))
+                        Text("当前密钥不含 DEBUG_MODE 权限，无法使用功能性测试。", color = MaterialTheme.colorScheme.onErrorContainer)
                     }
-                )
+                }
+            } else {
+                SettingsSection(
+                    title = "RP-Hub",
+                    icon = Icons.Default.BugReport
+                ) {
+                    CompactSettingsToggle(
+                        title = "Debug 模式",
+                        subtitle = "显示 CDN 加载诊断面板：资源状态、全局变量、JS 错误",
+                        icon = Icons.Default.BugReport,
+                        checked = debugMode,
+                        onCheckedChange = {
+                            debugMode = it
+                            prefs.edit().putBoolean("debug_mode", it).apply()
+                        }
+                    )
+                }
             }
         }
     }
@@ -1882,10 +1897,12 @@ fun SettingsTab(navigateToModule: (ModuleId) -> Unit, onNavigate: (Screen) -> Un
             title = "开发",
             icon = Icons.Default.Code
         ) {
+            val hasDebugPerm = PermissionManager.has(Feature.DEBUG_MODE)
             CompactSettingsItem(
                 title = "功能性测试",
-                subtitle = "调试工具与诊断模式",
+                subtitle = if (hasDebugPerm) "调试工具与诊断模式" else "需要 DEBUG_MODE 权限",
                 icon = Icons.Default.BugReport,
+                enabled = hasDebugPerm,
                 onClick = { onNavigate(Screen.FunctionalTest) }
             )
         }
