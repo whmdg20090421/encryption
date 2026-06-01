@@ -25,12 +25,16 @@ class RpHubServer(
         "ttf" to "font/ttf"
     )
 
-    private var cdnReplacements: Map<String, String> = emptyMap()
-
-    override fun start() {
-        super.start()
-        cdnReplacements = loadCdnReplacements()
-    }
+    // CDN URL → 本地 vendor 映射（补丁脚本使用）
+    val cdnToLocalMap = mapOf(
+        "https://cdn.tailwindcss.com" to "/vendor/tailwindcss.js",
+        "https://unpkg.com/vue@3/dist/vue.global.prod.js" to "/vendor/vue.global.prod.js",
+        "https://cdn.jsdelivr.net/npm/marked/marked.min.js" to "/vendor/marked.min.js",
+        "https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js" to "/vendor/purify.min.js",
+        "https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js" to "/vendor/Sortable.min.js",
+        "https://cdn.jsdelivr.net/npm/daisyui@4.7.2/dist/full.min.css" to "/vendor/daisyui.full.min.css",
+        "https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js" to "/vendor/localforage.min.js"
+    )
 
     override fun serve(session: IHTTPSession): Response {
         var uri = session.uri
@@ -60,38 +64,11 @@ class RpHubServer(
     }
 
     private fun processHtml(html: String): String {
-        var result = html
-        // 替换 CDN URL 为本地 vendor 路径（不修改原文件，在返回时动态替换）
-        for ((cdnUrl, localPath) in cdnReplacements) {
-            result = result.replace(cdnUrl, "http://localhost:$listeningPort$localPath")
-        }
-        // 注入 patches 目录下的 JS 脚本
         val patches = loadPatchScripts()
-        if (patches.isNotEmpty()) {
-            val injection = "\n" + patches.joinToString("\n") { "<script>$it</script>" } + "\n"
-            result = result.replace("</head>", "$injection</head>")
-        }
-        return result
-    }
-
-    private fun loadCdnReplacements(): Map<String, String> {
-        return try {
-            val json = context.assets.open("rp-hub-adapter/patches/cdn-replacements.json")
-                .bufferedReader().readText()
-            val map = mutableMapOf<String, String>()
-            val entries = json.trim().removeSurrounding("{", "}").split(",")
-            for (entry in entries) {
-                val parts = entry.split(":", limit = 2)
-                if (parts.size == 2) {
-                    val key = parts[0].trim().removeSurrounding("\"")
-                    val value = parts[1].trim().removeSurrounding("\"")
-                    map[key] = value
-                }
-            }
-            map
-        } catch (_: Exception) {
-            emptyMap()
-        }
+        if (patches.isEmpty()) return html
+        // 注入到 <head> 之后（在 CDN 脚本之前执行）
+        val injection = "\n" + patches.joinToString("\n") { "<script>$it</script>" } + "\n"
+        return html.replace("<head>", "<head>$injection")
     }
 
     private fun loadPatchScripts(): List<String> {

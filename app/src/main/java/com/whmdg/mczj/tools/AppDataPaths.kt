@@ -59,9 +59,9 @@ object AppDataPaths {
         return dir
     }
 
-    /** RP-Hub 模块目录 */
+    /** RP-Hub 模块目录（内部存储，不可被其他应用访问） */
     fun rpHub(context: Context): File {
-        val dir = File(root(context), "RP-Hub")
+        val dir = File(context.filesDir, "RP-Hub")
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
