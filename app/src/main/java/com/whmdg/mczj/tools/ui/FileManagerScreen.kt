@@ -674,15 +674,12 @@ fun FileManagerScreen(onBack: () -> Unit) {
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(onClick = {
-                            val targetPath = when (focusedPanel) {
-                                FocusedPanel.LEFT -> leftPath
-                                FocusedPanel.RIGHT -> rightPath
-                            }
-                            coroutineScope.launch(Dispatchers.IO) {
-                                val updatedDb = refreshFolderSize(targetPath)
-                                withContext(Dispatchers.Main) {
-                                    folderSizeDb = updatedDb
-                                    refreshVersion++
+                            when (focusedPanel) {
+                                FocusedPanel.LEFT -> {
+                                    leftEntries = listDirectory(leftPath)
+                                }
+                                FocusedPanel.RIGHT -> {
+                                    rightEntries = listDirectory(rightPath)
                                 }
                             }
                         }) {
