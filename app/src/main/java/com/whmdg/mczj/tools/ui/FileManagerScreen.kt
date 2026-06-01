@@ -1026,39 +1026,81 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                     }
                                 }
                             }
-                            // ── 第三行：属性 / 分享 ──
+                            // ── 第三行：大小刷新(文件夹)或属性 / 分享 ──
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // 左列：属性
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clickable {
-                                            Toast.makeText(context, "属性", Toast.LENGTH_SHORT).show()
-                                            selectedEntry = null
+                                // 左列：大小刷新（仅文件夹）或属性
+                                if (selectedEntry?.isDirectory == true) {
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                val entry = selectedEntry ?: return@clickable
+                                                selectedEntry = null
+                                                Toast.makeText(context, "正在计算大小...", Toast.LENGTH_SHORT).show()
+                                                coroutineScope.launch(Dispatchers.IO) {
+                                                    val updatedDb = refreshFolderSize(entry.path)
+                                                    withContext(Dispatchers.Main) {
+                                                        folderSizeDb = updatedDb
+                                                        leftEntries = listDirectory(leftPath)
+                                                        rightEntries = listDirectory(rightPath)
+                                                    }
+                                                }
+                                            }
+                                            .padding(vertical = 16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (isToRight) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text("大小刷新", style = MaterialTheme.typography.bodyLarge)
+                                                Icon(
+                                                    Icons.Default.FolderSpecial,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        } else {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    Icons.Default.FolderSpecial,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Text("大小刷新", style = MaterialTheme.typography.bodyLarge)
+                                            }
                                         }
-                                        .padding(vertical = 16.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (isToRight) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("属性", style = MaterialTheme.typography.bodyLarge)
-                                            Icon(
-                                                Icons.Default.Info,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    } else {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.Info,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Text("属性", style = MaterialTheme.typography.bodyLarge)
+                                    }
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                Toast.makeText(context, "属性", Toast.LENGTH_SHORT).show()
+                                                selectedEntry = null
+                                            }
+                                            .padding(vertical = 16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (isToRight) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text("属性", style = MaterialTheme.typography.bodyLarge)
+                                                Icon(
+                                                    Icons.Default.Info,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        } else {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    Icons.Default.Info,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Text("属性", style = MaterialTheme.typography.bodyLarge)
+                                            }
                                         }
                                     }
                                 }
@@ -1096,46 +1138,6 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                                 modifier = Modifier.size(16.dp)
                                             )
                                             Text("分享", style = MaterialTheme.typography.bodyLarge)
-                                        }
-                                    }
-                                }
-                            }
-                            // ── 第四行：大小刷新（仅文件夹） ──
-                            if (selectedEntry?.isDirectory == true) {
-                                HorizontalDivider(
-                                    thickness = 0.5.dp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-                                )
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable {
-                                                val entry = selectedEntry ?: return@clickable
-                                                selectedEntry = null
-                                                Toast.makeText(context, "正在计算大小...", Toast.LENGTH_SHORT).show()
-                                                coroutineScope.launch(Dispatchers.IO) {
-                                                    val updatedDb = refreshFolderSize(entry.path)
-                                                    withContext(Dispatchers.Main) {
-                                                        folderSizeDb = updatedDb
-                                                        leftEntries = listDirectory(leftPath)
-                                                        rightEntries = listDirectory(rightPath)
-                                                    }
-                                                }
-                                            }
-                                            .padding(vertical = 16.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.FolderSpecial,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Text("大小刷新", style = MaterialTheme.typography.bodyLarge)
                                         }
                                     }
                                 }
