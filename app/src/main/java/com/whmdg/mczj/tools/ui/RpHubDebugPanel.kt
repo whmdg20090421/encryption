@@ -1,22 +1,20 @@
 package com.whmdg.mczj.tools.ui
 
 import android.webkit.WebView
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -67,7 +65,6 @@ data class DebugSnapshot(
     val injectedScripts: Int
 )
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun RpHubDebugPanel(
     webView: WebView?,
@@ -178,9 +175,7 @@ fun RpHubDebugPanel(
                                         containerColor = if (ok) Color(0xFFDCFCE7) else Color(0xFFF3F4F6),
                                         labelColor = if (ok) Color(0xFF166534) else Color(0xFF9CA3AF)
                                     ),
-                                    border = SuggestionChipDefaults.suggestionChipBorder(
-                                        borderColor = if (ok) Color(0xFFBBF7D0) else Color(0xFFE5E7EB)
-                                    )
+                                    border = BorderStroke(1.dp, if (ok) Color(0xFFBBF7D0) else Color(0xFFE5E7EB))
                                 )
                             }
                         }
