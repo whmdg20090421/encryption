@@ -12,10 +12,12 @@ import java.io.File
  *
  * 结构：
  * ```
- * {externalFilesDir}/艨艟战舰工具箱数据/
+ * {filesDir}/艨艟战舰工具箱数据/
  * ├── 文件管理器/     ← file_manager_prefs / 缓存等
  * ├── 加密模块/       ← vault 相关
- * └── 安全设置/       ← 权限 / root 引擎等
+ * ├── 安全设置/       ← 权限 / root 引擎等
+ * ├── 批量下载器/
+ * └── RP-Hub/
  * ```
  *
  * SharedPreferences 虽由 Android 系统管理（internal shared_prefs/），
@@ -23,12 +25,17 @@ import java.io.File
  */
 object AppDataPaths {
 
-    /** 统一数据根目录（外部应用专属目录下） */
+    private const val DIR_NAME = "艨艟战舰工具箱数据"
+    private var migrated = false
+
+    /** 统一数据根目录（内部存储，不可被其他应用访问） */
     fun root(context: Context): File {
-        val base = context.getExternalFilesDir(null)
-            ?: context.filesDir // 降级到内部
-        val dir = File(base, "艨艟战舰工具箱数据")
+        val dir = File(context.filesDir, DIR_NAME)
         if (!dir.exists()) dir.mkdirs()
+        if (!migrated) {
+            migrated = true
+            migrateFromExternal(context, dir)
+        }
         return dir
     }
 
@@ -60,31 +67,11 @@ object AppDataPaths {
         return dir
     }
 
-    /** RP-Hub 模块目录（内部存储，不可被其他应用访问） */
+    /** RP-Hub 模块目录 */
     fun rpHub(context: Context): File {
-        val dir = File(context.filesDir, "RP-Hub")
+        val dir = File(root(context), "RP-Hub")
         if (!dir.exists()) dir.mkdirs()
-        migrateRpHubIfNeeded(context, dir)
         return dir
-    }
-
-    /** 旧版 RP-Hub 数据位于外部存储，迁移到内部存储后删除旧目录 */
-    private fun migrateRpHubIfNeeded(context: Context, newDir: File) {
-        val oldDir = File(root(context), "RP-Hub")
-        if (!oldDir.exists() || !oldDir.isDirectory) return
-        val oldFiles = oldDir.listFiles()
-        if (oldFiles.isNullOrEmpty()) {
-            oldDir.delete()
-            return
-        }
-        Log.i("AppDataPaths", "迁移 RP-Hub 数据: ${oldDir.absolutePath} → ${newDir.absolutePath}")
-        for (file in oldFiles) {
-            val target = File(newDir, file.name)
-            if (target.exists()) continue
-            file.renameTo(target)
-        }
-        if (oldDir.listFiles().isNullOrEmpty()) oldDir.delete()
-        Log.i("AppDataPaths", "RP-Hub 数据迁移完成")
     }
 
     // ── SharedPreferences 名称常量 ──
@@ -123,6 +110,47 @@ object AppDataPaths {
             return "$basePath/$subPath"
         } catch (_: Exception) {
             return null
+        }
+    }
+
+    /**
+     * 首次调用时将旧版外部存储数据迁移到内部存储。
+     * 旧路径: {externalFilesDir}/艨艟战舰工具箱数据/
+     * 新路径: {filesDir}/艨艟战舰工具箱数据/
+     */
+    private fun migrateFromExternal(context: Context, newRoot: File) {
+        val oldBase = context.getExternalFilesDir(null) ?: return
+        val oldRoot = File(oldBase, DIR_NAME)
+        if (!oldRoot.exists() || !oldRoot.isDirectory) return
+
+        val oldModules = oldRoot.listFiles() ?: return
+        if (oldModules.isEmpty()) {
+            oldRoot.delete()
+            return
+        }
+
+        Log.i("AppDataPaths", "开始迁移数据: ${oldRoot.absolutePath} → ${newRoot.absolutePath}")
+        for (oldModule in oldModules) {
+            if (!oldModule.isDirectory) continue
+            val newModule = File(newRoot, oldModule.name)
+            if (!newModule.exists()) newModule.mkdirs()
+            migrateDirectory(oldModule, newModule)
+            if (oldModule.listFiles().isNullOrEmpty()) oldModule.delete()
+        }
+        if (oldRoot.listFiles().isNullOrEmpty()) oldRoot.delete()
+        Log.i("AppDataPaths", "数据迁移完成")
+    }
+
+    private fun migrateDirectory(src: File, dst: File) {
+        for (file in src.listFiles() ?: emptyArray()) {
+            val target = File(dst, file.name)
+            if (file.isDirectory) {
+                if (!target.exists()) target.mkdirs()
+                migrateDirectory(file, target)
+                if (file.listFiles().isNullOrEmpty()) file.delete()
+            } else if (!target.exists()) {
+                file.renameTo(target)
+            }
         }
     }
 }
