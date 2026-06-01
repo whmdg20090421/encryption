@@ -240,10 +240,17 @@
     // ── 调试面板 ──
     var jsErrors = [];
     window.addEventListener('error', function(e) {
-        jsErrors.push({ msg: e.message, src: e.filename, line: e.lineno, col: e.colno });
+        jsErrors.push({ msg: e.message, src: e.filename, line: e.lineno, col: e.colno, stack: e.error ? e.error.stack : '' });
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+        jsErrors.push({ msg: 'Promise: ' + (e.reason ? e.reason.message || String(e.reason) : 'unknown'), src: '', line: 0, col: 0, stack: e.reason && e.reason.stack ? e.reason.stack : '' });
     });
 
+    var lastResults = null;
+    window.__SHOW_DEBUG_PANEL__ = function() { if (lastResults) showDebugPanel(lastResults); };
+
     function showDebugPanel(results) {
+        lastResults = results;
         setTimeout(function() {
             var lines = [];
             lines.push('=== CDN 加载结果 (v4: 按需检测) ===');
@@ -275,6 +282,7 @@
             for (var j = 0; j < jsErrors.length; j++) {
                 var err = jsErrors[j];
                 lines.push(err.msg + ' @ ' + (err.src || 'inline') + ':' + err.line);
+                if (err.stack) lines.push('  堆栈: ' + err.stack.split('\n').slice(0, 3).join(' <- '));
             }
             lines.push('');
             lines.push('=== DOM 状态 ===');

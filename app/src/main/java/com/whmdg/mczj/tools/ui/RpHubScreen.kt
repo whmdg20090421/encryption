@@ -63,7 +63,6 @@ fun RpHubScreen(onBack: () -> Unit) {
     var showTrafficPanel by remember { mutableStateOf(false) }
     var showDownloadPanel by remember { mutableStateOf(false) }
     var pendingSaveAsEntry by remember { mutableStateOf<DownloadEntry?>(null) }
-    var showDebugPanel by remember { mutableStateOf(false) }
     val isDebugMode = remember {
         context.getSharedPreferences(AppDataPaths.PREFS_RP_HUB, android.content.Context.MODE_PRIVATE)
             .getBoolean("debug_mode", false)
@@ -113,9 +112,9 @@ fun RpHubScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    // Debug 按钮（仅 Debug 模式时显示）
+                    // Debug 按钮（仅 Debug 模式时显示，调用 JS 调试弹窗）
                     if (isDebugMode) {
-                        IconButton(onClick = { showDebugPanel = true }) {
+                        IconButton(onClick = { webView?.evaluateJavascript("window.__SHOW_DEBUG_PANEL__()", null) }) {
                             Icon(Icons.Default.Code, contentDescription = "Debug")
                         }
                     }
@@ -175,9 +174,6 @@ fun RpHubScreen(onBack: () -> Unit) {
                             } else {
                                 handler?.cancel()
                             }
-                            if (isDebugMode) {
-                                DebugLog.log("SSL", "Error: ${error?.toString() ?: "unknown"}", "WARN")
-                            }
                         }
                     }
 
@@ -191,9 +187,6 @@ fun RpHubScreen(onBack: () -> Unit) {
                                     else -> "INFO"
                                 }
                                 DiagnosticLog.log("WebView/$level", "[${it.sourceId()}:${it.lineNumber()}] $msg")
-                                if (isDebugMode) {
-                                    DebugLog.log("Console", "[${it.sourceId()}:${it.lineNumber()}] $msg", level)
-                                }
                             }
                             return true
                         }
@@ -237,10 +230,6 @@ fun RpHubScreen(onBack: () -> Unit) {
                                         internalPath = intFile.absolutePath
                                     )
                                 )
-
-                                if (isDebugMode) {
-                                    DebugLog.log("Download", "$fileName → ${extFile.absolutePath}")
-                                }
 
                                 withContext(Dispatchers.Main) {
                                     Toast.makeText(context, "已下载: $fileName", Toast.LENGTH_SHORT).show()
@@ -286,17 +275,6 @@ fun RpHubScreen(onBack: () -> Unit) {
                     pendingSaveAsEntry = entry
                     safLauncher.launch(entry.fileName)
                 }
-            )
-        }
-    }
-
-    // Debug 面板 BottomSheet
-    if (showDebugPanel) {
-        ModalBottomSheet(
-            onDismissRequest = { showDebugPanel = false }
-        ) {
-            RpHubDebugPanel(
-                onDismiss = { showDebugPanel = false }
             )
         }
     }
