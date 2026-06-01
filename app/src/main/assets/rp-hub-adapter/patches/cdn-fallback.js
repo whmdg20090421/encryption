@@ -1,6 +1,6 @@
-// CDN 加载策略补丁
-// 拦截 CDN 元素 → 探测 CDN 可达性 → 放行(恢复原URL) 或 回退(缓存/本地)
-// 加载期间显示等待遮罩，全部失败时显示详细诊断
+// CDN 加载策略补丁 v3
+// 策略: 不拦截，让 CDN 正常加载 → 检测是否成功 → 失败则回退(缓存/本地)
+// Debug 模式下显示详细诊断面板
 (function() {
     var PORT = 18900;
     var LOCAL_BASE = 'http://localhost:' + PORT;
@@ -8,9 +8,9 @@
     var DB_STORE = 'scripts';
     var TIMEOUT_MS = 15000;
 
+    // 资源清单: CDN URL → 全局变量检测函数 + 本地回退路径
     var RESOURCES = [
         { cdn: 'https://cdn.tailwindcss.com', local: '/vendor/tailwindcss.js', name: 'Tailwind CSS', check: function() { return !!window.tailwind; } },
-        { cdn: 'https://cdn.jsdelivr.net/npm/daisyui@4.7.2/dist/full.min.css', local: '/vendor/daisyui.full.min.css', name: 'DaisyUI', isCss: true },
         { cdn: 'https://unpkg.com/vue@3/dist/vue.global.prod.js', local: '/vendor/vue.global.prod.js', name: 'Vue 3', check: function() { return !!window.Vue; } },
         { cdn: 'https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js', local: '/vendor/localforage.min.js', name: 'localForage', check: function() { return !!window.localforage; } },
         { cdn: 'https://cdn.jsdelivr.net/npm/marked/marked.min.js', local: '/vendor/marked.min.js', name: 'Marked', check: function() { return !!window.marked; } },
@@ -18,60 +18,8 @@
         { cdn: 'https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js', local: '/vendor/Sortable.min.js', name: 'SortableJS', check: function() { return !!window.Sortable; } }
     ];
 
-    var CDN_MAP = {};
-    for (var i = 0; i < RESOURCES.length; i++) CDN_MAP[RESOURCES[i].cdn] = RESOURCES[i];
-
-    // ── 拦截队列 ──
-    // observer 在浏览器解析 HTML 时拦截 CDN 元素，暂停加载（移除 src/href）
-    var intercepted = []; // { element, originalUrl, tag }
-
-    var observer = new MutationObserver(function(mutations) {
-        for (var i = 0; i < mutations.length; i++) {
-            var nodes = mutations[i].addedNodes;
-            for (var j = 0; j < nodes.length; j++) {
-                var node = nodes[j];
-                if (node.nodeType !== 1) continue;
-                var tag = node.tagName;
-                var url = null;
-                if (tag === 'SCRIPT') url = node.getAttribute('src');
-                else if (tag === 'LINK' && node.getAttribute('rel') === 'stylesheet') url = node.getAttribute('href');
-
-                if (url && CDN_MAP[url]) {
-                    // 暂停加载：移除 src/href，保存原始值
-                    if (tag === 'SCRIPT') node.removeAttribute('src');
-                    else node.removeAttribute('href');
-                    intercepted.push({ element: node, originalUrl: url, tag: tag });
-                }
-            }
-        }
-    });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-
-    // ── 遮罩 ──
-    var overlay, statusEl;
-    function createOverlay() {
-        overlay = document.createElement('div');
-        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(255,255,255,0.97);z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,-apple-system,sans-serif;';
-        var spinner = document.createElement('div');
-        spinner.style.cssText = 'width:36px;height:36px;border:3px solid #e5e7eb;border-top-color:#6366f1;border-radius:50%;animation:cdn-spin 0.8s linear infinite;margin-bottom:16px;';
-        var s = document.createElement('style');
-        s.textContent = '@keyframes cdn-spin{to{transform:rotate(360deg)}}';
-        document.head.appendChild(s);
-        statusEl = document.createElement('div');
-        statusEl.style.cssText = 'font-size:13px;color:#6b7280;text-align:center;max-width:300px;line-height:1.5;';
-        statusEl.textContent = '正在检测网络...';
-        overlay.appendChild(spinner);
-        overlay.appendChild(statusEl);
-        document.body.appendChild(overlay);
-    }
-    function updateStatus(t) { if (statusEl) statusEl.textContent = t; }
-    function removeOverlay() {
-        if (overlay && overlay.parentNode) {
-            overlay.style.transition = 'opacity 0.3s';
-            overlay.style.opacity = '0';
-            setTimeout(function() { if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 300);
-        }
-    }
+    // DaisyUI CSS — 检测方式: 查找包含 daisyui 的 stylesheet
+    var DAISYUI = { cdn: 'https://cdn.jsdelivr.net/npm/daisyui@4.7.2/dist/full.min.css', local: '/vendor/daisyui.full.min.css', name: 'DaisyUI', isCss: true };
 
     // ── IndexedDB 缓存 ──
     function openDB(cb) {
@@ -95,19 +43,18 @@
         try { db.transaction(DB_STORE, 'readwrite').objectStore(DB_STORE).put(val, key); } catch(e) {}
     }
 
-    // ── XHR 探测 CDN（收集诊断信息）──
+    // ── XHR 探测 CDN ──
     function probeCdn(url) {
         return new Promise(function(ok) {
             var info = {
                 url: url, method: 'GET', startTime: Date.now(),
                 endTime: null, duration: null, status: null, statusText: null,
-                responseHeaders: null, errorType: null, errorMessage: null, readyState: null
+                responseHeaders: null, errorType: null, errorMessage: null
             };
             try {
                 var x = new XMLHttpRequest();
                 x.open('GET', url, true);
                 x.timeout = TIMEOUT_MS;
-                x.onreadystatechange = function() { info.readyState = x.readyState; };
                 x.onload = function() {
                     info.endTime = Date.now(); info.duration = info.endTime - info.startTime;
                     info.status = x.status; info.statusText = x.statusText || '';
@@ -145,7 +92,6 @@
         lines.push('方法: ' + info.method);
         lines.push('发起时间: ' + new Date(info.startTime).toISOString());
         lines.push('耗时: ' + info.duration + 'ms');
-        lines.push('ReadyState: ' + info.readyState);
         lines.push('HTTP 状态: ' + (info.status || '无响应') + ' ' + (info.statusText || ''));
         lines.push('错误类型: ' + (info.errorType || '无'));
         lines.push('错误信息: ' + (info.errorMessage || '无'));
@@ -199,15 +145,30 @@
         });
     }
 
+    // ── 检测 CSS 是否已加载 ──
+    function isCssLoaded(cdnUrl) {
+        try {
+            var sheets = document.styleSheets;
+            for (var i = 0; i < sheets.length; i++) {
+                if (sheets[i].href && sheets[i].href.indexOf('daisyui') !== -1) return true;
+            }
+        } catch(e) {}
+        // 也检查是否有 daisyui 相关的 link 元素
+        var links = document.querySelectorAll('link[rel="stylesheet"]');
+        for (var j = 0; j < links.length; j++) {
+            if (links[j].href && links[j].href.indexOf('daisyui') !== -1) return true;
+        }
+        return false;
+    }
+
     // ── 错误对话框 ──
     function showErrorDialog(failedResources) {
-        removeOverlay();
         var diagTexts = failedResources.map(function(r) { return formatDiag(r.diag); });
         var fullReport = diagTexts.join('\n\n' + '─'.repeat(50) + '\n\n');
         console.error('[CDN-FALLBACK-DIAG]\n' + fullReport);
 
-        var overlay2 = document.createElement('div');
-        overlay2.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;font-family:system-ui,-apple-system,sans-serif;';
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;font-family:system-ui,-apple-system,sans-serif;';
         var box = document.createElement('div');
         box.style.cssText = 'background:#fff;border-radius:16px;max-width:480px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.2);';
         var header = document.createElement('div');
@@ -217,7 +178,7 @@
         title.textContent = 'CDN 资源加载失败';
         var subtitle = document.createElement('div');
         subtitle.style.cssText = 'font-size:12px;color:#9ca3af;margin-top:4px;';
-        subtitle.textContent = failedResources.length + ' 个资源全部失败，无缓存可用';
+        subtitle.textContent = failedResources.length + ' 个资源加载失败，无缓存可用';
         header.appendChild(title); header.appendChild(subtitle);
 
         var body = document.createElement('div');
@@ -247,93 +208,7 @@
         btnRetry.onclick = function() { location.reload(); };
         footer.appendChild(btnCopy); footer.appendChild(btnRetry);
         box.appendChild(header); box.appendChild(body); box.appendChild(footer);
-        overlay2.appendChild(box); document.body.appendChild(overlay2);
-    }
-
-    // ── 处理单个被拦截的资源 ──
-    // 策略: 探测 CDN → 成功则放行(恢复原URL) → 失败则缓存/本地
-    function processIntercepted(item, db) {
-        return new Promise(function(resolve) {
-            var res = CDN_MAP[item.originalUrl];
-
-            // CSS: 先探测
-            if (res.isCss) {
-                probeCdn(res.cdn).then(function(diag) {
-                    if (!diag.errorType) {
-                        // CDN 可达 → 恢复原 href，让浏览器正常加载
-                        item.element.setAttribute('href', item.originalUrl);
-                        // 异步缓存
-                        fetchText(res.cdn).then(function(t) { cachePut(db, res.cdn, { content: t, ts: Date.now() }); }).catch(function(){});
-                        resolve({ src: 'cdn', diag: diag });
-                    } else {
-                        // CDN 不可达 → 缓存/本地
-                        fallbackLoad(res, db, diag, resolve);
-                    }
-                });
-                return;
-            }
-
-            // Script: 先检查全局变量（可能已通过其他方式加载）
-            if (res.check && res.check()) { resolve({ src: 'existing', diag: null }); return; }
-
-            // 探测 CDN
-            probeCdn(res.cdn).then(function(diag) {
-                if (!diag.errorType) {
-                    // CDN 可达 → 恢复原 src，让浏览器正常加载
-                    // 用 Promise 等待脚本实际执行完成
-                    var el = item.element;
-                    var loaded = new Promise(function(ok, fail) {
-                        var t = setTimeout(function() { fail(new Error('exec timeout')); }, TIMEOUT_MS);
-                        el.onload = function() { clearTimeout(t); ok(); };
-                        el.onerror = function() { clearTimeout(t); fail(new Error('exec fail')); };
-                    });
-                    el.setAttribute('src', item.originalUrl);
-
-                    loaded.then(function() {
-                        // 脚本执行成功 → 缓存
-                        fetchText(res.cdn).then(function(t) { cachePut(db, res.cdn, { content: t, ts: Date.now() }); }).catch(function(){});
-                        resolve({ src: 'cdn', diag: diag });
-                    }).catch(function() {
-                        // CDN 可达但脚本执行失败 → 回退
-                        diag.errorType = 'EXEC_FAIL';
-                        diag.errorMessage = 'CDN 可达 (HTTP ' + diag.status + ') 但脚本执行失败。';
-                        el.removeAttribute('src');
-                        if (el.parentNode) el.parentNode.removeChild(el);
-                        fallbackLoad(res, db, diag, resolve);
-                    });
-                } else {
-                    // CDN 不可达 → 回退
-                    fallbackLoad(res, db, diag, resolve);
-                }
-            });
-        });
-    }
-
-    // 回退: 缓存 → 本地 vendor
-    function fallbackLoad(res, db, diag, resolve) {
-        cacheGet(db, res.cdn, function(cached) {
-            if (cached && cached.content) {
-                if (res.isCss) {
-                    var st = document.createElement('style'); st.textContent = cached.content;
-                    document.head.appendChild(st);
-                } else {
-                    var s = document.createElement('script'); s.textContent = cached.content;
-                    document.head.appendChild(s);
-                }
-                console.log('[cdn-fallback] ' + res.name + ' 使用缓存');
-                resolve({ src: 'cache', diag: diag });
-            } else {
-                var loader = res.isCss ? loadLink : loadScript;
-                loader(LOCAL_BASE + res.local).then(function() {
-                    console.log('[cdn-fallback] ' + res.name + ' 使用本地');
-                    resolve({ src: 'local', diag: diag });
-                }).catch(function(localErr) {
-                    diag.localError = localErr.message;
-                    console.error('[cdn-fallback] ' + res.name + ' 完全失败');
-                    resolve({ src: 'fail', diag: diag });
-                });
-            }
-        });
+        overlay.appendChild(box); document.body.appendChild(overlay);
     }
 
     // ── 调试面板 ──
@@ -343,20 +218,13 @@
     });
 
     function showDebugPanel(results) {
-        removeOverlay();
-
-        // 延迟检查全局变量（给脚本执行时间）
         setTimeout(function() {
             var lines = [];
-            lines.push('=== CDN 加载结果 ===');
-            lines.push('拦截元素数: ' + intercepted.length);
+            lines.push('=== CDN 加载结果 (v3: 无拦截，事后检测) ===');
             lines.push('');
             for (var i = 0; i < results.length; i++) {
                 var r = results[i];
-                var res = r.res;
-                var status = r.src;
-                var globalOk = res.check ? (res.check() ? 'YES' : 'NO') : 'N/A';
-                lines.push(res.name + ': ' + status + ' | 全局变量=' + globalOk);
+                lines.push(r.name + ': ' + r.src + (r.diag ? ' | HTTP ' + (r.diag.status || '无响应') + ' ' + r.diag.duration + 'ms' : ''));
             }
             lines.push('');
             lines.push('=== 全局变量状态 ===');
@@ -383,7 +251,6 @@
             var report = lines.join('\n');
             console.error('[CDN-DEBUG]\n' + report);
 
-            // 显示调试面板
             var panel = document.createElement('div');
             panel.style.cssText = 'position:fixed;top:0;right:0;width:320px;max-height:70vh;background:#1e1e2e;color:#cdd6f4;font:11px/1.5 monospace;padding:12px;overflow-y:auto;z-index:99998;border-bottom-left-radius:12px;box-shadow:-2px 2px 12px rgba(0,0,0,0.3);';
             var pre = document.createElement('pre');
@@ -399,51 +266,147 @@
         }, 2000);
     }
 
-    // ── 主流程 ──
+    // ── 主流程: 事后检测 + 回退 ──
     function main() {
-        if (!document.body) { setTimeout(main, 10); return; }
+        console.log('[cdn-fallback] v3: 等待页面加载完成后检测 CDN 资源...');
 
-        // 停止 observer（拦截阶段结束）
-        observer.disconnect();
-
-        createOverlay();
-        console.log('[cdn-fallback] 拦截到 ' + intercepted.length + ' 个 CDN 元素');
+        // 收集所有结果
+        var allResults = [];
+        var failedResources = [];
 
         openDB(function(db) {
             var index = 0;
-            var failedResources = [];
-            var allResults = [];
 
-            function next() {
-                if (index >= intercepted.length) {
+            // 先处理 CSS (DaisyUI)
+            function checkCss() {
+                if (isCssLoaded(DAISYUI.cdn)) {
+                    console.log('[cdn-fallback] ' + DAISYUI.name + ': CDN 已加载');
+                    // 异步缓存
+                    fetchText(DAISYUI.cdn).then(function(t) { cachePut(db, DAISYUI.cdn, { content: t, ts: Date.now() }); }).catch(function(){});
+                    allResults.push({ name: DAISYUI.name, src: 'cdn', diag: null });
+                    checkScripts();
+                } else {
+                    // CSS 未加载，尝试缓存/本地
+                    console.log('[cdn-fallback] ' + DAISYUI.name + ': CDN 未加载，尝试回退...');
+                    probeCdn(DAISYUI.cdn).then(function(diag) {
+                        fallbackCss(db, diag);
+                    });
+                }
+            }
+
+            function fallbackCss(db, diag) {
+                cacheGet(db, DAISYUI.cdn, function(cached) {
+                    if (cached && cached.content) {
+                        var st = document.createElement('style'); st.textContent = cached.content;
+                        document.head.appendChild(st);
+                        console.log('[cdn-fallback] ' + DAISYUI.name + ': 使用缓存');
+                        allResults.push({ name: DAISYUI.name, src: 'cache', diag: diag });
+                        checkScripts();
+                    } else {
+                        loadLink(LOCAL_BASE + DAISYUI.local).then(function() {
+                            console.log('[cdn-fallback] ' + DAISYUI.name + ': 使用本地');
+                            allResults.push({ name: DAISYUI.name, src: 'local', diag: diag });
+                            checkScripts();
+                        }).catch(function() {
+                            diag.errorType = diag.errorType || 'LOCAL_FAIL';
+                            diag.errorMessage = diag.errorMessage || '本地回退也失败';
+                            allResults.push({ name: DAISYUI.name, src: 'fail', diag: diag });
+                            failedResources.push({ name: DAISYUI.name, diag: diag });
+                            checkScripts();
+                        });
+                    }
+                });
+            }
+
+            function checkScripts() {
+                if (index >= RESOURCES.length) {
+                    // 全部检查完成
                     if (failedResources.length > 0) {
                         showErrorDialog(failedResources);
                     }
-                    // Debug 模式下显示调试面板
                     if (window.__RP_HUB_DEBUG__) showDebugPanel(allResults);
                     return;
                 }
 
-                var item = intercepted[index];
-                var res = CDN_MAP[item.originalUrl];
-                updateStatus('检测 ' + res.name + ' (' + (index + 1) + '/' + intercepted.length + ')...');
+                var res = RESOURCES[index];
+                index++;
 
-                processIntercepted(item, db).then(function(result) {
-                    allResults.push({ res: res, src: result.src, diag: result.diag });
-                    if (result.src === 'fail') {
-                        failedResources.push({ name: res.name, type: res.isCss ? 'CSS' : 'JS', diag: result.diag });
+                // 检测全局变量 — 如果存在说明 CDN 加载成功
+                if (res.check && res.check()) {
+                    console.log('[cdn-fallback] ' + res.name + ': CDN 已加载 (全局变量存在)');
+                    // 异步缓存
+                    fetchText(res.cdn).then(function(t) { cachePut(db, res.cdn, { content: t, ts: Date.now() }); }).catch(function(){});
+                    allResults.push({ name: res.name, src: 'cdn', diag: null });
+                    checkScripts();
+                    return;
+                }
+
+                // 全局变量不存在 → CDN 可能失败了
+                console.log('[cdn-fallback] ' + res.name + ': 全局变量不存在，探测 CDN...');
+                probeCdn(res.cdn).then(function(diag) {
+                    if (!diag.errorType) {
+                        // CDN 可达但脚本未执行? 尝试直接加载
+                        console.log('[cdn-fallback] ' + res.name + ': CDN 可达但未加载，尝试直接注入...');
+                        loadScript(res.cdn).then(function() {
+                            if (res.check && res.check()) {
+                                console.log('[cdn-fallback] ' + res.name + ': 直接注入成功');
+                                fetchText(res.cdn).then(function(t) { cachePut(db, res.cdn, { content: t, ts: Date.now() }); }).catch(function(){});
+                                allResults.push({ name: res.name, src: 'cdn-retry', diag: diag });
+                            } else {
+                                // CDN 脚本加载了但全局变量仍不存在 → 可能执行出错
+                                diag.errorType = 'EXEC_FAIL';
+                                diag.errorMessage = 'CDN 脚本已加载但全局变量未创建，可能执行出错。';
+                                tryCacheOrLocal(res, db, diag);
+                            }
+                            checkScripts();
+                        }).catch(function() {
+                            diag.errorType = 'LOAD_FAIL';
+                            diag.errorMessage = 'CDN 脚本加载失败。';
+                            tryCacheOrLocal(res, db, diag);
+                            checkScripts();
+                        });
+                    } else {
+                        // CDN 不可达 → 回退
+                        console.log('[cdn-fallback] ' + res.name + ': CDN 不可达 (' + diag.errorType + ')');
+                        tryCacheOrLocal(res, db, diag);
+                        checkScripts();
                     }
-                    index++;
-                    next();
                 });
             }
-            next();
+
+            function tryCacheOrLocal(res, db, diag) {
+                cacheGet(db, res.cdn, function(cached) {
+                    if (cached && cached.content) {
+                        var s = document.createElement('script'); s.textContent = cached.content;
+                        document.head.appendChild(s);
+                        console.log('[cdn-fallback] ' + res.name + ': 使用缓存');
+                        allResults.push({ name: res.name, src: 'cache', diag: diag });
+                    } else {
+                        loadScript(LOCAL_BASE + res.local).then(function() {
+                            console.log('[cdn-fallback] ' + res.name + ': 使用本地');
+                            allResults.push({ name: res.name, src: 'local', diag: diag });
+                        }).catch(function(localErr) {
+                            diag.localError = localErr.message;
+                            console.error('[cdn-fallback] ' + res.name + ': 完全失败');
+                            allResults.push({ name: res.name, src: 'fail', diag: diag });
+                            failedResources.push({ name: res.name, diag: diag });
+                        });
+                    }
+                });
+            }
+
+            // 开始: 先检查 CSS，再检查 JS
+            checkCss();
         });
     }
 
+    // 等待 DOM 就绪
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', main);
+        document.addEventListener('DOMContentLoaded', function() {
+            // 给 CDN 脚本一些加载时间，然后开始检测
+            setTimeout(main, 500);
+        });
     } else {
-        main();
+        setTimeout(main, 500);
     }
 })();
