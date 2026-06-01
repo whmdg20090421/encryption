@@ -140,8 +140,8 @@ fun RpHubScreen(onBack: () -> Unit) {
         }
     ) { innerPadding ->
         val baseUrl = remember(webViewKey) { rpHubBaseUrl(context) }
+        key(webViewKey) {
         AndroidView(
-            key = webViewKey,
             factory = { ctx ->
                 WebView(ctx).apply {
                     settings.javaScriptEnabled = true
@@ -178,5 +178,6 @@ fun RpHubScreen(onBack: () -> Unit) {
                 .fillMaxSize()
                 .padding(innerPadding)
         )
+        }
     }
 }
