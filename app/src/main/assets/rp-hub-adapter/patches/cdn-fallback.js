@@ -251,18 +251,30 @@
             var report = lines.join('\n');
             console.error('[CDN-DEBUG]\n' + report);
 
+            var mask = document.createElement('div');
+            mask.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:99998;display:flex;align-items:center;justify-content:center;padding:16px;';
             var panel = document.createElement('div');
-            panel.style.cssText = 'position:fixed;top:0;right:0;width:320px;max-height:70vh;background:#1e1e2e;color:#cdd6f4;font:11px/1.5 monospace;padding:12px;overflow-y:auto;z-index:99998;border-bottom-left-radius:12px;box-shadow:-2px 2px 12px rgba(0,0,0,0.3);';
+            panel.style.cssText = 'width:90vw;max-width:500px;max-height:80vh;background:#1e1e2e;color:#cdd6f4;font:12px/1.6 monospace;padding:16px;overflow-y:auto;border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,0.4);display:flex;flex-direction:column;';
             var pre = document.createElement('pre');
-            pre.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-all;';
+            pre.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-all;flex:1;';
             pre.textContent = report;
-            var btn = document.createElement('button');
-            btn.style.cssText = 'margin-top:8px;padding:4px 12px;background:#6366f1;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;';
-            btn.textContent = '关闭';
-            btn.onclick = function() { panel.parentNode.removeChild(panel); };
-            panel.appendChild(pre);
-            panel.appendChild(btn);
-            document.body.appendChild(panel);
+            var btnRow = document.createElement('div');
+            btnRow.style.cssText = 'display:flex;gap:10px;margin-top:12px;';
+            var btnCopy = document.createElement('button');
+            btnCopy.style.cssText = 'flex:1;padding:8px 0;background:#4b5563;color:#fff;border:none;border-radius:8px;font-size:12px;cursor:pointer;';
+            btnCopy.textContent = '复制';
+            btnCopy.onclick = function() {
+                try { navigator.clipboard.writeText(report); btnCopy.textContent = '已复制'; setTimeout(function(){ btnCopy.textContent='复制'; },2000); } catch(e) { btnCopy.textContent = '失败'; }
+            };
+            var btnClose = document.createElement('button');
+            btnClose.style.cssText = 'flex:1;padding:8px 0;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:12px;cursor:pointer;';
+            btnClose.textContent = '关闭';
+            btnClose.onclick = function() { mask.parentNode.removeChild(mask); };
+            btnRow.appendChild(btnCopy); btnRow.appendChild(btnClose);
+            panel.appendChild(pre); panel.appendChild(btnRow);
+            mask.appendChild(panel);
+            mask.onclick = function(e) { if (e.target === mask) mask.parentNode.removeChild(mask); };
+            document.body.appendChild(mask);
         }, 2000);
     }
 

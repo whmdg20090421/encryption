@@ -85,22 +85,19 @@ class RpHubServer(
                     return newFixedLengthResponse(Response.Status.OK, mime, processed)
                 }
 
-                // 所有文件类型都捕获响应信息
-                val bodyText = if (mime.startsWith("text/") || mime.contains("javascript") || mime.contains("json") || mime.contains("xml")) {
-                    try { stream.bufferedReader().readText().take(5000) } catch (_: Exception) { null }
-                } else null
+                // 读取完整内容用于响应，同时截取前 5000 字符用于 TrafficLog
+                val fullText = try { stream.bufferedReader().readText() } catch (_: Exception) { null }
+                val logBody = fullText?.take(5000)
                 updateLastEntry(
                     statusCode = 200,
                     responseHeaders = responseHeaders,
-                    responseBody = bodyText,
+                    responseBody = logBody,
                     responseTime = elapsed
                 )
 
-                // 如果已读取 body 文本，用字符串返回；否则用流返回
-                if (bodyText != null) {
-                    return newFixedLengthResponse(Response.Status.OK, mime, bodyText)
+                if (fullText != null) {
+                    return newFixedLengthResponse(Response.Status.OK, mime, fullText)
                 }
-                // 重新打开流（已被读取过）
                 val freshStream = context.assets.open(assetPath)
                 return newChunkedResponse(Response.Status.OK, mime, freshStream)
             } catch (_: Exception) {
