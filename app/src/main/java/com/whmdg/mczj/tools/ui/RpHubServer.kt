@@ -1,7 +1,7 @@
 package com.whmdg.mczj.tools.ui
 
 import android.content.Context
-import android.webkit.MimeTypeMap
+
 import fi.iki.elonen.NanoHTTPD
 import java.io.InputStream
 
@@ -30,7 +30,6 @@ class RpHubServer(
         var uri = session.uri
         if (uri == "/") uri = "/index.html"
 
-        // Try rp-hub original files first, then rp-hub-adapter for vendor
         val assetPaths = listOf("rp-hub$uri", "rp-hub-adapter$uri")
 
         for (assetPath in assetPaths) {
@@ -38,6 +37,14 @@ class RpHubServer(
                 val stream: InputStream = context.assets.open(assetPath)
                 val ext = uri.substringAfterLast('.', "").lowercase()
                 val mime = mimeTypes[ext] ?: "application/octet-stream"
+
+                // 对 HTML 文件注入适配脚本（不修改原文件）
+                if (ext == "html") {
+                    val html = stream.bufferedReader().readText()
+                    val injected = injectPatches(html)
+                    return newFixedLengthResponse(Response.Status.OK, mime, injected)
+                }
+
                 return newChunkedResponse(Response.Status.OK, mime, stream)
             } catch (_: Exception) {
                 // try next path
@@ -45,5 +52,25 @@ class RpHubServer(
         }
 
         return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "404 Not Found")
+    }
+
+    private fun injectPatches(html: String): String {
+        val patches = loadPatchScripts()
+        if (patches.isEmpty()) return html
+        val injection = "\n" + patches.joinToString("\n") { "<script>$it</script>" } + "\n"
+        return html.replace("</head>", "$injection</head>")
+    }
+
+    private fun loadPatchScripts(): List<String> {
+        val scripts = mutableListOf<String>()
+        try {
+            val files = context.assets.list("rp-hub-adapter/patches") ?: emptyArray()
+            for (file in files.sorted()) {
+                if (file.endsWith(".js")) {
+                    scripts.add(context.assets.open("rp-hub-adapter/patches/$file").bufferedReader().readText())
+                }
+            }
+        } catch (_: Exception) {}
+        return scripts
     }
 }
