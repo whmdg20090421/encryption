@@ -1,6 +1,6 @@
-// CDN 加载策略补丁 v3
+// CDN 加载策略补丁 v5
 // 策略: 不拦截，让 CDN 正常加载 → 检测是否成功 → 失败则回退(缓存/本地)
-// Debug 模式下显示详细诊断面板
+// Debug 面板: 仅手动触发，白色卡片风格，匹配错误对话框
 (function() {
     var PORT = 18900;
     var LOCAL_BASE = 'http://localhost:' + PORT;
@@ -247,89 +247,204 @@
     });
 
     var lastResults = null;
-    window.__SHOW_DEBUG_PANEL__ = function() { if (lastResults) showDebugPanel(lastResults); };
+    var debugPanelOpen = false;
 
-    function showDebugPanel(results) {
-        lastResults = results;
-        setTimeout(function() {
-            var lines = [];
-            lines.push('=== CDN 加载结果 (v4: 按需检测) ===');
-            lines.push('');
+    window.__SHOW_DEBUG_PANEL__ = function() { showDebugPanel(lastResults); };
+
+    function buildDebugReport(results) {
+        var lines = [];
+        lines.push('=== CDN 加载结果 (v5: 按需检测) ===');
+        lines.push('');
+
+        if (results && results.length > 0) {
             lines.push('--- 脚本资源 (' + results.length + ' 个被检测) ---');
             for (var i = 0; i < results.length; i++) {
                 var r = results[i];
-                lines.push(r.name + ': ' + r.src + (r.diag ? ' | HTTP ' + (r.diag.status || '无响应') + ' ' + r.diag.duration + 'ms' : ''));
+                var srcLabel = r.src;
+                if (r.diag) srcLabel += ' | HTTP ' + (r.diag.status || '无响应') + ' ' + r.diag.duration + 'ms';
+                lines.push('  ' + r.name + ': ' + srcLabel);
             }
-            lines.push('');
-            lines.push('--- 页面脚本标签 ---');
-            var pageScripts = document.querySelectorAll('script[src]');
-            for (var si = 0; si < pageScripts.length; si++) {
-                lines.push('  ' + pageScripts[si].src);
+        } else {
+            lines.push('--- 脚本资源: 尚未检测完成 ---');
+        }
+
+        lines.push('');
+        lines.push('--- 页面脚本标签 ---');
+        var pageScripts = document.querySelectorAll('script[src]');
+        for (var si = 0; si < pageScripts.length; si++) {
+            lines.push('  ' + pageScripts[si].src);
+        }
+
+        lines.push('');
+        lines.push('=== 全局变量状态 ===');
+        var globals = ['tailwind','Vue','localforage','marked','DOMPurify','Sortable','app','RPHubCardUtils','RPHubCustomSelect'];
+        for (var gi = 0; gi < globals.length; gi++) {
+            lines.push('  window.' + globals[gi] + ': ' + (typeof window[globals[gi]]));
+        }
+
+        lines.push('');
+        lines.push('=== JS 错误 (' + jsErrors.length + ') ===');
+        for (var j = 0; j < jsErrors.length; j++) {
+            var err = jsErrors[j];
+            lines.push('  ' + err.msg + ' @ ' + (err.src || 'inline') + ':' + err.line);
+            if (err.stack) lines.push('    堆栈: ' + err.stack.split('\n').slice(0, 3).join(' <- '));
+        }
+
+        lines.push('');
+        lines.push('=== DOM 状态 ===');
+        lines.push('  URL: ' + location.href);
+        lines.push('  document.readyState: ' + document.readyState);
+        var appEl = document.getElementById('app');
+        lines.push('  #app children: ' + (appEl ? appEl.children.length : 'NOT FOUND'));
+        lines.push('  #app innerHTML length: ' + (appEl ? appEl.innerHTML.length : 0));
+        lines.push('  [v-cloak] elements: ' + document.querySelectorAll('[v-cloak]').length);
+        lines.push('  injected scripts: ' + document.querySelectorAll('head > script').length);
+
+        return lines.join('\n');
+    }
+
+    function showDebugPanel(results) {
+        // 移除已有面板
+        var old = document.getElementById('__rp_debug_panel__');
+        if (old) old.parentNode.removeChild(old);
+
+        var report = buildDebugReport(results);
+        console.error('[CDN-DEBUG]\n' + report);
+
+        var overlay = document.createElement('div');
+        overlay.id = '__rp_debug_panel__';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;font-family:system-ui,-apple-system,sans-serif;box-sizing:border-box;';
+
+        var box = document.createElement('div');
+        box.style.cssText = 'background:#fff;border-radius:16px;max-width:480px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.2);';
+
+        // Header
+        var header = document.createElement('div');
+        header.style.cssText = 'padding:16px 20px 12px;border-bottom:1px solid #e5e7eb;';
+        var title = document.createElement('div');
+        title.style.cssText = 'font-size:16px;font-weight:700;color:#1e40af;';
+        title.textContent = 'Debug 诊断面板';
+        var subtitle = document.createElement('div');
+        subtitle.style.cssText = 'font-size:12px;color:#9ca3af;margin-top:4px;';
+        var statusText = results ? (results.length + ' 个资源已检测 | ' + jsErrors.length + ' 个 JS 错误') : '等待检测结果...';
+        subtitle.textContent = statusText;
+        header.appendChild(title);
+        header.appendChild(subtitle);
+
+        // Body
+        var body = document.createElement('div');
+        body.style.cssText = 'flex:1;overflow-y:auto;padding:12px 20px;min-height:0;';
+
+        if (results && results.length > 0) {
+            // CDN 资源卡片
+            var sectionTitle = document.createElement('div');
+            sectionTitle.style.cssText = 'font-size:12px;font-weight:600;color:#6b7280;margin-bottom:6px;';
+            sectionTitle.textContent = 'CDN 资源';
+            body.appendChild(sectionTitle);
+
+            for (var i = 0; i < results.length; i++) {
+                var r = results[i];
+                var ok = r.src !== 'fail';
+                var card = document.createElement('div');
+                card.style.cssText = 'background:' + (ok ? '#f0fdf4' : '#fef2f2') + ';border:1px solid ' + (ok ? '#bbf7d0' : '#fecaca') + ';border-radius:8px;padding:8px 12px;margin-bottom:6px;';
+                var srcLabel = r.src;
+                if (r.diag) srcLabel += ' | HTTP ' + (r.diag.status || '-') + ' ' + r.diag.duration + 'ms';
+                card.innerHTML = '<div style="font-size:13px;font-weight:600;color:' + (ok ? '#166534' : '#991b1b') + ';">' + r.name + '</div>' +
+                    '<div style="font-size:11px;color:#6b7280;margin-top:2px;">' + srcLabel + '</div>';
+                body.appendChild(card);
             }
-            lines.push('');
-            lines.push('=== 全局变量状态 ===');
-            lines.push('window.tailwind: ' + (typeof window.tailwind));
-            lines.push('window.Vue: ' + (typeof window.Vue));
-            lines.push('window.localforage: ' + (typeof window.localforage));
-            lines.push('window.marked: ' + (typeof window.marked));
-            lines.push('window.DOMPurify: ' + (typeof window.DOMPurify));
-            lines.push('window.Sortable: ' + (typeof window.Sortable));
-            lines.push('window.app: ' + (typeof window.app));
-            lines.push('window.RPHubCardUtils: ' + (typeof window.RPHubCardUtils));
-            lines.push('window.RPHubCustomSelect: ' + (typeof window.RPHubCustomSelect));
-            lines.push('');
-            lines.push('=== JS 错误 (' + jsErrors.length + ') ===');
+        } else {
+            var waiting = document.createElement('div');
+            waiting.style.cssText = 'text-align:center;padding:24px 0;color:#9ca3af;font-size:13px;';
+            waiting.textContent = 'CDN 检测尚未完成，请稍后再试';
+            body.appendChild(waiting);
+        }
+
+        // JS 错误卡片
+        if (jsErrors.length > 0) {
+            var errTitle = document.createElement('div');
+            errTitle.style.cssText = 'font-size:12px;font-weight:600;color:#6b7280;margin:10px 0 6px;';
+            errTitle.textContent = 'JS 错误 (' + jsErrors.length + ')';
+            body.appendChild(errTitle);
+
             for (var j = 0; j < jsErrors.length; j++) {
                 var err = jsErrors[j];
-                lines.push(err.msg + ' @ ' + (err.src || 'inline') + ':' + err.line);
-                if (err.stack) lines.push('  堆栈: ' + err.stack.split('\n').slice(0, 3).join(' <- '));
+                var errCard = document.createElement('div');
+                errCard.style.cssText = 'background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 12px;margin-bottom:6px;';
+                var errLines = '<div style="font-size:12px;font-weight:600;color:#991b1b;">' + err.msg + '</div>' +
+                    '<div style="font-size:10px;color:#6b7280;margin-top:2px;">' + (err.src || 'inline') + ':' + err.line + '</div>';
+                if (err.stack) {
+                    errLines += '<div style="font-size:10px;color:#9ca3af;margin-top:3px;word-break:break-all;">' + err.stack.split('\n').slice(0, 2).join(' ← ') + '</div>';
+                }
+                errCard.innerHTML = errLines;
+                body.appendChild(errCard);
             }
-            lines.push('');
-            lines.push('=== DOM 状态 ===');
-            lines.push('URL: ' + location.href);
-            lines.push('document.readyState: ' + document.readyState);
-            lines.push('#app children: ' + (document.getElementById('app') ? document.getElementById('app').children.length : 'NOT FOUND'));
-            lines.push('#app innerHTML length: ' + (document.getElementById('app') ? document.getElementById('app').innerHTML.length : 0));
-            lines.push('[v-cloak] elements: ' + document.querySelectorAll('[v-cloak]').length);
-            lines.push('injected scripts: ' + document.querySelectorAll('head > script').length);
+        }
 
-            var report = lines.join('\n');
-            console.error('[CDN-DEBUG]\n' + report);
+        // 全局变量状态
+        var globalsTitle = document.createElement('div');
+        globalsTitle.style.cssText = 'font-size:12px;font-weight:600;color:#6b7280;margin:10px 0 6px;';
+        globalsTitle.textContent = '全局变量';
+        body.appendChild(globalsTitle);
 
-            // 面板: 按钮固定在底部，内容可滚动
-            var mask = document.createElement('div');
-            mask.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:99998;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
-            var panel = document.createElement('div');
-            panel.style.cssText = 'width:90vw;max-width:500px;max-height:80vh;background:#1e1e2e;color:#cdd6f4;font:12px/1.6 monospace;border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,0.4);display:flex;flex-direction:column;overflow:hidden;';
-            var content = document.createElement('div');
-            content.style.cssText = 'flex:1;overflow-y:auto;padding:16px 16px 0 16px;min-height:0;';
-            var pre = document.createElement('pre');
-            pre.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-all;';
-            pre.textContent = report;
-            content.appendChild(pre);
-            var btnRow = document.createElement('div');
-            btnRow.style.cssText = 'display:flex;gap:10px;padding:12px 16px;border-top:1px solid #313244;flex-shrink:0;';
-            var btnCopy = document.createElement('button');
-            btnCopy.style.cssText = 'flex:1;padding:8px 0;background:#4b5563;color:#fff;border:none;border-radius:8px;font-size:12px;cursor:pointer;';
-            btnCopy.textContent = '复制';
-            btnCopy.onclick = function() {
-                try { navigator.clipboard.writeText(report); btnCopy.textContent = '已复制'; setTimeout(function(){ btnCopy.textContent='复制'; },2000); } catch(e) { btnCopy.textContent = '失败'; }
-            };
-            var btnClose = document.createElement('button');
-            btnClose.style.cssText = 'flex:1;padding:8px 0;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:12px;cursor:pointer;';
-            btnClose.textContent = '关闭';
-            btnClose.onclick = function() { mask.parentNode.removeChild(mask); };
-            btnRow.appendChild(btnCopy); btnRow.appendChild(btnClose);
-            panel.appendChild(content); panel.appendChild(btnRow);
-            mask.appendChild(panel);
-            mask.onclick = function(e) { if (e.target === mask) mask.parentNode.removeChild(mask); };
-            document.body.appendChild(mask);
-        }, 2000);
+        var globals = ['tailwind','Vue','localforage','marked','DOMPurify','Sortable','app','RPHubCardUtils','RPHubCustomSelect'];
+        var globalsGrid = document.createElement('div');
+        globalsGrid.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;';
+        for (var gi = 0; gi < globals.length; gi++) {
+            var gName = globals[gi];
+            var gType = typeof window[gName];
+            var gOk = gType !== 'undefined';
+            var chip = document.createElement('span');
+            chip.style.cssText = 'font-size:10px;padding:2px 8px;border-radius:99px;background:' + (gOk ? '#dcfce7' : '#f3f4f6') + ';color:' + (gOk ? '#166534' : '#9ca3af') + ';border:1px solid ' + (gOk ? '#bbf7d0' : '#e5e7eb') + ';';
+            chip.textContent = gName + ': ' + gType;
+            globalsGrid.appendChild(chip);
+        }
+        body.appendChild(globalsGrid);
+
+        // Footer
+        var footer = document.createElement('div');
+        footer.style.cssText = 'padding:12px 20px 16px;border-top:1px solid #e5e7eb;display:flex;gap:10px;';
+
+        var btnCopy = document.createElement('button');
+        btnCopy.style.cssText = 'flex:1;padding:10px;border:1px solid #d1d5db;border-radius:10px;background:#fff;color:#374151;font-size:13px;font-weight:600;cursor:pointer;';
+        btnCopy.textContent = '复制报告';
+        btnCopy.onclick = function() {
+            try { navigator.clipboard.writeText(report); btnCopy.textContent = '已复制'; setTimeout(function(){ btnCopy.textContent='复制报告'; },2000); } catch(e) {}
+        };
+
+        var btnClear = document.createElement('button');
+        btnClear.style.cssText = 'flex:1;padding:10px;border:1px solid #d1d5db;border-radius:10px;background:#fff;color:#374151;font-size:13px;font-weight:600;cursor:pointer;';
+        btnClear.textContent = '清除错误';
+        btnClear.onclick = function() {
+            jsErrors.length = 0;
+            showDebugPanel(results);
+        };
+
+        var btnClose = document.createElement('button');
+        btnClose.style.cssText = 'flex:1;padding:10px;border:none;border-radius:10px;background:#6366f1;color:#fff;font-size:13px;font-weight:600;cursor:pointer;';
+        btnClose.textContent = '关闭';
+        btnClose.onclick = function() {
+            overlay.parentNode.removeChild(overlay);
+            debugPanelOpen = false;
+        };
+
+        footer.appendChild(btnCopy);
+        footer.appendChild(btnClear);
+        footer.appendChild(btnClose);
+
+        box.appendChild(header);
+        box.appendChild(body);
+        box.appendChild(footer);
+        overlay.appendChild(box);
+
+        overlay.onclick = function(e) { if (e.target === overlay) { overlay.parentNode.removeChild(overlay); debugPanelOpen = false; } };
+        document.body.appendChild(overlay);
+        debugPanelOpen = true;
     }
 
     // ── 主流程: 事后检测 + 回退 ──
     function main() {
-        console.log('[cdn-fallback] v3: 等待页面加载完成后检测 CDN 资源...');
+        console.log('[cdn-fallback] v5: 等待页面加载完成后检测 CDN 资源...');
 
         // 只处理当前页面实际使用的资源
         var activeResources = getUsedResources();
@@ -395,7 +510,7 @@
                     if (failedResources.length > 0) {
                         showErrorDialog(failedResources);
                     }
-                    if (window.__RP_HUB_DEBUG__) showDebugPanel(allResults);
+                    lastResults = allResults;
                     return;
                 }
 
