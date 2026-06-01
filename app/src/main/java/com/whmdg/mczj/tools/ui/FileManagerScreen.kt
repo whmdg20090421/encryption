@@ -1413,7 +1413,7 @@ private fun FileBrowserPanel(
                             if (cached.size == 0L) {
                                 val dir = File(entry.path)
                                 val children = try { dir.listFiles() } catch (_: Exception) { null }
-                                if (children == null) "0 (权限不足)" else "0 (空文件夹)"
+                                if (children == null) "✕" else "0MB"
                             } else {
                                 compactSize(cached.size)
                             }
@@ -1421,7 +1421,7 @@ private fun FileBrowserPanel(
                             // 未计算过大小
                             val dir = File(entry.path)
                             val children = try { dir.listFiles() } catch (_: Exception) { null }
-                            if (children == null) "权限不足" else ""
+                            if (children == null) "✕" else ""
                         }
                     } else ""
                     FileEntryRow(
@@ -1513,7 +1513,7 @@ private fun FileEntryRow(
                 Text(
                     text = rightLabel,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (rightLabel == "✕") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
