@@ -1042,10 +1042,13 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                                 Toast.makeText(context, "正在计算大小...", Toast.LENGTH_SHORT).show()
                                                 coroutineScope.launch(Dispatchers.IO) {
                                                     val updatedDb = refreshFolderSize(entry.path)
+                                                    val sizeInfo = updatedDb.get(entry.path)
+                                                    val sizeText = if (sizeInfo != null && sizeInfo.size > 0) compactSize(sizeInfo.size) else "0"
                                                     withContext(Dispatchers.Main) {
                                                         folderSizeDb = updatedDb
                                                         leftEntries = listDirectory(leftPath)
                                                         rightEntries = listDirectory(rightPath)
+                                                        Toast.makeText(context, "大小计算完毕: $sizeText", Toast.LENGTH_SHORT).show()
                                                     }
                                                 }
                                             }
