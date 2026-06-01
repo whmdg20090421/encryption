@@ -419,8 +419,8 @@
                     if (failedResources.length > 0) {
                         showErrorDialog(failedResources);
                     }
-                    // 总是显示调试面板（临时调试用）
-                    showDebugPanel(allResults);
+                    // Debug 模式下显示调试面板
+                    if (window.__RP_HUB_DEBUG__) showDebugPanel(allResults);
                     return;
                 }
 

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.encryption.data.StorageLocation
 import com.whmdg.mczj.tools.encryption.data.VaultConfig
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
@@ -124,6 +125,7 @@ sealed class Screen {
     data class VaultOpen(val session: VaultSession) : Screen()
     data class VaultChangePassword(val vault: VaultRecord) : Screen()
     object AuthManagement : Screen()
+    object FunctionalTest : Screen()
     object RpHub : Screen()
 }
 
@@ -492,6 +494,11 @@ fun MainAppContainer() {
         }
         is Screen.RpHub -> {
             RpHubScreen(
+                onBack = { navigateBack() }
+            )
+        }
+        is Screen.FunctionalTest -> {
+            FunctionalTestScreen(
                 onBack = { navigateBack() }
             )
         }
@@ -1786,6 +1793,51 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FunctionalTestScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_RP_HUB, Context.MODE_PRIVATE) }
+    var debugMode by remember { mutableStateOf(prefs.getBoolean("debug_mode", false)) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("功能性测试") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            SettingsSection(
+                title = "RP-Hub",
+                icon = Icons.Default.BugReport
+            ) {
+                CompactSettingsToggle(
+                    title = "Debug 模式",
+                    subtitle = "显示 CDN 加载诊断面板：资源状态、全局变量、JS 错误",
+                    icon = Icons.Default.BugReport,
+                    checked = debugMode,
+                    onCheckedChange = {
+                        debugMode = it
+                        prefs.edit().putBoolean("debug_mode", it).apply()
+                    }
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun SettingsTab(navigateToModule: (ModuleId) -> Unit, onNavigate: (Screen) -> Unit) {
     Column(
@@ -1823,6 +1875,18 @@ fun SettingsTab(navigateToModule: (ModuleId) -> Unit, onNavigate: (Screen) -> Un
                 subtitle = "切换或清除当前权限令牌",
                 icon = Icons.Default.VpnKey,
                 onClick = { onNavigate(Screen.AuthManagement) }
+            )
+        }
+
+        SettingsSection(
+            title = "开发",
+            icon = Icons.Default.Code
+        ) {
+            CompactSettingsItem(
+                title = "功能性测试",
+                subtitle = "调试工具与诊断模式",
+                icon = Icons.Default.BugReport,
+                onClick = { onNavigate(Screen.FunctionalTest) }
             )
         }
     }

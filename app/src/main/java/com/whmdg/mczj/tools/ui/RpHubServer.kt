@@ -1,6 +1,7 @@
 package com.whmdg.mczj.tools.ui
 
 import android.content.Context
+import com.whmdg.mczj.tools.AppDataPaths
 import fi.iki.elonen.NanoHTTPD
 import java.io.InputStream
 
@@ -72,7 +73,9 @@ class RpHubServer(
 
                 if (ext == "html") {
                     val html = stream.bufferedReader().readText()
-                    val processed = processHtml(html)
+                    val debugMode = context.getSharedPreferences(AppDataPaths.PREFS_RP_HUB, Context.MODE_PRIVATE)
+                        .getBoolean("debug_mode", false)
+                    val processed = processHtml(html, debugMode)
                     updateLastEntry(
                         statusCode = 200,
                         responseHeaders = responseHeaders + ("Content-Length" to processed.length.toString()),
@@ -128,11 +131,13 @@ class RpHubServer(
         )
     }
 
-    private fun processHtml(html: String): String {
+    private fun processHtml(html: String, debugMode: Boolean = false): String {
+        // 注入调试标记（在 patch 脚本之前执行）
+        val debugFlag = if (debugMode) "\n<script>window.__RP_HUB_DEBUG__ = true;</script>\n" else ""
         val patches = loadPatchScripts()
-        if (patches.isEmpty()) return html
-        val injection = "\n" + patches.joinToString("\n") { "<script>$it</script>" } + "\n"
-        return html.replace("<head>", "<head>$injection")
+        if (patches.isEmpty() && debugFlag.isEmpty()) return html
+        val injection = debugFlag + patches.joinToString("\n") { "<script>$it</script>" }
+        return html.replace("<head>", "<head>\n$injection\n")
     }
 
     private fun loadPatchScripts(): List<String> {

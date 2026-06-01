@@ -104,6 +104,9 @@ object AppDataPaths {
     /** 批量下载器 SharedPreferences */
     const val PREFS_BATCH_DOWNLOADER = "batch_downloader_prefs"
 
+    /** RP-Hub SharedPreferences */
+    const val PREFS_RP_HUB = "rp_hub_prefs"
+
     /**
      * 将 SAF tree URI 转换为绝对文件路径。
      * 解析 content://com.android.externalstorage.documents/tree/primary:加密/TF图
