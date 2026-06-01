@@ -1222,199 +1222,164 @@ fun VaultsListTab(
             }
         }
 
-        // ── 底部栏：取消 | 时长选择器 | 确认 ──
-        AnimatedVisibility(
-            visible = selectedVault != null,
-            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter)
-        ) {
-            val vault = selectedVault!!
-            Surface(
-                tonalElevation = 3.dp,
-                shadowElevation = 8.dp,
-                modifier = Modifier.fillMaxWidth()
-            ) {
+        } // end Box
+    }
+
+    // ── 保险箱打开弹窗（居中对话框） ──
+    selectedVault?.let { vault ->
+        val durationLabel = when (lockDurationMin) {
+            0 -> "立即锁定"
+            5 -> "5 分钟"
+            15 -> "15 分钟"
+            30 -> "30 分钟"
+            60 -> "1 小时"
+            else -> "${lockDurationMin} 分钟"
+        }
+        AlertDialog(
+            onDismissRequest = { selectedVault = null },
+            title = { Text("打开「${vault.name}」") },
+            text = {
                 Column {
-                    // 时长选项展开列表（在底部栏上方）
-                    AnimatedVisibility(
-                        visible = showTimerPicker,
-                        enter = expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
-                        exit = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut()
+                    // 时长选择器
+                    Text("保持打开时长", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(4.dp))
+                    Surface(
+                        onClick = { showTimerPicker = !showTimerPicker },
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)) {
-                            listOf(
-                                0 to "立即锁定",
-                                5 to "5 分钟",
-                                15 to "15 分钟",
-                                30 to "30 分钟",
-                                60 to "1 小时"
-                            ).forEach { (min, label) ->
-                                val isSelected = lockDurationMin == min
-                                Surface(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            lockDurationMin = min
-                                            showTimerPicker = false
-                                            val newDuration = min * 60000L
-                                            lockPrefs.edit().putLong("duration_${vault.id}", newDuration).apply()
-                                            // 切换到"立即锁定"时清除所有缓存
-                                            if (min == 0) {
-                                                clearDeadline(vault.id.toString())
-                                            }
-                                        },
-                                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer
-                                    else Color.Transparent
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        if (isSelected) {
-                                            Icon(Icons.Default.Check, contentDescription = null,
-                                                modifier = Modifier.size(18.dp),
-                                                tint = MaterialTheme.colorScheme.primary)
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                        }
-                                        Text(
-                                            label,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                            color = if (isSelected) MaterialTheme.colorScheme.primary
-                                            else MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
-                                }
-                            }
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.Timer, contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(durationLabel, style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f))
+                            Icon(
+                                if (showTimerPicker) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                contentDescription = null, modifier = Modifier.size(18.dp)
+                            )
                         }
                     }
-                    // 底部按钮行
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 左：取消
-                        TextButton(onClick = {
-                            selectedVault = null
-                            showTimerPicker = false
-                        }) { Text("取消") }
-                        Spacer(modifier = Modifier.weight(1f))
-                        // 中：时长选择器
-                        val durationLabel = when (lockDurationMin) {
-                            0 -> "立即锁定"
-                            5 -> "5 分钟"
-                            15 -> "15 分钟"
-                            30 -> "30 分钟"
-                            60 -> "1 小时"
-                            else -> "${lockDurationMin} 分钟"
-                        }
-                        Surface(
-                            onClick = { showTimerPicker = !showTimerPicker },
-                            shape = RoundedCornerShape(20.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Timer, contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                    tint = MaterialTheme.colorScheme.primary)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(durationLabel, style = MaterialTheme.typography.bodyMedium)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Icon(
-                                    if (showTimerPicker) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.weight(1f))
-                        // 右：确认
-                        Button(onClick = {
-                            val v = selectedVault!!
-                            selectedVault = null
-                            showTimerPicker = false
-
-                            // 检查是否在保持打开期内（deadline 未过期）
-                            if (isVaultUnlocked(v.id.toString())) {
-                                try {
-                                    // 解密缓存的密码
-                                    val cachedCipher = lockPrefs.getString("cached_pwd_${v.id}", null)
-                                    val cachedIv = lockPrefs.getString("cached_iv_${v.id}", null)
-                                    val pwd = if (cachedCipher != null && cachedIv != null) {
-                                        val cipherBytes = android.util.Base64.decode(cachedCipher, android.util.Base64.NO_WRAP)
-                                        val ivBytes = android.util.Base64.decode(cachedIv, android.util.Base64.NO_WRAP)
-                                        String(com.whmdg.mczj.tools.auth.KeystoreMaster.unwrap(cipherBytes, ivBytes)!!, Charsets.UTF_8)
-                                    } else throw Exception("缓存密码丢失")
-                                    val session = vaultService.open(v.id, pwd)
-                                    // deadline 保留，退出时会刷新
-                                    onNavigate(Screen.VaultOpen(session))
-                                } catch (e: Exception) {
-                                    // 缓存密码解密失败，清除所有缓存
-                                    clearDeadline(v.id.toString())
-                                    showPasswordDialog = v
-                                }
-                            } else {
-                                // 需要密码验证（deadline 已过期或不存在）
-                                clearDeadline(v.id.toString())
-                                val vaultDir = File(v.relativePath)
-                                val verifyResult = try {
-                                    VaultConfig.verifyAllCopies(context, vaultDir)
-                                } catch (e: Exception) {
-                                    VaultConfig.VerifyResult(null, true)
-                                }
-                                if (verifyResult.isTampered) {
-                                    showWarningDialog = Pair(v, verifyResult)
-                                } else if (settings.enableTeeQuickUnlock &&
-                                    com.whmdg.mczj.tools.security.TeeManager.isVaultPasswordSaved(context, v.id)) {
-                                    val cipher = com.whmdg.mczj.tools.security.TeeManager.getDecryptCipher(context, v.id)
-                                    if (cipher != null) {
-                                        val activity = context as android.app.Activity
-                                        val crypto = android.hardware.biometrics.BiometricPrompt.CryptoObject(cipher as javax.crypto.Cipher)
-                                        com.whmdg.mczj.tools.security.TeeManager.showBiometricPrompt(
-                                            activity = activity,
-                                            cryptoObject = crypto,
-                                            title = "快速解锁「${v.name}」",
-                                            description = "请验证指纹以安全解锁保险箱",
-                                            onSuccess = { result ->
-                                                val authenticatedCipher = result.cryptoObject!!.cipher!!
-                                                val decrypted = com.whmdg.mczj.tools.security.TeeManager.decryptPassword(context, v.id, authenticatedCipher)
-                                                if (!decrypted.isNullOrEmpty()) {
-                                                    openVault(v, decrypted)
-                                                } else {
-                                                    Toast.makeText(context, "指纹密匙读取失败，请手动解锁", Toast.LENGTH_SHORT).show()
-                                                    showPasswordDialog = v
-                                                }
-                                            },
-                                            onFailure = { err ->
-                                                if (err != "用户取消") {
-                                                    Toast.makeText(context, "快速解锁失败: $err", Toast.LENGTH_SHORT).show()
-                                                }
-                                                showPasswordDialog = v
+                    // 时长选项展开列表
+                    AnimatedVisibility(visible = showTimerPicker) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                            listOf(0 to "立即锁定", 5 to "5 分钟", 15 to "15 分钟", 30 to "30 分钟", 60 to "1 小时")
+                                .forEach { (min, label) ->
+                                    val isSelected = lockDurationMin == min
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth().clickable {
+                                            lockDurationMin = min
+                                            showTimerPicker = false
+                                            lockPrefs.edit().putLong("duration_${vault.id}", min * 60000L).apply()
+                                            if (min == 0) clearDeadline(vault.id.toString())
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            if (isSelected) {
+                                                Icon(Icons.Default.Check, contentDescription = null,
+                                                    modifier = Modifier.size(16.dp),
+                                                    tint = MaterialTheme.colorScheme.primary)
+                                                Spacer(modifier = Modifier.width(6.dp))
                                             }
-                                        )
-                                    } else {
-                                        Toast.makeText(context, "安全环境发生变化，指纹密钥已失效，请手动解锁以重新绑定", Toast.LENGTH_LONG).show()
-                                        showPasswordDialog = v
+                                            Text(label, style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                                        }
                                     }
-                                } else {
-                                    showPasswordDialog = v
                                 }
-                            }
-                        }) {
-                            Text("确认")
                         }
                     }
                 }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val v = selectedVault ?: return@Button
+                    selectedVault = null
+                    showTimerPicker = false
+
+                    // 检查是否在保持打开期内（deadline 未过期）
+                    if (isVaultUnlocked(v.id.toString())) {
+                        try {
+                            val cachedCipher = lockPrefs.getString("cached_pwd_${v.id}", null)
+                            val cachedIv = lockPrefs.getString("cached_iv_${v.id}", null)
+                            val pwd = if (cachedCipher != null && cachedIv != null) {
+                                val cipherBytes = android.util.Base64.decode(cachedCipher, android.util.Base64.NO_WRAP)
+                                val ivBytes = android.util.Base64.decode(cachedIv, android.util.Base64.NO_WRAP)
+                                String(com.whmdg.mczj.tools.auth.KeystoreMaster.unwrap(cipherBytes, ivBytes)!!, Charsets.UTF_8)
+                            } else throw Exception("缓存密码丢失")
+                            val session = vaultService.open(v.id, pwd)
+                            onNavigate(Screen.VaultOpen(session))
+                        } catch (e: Exception) {
+                            clearDeadline(v.id.toString())
+                            showPasswordDialog = v
+                        }
+                    } else {
+                        clearDeadline(v.id.toString())
+                        val vaultDir = File(v.relativePath)
+                        val verifyResult = try {
+                            VaultConfig.verifyAllCopies(context, vaultDir)
+                        } catch (e: Exception) {
+                            VaultConfig.VerifyResult(null, true)
+                        }
+                        if (verifyResult.isTampered) {
+                            showWarningDialog = Pair(v, verifyResult)
+                        } else if (settings.enableTeeQuickUnlock &&
+                            com.whmdg.mczj.tools.security.TeeManager.isVaultPasswordSaved(context, v.id)) {
+                            val cipher = com.whmdg.mczj.tools.security.TeeManager.getDecryptCipher(context, v.id)
+                            if (cipher != null) {
+                                val activity = context as android.app.Activity
+                                val crypto = android.hardware.biometrics.BiometricPrompt.CryptoObject(cipher as javax.crypto.Cipher)
+                                com.whmdg.mczj.tools.security.TeeManager.showBiometricPrompt(
+                                    activity = activity,
+                                    cryptoObject = crypto,
+                                    title = "快速解锁「${v.name}」",
+                                    description = "请验证指纹以安全解锁保险箱",
+                                    onSuccess = { result ->
+                                        val authenticatedCipher = result.cryptoObject!!.cipher!!
+                                        val decrypted = com.whmdg.mczj.tools.security.TeeManager.decryptPassword(context, v.id, authenticatedCipher)
+                                        if (!decrypted.isNullOrEmpty()) {
+                                            openVault(v, decrypted)
+                                        } else {
+                                            Toast.makeText(context, "指纹密匙读取失败，请手动解锁", Toast.LENGTH_SHORT).show()
+                                            showPasswordDialog = v
+                                        }
+                                    },
+                                    onFailure = { err ->
+                                        if (err != "用户取消") {
+                                            Toast.makeText(context, "快速解锁失败: $err", Toast.LENGTH_SHORT).show()
+                                        }
+                                        showPasswordDialog = v
+                                    }
+                                )
+                            } else {
+                                Toast.makeText(context, "安全环境发生变化，指纹密钥已失效，请手动解锁以重新绑定", Toast.LENGTH_LONG).show()
+                                showPasswordDialog = v
+                            }
+                        } else {
+                            showPasswordDialog = v
+                        }
+                    }
+                }) {
+                    Text("打开")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { selectedVault = null; showTimerPicker = false }) {
+                    Text("取消")
+                }
             }
-        }
-        } // end Box
+        )
     }
 
     // Warnings Dialog
