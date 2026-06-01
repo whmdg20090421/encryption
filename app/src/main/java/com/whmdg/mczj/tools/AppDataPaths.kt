@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
+import android.util.Log
 import java.io.File
 
 /**
@@ -63,7 +64,27 @@ object AppDataPaths {
     fun rpHub(context: Context): File {
         val dir = File(context.filesDir, "RP-Hub")
         if (!dir.exists()) dir.mkdirs()
+        migrateRpHubIfNeeded(context, dir)
         return dir
+    }
+
+    /** 旧版 RP-Hub 数据位于外部存储，迁移到内部存储后删除旧目录 */
+    private fun migrateRpHubIfNeeded(context: Context, newDir: File) {
+        val oldDir = File(root(context), "RP-Hub")
+        if (!oldDir.exists() || !oldDir.isDirectory) return
+        val oldFiles = oldDir.listFiles()
+        if (oldFiles.isNullOrEmpty()) {
+            oldDir.delete()
+            return
+        }
+        Log.i("AppDataPaths", "迁移 RP-Hub 数据: ${oldDir.absolutePath} → ${newDir.absolutePath}")
+        for (file in oldFiles) {
+            val target = File(newDir, file.name)
+            if (target.exists()) continue
+            file.renameTo(target)
+        }
+        if (oldDir.listFiles().isNullOrEmpty()) oldDir.delete()
+        Log.i("AppDataPaths", "RP-Hub 数据迁移完成")
     }
 
     // ── SharedPreferences 名称常量 ──
