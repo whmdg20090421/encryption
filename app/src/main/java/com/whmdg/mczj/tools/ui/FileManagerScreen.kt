@@ -298,10 +298,16 @@ fun FileManagerScreen(onBack: () -> Unit) {
             }
         }
 
-        entries.sortWith(
+        // 提取"返回上一级"，排序其余项，再置顶
+        val parentEntry = entries.find { it.name == "返回上一级" }
+        val others = entries.filter { it.name != "返回上一级" }
+        others.sortWith(
             compareByDescending<FileEntry> { it.isDirectory }
                 .thenBy { it.name.lowercase() }
         )
+        entries.clear()
+        if (parentEntry != null) entries.add(parentEntry)
+        entries.addAll(others)
         return entries
     }
 
@@ -370,10 +376,16 @@ fun FileManagerScreen(onBack: () -> Unit) {
             }
         }
 
-        entries.sortWith(
+        // 提取"返回上一级"，排序其余项，再置顶
+        val parentEntry = entries.find { it.name == "返回上一级" }
+        val others = entries.filter { it.name != "返回上一级" }
+        others.sortWith(
             compareByDescending<FileEntry> { it.isDirectory }
                 .thenBy { it.name.lowercase() }
         )
+        entries.clear()
+        if (parentEntry != null) entries.add(parentEntry)
+        entries.addAll(others)
         return entries
     }
 
@@ -1397,8 +1409,22 @@ private fun FileBrowserPanel(
                 contentPadding = PaddingValues(vertical = 4.dp)
             ) {
                 items(entries, key = { it.path }) { entry ->
-                    val dirSize = if (entry.isDirectory) {
-                        folderSizeDb.get(entry.path)?.size?.let { compactSize(it) } ?: ""
+                    val dirSize = if (entry.isDirectory && entry.name != "返回上一级") {
+                        val cached = folderSizeDb.get(entry.path)
+                        if (cached != null) {
+                            if (cached.size == 0L) {
+                                val dir = File(entry.path)
+                                val children = try { dir.listFiles() } catch (_: Exception) { null }
+                                if (children == null) "0 (权限不足)" else "0 (空文件夹)"
+                            } else {
+                                compactSize(cached.size)
+                            }
+                        } else {
+                            // 未计算过大小
+                            val dir = File(entry.path)
+                            val children = try { dir.listFiles() } catch (_: Exception) { null }
+                            if (children == null) "权限不足" else ""
+                        }
                     } else ""
                     FileEntryRow(
                         entry = entry,
