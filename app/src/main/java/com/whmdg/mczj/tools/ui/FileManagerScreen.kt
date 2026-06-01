@@ -1431,102 +1431,77 @@ private fun FileEntryRow(
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp)
     ) {
-        // Icon column: icon on top, date/permission below
-        Column(
-            modifier = Modifier.fillMaxHeight(),
-            horizontalAlignment = Alignment.CenterHorizontally
+        // Left 2/5: icon centered in top 4/5
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .weight(2f),
+            contentAlignment = Alignment.Center
         ) {
+            Icon(
+                imageVector = when {
+                    entry.name == "返回上一级" -> Icons.Default.ArrowUpward
+                    entry.isDirectory -> Icons.Default.Folder
+                    else -> Icons.Default.InsertDriveFile
+                },
+                contentDescription = null,
+                modifier = Modifier.size(22.dp),
+                tint = if (isFocused) MaterialTheme.colorScheme.primary
+                       else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        // Right 3/5: filename (top 4/5) + date/perm|size (bottom 1/5)
+        Column(
+            modifier = Modifier
+                .weight(3f)
+                .fillMaxHeight()
+        ) {
+            // Top 4/5: filename
             Box(
-                modifier = Modifier.weight(4f),
-                contentAlignment = Alignment.Center
+                modifier = Modifier
+                    .weight(4f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.CenterStart
             ) {
-                Icon(
-                    imageVector = when {
-                        entry.name == "返回上一级" -> Icons.Default.ArrowUpward
-                        entry.isDirectory -> Icons.Default.Folder
-                        else -> Icons.Default.InsertDriveFile
-                    },
-                    contentDescription = null,
-                    modifier = Modifier.size(22.dp),
-                    tint = if (isFocused) MaterialTheme.colorScheme.primary
-                           else MaterialTheme.colorScheme.onSurfaceVariant
+                Text(
+                    text = entry.name,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium
                 )
             }
-            // Bottom 1/5: date (folders) or permission (files) under icon
-            Box(
-                modifier = Modifier.weight(1f),
-                contentAlignment = Alignment.TopCenter
+            // Bottom 1/5: date/permission (left) + size (right)
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 val label = when {
                     entry.isDirectory -> compactDate(entry.lastModified)
                     entry.permission.isNotEmpty() -> entry.permission
                     else -> ""
                 }
-                if (label.isNotEmpty()) {
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-        ) {
-            // Top 4/5: filename, always centered
-            Box(
-                modifier = Modifier
-                    .weight(4f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
                 Text(
-                    text = entry.name,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                    style = MaterialTheme.typography.bodyMedium
+                    text = label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-            }
-            // Bottom 1/5: size
-            if (entry.isDirectory) {
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                val rightLabel = when {
+                    entry.isDirectory -> folderSize.ifEmpty { "--" }
+                    entry.size > 0 -> compactSize(entry.size)
+                    else -> ""
+                }
+                if (rightLabel.isNotEmpty()) {
                     Text(
-                        text = folderSize.ifEmpty { "--" },
+                        text = rightLabel,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-            } else if (entry.size > 0) {
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = compactSize(entry.size),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                Spacer(modifier = Modifier.weight(1f))
             }
         }
     }
