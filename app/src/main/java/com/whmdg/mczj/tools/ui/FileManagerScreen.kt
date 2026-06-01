@@ -1453,10 +1453,10 @@ private fun FileEntryRow(
             .fillMaxWidth()
             .height(56.dp)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 3.dp)
+            .padding(horizontal = 16.dp, vertical = 2.5.dp)
     ) {
-        // Top 4/5: icon (left 2/5) + filename (right 3/5)
-        Row(modifier = Modifier.weight(4f)) {
+        // Top 7/10: icon (left 2/5) + filename (right 3/5)
+        Row(modifier = Modifier.weight(7f)) {
             Box(
                 modifier = Modifier.weight(2f).fillMaxHeight(),
                 contentAlignment = Alignment.Center
@@ -1486,9 +1486,9 @@ private fun FileEntryRow(
                 )
             }
         }
-        // Bottom 1/5: date/permission (left, aligned to icon left) + size (right, aligned to filename right)
+        // Bottom 3/10: date/permission (left, aligned to icon left) + size (right, aligned to filename right)
         Row(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
+            modifier = Modifier.weight(3f).fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Top
         ) {
