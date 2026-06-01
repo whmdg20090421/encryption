@@ -1451,7 +1451,7 @@ private fun FileEntryRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(66.dp)
+            .height(56.dp)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 3.dp)
     ) {
@@ -1481,7 +1481,7 @@ private fun FileEntryRow(
                     text = entry.name,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
+                    textAlign = TextAlign.Start,
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
@@ -1490,7 +1490,7 @@ private fun FileEntryRow(
         Row(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.Top
         ) {
             val label = when {
                 entry.isDirectory -> compactDate(entry.lastModified)
