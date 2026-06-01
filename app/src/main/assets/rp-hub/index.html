@@ -3629,9 +3629,9 @@
 
         <!-- Update Notification Modal -->
         <div v-if="showUpdateModal"
-            class="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
+            class="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in update-modal-overlay">
             <div
-                class="bg-white rounded-xl border border-gray-200 w-full max-w-lg flex flex-col shadow-2xl transform transition-all scale-100 overflow-hidden relative">
+                class="bg-white rounded-xl border border-gray-200 w-full max-w-lg flex flex-col shadow-2xl transform transition-all scale-100 overflow-hidden relative update-modal-box">
                 <div class="bg-gradient-to-r from-primary-50 to-purple-50 p-4 border-b border-gray-100">
                     <div class="flex items-center gap-3">
                         <h3 class="text-xl font-bold text-gray-900">{{ latestUpdate.title }}</h3>

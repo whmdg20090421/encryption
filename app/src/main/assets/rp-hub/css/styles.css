@@ -1236,6 +1236,30 @@ opacity: 0;
             font-style: italic;
         }
 
+        /* Update Modal overlay — fallback for WebView where Tailwind CDN misses v-if classes */
+        .update-modal-overlay {
+            position: fixed !important;
+            inset: 0 !important;
+            z-index: 80 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            background: rgba(0,0,0,0.5) !important;
+            padding: 1rem !important;
+        }
+        .update-modal-box {
+            background: #fff !important;
+            border-radius: 0.75rem !important;
+            border: 1px solid #e5e7eb !important;
+            width: 100% !important;
+            max-width: 32rem !important;
+            display: flex !important;
+            flex-direction: column !important;
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25) !important;
+            overflow: hidden !important;
+            position: relative !important;
+        }
+
         /* Update Notification Styles */
         .update-content .markdown-body {
             line-height: 1.5 !important;
@@ -1247,6 +1271,39 @@ opacity: 0;
         .update-content .markdown-body li {
             margin-top: 0.5em !important;
             margin-bottom: 0.5em !important;
+        }
+
+        /* Update Modal — explicit styles for WebView (Tailwind CDN may not process v-if dynamic classes) */
+        .update-content {
+            max-height: 75vh !important;
+            overflow-y: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+        }
+        .update-content .markdown-body {
+            color: #1f2937 !important;
+            font-size: 0.875rem !important;
+            line-height: 1.625 !important;
+        }
+        .update-content .markdown-body h3 {
+            font-size: 1.25rem !important;
+            font-weight: 700 !important;
+            margin-bottom: 0.75rem !important;
+        }
+        .update-content .markdown-body h4 {
+            font-size: 1rem !important;
+            font-weight: 600 !important;
+            margin-top: 1rem !important;
+        }
+        .update-content .markdown-body ul {
+            list-style-type: disc !important;
+            padding-left: 1.5rem !important;
+        }
+        .update-content .markdown-body li {
+            margin-top: 0.25rem !important;
+            margin-bottom: 0.25rem !important;
+        }
+        .update-content .markdown-body p {
+            margin-bottom: 0.75rem !important;
         }
 
         /* Performance Optimization for Character Cards */
