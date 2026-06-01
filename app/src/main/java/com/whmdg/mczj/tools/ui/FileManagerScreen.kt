@@ -166,10 +166,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
     var refreshVersion by remember { mutableStateOf(0L) }
 
     // ── 文件夹大小数据库（存储在应用内部目录） ──
-    var folderSizeVersion by remember { mutableStateOf(0L) }
-    val folderSizeDb = remember(folderSizeVersion) {
-        FolderSizeDb.load(context.filesDir)
-    }
+    var folderSizeDb by remember { mutableStateOf(FolderSizeDb.load(context.filesDir)) }
 
     /** 计算目录直接内容大小：直接子文件 + 子文件夹 DB 值 */
     fun calcDirDirectSize(db: FolderSizeDb, dir: File): Long {
@@ -190,10 +187,10 @@ fun FileManagerScreen(onBack: () -> Unit) {
      * 刷新指定目录的文件夹大小（增量、自底向上冒泡）。
      * 使用绝对路径作为 key，存储在应用内部目录的 folder_sizes.json 中。
      */
-    fun refreshFolderSize(dirPath: String) {
+    fun refreshFolderSize(dirPath: String): FolderSizeDb {
         val baseDir = File(dirPath)
-        if (!baseDir.exists() || !baseDir.isDirectory) return
         val db = FolderSizeDb.load(context.filesDir)
+        if (!baseDir.exists() || !baseDir.isDirectory) return db
 
         // 收集所有子文件夹
         val subdirs = mutableListOf<String>()
@@ -227,6 +224,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
         db.put(dirPath, FolderSizeInfo(targetSize, targetMtime))
 
         db.save(context.filesDir)
+        return db
     }
 
     // ── 普通引擎：File.listFiles（公开 API，无 hidden API 限制） ──
@@ -681,9 +679,9 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                 FocusedPanel.RIGHT -> rightPath
                             }
                             coroutineScope.launch(Dispatchers.IO) {
-                                refreshFolderSize(targetPath)
+                                val updatedDb = refreshFolderSize(targetPath)
                                 withContext(Dispatchers.Main) {
-                                    folderSizeVersion++
+                                    folderSizeDb = updatedDb
                                     refreshVersion++
                                 }
                             }
@@ -747,9 +745,16 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             onFolderClick = { entry ->
                                 DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
                                 DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$leftPath")
-                                focusedPanel = FocusedPanel.LEFT
-                                leftNavState = leftNavState.navigate(entry.path)
-                                leftPath = entry.path
+                                // 权限预检查
+                                val testDir = java.io.File(entry.path)
+                                val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
+                                if (accessible != null) {
+                                    focusedPanel = FocusedPanel.LEFT
+                                    leftNavState = leftNavState.navigate(entry.path)
+                                    leftPath = entry.path
+                                } else {
+                                    Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
+                                }
                             },
                             onFileClick = { entry ->
                                 DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
@@ -777,9 +782,16 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             onFolderClick = { entry ->
                                 DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
                                 DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$rightPath")
-                                focusedPanel = FocusedPanel.RIGHT
-                                rightNavState = rightNavState.navigate(entry.path)
-                                rightPath = entry.path
+                                // 权限预检查
+                                val testDir = java.io.File(entry.path)
+                                val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
+                                if (accessible != null) {
+                                    focusedPanel = FocusedPanel.RIGHT
+                                    rightNavState = rightNavState.navigate(entry.path)
+                                    rightPath = entry.path
+                                } else {
+                                    Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
+                                }
                             },
                             onFileClick = { entry ->
                                 DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
@@ -1109,9 +1121,9 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                                 selectedEntry = null
                                                 Toast.makeText(context, "正在计算大小...", Toast.LENGTH_SHORT).show()
                                                 coroutineScope.launch(Dispatchers.IO) {
-                                                    refreshFolderSize(entry.path)
+                                                    val updatedDb = refreshFolderSize(entry.path)
                                                     withContext(Dispatchers.Main) {
-                                                        folderSizeVersion++
+                                                        folderSizeDb = updatedDb
                                                         leftEntries = listDirectory(leftPath)
                                                         rightEntries = listDirectory(rightPath)
                                                     }
