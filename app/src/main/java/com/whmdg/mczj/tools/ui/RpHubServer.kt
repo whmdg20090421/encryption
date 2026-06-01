@@ -67,25 +67,39 @@ class RpHubServer(
                 val ext = uri.substringAfterLast('.', "").lowercase()
                 val mime = mimeTypes[ext] ?: "application/octet-stream"
 
+                val responseHeaders = mapOf("Content-Type" to mime)
+                val elapsed = System.currentTimeMillis() - startTime
+
                 if (ext == "html") {
                     val html = stream.bufferedReader().readText()
                     val processed = processHtml(html)
-                    val elapsed = System.currentTimeMillis() - startTime
-
-                    // 更新最后一条记录的响应信息
                     updateLastEntry(
                         statusCode = 200,
-                        responseHeaders = mapOf("Content-Type" to mime, "Content-Length" to processed.length.toString()),
-                        responseBody = processed.take(2000),
+                        responseHeaders = responseHeaders + ("Content-Length" to processed.length.toString()),
+                        responseBody = processed.take(5000),
                         responseTime = elapsed
                     )
-
                     return newFixedLengthResponse(Response.Status.OK, mime, processed)
                 }
 
-                val elapsed = System.currentTimeMillis() - startTime
-                updateLastEntry(statusCode = 200, responseTime = elapsed)
-                return newChunkedResponse(Response.Status.OK, mime, stream)
+                // 所有文件类型都捕获响应信息
+                val bodyText = if (mime.startsWith("text/") || mime.contains("javascript") || mime.contains("json") || mime.contains("xml")) {
+                    try { stream.bufferedReader().readText().take(5000) } catch (_: Exception) { null }
+                } else null
+                updateLastEntry(
+                    statusCode = 200,
+                    responseHeaders = responseHeaders,
+                    responseBody = bodyText,
+                    responseTime = elapsed
+                )
+
+                // 如果已读取 body 文本，用字符串返回；否则用流返回
+                if (bodyText != null) {
+                    return newFixedLengthResponse(Response.Status.OK, mime, bodyText)
+                }
+                // 重新打开流（已被读取过）
+                val freshStream = context.assets.open(assetPath)
+                return newChunkedResponse(Response.Status.OK, mime, freshStream)
             } catch (_: Exception) {
                 // try next path
             }
