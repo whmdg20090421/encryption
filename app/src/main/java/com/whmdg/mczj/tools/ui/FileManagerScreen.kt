@@ -300,14 +300,13 @@ fun FileManagerScreen(onBack: () -> Unit) {
 
         // 提取"返回上一级"，排序其余项，再置顶
         val parentEntry = entries.find { it.name == "返回上一级" }
-        val others = entries.filter { it.name != "返回上一级" }
-        others.sortWith(
+        val sortedOthers = entries.filter { it.name != "返回上一级" }.sortedWith(
             compareByDescending<FileEntry> { it.isDirectory }
                 .thenBy { it.name.lowercase() }
         )
         entries.clear()
         if (parentEntry != null) entries.add(parentEntry)
-        entries.addAll(others)
+        entries.addAll(sortedOthers)
         return entries
     }
 
@@ -378,14 +377,13 @@ fun FileManagerScreen(onBack: () -> Unit) {
 
         // 提取"返回上一级"，排序其余项，再置顶
         val parentEntry = entries.find { it.name == "返回上一级" }
-        val others = entries.filter { it.name != "返回上一级" }
-        others.sortWith(
+        val sortedOthers = entries.filter { it.name != "返回上一级" }.sortedWith(
             compareByDescending<FileEntry> { it.isDirectory }
                 .thenBy { it.name.lowercase() }
         )
         entries.clear()
         if (parentEntry != null) entries.add(parentEntry)
-        entries.addAll(others)
+        entries.addAll(sortedOthers)
         return entries
     }
 
