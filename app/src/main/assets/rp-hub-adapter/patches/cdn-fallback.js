@@ -336,6 +336,69 @@
         });
     }
 
+    // ── 调试面板 ──
+    var jsErrors = [];
+    window.addEventListener('error', function(e) {
+        jsErrors.push({ msg: e.message, src: e.filename, line: e.lineno, col: e.colno });
+    });
+
+    function showDebugPanel(results) {
+        removeOverlay();
+
+        // 延迟检查全局变量（给脚本执行时间）
+        setTimeout(function() {
+            var lines = [];
+            lines.push('=== CDN 加载结果 ===');
+            lines.push('拦截元素数: ' + intercepted.length);
+            lines.push('');
+            for (var i = 0; i < results.length; i++) {
+                var r = results[i];
+                var res = r.res;
+                var status = r.src;
+                var globalOk = res.check ? (res.check() ? 'YES' : 'NO') : 'N/A';
+                lines.push(res.name + ': ' + status + ' | 全局变量=' + globalOk);
+            }
+            lines.push('');
+            lines.push('=== 全局变量状态 ===');
+            lines.push('window.tailwind: ' + (typeof window.tailwind));
+            lines.push('window.Vue: ' + (typeof window.Vue));
+            lines.push('window.localforage: ' + (typeof window.localforage));
+            lines.push('window.marked: ' + (typeof window.marked));
+            lines.push('window.DOMPurify: ' + (typeof window.DOMPurify));
+            lines.push('window.Sortable: ' + (typeof window.Sortable));
+            lines.push('window.app: ' + (typeof window.app));
+            lines.push('');
+            lines.push('=== JS 错误 (' + jsErrors.length + ') ===');
+            for (var j = 0; j < jsErrors.length; j++) {
+                var err = jsErrors[j];
+                lines.push(err.msg + ' @ ' + (err.src || 'inline') + ':' + err.line);
+            }
+            lines.push('');
+            lines.push('=== DOM 状态 ===');
+            lines.push('document.readyState: ' + document.readyState);
+            lines.push('#app children: ' + (document.getElementById('app') ? document.getElementById('app').children.length : 'NOT FOUND'));
+            lines.push('#app innerHTML length: ' + (document.getElementById('app') ? document.getElementById('app').innerHTML.length : 0));
+            lines.push('[v-cloak] elements: ' + document.querySelectorAll('[v-cloak]').length);
+
+            var report = lines.join('\n');
+            console.error('[CDN-DEBUG]\n' + report);
+
+            // 显示调试面板
+            var panel = document.createElement('div');
+            panel.style.cssText = 'position:fixed;top:0;right:0;width:320px;max-height:70vh;background:#1e1e2e;color:#cdd6f4;font:11px/1.5 monospace;padding:12px;overflow-y:auto;z-index:99998;border-bottom-left-radius:12px;box-shadow:-2px 2px 12px rgba(0,0,0,0.3);';
+            var pre = document.createElement('pre');
+            pre.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-all;';
+            pre.textContent = report;
+            var btn = document.createElement('button');
+            btn.style.cssText = 'margin-top:8px;padding:4px 12px;background:#6366f1;color:#fff;border:none;border-radius:6px;font-size:11px;cursor:pointer;';
+            btn.textContent = '关闭';
+            btn.onclick = function() { panel.parentNode.removeChild(panel); };
+            panel.appendChild(pre);
+            panel.appendChild(btn);
+            document.body.appendChild(panel);
+        }, 2000);
+    }
+
     // ── 主流程 ──
     function main() {
         if (!document.body) { setTimeout(main, 10); return; }
@@ -349,14 +412,15 @@
         openDB(function(db) {
             var index = 0;
             var failedResources = [];
+            var allResults = [];
 
             function next() {
                 if (index >= intercepted.length) {
                     if (failedResources.length > 0) {
                         showErrorDialog(failedResources);
-                    } else {
-                        removeOverlay();
                     }
+                    // 总是显示调试面板（临时调试用）
+                    showDebugPanel(allResults);
                     return;
                 }
 
@@ -365,6 +429,7 @@
                 updateStatus('检测 ' + res.name + ' (' + (index + 1) + '/' + intercepted.length + ')...');
 
                 processIntercepted(item, db).then(function(result) {
+                    allResults.push({ res: res, src: result.src, diag: result.diag });
                     if (result.src === 'fail') {
                         failedResources.push({ name: res.name, type: res.isCss ? 'CSS' : 'JS', diag: result.diag });
                     }
