@@ -35,6 +35,7 @@ object AppDataPaths {
         if (!migrated) {
             migrated = true
             migrateFromExternal(context, dir)
+            migrateScatteredFiles(context)
         }
         return dir
     }
@@ -70,6 +71,13 @@ object AppDataPaths {
     /** RP-Hub 模块目录 */
     fun rpHub(context: Context): File {
         val dir = File(root(context), "RP-Hub")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 诊断日志目录（crash_reports + debug_logs） */
+    fun diagnostics(context: Context): File {
+        val dir = File(root(context), "诊断日志")
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
@@ -152,5 +160,53 @@ object AppDataPaths {
                 file.renameTo(target)
             }
         }
+    }
+
+    /**
+     * 将 filesDir 根目录下散落的数据文件迁移到 AppDataPaths 子目录。
+     * 一次性执行，迁移完成后记录标记。
+     */
+    private fun migrateScatteredFiles(context: Context) {
+        val prefs = context.getSharedPreferences("app_data_migration", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("scattered_migrated", false)) return
+
+        val fd = context.filesDir
+        val encDir = File(context.filesDir, "$DIR_NAME/加密模块").apply { mkdirs() }
+        val diagDir = File(context.filesDir, "$DIR_NAME/诊断日志").apply { mkdirs() }
+
+        // 加密模块文件
+        moveFile(File(fd, "vault_db.json"), File(encDir, "vault_db.json"))
+        moveFile(File(fd, "encryption_tasks.json"), File(encDir, "encryption_tasks.json"))
+        moveFile(File(fd, "encryption_history.json"), File(encDir, "encryption_history.json"))
+        moveDir(File(fd, "vault"), File(encDir, "vault"))
+        moveDir(File(fd, ".vault_private_backup"), File(encDir, ".vault_private_backup"))
+
+        // 诊断日志
+        moveDir(File(fd, "crash_reports"), File(diagDir, "crash_reports"))
+        moveDir(File(fd, "debug_logs"), File(diagDir, "debug_logs"))
+
+        prefs.edit().putBoolean("scattered_migrated", true).apply()
+        Log.i("AppDataPaths", "散落文件迁移完成")
+    }
+
+    private fun moveFile(src: File, dst: File) {
+        if (!src.exists() || dst.exists()) return
+        dst.parentFile?.mkdirs()
+        src.renameTo(dst)
+    }
+
+    private fun moveDir(src: File, dst: File) {
+        if (!src.exists() || !src.isDirectory) return
+        if (!dst.exists()) dst.mkdirs()
+        for (file in src.listFiles() ?: emptyArray()) {
+            val target = File(dst, file.name)
+            if (file.isDirectory) {
+                moveDir(file, target)
+                if (file.listFiles().isNullOrEmpty()) file.delete()
+            } else if (!target.exists()) {
+                file.renameTo(target)
+            }
+        }
+        if (src.listFiles().isNullOrEmpty()) src.delete()
     }
 }

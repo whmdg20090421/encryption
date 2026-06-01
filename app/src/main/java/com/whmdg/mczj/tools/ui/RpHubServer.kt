@@ -40,6 +40,15 @@ class RpHubServer(
         var uri = session.uri
         if (uri == "/") uri = "/index.html"
 
+        // 记录本地请求到 TrafficLog
+        TrafficLog.add(
+            TrafficEntry(
+                url = "http://localhost:$listeningPort$uri",
+                method = session.method.name,
+                isLocal = true
+            )
+        )
+
         val assetPaths = listOf("rp-hub$uri", "rp-hub-adapter$uri")
 
         for (assetPath in assetPaths) {

@@ -1,6 +1,7 @@
 package com.whmdg.mczj.tools.encryption.data
 
 import android.content.Context
+import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
 import java.security.MessageDigest
 
@@ -14,7 +15,7 @@ object VaultPaths {
      */
     fun rootFor(context: Context, loc: StorageLocation): File {
         return when (loc) {
-            StorageLocation.INTERNAL -> context.filesDir
+            StorageLocation.INTERNAL -> AppDataPaths.encryption(context)
             StorageLocation.EXTERNAL -> {
                 context.getExternalFilesDir(null) ?: throw Exception("外部应用专属目录不可用，请改用内部目录")
             }
@@ -40,8 +41,7 @@ object VaultPaths {
      * 内部应用私有备份目录（vault_db 备份 / 配置备份 / 名称映射备份）。
      */
     fun appPrivateBackupDir(context: Context): File {
-        val root = context.filesDir
-        val dir = File(root, ".vault_private_backup")
+        val dir = File(AppDataPaths.encryption(context), ".vault_private_backup")
         if (!dir.exists()) {
             dir.mkdirs()
         }
@@ -64,7 +64,7 @@ object VaultPaths {
      * 全局 vault_db.json（内部）
      */
     fun vaultDbFile(context: Context): File {
-        return File(context.filesDir, "vault_db.json")
+        return File(AppDataPaths.encryption(context), "vault_db.json")
     }
 
     /**

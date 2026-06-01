@@ -132,7 +132,7 @@ private fun CrashScreen(
     var savedPath by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         try {
-            val dir = File(context.filesDir, "crash_reports")
+            val dir = File(AppDataPaths.diagnostics(context), "crash_reports")
             dir.mkdirs()
             val file = File(dir, "native_crash_${timestamp}.txt")
             FileOutputStream(file).use { it.write(fullErrorText.toByteArray()) }

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
 import org.json.JSONArray
 import org.json.JSONObject
+import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -67,8 +68,9 @@ object EncryptionTaskManager {
      */
     fun init(context: Context) {
         appContext = context.applicationContext
-        queueFile = File(context.filesDir, "encryption_tasks.json")
-        historyFile = File(context.filesDir, "encryption_history.json")
+        val encDir = AppDataPaths.encryption(context)
+        queueFile = File(encDir, "encryption_tasks.json")
+        historyFile = File(encDir, "encryption_history.json")
         loadQueue()
         loadHistory()
         startSpeedCalculator()

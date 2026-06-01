@@ -3,6 +3,7 @@ package com.whmdg.mczj.tools.util
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -94,7 +95,7 @@ object DiagnosticLog {
         // 2) 写内部目录（始终写，作为兜底）
         var internalFile: File? = null
         try {
-            val dir = File(context.filesDir, "debug_logs").apply { mkdirs() }
+            val dir = File(AppDataPaths.diagnostics(context), "debug_logs").apply { mkdirs() }
             val f = File(dir, fileName)
             f.writeText(report)
             internalFile = f
