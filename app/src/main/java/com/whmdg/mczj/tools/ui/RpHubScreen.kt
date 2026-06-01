@@ -173,7 +173,7 @@ private fun proxyExternalRequest(
         // 忽略 SSL 证书验证（用于读取 HTTPS 明文）
         if (conn is javax.net.ssl.HttpsURLConnection) {
             conn.sslSocketFactory = createTrustAllSslFactory()
-            conn.hostnameVerifier = { _, _ -> true }
+            conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
         }
         // 转发请求头
         for ((key, value) in reqHeaders) {
