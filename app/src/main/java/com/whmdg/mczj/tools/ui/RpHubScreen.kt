@@ -62,6 +62,7 @@ fun RpHubScreen(onBack: () -> Unit) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     var showTrafficPanel by remember { mutableStateOf(false) }
     var showDownloadPanel by remember { mutableStateOf(false) }
+    var showDebugPanel by remember { mutableStateOf(false) }
     var pendingSaveAsEntry by remember { mutableStateOf<DownloadEntry?>(null) }
     val isDebugMode = remember {
         context.getSharedPreferences(AppDataPaths.PREFS_RP_HUB, android.content.Context.MODE_PRIVATE)
@@ -112,9 +113,9 @@ fun RpHubScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    // Debug 按钮（仅 Debug 模式时显示，调用 JS 调试弹窗）
+                    // Debug 按钮（仅 Debug 模式时显示）
                     if (isDebugMode) {
-                        IconButton(onClick = { webView?.evaluateJavascript("window.__SHOW_DEBUG_PANEL__()", null) }) {
+                        IconButton(onClick = { showDebugPanel = true }) {
                             Icon(Icons.Default.Code, contentDescription = "Debug")
                         }
                     }
@@ -275,6 +276,18 @@ fun RpHubScreen(onBack: () -> Unit) {
                     pendingSaveAsEntry = entry
                     safLauncher.launch(entry.fileName)
                 }
+            )
+        }
+    }
+
+    // Debug 面板 BottomSheet
+    if (showDebugPanel) {
+        ModalBottomSheet(
+            onDismissRequest = { showDebugPanel = false }
+        ) {
+            RpHubDebugPanel(
+                webView = webView,
+                onDismiss = { showDebugPanel = false }
             )
         }
     }
