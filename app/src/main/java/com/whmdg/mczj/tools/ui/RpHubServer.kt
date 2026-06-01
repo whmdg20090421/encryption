@@ -138,7 +138,7 @@ class RpHubServer(
         val patches = loadPatchScripts()
         if (patches.isEmpty() && debugFlag.isEmpty()) return fixed
         val injection = debugFlag + patches.joinToString("\n") { "<script>$it</script>" }
-        return fixed.replace("<head>", "<head>\n$injection\n")
+        return fixed.replaceFirst("<head>", "<head>\n$injection\n")
     }
 
     /**

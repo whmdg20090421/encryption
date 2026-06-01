@@ -62,7 +62,10 @@ data class DebugSnapshot(
     val readyState: String,
     val appChildren: Int,
     val vCloak: Int,
-    val injectedScripts: Int
+    val injectedScripts: Int,
+    val pageScripts: List<String>,
+    val styleSheets: List<String>,
+    val timestamp: Long
 )
 
 @Composable
@@ -189,6 +192,19 @@ fun RpHubDebugPanel(
                         Text("#app children: ${snap.appChildren}", fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                         Text("[v-cloak]: ${snap.vCloak}", fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                         Text("injected scripts: ${snap.injectedScripts}", fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+
+                        if (snap.pageScripts.isNotEmpty()) {
+                            SectionTitle("页面脚本 (${snap.pageScripts.size})")
+                            snap.pageScripts.forEach { src ->
+                                Text(src, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = Color(0xFF6B7280))
+                            }
+                        }
+                        if (snap.styleSheets.isNotEmpty()) {
+                            SectionTitle("样式表 (${snap.styleSheets.size})")
+                            snap.styleSheets.forEach { href ->
+                                Text(href, fontSize = 10.sp, fontFamily = FontFamily.Monospace, color = Color(0xFF6B7280))
+                            }
+                        }
                     }
                 }
             }
@@ -348,6 +364,10 @@ private fun parseDebugSnapshot(json: String?): DebugSnapshot? {
         }
         val globalsObj = obj.optJSONObject("globals") ?: JSONObject()
         val globals = globalsObj.keys().asSequence().associateWith { globalsObj.getString(it) }
+        val scriptsArr = obj.optJSONArray("pageScripts") ?: org.json.JSONArray()
+        val pageScripts = (0 until scriptsArr.length()).map { scriptsArr.getString(it) }
+        val sheetsArr = obj.optJSONArray("styleSheets") ?: org.json.JSONArray()
+        val styleSheets = (0 until sheetsArr.length()).map { sheetsArr.getString(it) }
         DebugSnapshot(
             cdn = cdn,
             jsErrors = errors,
@@ -356,7 +376,10 @@ private fun parseDebugSnapshot(json: String?): DebugSnapshot? {
             readyState = obj.optString("readyState"),
             appChildren = obj.optInt("appChildren"),
             vCloak = obj.optInt("vCloak"),
-            injectedScripts = obj.optInt("injectedScripts")
+            injectedScripts = obj.optInt("injectedScripts"),
+            pageScripts = pageScripts,
+            styleSheets = styleSheets,
+            timestamp = obj.optLong("timestamp", 0L)
         )
     } catch (_: Exception) {
         null
@@ -387,5 +410,15 @@ private fun buildReportText(snap: DebugSnapshot?): String {
     sb.appendLine("  #app children: ${snap.appChildren}")
     sb.appendLine("  [v-cloak]: ${snap.vCloak}")
     sb.appendLine("  injected scripts: ${snap.injectedScripts}")
+    if (snap.pageScripts.isNotEmpty()) {
+        sb.appendLine()
+        sb.appendLine("=== 页面脚本 (${snap.pageScripts.size}) ===")
+        snap.pageScripts.forEach { sb.appendLine("  $it") }
+    }
+    if (snap.styleSheets.isNotEmpty()) {
+        sb.appendLine()
+        sb.appendLine("=== 样式表 (${snap.styleSheets.size}) ===")
+        snap.styleSheets.forEach { sb.appendLine("  $it") }
+    }
     return sb.toString()
 }

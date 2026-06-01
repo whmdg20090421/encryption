@@ -255,6 +255,17 @@
             globalsState[globals[i]] = typeof window[globals[i]];
         }
         var appEl = document.getElementById('app');
+        // 实时收集当前页面的 script 和 stylesheet 信息
+        var pageScripts = [];
+        var scripts = document.querySelectorAll('script[src]');
+        for (var si = 0; si < scripts.length; si++) {
+            pageScripts.push(scripts[si].src);
+        }
+        var styleSheets = [];
+        var links = document.querySelectorAll('link[rel="stylesheet"]');
+        for (var li = 0; li < links.length; li++) {
+            styleSheets.push(links[li].href);
+        }
         return JSON.stringify({
             cdn: lastResults ? lastResults.map(function(r) {
                 return { name: r.name, src: r.src, status: r.diag ? r.diag.status : null, duration: r.diag ? r.diag.duration : null, error: r.diag ? r.diag.errorType : null };
@@ -265,7 +276,10 @@
             readyState: document.readyState,
             appChildren: appEl ? appEl.children.length : 0,
             vCloak: document.querySelectorAll('[v-cloak]').length,
-            injectedScripts: document.querySelectorAll('head > script').length
+            injectedScripts: document.querySelectorAll('head > script').length,
+            pageScripts: pageScripts,
+            styleSheets: styleSheets,
+            timestamp: Date.now()
         });
     };
 
