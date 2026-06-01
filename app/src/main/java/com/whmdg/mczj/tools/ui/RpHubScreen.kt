@@ -1,22 +1,33 @@
 package com.whmdg.mczj.tools.ui
 
 import android.net.http.SslError
+import android.os.Environment
 import android.webkit.ConsoleMessage
+import android.webkit.CookieManager
+import android.webkit.DownloadListener
 import android.webkit.SslErrorHandler
+import android.webkit.URLUtil
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import java.io.ByteArrayInputStream
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -30,10 +41,15 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val RP_HUB_PORT = 18900
 
@@ -41,9 +57,43 @@ private const val RP_HUB_PORT = 18900
 @Composable
 fun RpHubScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val server = remember { RpHubServer(context, RP_HUB_PORT) }
     var webView by remember { mutableStateOf<WebView?>(null) }
     var showTrafficPanel by remember { mutableStateOf(false) }
+    var showDownloadPanel by remember { mutableStateOf(false) }
+    var pendingSaveAsEntry by remember { mutableStateOf<DownloadEntry?>(null) }
+    var showDebugPanel by remember { mutableStateOf(false) }
+    val isDebugMode = remember {
+        context.getSharedPreferences(AppDataPaths.PREFS_RP_HUB, android.content.Context.MODE_PRIVATE)
+            .getBoolean("debug_mode", false)
+    }
+
+    // SAF 另存为 launcher
+    val safLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("*/*")
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        val entry = pendingSaveAsEntry ?: return@rememberLauncherForActivityResult
+        pendingSaveAsEntry = null
+        scope.launch {
+            val src = File(entry.externalPath)
+            if (!src.exists()) {
+                Toast.makeText(context, "源文件不存在", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            try {
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        src.inputStream().use { it.copyTo(out) }
+                    }
+                }
+                Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(context, "保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     DisposableEffect(Unit) {
         DiagnosticLog.beginSession("RP-Hub")
@@ -63,6 +113,16 @@ fun RpHubScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    // Debug 按钮（仅 Debug 模式时显示）
+                    if (isDebugMode) {
+                        IconButton(onClick = { showDebugPanel = true }) {
+                            Icon(Icons.Default.Code, contentDescription = "Debug")
+                        }
+                    }
+                    // 下载按钮
+                    IconButton(onClick = { showDownloadPanel = true }) {
+                        Icon(Icons.Default.Download, contentDescription = "下载")
+                    }
                     // Web 面板按钮
                     IconButton(onClick = { showTrafficPanel = true }) {
                         Icon(Icons.Default.BugReport, contentDescription = "Web 面板")
@@ -115,6 +175,9 @@ fun RpHubScreen(onBack: () -> Unit) {
                             } else {
                                 handler?.cancel()
                             }
+                            if (isDebugMode) {
+                                DebugLog.log("SSL", "Error: ${error?.toString() ?: "unknown"}", "WARN")
+                            }
                         }
                     }
 
@@ -128,8 +191,66 @@ fun RpHubScreen(onBack: () -> Unit) {
                                     else -> "INFO"
                                 }
                                 DiagnosticLog.log("WebView/$level", "[${it.sourceId()}:${it.lineNumber()}] $msg")
+                                if (isDebugMode) {
+                                    DebugLog.log("Console", "[${it.sourceId()}:${it.lineNumber()}] $msg", level)
+                                }
                             }
                             return true
+                        }
+                    }
+
+                    // 下载监听
+                    setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val fileName = URLUtil.guessFileName(url, contentDisposition, mimetype)
+                                val cookies = CookieManager.getInstance().getCookie(url)
+
+                                // 下载文件数据
+                                val conn = URL(url).openConnection() as HttpURLConnection
+                                cookies?.let { conn.setRequestProperty("Cookie", it) }
+                                conn.setRequestProperty("User-Agent", userAgent)
+                                conn.connect()
+                                val data = conn.inputStream.use { it.readBytes() }
+                                conn.disconnect()
+
+                                // 外部存储：Download/RP-Hub/download/cards/
+                                val extDir = File(
+                                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                                    "RP-Hub/download/cards"
+                                ).apply { mkdirs() }
+                                val extFile = File(extDir, fileName)
+                                extFile.writeBytes(data)
+
+                                // 内部存储：AppDataPaths.rpHub/download/cards/
+                                val intDir = File(
+                                    AppDataPaths.rpHub(context),
+                                    "download/cards"
+                                ).apply { mkdirs() }
+                                val intFile = File(intDir, fileName)
+                                intFile.writeBytes(data)
+
+                                DownloadLog.add(
+                                    DownloadEntry(
+                                        fileName = fileName,
+                                        externalPath = extFile.absolutePath,
+                                        internalPath = intFile.absolutePath
+                                    )
+                                )
+
+                                if (isDebugMode) {
+                                    DebugLog.log("Download", "$fileName → ${extFile.absolutePath}")
+                                }
+
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(context, "已下载: $fileName", Toast.LENGTH_SHORT).show()
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(context, "下载失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
+                                DiagnosticLog.log("RP-Hub/ERROR", "Download failed: ${e.message}")
+                            }
                         }
                     }
 
@@ -149,6 +270,33 @@ fun RpHubScreen(onBack: () -> Unit) {
         ) {
             RpHubTrafficPanel(
                 onDismiss = { showTrafficPanel = false }
+            )
+        }
+    }
+
+    // 下载面板 BottomSheet
+    if (showDownloadPanel) {
+        ModalBottomSheet(
+            onDismissRequest = { showDownloadPanel = false }
+        ) {
+            RpHubDownloadPanel(
+                onDismiss = { showDownloadPanel = false },
+                onSaveAs = { entry ->
+                    showDownloadPanel = false
+                    pendingSaveAsEntry = entry
+                    safLauncher.launch(entry.fileName)
+                }
+            )
+        }
+    }
+
+    // Debug 面板 BottomSheet
+    if (showDebugPanel) {
+        ModalBottomSheet(
+            onDismissRequest = { showDebugPanel = false }
+        ) {
+            RpHubDebugPanel(
+                onDismiss = { showDebugPanel = false }
             )
         }
     }

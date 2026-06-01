@@ -93,8 +93,10 @@ import com.whmdg.mczj.tools.ui.components.GlowListItem
 import com.whmdg.mczj.tools.ui.components.GlowToggleItem
 import com.whmdg.mczj.tools.ui.components.glowEffect
 
-/** 鉴权调试开关：true = 显示详细变量值，false = 仅显示权限列表 */
-const val DEBUG_AUTH = false
+/** 鉴权调试开关：由 debug_mode SharedPreferences 控制 */
+fun isDebugAuth(ctx: Context): Boolean =
+    ctx.getSharedPreferences(AppDataPaths.PREFS_RP_HUB, Context.MODE_PRIVATE)
+        .getBoolean("debug_mode", false)
 
 fun featureDisplayName(f: Feature): String = when (f) {
     Feature.ENCRYPTION_VAULT -> "加密"
@@ -240,14 +242,14 @@ fun NavigateGate(
         )
     }
 
-    // 认证成功弹窗（DEBUG_AUTH=true 时显示详细调试信息，否则显示简洁权限列表）
+    // 认证成功弹窗（Debug 模式时显示详细调试信息，否则显示简洁权限列表）
     debugInfo?.let { info ->
         AlertDialog(
             onDismissRequest = { debugInfo = null },
             title = { Text("密钥已激活") },
             text = {
                 Column {
-                    if (DEBUG_AUTH) {
+                    if (isDebugAuth(ctx)) {
                         // DEBUG 模式：显示全部变量值
                         Text("当前已激活权限：", style = MaterialTheme.typography.titleSmall)
                         Spacer(modifier = Modifier.height(8.dp))

@@ -65,7 +65,7 @@ fun AuthManagementScreen(onBack: () -> Unit) {
                             if (res.isSuccess) {
                                 val features = res.getOrNull() ?: emptySet()
                                 currentPw = pw
-                                resultMsg = if (DEBUG_AUTH) {
+                                resultMsg = if (isDebugAuth(context)) {
                                     val state = PermissionManager.state.value
                                     val keyId = (state as? PermissionManager.AuthState.Authed)?.keyId ?: "?"
                                     "密钥已激活: keyId=$keyId, features=${features.joinToString { it.name }}, state=$state"

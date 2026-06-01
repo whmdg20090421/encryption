@@ -21,6 +21,32 @@
     // DaisyUI CSS — 检测方式: 查找包含 daisyui 的 stylesheet
     var DAISYUI = { cdn: 'https://cdn.jsdelivr.net/npm/daisyui@4.7.2/dist/full.min.css', local: '/vendor/daisyui.full.min.css', name: 'DaisyUI', isCss: true };
 
+    // ── 页面资源检测: 只处理当前页面实际引用的 CDN 资源 ──
+    function getUsedResources() {
+        var scriptSrcs = [];
+        var scripts = document.querySelectorAll('script[src]');
+        for (var i = 0; i < scripts.length; i++) {
+            scriptSrcs.push(scripts[i].src);
+        }
+        return RESOURCES.filter(function(res) {
+            // 如果全局变量已存在，说明已加载（无论来源）
+            if (res.check && res.check()) return true;
+            // 检查页面是否有引用该 CDN 的 script 标签
+            for (var j = 0; j < scriptSrcs.length; j++) {
+                if (scriptSrcs[j].indexOf(res.cdn) !== -1) return true;
+            }
+            return false;
+        });
+    }
+    function isDaisyUiUsedInPage() {
+        // 检查页面是否有引用 DaisyUI 的 link 标签
+        var links = document.querySelectorAll('link[href]');
+        for (var i = 0; i < links.length; i++) {
+            if (links[i].href.indexOf('daisyui') !== -1) return true;
+        }
+        return false;
+    }
+
     // ── IndexedDB 缓存 ──
     function openDB(cb) {
         try {
@@ -220,11 +246,18 @@
     function showDebugPanel(results) {
         setTimeout(function() {
             var lines = [];
-            lines.push('=== CDN 加载结果 (v3: 无拦截，事后检测) ===');
+            lines.push('=== CDN 加载结果 (v4: 按需检测) ===');
             lines.push('');
+            lines.push('--- 脚本资源 (' + results.length + ' 个被检测) ---');
             for (var i = 0; i < results.length; i++) {
                 var r = results[i];
                 lines.push(r.name + ': ' + r.src + (r.diag ? ' | HTTP ' + (r.diag.status || '无响应') + ' ' + r.diag.duration + 'ms' : ''));
+            }
+            lines.push('');
+            lines.push('--- 页面脚本标签 ---');
+            var pageScripts = document.querySelectorAll('script[src]');
+            for (var si = 0; si < pageScripts.length; si++) {
+                lines.push('  ' + pageScripts[si].src);
             }
             lines.push('');
             lines.push('=== 全局变量状态 ===');
@@ -235,6 +268,8 @@
             lines.push('window.DOMPurify: ' + (typeof window.DOMPurify));
             lines.push('window.Sortable: ' + (typeof window.Sortable));
             lines.push('window.app: ' + (typeof window.app));
+            lines.push('window.RPHubCardUtils: ' + (typeof window.RPHubCardUtils));
+            lines.push('window.RPHubCustomSelect: ' + (typeof window.RPHubCustomSelect));
             lines.push('');
             lines.push('=== JS 错误 (' + jsErrors.length + ') ===');
             for (var j = 0; j < jsErrors.length; j++) {
@@ -243,23 +278,29 @@
             }
             lines.push('');
             lines.push('=== DOM 状态 ===');
+            lines.push('URL: ' + location.href);
             lines.push('document.readyState: ' + document.readyState);
             lines.push('#app children: ' + (document.getElementById('app') ? document.getElementById('app').children.length : 'NOT FOUND'));
             lines.push('#app innerHTML length: ' + (document.getElementById('app') ? document.getElementById('app').innerHTML.length : 0));
             lines.push('[v-cloak] elements: ' + document.querySelectorAll('[v-cloak]').length);
+            lines.push('injected scripts: ' + document.querySelectorAll('head > script').length);
 
             var report = lines.join('\n');
             console.error('[CDN-DEBUG]\n' + report);
 
+            // 面板: 按钮固定在底部，内容可滚动
             var mask = document.createElement('div');
-            mask.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:99998;display:flex;align-items:center;justify-content:center;padding:16px;';
+            mask.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:99998;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
             var panel = document.createElement('div');
-            panel.style.cssText = 'width:90vw;max-width:500px;max-height:80vh;background:#1e1e2e;color:#cdd6f4;font:12px/1.6 monospace;padding:16px;overflow-y:auto;border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,0.4);display:flex;flex-direction:column;';
+            panel.style.cssText = 'width:90vw;max-width:500px;max-height:80vh;background:#1e1e2e;color:#cdd6f4;font:12px/1.6 monospace;border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,0.4);display:flex;flex-direction:column;overflow:hidden;';
+            var content = document.createElement('div');
+            content.style.cssText = 'flex:1;overflow-y:auto;padding:16px 16px 0 16px;min-height:0;';
             var pre = document.createElement('pre');
-            pre.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-all;flex:1;';
+            pre.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-all;';
             pre.textContent = report;
+            content.appendChild(pre);
             var btnRow = document.createElement('div');
-            btnRow.style.cssText = 'display:flex;gap:10px;margin-top:12px;';
+            btnRow.style.cssText = 'display:flex;gap:10px;padding:12px 16px;border-top:1px solid #313244;flex-shrink:0;';
             var btnCopy = document.createElement('button');
             btnCopy.style.cssText = 'flex:1;padding:8px 0;background:#4b5563;color:#fff;border:none;border-radius:8px;font-size:12px;cursor:pointer;';
             btnCopy.textContent = '复制';
@@ -271,7 +312,7 @@
             btnClose.textContent = '关闭';
             btnClose.onclick = function() { mask.parentNode.removeChild(mask); };
             btnRow.appendChild(btnCopy); btnRow.appendChild(btnClose);
-            panel.appendChild(pre); panel.appendChild(btnRow);
+            panel.appendChild(content); panel.appendChild(btnRow);
             mask.appendChild(panel);
             mask.onclick = function(e) { if (e.target === mask) mask.parentNode.removeChild(mask); };
             document.body.appendChild(mask);
@@ -282,6 +323,11 @@
     function main() {
         console.log('[cdn-fallback] v3: 等待页面加载完成后检测 CDN 资源...');
 
+        // 只处理当前页面实际使用的资源
+        var activeResources = getUsedResources();
+        var daisyUiNeeded = isDaisyUiUsedInPage();
+        console.log('[cdn-fallback] 页面需要 ' + activeResources.length + ' 个脚本资源, DaisyUI: ' + daisyUiNeeded);
+
         // 收集所有结果
         var allResults = [];
         var failedResources = [];
@@ -289,8 +335,13 @@
         openDB(function(db) {
             var index = 0;
 
-            // 先处理 CSS (DaisyUI)
+            // 先处理 CSS (DaisyUI) — 仅当页面实际引用时
             function checkCss() {
+                if (!daisyUiNeeded) {
+                    allResults.push({ name: DAISYUI.name, src: 'skip (not in page)', diag: null });
+                    checkScripts();
+                    return;
+                }
                 if (isCssLoaded(DAISYUI.cdn)) {
                     console.log('[cdn-fallback] ' + DAISYUI.name + ': CDN 已加载');
                     // 异步缓存
@@ -331,7 +382,7 @@
             }
 
             function checkScripts() {
-                if (index >= RESOURCES.length) {
+                if (index >= activeResources.length) {
                     // 全部检查完成
                     if (failedResources.length > 0) {
                         showErrorDialog(failedResources);
@@ -340,7 +391,7 @@
                     return;
                 }
 
-                var res = RESOURCES[index];
+                var res = activeResources[index];
                 index++;
 
                 // 检测全局变量 — 如果存在说明 CDN 加载成功
