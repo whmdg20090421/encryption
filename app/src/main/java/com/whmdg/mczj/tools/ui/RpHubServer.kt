@@ -129,12 +129,61 @@ class RpHubServer(
     }
 
     private fun processHtml(html: String, debugMode: Boolean = false): String {
+        // 修复 HTML 中 </script> 字面量问题：将脚本内容中的 </script> 转义为 <\/script>
+        // HTML 解析器不区分 JS 上下文，正则/字符串中的 </script> 会导致脚本被提前截断
+        val fixed = escapeScriptCloseInContent(html)
+
         // 注入调试标记（在 patch 脚本之前执行）
         val debugFlag = if (debugMode) "\n<script>window.__RP_HUB_DEBUG__ = true;</script>\n" else ""
         val patches = loadPatchScripts()
-        if (patches.isEmpty() && debugFlag.isEmpty()) return html
+        if (patches.isEmpty() && debugFlag.isEmpty()) return fixed
         val injection = debugFlag + patches.joinToString("\n") { "<script>$it</script>" }
-        return html.replace("<head>", "<head>\n$injection\n")
+        return fixed.replace("<head>", "<head>\n$injection\n")
+    }
+
+    /**
+     * 将 <script>...</script> 块内容中的 </script> 字面量转义为 <\/script>，
+     * 防止 HTML 解析器将其误认为脚本关闭标签（常见于正则表达式和字符串中）。
+     */
+    private fun escapeScriptCloseInContent(html: String): String {
+        val regex = Regex("</script>", RegexOption.IGNORE_CASE)
+        val sb = StringBuilder()
+        var pos = 0
+
+        while (pos < html.length) {
+            val tagStart = html.indexOf("<script", pos, ignoreCase = true)
+            if (tagStart == -1) {
+                sb.append(html, pos, html.length)
+                break
+            }
+
+            // 找到 <script> 标签的 > 位置
+            val tagEnd = html.indexOf('>', tagStart)
+            if (tagEnd == -1) {
+                sb.append(html, pos, html.length)
+                break
+            }
+
+            // 复制到 <script...> 之后
+            sb.append(html, pos, tagEnd + 1)
+
+            // 找到真正的 </script> 关闭标签
+            val closeTag = regex.find(html, tagEnd + 1)
+            if (closeTag == null) {
+                sb.append(html, tagEnd + 1, html.length)
+                pos = html.length
+            } else {
+                val contentStart = tagEnd + 1
+                val contentEnd = closeTag.range.first
+                val content = html.substring(contentStart, contentEnd)
+                // 将脚本内容中的 </script> 转义为 <\/script>
+                sb.append(regex.replace(content, "<\\/script>"))
+                // 写入真正的 </script> 关闭标签
+                sb.append(closeTag.value)
+                pos = closeTag.range.last + 1
+            }
+        }
+        return sb.toString()
     }
 
     private fun loadPatchScripts(): List<String> {
