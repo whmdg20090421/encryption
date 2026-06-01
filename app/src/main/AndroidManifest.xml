@@ -95,6 +95,14 @@
             android:launchMode="singleInstance"
             android:theme="@android:style/Theme.Material.NoActionBar" />
 
+        <!-- Java/Kotlin 未捕获异常显示 Activity -->
+        <activity
+            android:name=".ErrorReportActivity"
+            android:exported="false"
+            android:label="错误报告"
+            android:launchMode="singleInstance"
+            android:theme="@style/Theme.工具箱" />
+
         <receiver
             android:name=".security.MyDeviceAdminReceiver"
             android:label="@string/app_name"
