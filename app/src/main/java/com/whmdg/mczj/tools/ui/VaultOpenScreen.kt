@@ -64,7 +64,7 @@ fun VaultOpenScreen(
 
     val isRoot = currentPath == session.vaultDir.absolutePath
 
-    var folderSizeVersion by remember { mutableStateOf(0L) }
+    var folderSizeDb by remember { mutableStateOf(com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(session.vaultDir)) }
 
     fun refresh() {
         loading = true
@@ -119,7 +119,8 @@ fun VaultOpenScreen(
                     val rel = if (currentDir.absolutePath == session.vaultDir.absolutePath) ""
                     else currentDir.relativeTo(session.vaultDir).path
                     vaultService.refreshFolderSize(session.vaultDir, rel)
-                    withContext(Dispatchers.Main) { folderSizeVersion++ }
+                    val updatedDb = com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(session.vaultDir)
+                    withContext(Dispatchers.Main) { folderSizeDb = updatedDb }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -130,10 +131,7 @@ fun VaultOpenScreen(
         }
     }
 
-    // 保险箱文件夹大小数据库（VaultOpenScreen 专用）
-    val folderSizeDb = remember(folderSizeVersion) {
-        com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(session.vaultDir)
-    }
+    // folderSizeDb 已在上方声明为 mutableStateOf
 
     // 异步刷新当前目录的文件夹大小（不阻塞 UI）
     fun refreshFolderSize() {
@@ -141,7 +139,8 @@ fun VaultOpenScreen(
         coroutineScope.launch(Dispatchers.Default) {
             val rel = if (isRoot) "" else File(currentPath).relativeTo(session.vaultDir).path
             vaultService.refreshFolderSize(session.vaultDir, rel)
-            withContext(Dispatchers.Main) { folderSizeVersion++ }
+            val updatedDb = com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(session.vaultDir)
+            withContext(Dispatchers.Main) { folderSizeDb = updatedDb }
         }
     }
 
@@ -667,8 +666,18 @@ fun VaultOpenScreen(
                                 { Text(compactSize(entry.file.length())) }
                             } else {{ // 保险箱文件夹：显示修改日期 + 大小
                                 val rel = entry.file.relativeTo(session.vaultDir).path
-                                val dirSize = folderSizeDb.get(rel)?.size
-                                val sizeStr = if (dirSize != null) compactSize(dirSize) else "--"
+                                val cached = folderSizeDb.get(rel)
+                                val sizeStr = if (cached != null) {
+                                    if (cached.size == 0L) {
+                                        val children = try { entry.file.listFiles() } catch (_: Exception) { null }
+                                        if (children == null) "✕" else "0MB"
+                                    } else {
+                                        compactSize(cached.size)
+                                    }
+                                } else {
+                                    val children = try { entry.file.listFiles() } catch (_: Exception) { null }
+                                    if (children == null) "✕" else ""
+                                }
                                 val dateStr = compactDate(entry.lastModified)
                                 Text("$dateStr  $sizeStr")
                             }},
@@ -898,10 +907,18 @@ fun VaultOpenScreen(
                                     modifier = Modifier.combinedClickable(
                                         onClick = {
                                             contextMenuEntry = null
+                                            Toast.makeText(context, "正在计算大小...", Toast.LENGTH_SHORT).show()
                                             coroutineScope.launch(Dispatchers.Default) {
                                                 val rel = entry.file.relativeTo(session.vaultDir).path
                                                 vaultService.refreshFolderSize(session.vaultDir, rel)
-                                                withContext(Dispatchers.Main) { refresh() }
+                                                val updatedDb = com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(session.vaultDir)
+                                                val sizeInfo = updatedDb.get(rel)
+                                                val sizeText = if (sizeInfo != null && sizeInfo.size > 0) compactSize(sizeInfo.size) else "0"
+                                                withContext(Dispatchers.Main) {
+                                                    folderSizeDb = updatedDb
+                                                    refresh()
+                                                    Toast.makeText(context, "大小计算完毕: $sizeText", Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                         },
                                         onLongClick = {}

@@ -56,6 +56,8 @@ import java.util.TimeZone
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -1267,7 +1269,19 @@ fun VaultsListTab(
                         }
                     }
                     // 时长选项展开列表
-                    AnimatedVisibility(visible = showTimerPicker) {
+                    AnimatedVisibility(
+                        visible = showTimerPicker,
+                        enter = expandVertically(
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+                        ) + fadeIn(
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+                        ),
+                        exit = shrinkVertically(
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+                        ) + fadeOut(
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow)
+                        )
+                    ) {
                         Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                             listOf(0 to "立即锁定", 5 to "5 分钟", 15 to "15 分钟", 30 to "30 分钟", 60 to "1 小时")
                                 .forEach { (min, label) ->
