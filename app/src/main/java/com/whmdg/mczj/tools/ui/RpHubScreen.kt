@@ -87,11 +87,14 @@ fun RpHubScreen(onBack: () -> Unit) {
                             val url = request?.url?.toString() ?: return null
                             val host = request.url?.host ?: ""
                             val isLocal = host.isEmpty() || host == "localhost"
+                            val reqHeaders = request.requestHeaders?.entries?.associate { it.key to it.value } ?: emptyMap()
                             TrafficLog.add(
                                 TrafficEntry(
                                     url = url,
                                     method = request.method ?: "GET",
-                                    isLocal = isLocal
+                                    isLocal = isLocal,
+                                    requestHeaders = reqHeaders,
+                                    cookies = reqHeaders["Cookie"]
                                 )
                             )
                             return null
@@ -102,7 +105,7 @@ fun RpHubScreen(onBack: () -> Unit) {
                             handler: SslErrorHandler?,
                             error: SslError?
                         ) {
-                            if (TrafficLog.enabled.value && TrafficLog.mode.value == TrafficMode.EXTERNAL) {
+                            if (TrafficLog.externalEnabled.value) {
                                 handler?.proceed()
                             } else {
                                 handler?.cancel()

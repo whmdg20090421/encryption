@@ -68,11 +68,19 @@ object AppDataPaths {
         return dir
     }
 
-    /** RP-Hub 模块目录 */
+    /** RP-Hub 模块目录（WebView 实际数据位于 app_webview-app/） */
     fun rpHub(context: Context): File {
         val dir = File(root(context), "RP-Hub")
         if (!dir.exists()) dir.mkdirs()
         return dir
+    }
+
+    /**
+     * WebView 数据目录（由 setDataDirectorySuffix("app") 决定）。
+     * 包含：RP-Hub IndexedDB/localStorage、FA 登录 Cookie 等。
+     */
+    fun webViewData(context: Context): File {
+        return File(context.filesDir.parentFile, "app_webview-app")
     }
 
     /** 诊断日志目录（crash_reports + debug_logs） */
