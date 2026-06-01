@@ -253,7 +253,7 @@
 
     function buildDebugBody(results) {
         var body = document.createElement('div');
-        body.style.cssText = 'flex:1;overflow-y:auto;padding:12px 20px;min-height:0;';
+        body.style.cssText = 'flex:1;overflow-y:auto;padding:12px 20px;height:0;';
 
         if (results && results.length > 0) {
             var sectionTitle = document.createElement('div');
