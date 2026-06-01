@@ -22,10 +22,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -280,6 +284,41 @@ private fun TrafficDetailDialog(
     onDismiss: () -> Unit
 ) {
     val scrollState = rememberScrollState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    fun buildCopyText(): String {
+        val sb = StringBuilder()
+        sb.appendLine("${entry.method.uppercase()} ${entry.url}")
+        sb.appendLine("时间: ${timeFmt.format(Date(entry.timestamp))}")
+        sb.appendLine("类型: ${if (entry.isLocal) "本地" else "外部"}")
+        entry.statusCode?.let { sb.appendLine("状态码: $it") }
+        entry.responseTime?.let { sb.appendLine("耗时: ${it}ms") }
+        if (entry.requestHeaders.isNotEmpty()) {
+            sb.appendLine("\n--- 请求头 ---")
+            entry.requestHeaders.forEach { (k, v) -> sb.appendLine("$k: $v") }
+        }
+        if (entry.requestParams.isNotEmpty()) {
+            sb.appendLine("\n--- 请求参数 ---")
+            entry.requestParams.forEach { (k, v) -> sb.appendLine("$k=$v") }
+        }
+        if (!entry.cookies.isNullOrEmpty()) {
+            sb.appendLine("\n--- Cookie ---")
+            sb.appendLine(entry.cookies)
+        }
+        if (!entry.requestBody.isNullOrEmpty()) {
+            sb.appendLine("\n--- 请求体 ---")
+            sb.appendLine(entry.requestBody)
+        }
+        if (entry.responseHeaders.isNotEmpty()) {
+            sb.appendLine("\n--- 响应头 ---")
+            entry.responseHeaders.forEach { (k, v) -> sb.appendLine("$k: $v") }
+        }
+        if (!entry.responseBody.isNullOrEmpty()) {
+            sb.appendLine("\n--- 响应体 ---")
+            sb.appendLine(entry.responseBody.take(5000))
+        }
+        return sb.toString().trimEnd()
+    }
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         androidx.compose.material3.Surface(
@@ -303,8 +342,19 @@ private fun TrafficDetailDialog(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    TextButton(onClick = onDismiss) {
-                        Text("关闭")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = {
+                            try {
+                                val cb = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                cb.setPrimaryClip(android.content.ClipData.newPlainText("Traffic", buildCopyText()))
+                                android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+                            } catch (_: Exception) {}
+                        }) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "复制")
+                        }
+                        TextButton(onClick = onDismiss) {
+                            Text("关闭")
+                        }
                     }
                 }
 

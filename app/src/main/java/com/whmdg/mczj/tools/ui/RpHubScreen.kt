@@ -174,10 +174,15 @@ fun RpHubScreen(onBack: () -> Unit) {
                     webView = this
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
+                    settings.databaseEnabled = true
                     settings.allowFileAccess = true
                     settings.allowContentAccess = true
                     settings.mediaPlaybackRequiresUserGesture = false
                     settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+
+                    // 启用 Cookie（万相广场等 iframe 内第三方网站登录需要）
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
                     webViewClient = object : WebViewClient() {
                         override fun shouldInterceptRequest(
