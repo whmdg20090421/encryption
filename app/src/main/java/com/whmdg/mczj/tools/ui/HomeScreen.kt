@@ -640,19 +640,6 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
             )
         }
 
-        val onAboutClick: () -> Unit = { onNavigate(Screen.About) }
-        SettingsSection(
-            title = "开发者",
-            icon = Icons.Default.Code
-        ) {
-            CompactSettingsItem(
-                title = "关于",
-                subtitle = "版本信息与更新日志",
-                icon = Icons.Default.Info,
-                enabled = true,
-                onClick = onAboutClick
-            )
-        }
     }
 }
 
@@ -1902,6 +1889,13 @@ fun SettingsTab(navigateToModule: (ModuleId) -> Unit, onNavigate: (Screen) -> Un
                 icon = Icons.Default.BugReport,
                 enabled = hasDebugPerm,
                 onClick = { onNavigate(Screen.FunctionalTest) }
+            )
+            CompactSettingsItem(
+                title = "关于",
+                subtitle = "版本信息与更新日志",
+                icon = Icons.Default.Info,
+                enabled = true,
+                onClick = { onNavigate(Screen.About) }
             )
         }
     }
