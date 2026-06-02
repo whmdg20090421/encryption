@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material3.Icon
@@ -99,7 +100,7 @@ private fun loadApkIcon(context: Context, apkPath: String): Drawable? {
  * @param filename 文件名（用于判断后缀）
  * @param filePath 文件完整路径（APK 图标提取需要）
  * @param modifier Modifier
- * @param size 图标尺寸
+ * @param iconSize 图标尺寸
  * @param fallbackIcon 无法识别时的兜底图标
  */
 @Composable
@@ -107,7 +108,7 @@ fun FileTypeIcon(
     filename: String,
     filePath: String? = null,
     modifier: Modifier = Modifier,
-    size: Dp = 22.dp,
+    iconSize: Dp = 22.dp,
     fallbackIcon: ImageVector = Icons.Default.InsertDriveFile
 ) {
     val category = categorizeFile(extractExtension(filename))
@@ -133,7 +134,7 @@ fun FileTypeIcon(
             Image(
                 painter = painter,
                 contentDescription = null,
-                modifier = modifier.then(Modifier.size(size))
+                modifier = modifier.then(Modifier.size(iconSize))
             )
             return
         }
@@ -146,13 +147,13 @@ fun FileTypeIcon(
         Icon(
             painter = painterResource(drawableRes),
             contentDescription = null,
-            modifier = modifier.then(Modifier.size(size))
+            modifier = modifier.then(Modifier.size(iconSize))
         )
     } else {
         Icon(
             imageVector = fallbackIcon,
             contentDescription = null,
-            modifier = modifier.then(Modifier.size(size))
+            modifier = modifier.then(Modifier.size(iconSize))
         )
     }
 }

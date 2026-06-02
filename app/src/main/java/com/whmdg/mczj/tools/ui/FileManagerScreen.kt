@@ -1499,7 +1499,7 @@ private fun FileEntryRow(
                     FileTypeIcon(
                         filename = entry.name,
                         filePath = entry.path,
-                        size = 22.dp
+                        iconSize = 22.dp
                     )
                 } else {
                     Icon(
