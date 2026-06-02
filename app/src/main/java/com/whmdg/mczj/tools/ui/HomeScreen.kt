@@ -640,6 +640,7 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
             )
         }
 
+        val onAboutClick: () -> Unit = { onNavigate(Screen.About) }
         SettingsSection(
             title = "开发者",
             icon = Icons.Default.Code
@@ -649,7 +650,7 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
                 subtitle = "版本信息与更新日志",
                 icon = Icons.Default.Info,
                 enabled = true,
-                onClick = { onNavigate(Screen.About) }
+                onClick = onAboutClick
             )
         }
     }
