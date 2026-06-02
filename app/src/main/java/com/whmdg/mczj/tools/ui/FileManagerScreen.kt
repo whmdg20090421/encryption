@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.ui
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
@@ -21,9 +22,14 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -1476,47 +1482,75 @@ private fun FileEntryRow(
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 2.5.dp)
     ) {
-        // Top 7/10: icon (left 2/5) + filename (right 3/5)
+        // Top 7/10: icon (left 1/5) + filename (right 4/5)
         Row(modifier = Modifier.weight(7f)) {
             Box(
-                modifier = Modifier.weight(2f).fillMaxHeight(),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
                 contentAlignment = Alignment.Center
             ) {
-                val fileDrawableRes = if (!entry.isDirectory && entry.name != "返回上一级") {
-                    getFileTypeDrawableRes(categorizeFile(extractExtension(entry.name)))
-                } else null
+                val ext = extractExtension(entry.name)
+                val category = categorizeFile(ext)
+                val isImageFile = category == FileCategory.IMAGE && !entry.isDirectory
+                    && entry.name != "返回上一级"
 
-                if (fileDrawableRes != null) {
-                    Icon(
-                        painter = painterResource(fileDrawableRes),
+                // 图片文件：显示缩略图
+                val thumbnailBitmap = remember(entry.path, isImageFile) {
+                    if (!isImageFile) return@remember null
+                    try {
+                        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeFile(entry.path, opts)
+                        opts.inSampleSize = maxOf(
+                            opts.outWidth / 48, opts.outHeight / 48, 1
+                        ).coerceAtLeast(1)
+                        opts.inJustDecodeBounds = false
+                        BitmapFactory.decodeFile(entry.path, opts)?.asImageBitmap()
+                    } catch (_: Exception) { null }
+                }
+
+                if (thumbnailBitmap != null) {
+                    Image(
+                        painter = BitmapPainter(thumbnailBitmap),
                         contentDescription = null,
-                        modifier = Modifier.size(22.dp),
-                        tint = Color.Unspecified // 保持彩色原色
-                    )
-                } else if (!entry.isDirectory && entry.name != "返回上一级"
-                    && categorizeFile(extractExtension(entry.name)) == FileCategory.APK) {
-                    // APK 文件：从 APK 自身读取应用图标
-                    FileTypeIcon(
-                        filename = entry.name,
-                        filePath = entry.path,
-                        iconSize = 22.dp
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(4.dp))
                     )
                 } else {
-                    Icon(
-                        imageVector = when {
-                            entry.name == "返回上一级" -> Icons.Default.ArrowUpward
-                            entry.isDirectory -> Icons.Default.Folder
-                            else -> Icons.Default.InsertDriveFile
-                        },
-                        contentDescription = null,
-                        modifier = Modifier.size(22.dp),
-                        tint = if (isFocused) MaterialTheme.colorScheme.primary
-                               else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    val fileDrawableRes = if (!entry.isDirectory && entry.name != "返回上一级") {
+                        getFileTypeDrawableRes(category)
+                    } else null
+
+                    if (fileDrawableRes != null) {
+                        Icon(
+                            painter = painterResource(fileDrawableRes),
+                            contentDescription = null,
+                            modifier = Modifier.size(28.dp),
+                            tint = Color.Unspecified
+                        )
+                    } else if (!entry.isDirectory && entry.name != "返回上一级"
+                        && category == FileCategory.APK) {
+                        FileTypeIcon(
+                            filename = entry.name,
+                            filePath = entry.path,
+                            iconSize = 28.dp
+                        )
+                    } else {
+                        Icon(
+                            imageVector = when {
+                                entry.name == "返回上一级" -> Icons.Default.ArrowUpward
+                                entry.isDirectory -> Icons.Default.Folder
+                                else -> Icons.Default.InsertDriveFile
+                            },
+                            contentDescription = null,
+                            modifier = Modifier.size(28.dp),
+                            tint = if (isFocused) MaterialTheme.colorScheme.primary
+                                   else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
             Box(
-                modifier = Modifier.weight(3f).fillMaxHeight(),
+                modifier = Modifier.weight(4f).fillMaxHeight(),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
