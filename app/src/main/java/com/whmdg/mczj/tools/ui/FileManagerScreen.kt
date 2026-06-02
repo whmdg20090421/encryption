@@ -29,6 +29,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import com.whmdg.mczj.tools.ui.components.categorizeFile
+import com.whmdg.mczj.tools.ui.components.extractExtension
+import com.whmdg.mczj.tools.ui.components.getFileTypeDrawableRes
+import com.whmdg.mczj.tools.ui.components.FileCategory
+import com.whmdg.mczj.tools.ui.components.FileTypeIcon
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -1475,17 +1482,38 @@ private fun FileEntryRow(
                 modifier = Modifier.weight(2f).fillMaxHeight(),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector = when {
-                        entry.name == "返回上一级" -> Icons.Default.ArrowUpward
-                        entry.isDirectory -> Icons.Default.Folder
-                        else -> Icons.Default.InsertDriveFile
-                    },
-                    contentDescription = null,
-                    modifier = Modifier.size(22.dp),
-                    tint = if (isFocused) MaterialTheme.colorScheme.primary
-                           else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                val fileDrawableRes = if (!entry.isDirectory && entry.name != "返回上一级") {
+                    getFileTypeDrawableRes(categorizeFile(extractExtension(entry.name)))
+                } else null
+
+                if (fileDrawableRes != null) {
+                    Icon(
+                        painter = painterResource(fileDrawableRes),
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                        tint = Color.Unspecified // 保持彩色原色
+                    )
+                } else if (!entry.isDirectory && entry.name != "返回上一级"
+                    && categorizeFile(extractExtension(entry.name)) == FileCategory.APK) {
+                    // APK 文件：从 APK 自身读取应用图标
+                    FileTypeIcon(
+                        filename = entry.name,
+                        filePath = entry.path,
+                        size = 22.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = when {
+                            entry.name == "返回上一级" -> Icons.Default.ArrowUpward
+                            entry.isDirectory -> Icons.Default.Folder
+                            else -> Icons.Default.InsertDriveFile
+                        },
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                        tint = if (isFocused) MaterialTheme.colorScheme.primary
+                               else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             Box(
                 modifier = Modifier.weight(3f).fillMaxHeight(),
