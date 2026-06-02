@@ -56,8 +56,6 @@ import java.util.TimeZone
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -132,6 +130,8 @@ sealed class Screen {
     object AuthManagement : Screen()
     object FunctionalTest : Screen()
     object RpHub : Screen()
+    object About : Screen()
+    object Changelog : Screen()
 }
 
 enum class ModuleId {
@@ -507,6 +507,17 @@ fun MainAppContainer() {
                 onBack = { navigateBack() }
             )
         }
+        is Screen.About -> {
+            AboutScreen(
+                onBack = { navigateBack() },
+                onNavigate = { navigateTo(it) }
+            )
+        }
+        is Screen.Changelog -> {
+            ChangelogScreen(
+                onBack = { navigateBack() }
+            )
+        }
     }
 }
 
@@ -626,6 +637,19 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
                 icon = rpHubEntry.icon,
                 enabled = PermissionManager.has(rpHubEntry.feature),
                 onClick = { navigateToModule(ModuleId.RP_HUB) }
+            )
+        }
+
+        SettingsSection(
+            title = "开发者",
+            icon = Icons.Default.Code
+        ) {
+            CompactSettingsItem(
+                title = "关于",
+                subtitle = "版本信息与更新日志",
+                icon = Icons.Default.Info,
+                enabled = true,
+                onClick = { onNavigate(Screen.About) }
             )
         }
     }
@@ -1271,16 +1295,8 @@ fun VaultsListTab(
                     // 时长选项展开列表
                     AnimatedVisibility(
                         visible = showTimerPicker,
-                        enter = expandVertically(
-                            animationSpec = tween(durationMillis = 200, easing = LinearEasing)
-                        ) + fadeIn(
-                            animationSpec = tween(durationMillis = 200, easing = LinearEasing)
-                        ),
-                        exit = shrinkVertically(
-                            animationSpec = tween(durationMillis = 200, easing = LinearEasing)
-                        ) + fadeOut(
-                            animationSpec = tween(durationMillis = 200, easing = LinearEasing)
-                        )
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically()
                     ) {
                         Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                             listOf(0 to "立即锁定", 5 to "5 分钟", 15 to "15 分钟", 30 to "30 分钟", 60 to "1 小时")
