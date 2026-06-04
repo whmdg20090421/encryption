@@ -29,6 +29,18 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V2.2.1",
+        date = "2026-06-04",
+        items = listOf(
+            "文件管理器排序菜单：级联子菜单，按名称/大小/修改时间/创建时间排序，升降序上下文标签（A到Z/小到大等），设置持久化",
+            "文件管理器书签功能：设置菜单添加书签，底部面板「书签」标签与「历史记录」并列，长按删除，新书签置顶，持久化存储",
+            "历史/书签面板动画优化：左右滑动切换标签，AnimatedContent 丝滑滑入滑出动画，标题栏空白区域触摸拦截",
+            "全模块存储路径统一收归 AppDataPaths：SharedPreferences 常量、FolderSizeDb、crash_tmp 迁移至规范路径，双标志位平滑迁移",
+            "返回上一级独立为专属条目：不再混入文件列表，点击不记录历史记录",
+            "底部栏6图标均匀分布修复：改用 weight(1f) 保证等宽分配"
+        )
+    ),
+    ChangelogVersion(
         version = "V2.2",
         date = "2026-06-02",
         items = listOf(

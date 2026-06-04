@@ -18,6 +18,7 @@ import kotlinx.coroutines.withContext
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
@@ -64,8 +65,11 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
 import android.graphics.Rect as AndroidRect
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 
@@ -1179,7 +1183,20 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                     }
                                 }
                         ) {
-                        if (panelTab == 0) {
+                        AnimatedContent(
+                            targetState = panelTab,
+                            transitionSpec = {
+                                if (targetState > initialState) {
+                                    slideInHorizontally { it } + fadeIn() togetherWith
+                                    slideOutHorizontally { -it } + fadeOut()
+                                } else {
+                                    slideInHorizontally { -it } + fadeIn() togetherWith
+                                    slideOutHorizontally { it } + fadeOut()
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        ) { tab ->
+                        if (tab == 0) {
                             // ── 历史列表 ──
                             if (historyList.isEmpty()) {
                                 Box(
@@ -1346,6 +1363,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                 }
                             }
                         }
+                        } // AnimatedContent
                         } // Box swipe
                     }
                 }
