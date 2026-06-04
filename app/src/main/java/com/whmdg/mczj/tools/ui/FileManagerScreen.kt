@@ -318,32 +318,13 @@ fun FileManagerScreen(onBack: () -> Unit) {
         }
         DiagnosticLog.log("FileEngine", "统计: dirs=$dirCount, files=$fileCount, hidden 过滤=$skipHidden")
 
-        // 添加 ".." 父目录（仅当不在根目录且父目录可访问）
-        if (normalizedPath != effectiveRoot && normalizedPath.contains('/')) {
-            val parentPath = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
-            if (parentPath != normalizedPath) {
-                val parentFile = File(parentPath)
-                val parentAccessible = try {
-                    parentFile.canRead()
-                } catch (_: Exception) { false }
-                if (parentAccessible) {
-                    val parentModified = try { parentFile.lastModified() } catch (_: Exception) { 0L }
-                    entries.add(0, FileEntry(parentPath, "返回上一级", true, lastModified = parentModified))
-                } else {
-                    DiagnosticLog.log("FileEngine", "父目录不可读: $parentPath")
-                }
-            }
-        }
-
-        // 提取"返回上一级"，排序其余项，再置顶
-        val parentEntry = entries.find { it.name == "返回上一级" }
-        val sortedOthers = entries.filter { it.name != "返回上一级" }.sortedWith(
+        // 排序：文件夹在前，按名称升序
+        val sorted = entries.sortedWith(
             compareByDescending<FileEntry> { it.isDirectory }
                 .thenBy { it.name.lowercase() }
         )
         entries.clear()
-        if (parentEntry != null) entries.add(parentEntry)
-        entries.addAll(sortedOthers)
+        entries.addAll(sorted)
         return entries
     }
 
@@ -403,24 +384,13 @@ fun FileManagerScreen(onBack: () -> Unit) {
         }
         DiagnosticLog.log(tag, "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
 
-        // ".." 父目录：只要不是根 "/" 都显示
-        if (normalizedPath != effectiveRoot && normalizedPath.contains('/')) {
-            val parentPath = normalizedPath.substringBeforeLast('/').ifEmpty { "/" }
-            if (parentPath != normalizedPath) {
-                val parentModified = try { File(parentPath).lastModified() } catch (_: Exception) { 0L }
-                entries.add(0, FileEntry(parentPath, "返回上一级", true, lastModified = parentModified))
-            }
-        }
-
-        // 提取"返回上一级"，排序其余项，再置顶
-        val parentEntry = entries.find { it.name == "返回上一级" }
-        val sortedOthers = entries.filter { it.name != "返回上一级" }.sortedWith(
+        // 排序：文件夹在前，按名称升序
+        val sorted = entries.sortedWith(
             compareByDescending<FileEntry> { it.isDirectory }
                 .thenBy { it.name.lowercase() }
         )
         entries.clear()
-        if (parentEntry != null) entries.add(parentEntry)
-        entries.addAll(sortedOthers)
+        entries.addAll(sorted)
         return entries
     }
 
@@ -840,6 +810,13 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     }
                 } else {
                     Row(modifier = Modifier.fillMaxSize()) {
+                        val leftEffectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
+                        val leftParentPath = if (leftPath != leftEffectiveRoot && leftPath.contains('/')) {
+                            leftPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
+                                if (p != leftPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
+                            }
+                        } else null
+
                         FileBrowserPanel(
                             entries = leftEntries,
                             isFocused = focusedPanel == FocusedPanel.LEFT,
@@ -847,7 +824,6 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             onFolderClick = { entry ->
                                 DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
                                 DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$leftPath")
-                                // 权限预检查
                                 val testDir = java.io.File(entry.path)
                                 val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
                                 if (accessible != null) {
@@ -871,13 +847,28 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                 focusedPanel = FocusedPanel.LEFT
                             },
                             modifier = Modifier.weight(1f),
-                            folderSizeDb = folderSizeDb
+                            folderSizeDb = folderSizeDb,
+                            parentPath = leftParentPath,
+                            onNavigateUp = {
+                                if (leftParentPath != null) {
+                                    focusedPanel = FocusedPanel.LEFT
+                                    leftNavState = leftNavState.navigate(leftParentPath)
+                                    leftPath = leftParentPath
+                                }
+                            }
                         )
 
                         VerticalDivider(
                             modifier = Modifier.fillMaxHeight(),
                             thickness = 1.dp
                         )
+
+                        val rightEffectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
+                        val rightParentPath = if (rightPath != rightEffectiveRoot && rightPath.contains('/')) {
+                            rightPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
+                                if (p != rightPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
+                            }
+                        } else null
 
                         FileBrowserPanel(
                             entries = rightEntries,
@@ -886,7 +877,6 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             onFolderClick = { entry ->
                                 DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
                                 DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$rightPath")
-                                // 权限预检查
                                 val testDir = java.io.File(entry.path)
                                 val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
                                 if (accessible != null) {
@@ -910,7 +900,15 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                 focusedPanel = FocusedPanel.RIGHT
                             },
                             modifier = Modifier.weight(1f),
-                            folderSizeDb = folderSizeDb
+                            folderSizeDb = folderSizeDb,
+                            parentPath = rightParentPath,
+                            onNavigateUp = {
+                                if (rightParentPath != null) {
+                                    focusedPanel = FocusedPanel.RIGHT
+                                    rightNavState = rightNavState.navigate(rightParentPath)
+                                    rightPath = rightParentPath
+                                }
+                            }
                         )
                     }
                 }
@@ -1621,7 +1619,9 @@ private fun FileBrowserPanel(
     onFileClick: (FileEntry) -> Unit,
     onLongClick: (FileEntry) -> Unit,
     modifier: Modifier = Modifier,
-    folderSizeDb: FolderSizeDb = FolderSizeDb()
+    folderSizeDb: FolderSizeDb = FolderSizeDb(),
+    parentPath: String? = null,
+    onNavigateUp: () -> Unit = {}
 ) {
     Box(
         modifier = modifier
@@ -1638,7 +1638,7 @@ private fun FileBrowserPanel(
                 }
             }
     ) {
-        if (entries.isEmpty()) {
+        if (entries.isEmpty() && parentPath == null) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -1653,8 +1653,20 @@ private fun FileBrowserPanel(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(vertical = 4.dp)
             ) {
+                // 独立的"返回上一级"条目，不走 onFolderClick，不记录历史
+                if (parentPath != null) {
+                    item(key = "__parent__") {
+                        FileEntryRow(
+                            entry = FileEntry(parentPath, "返回上一级", true),
+                            isFocused = isFocused,
+                            onClick = onNavigateUp,
+                            onLongClick = {},
+                            folderSize = ""
+                        )
+                    }
+                }
                 items(entries, key = { it.path }) { entry ->
-                    val dirSize = if (entry.isDirectory && entry.name != "返回上一级") {
+                    val dirSize = if (entry.isDirectory) {
                         val cached = folderSizeDb.get(entry.path)
                         if (cached != null) {
                             if (cached.size == 0L) {
@@ -1665,7 +1677,6 @@ private fun FileBrowserPanel(
                                 compactSize(cached.size)
                             }
                         } else {
-                            // 未计算过大小
                             val dir = File(entry.path)
                             val children = try { dir.listFiles() } catch (_: Exception) { null }
                             if (children == null) "✕" else ""
