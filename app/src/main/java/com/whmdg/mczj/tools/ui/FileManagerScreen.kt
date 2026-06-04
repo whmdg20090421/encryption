@@ -62,6 +62,9 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
 import android.graphics.Rect as AndroidRect
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 
 enum class FocusedPanel { LEFT, RIGHT }
 enum class CreateMode { FILE, FOLDER }
@@ -73,6 +76,13 @@ data class FileEntry(
     val permission: String = "",
     val size: Long = 0,
     val lastModified: Long = 0
+)
+
+data class HistoryEntry(
+    val name: String,
+    val path: String,
+    val isDirectory: Boolean,
+    val timestamp: Long = System.currentTimeMillis()
 )
 
 /**
@@ -181,6 +191,8 @@ fun FileManagerScreen(onBack: () -> Unit) {
         mutableStateOf(fmPrefs.getBoolean("recycle_bin_enabled", false))
     }
     var refreshVersion by remember { mutableStateOf(0L) }
+    var historyList by remember { mutableStateOf(listOf<HistoryEntry>()) }
+    var showHistoryPanel by remember { mutableStateOf(false) }
 
     // ── 文件夹大小数据库（存储在应用内部目录） ──
     var folderSizeDb by remember { mutableStateOf(FolderSizeDb.load(context.filesDir)) }
@@ -594,12 +606,19 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     .fillMaxWidth()
                     .height(80.dp)
             ) {
-                // 上方 60dp：按钮区域（排除系统手势识别）
+                // 上方 60dp：按钮区域（排除系统手势识别 + 上滑触发历史面板）
                 val view = LocalView.current
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp)
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures { _, dragAmount ->
+                                if (dragAmount < -30) {
+                                    showHistoryPanel = true
+                                }
+                            }
+                        }
                         .onGloballyPositioned { coords ->
                             val pos = coords.localToWindow(androidx.compose.ui.geometry.Offset.Zero)
                             val rect = AndroidRect(
@@ -818,6 +837,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                     focusedPanel = FocusedPanel.LEFT
                                     leftNavState = leftNavState.navigate(entry.path)
                                     leftPath = entry.path
+                                    historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
                                 } else {
                                     Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
                                 }
@@ -827,6 +847,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                 DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                 focusedPanel = FocusedPanel.LEFT
                                 openFile(context, entry)
+                                historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + historyList
                             },
                             onLongClick = { entry ->
                                 selectedEntry = entry
@@ -855,6 +876,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                     focusedPanel = FocusedPanel.RIGHT
                                     rightNavState = rightNavState.navigate(entry.path)
                                     rightPath = entry.path
+                                    historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
                                 } else {
                                     Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
                                 }
@@ -864,6 +886,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                 DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                 focusedPanel = FocusedPanel.RIGHT
                                 openFile(context, entry)
+                                historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + historyList
                             },
                             onLongClick = { entry ->
                                 selectedEntry = entry
@@ -872,6 +895,100 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             modifier = Modifier.weight(1f),
                             folderSizeDb = folderSizeDb
                         )
+                    }
+                }
+            }
+
+            // ── 历史记录面板（从底部滑入，占屏幕一半高度） ──
+            AnimatedVisibility(
+                visible = showHistoryPanel,
+                enter = slideInVertically(initialOffsetY = { it }),
+                exit = slideOutVertically(targetOffsetY = { it }),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight(0.5f)
+                        .drawBehind { drawRect(MaterialTheme.colorScheme.surface) }
+                        .padding(top = 8.dp)
+                ) {
+                    // 标题行
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "历史记录",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        IconButton(onClick = { showHistoryPanel = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "关闭")
+                        }
+                    }
+                    HorizontalDivider()
+                    // 历史列表
+                    if (historyList.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "暂无操作记录",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(vertical = 4.dp)
+                        ) {
+                            items(historyList) { entry ->
+                                ListItem(
+                                    headlineContent = { Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                    supportingContent = {
+                                        Text(
+                                            compactDate(entry.timestamp),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    },
+                                    leadingContent = {
+                                        Icon(
+                                            imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                            contentDescription = null,
+                                            tint = if (entry.isDirectory) MaterialTheme.colorScheme.primary
+                                                   else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    },
+                                    modifier = Modifier.clickable {
+                                        if (entry.isDirectory) {
+                                            val testDir = File(entry.path)
+                                            if (testDir.exists() && testDir.canRead()) {
+                                                when (focusedPanel) {
+                                                    FocusedPanel.LEFT -> {
+                                                        leftNavState = leftNavState.navigate(entry.path)
+                                                        leftPath = entry.path
+                                                    }
+                                                    FocusedPanel.RIGHT -> {
+                                                        rightNavState = rightNavState.navigate(entry.path)
+                                                        rightPath = entry.path
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            openFile(context, FileEntry(entry.path, entry.name, false))
+                                        }
+                                        showHistoryPanel = false
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
