@@ -257,7 +257,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 DropdownMenuItem(
                                     modifier = Modifier
                                         .onGloballyPositioned { coords ->
-                                            sortRowYPx = coords.positionInRoot().y.toInt()
+                                            sortRowYPx = coords.localToWindow(androidx.compose.ui.geometry.Offset.Zero).y.toInt()
                                         }
                                         .drawBehind {
                                             if (sortSubMenuExpanded) {
@@ -307,7 +307,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                         DropdownMenuItem(
                                                             modifier = Modifier
                                                                 .onGloballyPositioned { coords ->
-                                                                    fieldRowYPx = coords.positionInRoot().y.toInt()
+                                                                    fieldRowYPx = coords.localToWindow(androidx.compose.ui.geometry.Offset.Zero).y.toInt()
                                                                 }
                                                                 .drawBehind {
                                                                     if (expandedSortField == field) {
