@@ -1478,7 +1478,7 @@ private fun FileEntryRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp)
+            .height(65.dp)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 2.5.dp)
     ) {
@@ -1555,8 +1555,10 @@ private fun FileEntryRow(
             ) {
                 Text(
                     text = entry.name,
+                    modifier = Modifier.fillMaxWidth(),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                    softWrap = true,
                     textAlign = TextAlign.Start,
                     style = MaterialTheme.typography.bodyMedium
                 )
