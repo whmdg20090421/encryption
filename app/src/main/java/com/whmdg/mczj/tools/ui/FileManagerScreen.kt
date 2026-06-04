@@ -58,6 +58,8 @@ import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import android.system.Os
 import java.io.File
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.draw.drawBehind
 
 enum class FocusedPanel { LEFT, RIGHT }
 enum class CreateMode { FILE, FOLDER }
@@ -595,7 +597,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp)
-                        .systemGestureExclusion(),
+                        .systemGestureExclusion { Rect(0f, 0f, size.width, size.height) },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
@@ -744,7 +746,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(20.dp)
-                        .background(Color.White)
+                        .drawBehind { drawRect(Color.White) }
                 )
             }
         }
