@@ -58,6 +58,8 @@ import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import android.system.Os
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.BasicFileAttributes
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
@@ -68,6 +70,8 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 
 enum class FocusedPanel { LEFT, RIGHT }
 enum class CreateMode { FILE, FOLDER }
+enum class SortField { NAME, SIZE, MODIFIED, CREATED }
+enum class SortOrder { ASC, DESC }
 
 data class FileEntry(
     val path: String,
@@ -75,7 +79,8 @@ data class FileEntry(
     val isDirectory: Boolean,
     val permission: String = "",
     val size: Long = 0,
-    val lastModified: Long = 0
+    val lastModified: Long = 0,
+    val createdAt: Long = 0
 )
 
 @kotlinx.serialization.Serializable
@@ -84,6 +89,12 @@ data class HistoryEntry(
     val path: String,
     val isDirectory: Boolean,
     val timestamp: Long = System.currentTimeMillis()
+)
+
+@kotlinx.serialization.Serializable
+data class BookmarkEntry(
+    val name: String,
+    val path: String
 )
 
 /**
@@ -179,6 +190,34 @@ fun FileManagerScreen(onBack: () -> Unit) {
         mutableStateOf(fmPrefs.getBoolean("show_hidden_files", false))
     }
     var showSettingsMenu by remember { mutableStateOf(false) }
+    var sortField by remember {
+        mutableStateOf(
+            when (fmPrefs.getString("sort_field", "NAME")) {
+                "SIZE" -> SortField.SIZE
+                "MODIFIED" -> SortField.MODIFIED
+                "CREATED" -> SortField.CREATED
+                else -> SortField.NAME
+            }
+        )
+    }
+    var sortOrder by remember {
+        mutableStateOf(
+            if (fmPrefs.getString("sort_order", "ASC") == "DESC") SortOrder.DESC else SortOrder.ASC
+        )
+    }
+    var sortMenuLevel by remember { mutableStateOf(0) }
+    val sortAscLabels = mapOf(
+        SortField.NAME to "A到Z",
+        SortField.SIZE to "小到大",
+        SortField.MODIFIED to "最早到最近",
+        SortField.CREATED to "最早到最近"
+    )
+    val sortDescLabels = mapOf(
+        SortField.NAME to "Z到A",
+        SortField.SIZE to "大到小",
+        SortField.MODIFIED to "最近到最早",
+        SortField.CREATED to "最近到最早"
+    )
     var loadError by remember { mutableStateOf<Throwable?>(null) }
     var showCreateTypeDialog by remember { mutableStateOf(false) }
     var createMode by remember { mutableStateOf(CreateMode.FILE) }
@@ -203,6 +242,17 @@ fun FileManagerScreen(onBack: () -> Unit) {
         )
     }
     var showHistoryPanel by remember { mutableStateOf(false) }
+    val bookmarkFile = remember { java.io.File(AppDataPaths.fileManager(context), "bookmarks.json") }
+    var bookmarkList by remember {
+        mutableStateOf(
+            try {
+                if (bookmarkFile.exists()) historyJson.decodeFromString<List<BookmarkEntry>>(bookmarkFile.readText())
+                else emptyList()
+            } catch (_: Exception) { emptyList() }
+        )
+    }
+    var panelTab by remember { mutableStateOf(0) } // 0=历史, 1=书签
+    var bookmarkDeleteVisible by remember { mutableStateOf(setOf<String>()) }
 
     // ── 文件夹大小数据库（存储在应用内部目录） ──
     var folderSizeDb by remember { mutableStateOf(FolderSizeDb.load(AppDataPaths.fileManager(context))) }
@@ -419,6 +469,37 @@ fun FileManagerScreen(onBack: () -> Unit) {
             }
         }
 
+        // 填充创建时间（API 26+ 使用 NIO）
+        if (sortField == SortField.CREATED && android.os.Build.VERSION.SDK_INT >= 26) {
+            entries = entries.map { e ->
+                if (e.createdAt > 0) return@map e
+                val ct = try {
+                    Files.readAttributes(File(e.path).toPath(), BasicFileAttributes::class.java).creationTime().toMillis()
+                } catch (_: Exception) { e.lastModified }
+                e.copy(createdAt = ct)
+            }
+        }
+
+        // 自定义排序：文件夹在前，然后按用户选择的字段+顺序
+        entries = when (sortField) {
+            SortField.NAME -> if (sortOrder == SortOrder.ASC)
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
+            else
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
+            SortField.SIZE -> if (sortOrder == SortOrder.ASC)
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.size })
+            else
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.size })
+            SortField.MODIFIED -> if (sortOrder == SortOrder.ASC)
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.lastModified })
+            else
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.lastModified })
+            SortField.CREATED -> if (sortOrder == SortOrder.ASC)
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.createdAt })
+            else
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.createdAt })
+        }
+
         val took = System.currentTimeMillis() - t0
         DiagnosticLog.log("FileMgr", "<<< listDirectory END path=$path entries=${entries.size} took=${took}ms err=${loadError?.javaClass?.simpleName}")
         return entries
@@ -473,13 +554,13 @@ fun FileManagerScreen(onBack: () -> Unit) {
         }
     }
 
-    LaunchedEffect(leftPath, showHiddenFiles, refreshVersion) {
-        DiagnosticLog.log("FileMgr", "LaunchedEffect[LEFT] 触发 path=$leftPath showHidden=$showHiddenFiles")
+    LaunchedEffect(leftPath, showHiddenFiles, refreshVersion, sortField, sortOrder) {
+        DiagnosticLog.log("FileMgr", "LaunchedEffect[LEFT] 触发 path=$leftPath showHidden=$showHiddenFiles sort=$sortField/$sortOrder")
         leftEntries = listDirectory(leftPath)
         DiagnosticLog.log("FileMgr", "LaunchedEffect[LEFT] 完成 entries=${leftEntries.size}")
     }
-    LaunchedEffect(rightPath, showHiddenFiles, refreshVersion) {
-        DiagnosticLog.log("FileMgr", "LaunchedEffect[RIGHT] 触发 path=$rightPath showHidden=$showHiddenFiles")
+    LaunchedEffect(rightPath, showHiddenFiles, refreshVersion, sortField, sortOrder) {
+        DiagnosticLog.log("FileMgr", "LaunchedEffect[RIGHT] 触发 path=$rightPath showHidden=$showHiddenFiles sort=$sortField/$sortOrder")
         rightEntries = listDirectory(rightPath)
         DiagnosticLog.log("FileMgr", "LaunchedEffect[RIGHT] 完成 entries=${rightEntries.size}")
     }
@@ -488,6 +569,12 @@ fun FileManagerScreen(onBack: () -> Unit) {
     LaunchedEffect(historyList) {
         try {
             historyFile.writeText(historyJson.encodeToString(historyList))
+        } catch (_: Exception) {}
+    }
+    // 书签持久化
+    LaunchedEffect(bookmarkList) {
+        try {
+            bookmarkFile.writeText(historyJson.encodeToString(bookmarkList))
         } catch (_: Exception) {}
     }
 
@@ -567,8 +654,9 @@ fun FileManagerScreen(onBack: () -> Unit) {
                         }
                         DropdownMenu(
                             expanded = showSettingsMenu,
-                            onDismissRequest = { showSettingsMenu = false }
+                            onDismissRequest = { showSettingsMenu = false; sortMenuLevel = 0 }
                         ) {
+                            // 显示隐藏文件
                             DropdownMenuItem(
                                 text = { Text("显示隐藏文件") },
                                 trailingIcon = {
@@ -579,6 +667,104 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                 onClick = {
                                     showHiddenFiles = !showHiddenFiles
                                     fmPrefs.edit().putBoolean("show_hidden_files", showHiddenFiles).apply()
+                                    showSettingsMenu = false
+                                }
+                            )
+                            HorizontalDivider()
+                            // 排序级联菜单
+                            if (sortMenuLevel == 0) {
+                                // 第一级：显示当前排序状态，点击展开子菜单
+                                DropdownMenuItem(
+                                    text = { Text("排列顺序") },
+                                    trailingIcon = {
+                                        val label = when (sortOrder) {
+                                            SortOrder.ASC -> sortAscLabels[sortField]
+                                            SortOrder.DESC -> sortDescLabels[sortField]
+                                        }
+                                        Text(label!!, style = MaterialTheme.typography.bodySmall)
+                                    },
+                                    onClick = { sortMenuLevel = 1 }
+                                )
+                            } else if (sortMenuLevel == 1) {
+                                // 第二级：四个排序字段
+                                DropdownMenuItem(
+                                    text = { Text("← 排列顺序") },
+                                    onClick = { sortMenuLevel = 0 }
+                                )
+                                for (field in SortField.entries) {
+                                    val fieldLabel = when (field) {
+                                        SortField.NAME -> "名称"
+                                        SortField.SIZE -> "大小"
+                                        SortField.MODIFIED -> "最后修改时间"
+                                        SortField.CREATED -> "创建时间"
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text(fieldLabel) },
+                                        trailingIcon = {
+                                            if (sortField == field) {
+                                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            }
+                                        },
+                                        onClick = { sortMenuLevel = 2; sortField = field }
+                                    )
+                                }
+                            } else {
+                                // 第三级：升序/降序（上下文标签）
+                                DropdownMenuItem(
+                                    text = { Text("← ${when (sortField) {
+                                        SortField.NAME -> "名称"
+                                        SortField.SIZE -> "大小"
+                                        SortField.MODIFIED -> "最后修改时间"
+                                        SortField.CREATED -> "创建时间"
+                                    }}") },
+                                    onClick = { sortMenuLevel = 1 }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(sortAscLabels[sortField]!!) },
+                                    trailingIcon = {
+                                        if (sortOrder == SortOrder.ASC) {
+                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        }
+                                    },
+                                    onClick = {
+                                        sortOrder = SortOrder.ASC
+                                        fmPrefs.edit().putString("sort_field", sortField.name).putString("sort_order", "ASC").apply()
+                                        showSettingsMenu = false; sortMenuLevel = 0
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(sortDescLabels[sortField]!!) },
+                                    trailingIcon = {
+                                        if (sortOrder == SortOrder.DESC) {
+                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        }
+                                    },
+                                    onClick = {
+                                        sortOrder = SortOrder.DESC
+                                        fmPrefs.edit().putString("sort_field", sortField.name).putString("sort_order", "DESC").apply()
+                                        showSettingsMenu = false; sortMenuLevel = 0
+                                    }
+                                )
+                            }
+                            HorizontalDivider()
+                            // 添加书签
+                            val currentFocusedPath = when (focusedPanel) {
+                                FocusedPanel.LEFT -> leftPath
+                                FocusedPanel.RIGHT -> rightPath
+                            }
+                            val isAlreadyBookmarked = bookmarkList.any { it.path == currentFocusedPath }
+                            DropdownMenuItem(
+                                text = { Text("添加书签") },
+                                trailingIcon = {
+                                    if (isAlreadyBookmarked) {
+                                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    }
+                                },
+                                onClick = {
+                                    val folderName = currentFocusedPath.substringAfterLast('/').ifEmpty { "/" }
+                                    if (!isAlreadyBookmarked) {
+                                        bookmarkList = listOf(BookmarkEntry(folderName, currentFocusedPath)) + bookmarkList
+                                    }
                                     showSettingsMenu = false
                                 }
                             )
@@ -916,6 +1102,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
             // ── 历史记录面板（从底部滑入，占屏幕一半高度） ──
             if (showHistoryPanel) {
                 BackHandler { showHistoryPanel = false }
+                LaunchedEffect(Unit) { bookmarkDeleteVisible = emptySet() }
             }
             AnimatedVisibility(
                 visible = showHistoryPanel,
@@ -935,7 +1122,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                 onClick = { showHistoryPanel = false }
                             )
                     )
-                    // 下半部分：历史面板内容
+                    // 下半部分：面板内容
                     val surfaceColor = MaterialTheme.colorScheme.surface
                     Column(
                         modifier = Modifier
@@ -945,7 +1132,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             .drawBehind { drawRect(surfaceColor) }
                             .padding(top = 8.dp)
                     ) {
-                        // 标题行
+                        // 标题行：标签切换 + 关闭按钮
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -953,81 +1140,192 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "历史记录",
-                                style = MaterialTheme.typography.titleMedium
-                            )
+                            Row {
+                                Text(
+                                    text = "历史记录",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if (panelTab == 0) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.clickable { panelTab = 0 }
+                                )
+                                Spacer(Modifier.width(20.dp))
+                                Text(
+                                    text = "书签",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if (panelTab == 1) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.clickable { panelTab = 1 }
+                                )
+                            }
                             IconButton(onClick = { showHistoryPanel = false }) {
                                 Icon(Icons.Default.Close, contentDescription = "关闭")
                             }
                         }
                         HorizontalDivider()
-                    // 历史列表
-                    if (historyList.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                "暂无操作记录",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(vertical = 4.dp)
-                        ) {
-                            items(historyList) { entry ->
-                                Row(
+                        // 内容区：历史 or 书签
+                        if (panelTab == 0) {
+                            // ── 历史列表 ──
+                            if (historyList.isEmpty()) {
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(50.dp)
-                                        .clickable {
-                                            if (entry.isDirectory) {
-                                                val testDir = File(entry.path)
-                                                if (testDir.exists() && testDir.canRead()) {
-                                                    when (focusedPanel) {
-                                                        FocusedPanel.LEFT -> {
-                                                            leftNavState = leftNavState.navigate(entry.path)
-                                                            leftPath = entry.path
-                                                        }
-                                                        FocusedPanel.RIGHT -> {
-                                                            rightNavState = rightNavState.navigate(entry.path)
-                                                            rightPath = entry.path
-                                                        }
-                                                    }
-                                                }
-                                            } else {
-                                                openFile(context, FileEntry(entry.path, entry.name, false))
-                                            }
-                                            showHistoryPanel = false
-                                        }
-                                        .padding(horizontal = 16.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .fillMaxSize()
+                                        .padding(32.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(
-                                        imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(20.dp),
-                                        tint = if (entry.isDirectory) MaterialTheme.colorScheme.primary
-                                               else MaterialTheme.colorScheme.onSurfaceVariant
+                                    Text(
+                                        "暂无操作记录",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = entry.name,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                        Text(
-                                            text = compactDate(entry.timestamp),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                                }
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(vertical = 4.dp)
+                                ) {
+                                    items(historyList) { entry ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(50.dp)
+                                                .clickable {
+                                                    if (entry.isDirectory) {
+                                                        val testDir = File(entry.path)
+                                                        if (testDir.exists() && testDir.canRead()) {
+                                                            when (focusedPanel) {
+                                                                FocusedPanel.LEFT -> {
+                                                                    leftNavState = leftNavState.navigate(entry.path)
+                                                                    leftPath = entry.path
+                                                                }
+                                                                FocusedPanel.RIGHT -> {
+                                                                    rightNavState = rightNavState.navigate(entry.path)
+                                                                    rightPath = entry.path
+                                                                }
+                                                            }
+                                                        }
+                                                    } else {
+                                                        openFile(context, FileEntry(entry.path, entry.name, false))
+                                                    }
+                                                    showHistoryPanel = false
+                                                }
+                                                .padding(horizontal = 16.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(20.dp),
+                                                tint = if (entry.isDirectory) MaterialTheme.colorScheme.primary
+                                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Spacer(Modifier.width(12.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = entry.name,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                                Text(
+                                                    text = compactDate(entry.timestamp),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            // ── 书签列表 ──
+                            if (bookmarkList.isEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(32.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        "暂无书签",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentPadding = PaddingValues(vertical = 4.dp)
+                                ) {
+                                    items(bookmarkList) { bm ->
+                                        val showDelete = bookmarkDeleteVisible.contains(bm.path)
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(56.dp)
+                                                .combinedClickable(
+                                                    onClick = {
+                                                        if (showDelete) {
+                                                            bookmarkDeleteVisible = bookmarkDeleteVisible - bm.path
+                                                        } else {
+                                                            val testDir = File(bm.path)
+                                                            if (testDir.exists() && testDir.canRead()) {
+                                                                when (focusedPanel) {
+                                                                    FocusedPanel.LEFT -> {
+                                                                        leftNavState = leftNavState.navigate(bm.path)
+                                                                        leftPath = bm.path
+                                                                    }
+                                                                    FocusedPanel.RIGHT -> {
+                                                                        rightNavState = rightNavState.navigate(bm.path)
+                                                                        rightPath = bm.path
+                                                                    }
+                                                                }
+                                                            }
+                                                            showHistoryPanel = false
+                                                        }
+                                                    },
+                                                    onLongClick = {
+                                                        bookmarkDeleteVisible = if (showDelete) bookmarkDeleteVisible - bm.path
+                                                        else bookmarkDeleteVisible + bm.path
+                                                    }
+                                                )
+                                                .padding(horizontal = 16.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Folder,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(20.dp),
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                            Spacer(Modifier.width(12.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = bm.name,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                                Text(
+                                                    text = bm.path,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            if (showDelete) {
+                                                IconButton(
+                                                    onClick = {
+                                                        bookmarkList = bookmarkList.filter { it.path != bm.path }
+                                                        bookmarkDeleteVisible = bookmarkDeleteVisible - bm.path
+                                                    }
+                                                ) {
+                                                    Icon(
+                                                        Icons.Default.Delete,
+                                                        contentDescription = "删除书签",
+                                                        tint = MaterialTheme.colorScheme.error
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
