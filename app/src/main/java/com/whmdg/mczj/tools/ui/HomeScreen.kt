@@ -457,13 +457,13 @@ fun MainAppContainer() {
         }
         is Screen.TextEditor -> {
             TextEditorScreen(
-                filePath = screen.filePath,
+                filePath = currentScreen.filePath,
                 onBack = { navigateBack() }
             )
         }
         is Screen.ImageViewer -> {
             ImageViewerScreen(
-                filePath = screen.filePath,
+                filePath = currentScreen.filePath,
                 onBack = { navigateBack() }
             )
         }
