@@ -29,7 +29,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.zIndex
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -37,6 +36,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
 import com.whmdg.mczj.tools.ui.components.categorizeFile
 import com.whmdg.mczj.tools.ui.components.extractExtension
@@ -529,7 +529,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 selectedEntry = entry
                                 vm.focusedPanel = FocusedPanel.LEFT
                             },
-                            modifier = Modifier.weight(1f).zIndex(if (vm.focusedPanel == FocusedPanel.LEFT) 1f else 0f),
+                            modifier = Modifier.weight(1f).graphicsLayer { if (vm.focusedPanel == FocusedPanel.LEFT) translationZ = 1f },
                             folderSizeDb = vm.folderSizeDb,
                             parentPath = leftParentPath,
                             lazyListState = leftListState,
@@ -583,7 +583,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 selectedEntry = entry
                                 vm.focusedPanel = FocusedPanel.RIGHT
                             },
-                            modifier = Modifier.weight(1f).zIndex(if (vm.focusedPanel == FocusedPanel.RIGHT) 1f else 0f),
+                            modifier = Modifier.weight(1f).graphicsLayer { if (vm.focusedPanel == FocusedPanel.RIGHT) translationZ = 1f },
                             folderSizeDb = vm.folderSizeDb,
                             parentPath = rightParentPath,
                             lazyListState = rightListState,
