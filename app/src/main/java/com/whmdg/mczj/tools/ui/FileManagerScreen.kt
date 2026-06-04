@@ -529,7 +529,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 selectedEntry = entry
                                 vm.focusedPanel = FocusedPanel.LEFT
                             },
-                            modifier = Modifier.weight(1f).graphicsLayer { if (vm.focusedPanel == FocusedPanel.LEFT) translationZ = 1f },
+                            modifier = Modifier.weight(1f).graphicsLayer(translationZ = if (vm.focusedPanel == FocusedPanel.LEFT) 1f else 0f),
                             folderSizeDb = vm.folderSizeDb,
                             parentPath = leftParentPath,
                             lazyListState = leftListState,
@@ -583,7 +583,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 selectedEntry = entry
                                 vm.focusedPanel = FocusedPanel.RIGHT
                             },
-                            modifier = Modifier.weight(1f).graphicsLayer { if (vm.focusedPanel == FocusedPanel.RIGHT) translationZ = 1f },
+                            modifier = Modifier.weight(1f).graphicsLayer(translationZ = if (vm.focusedPanel == FocusedPanel.RIGHT) 1f else 0f),
                             folderSizeDb = vm.folderSizeDb,
                             parentPath = rightParentPath,
                             lazyListState = rightListState,
