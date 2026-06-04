@@ -269,21 +269,21 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── 设置 ──
-    fun setShowHiddenFiles(value: Boolean) {
+    fun updateShowHiddenFiles(value: Boolean) {
         showHiddenFiles = value
         fmPrefs.edit().putBoolean("show_hidden_files", value).apply()
         leftEntries = listDirectory(leftPath)
         rightEntries = listDirectory(rightPath)
     }
 
-    fun setSortField(field: SortField) {
+    fun updateSortField(field: SortField) {
         sortField = field
         fmPrefs.edit().putString("sort_field", field.name).apply()
         leftEntries = listDirectory(leftPath)
         rightEntries = listDirectory(rightPath)
     }
 
-    fun setSortOrder(order: SortOrder) {
+    fun updateSortOrder(order: SortOrder) {
         sortOrder = order
         fmPrefs.edit().putString("sort_order", order.name).apply()
         leftEntries = listDirectory(leftPath)

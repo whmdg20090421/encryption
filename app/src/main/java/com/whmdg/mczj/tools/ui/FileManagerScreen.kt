@@ -236,7 +236,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 },
                                 onClick = {
-                                    vm.setShowHiddenFiles(!vm.showHiddenFiles)
+                                    vm.updateShowHiddenFiles(!vm.showHiddenFiles)
                                     showSettingsMenu = false
                                 }
                             )
@@ -275,7 +275,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                 Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                                             }
                                         },
-                                        onClick = { sortMenuLevel = 2; vm.setSortField(field) }
+                                        onClick = { sortMenuLevel = 2; vm.updateSortField(field) }
                                     )
                                 }
                             } else {
@@ -297,7 +297,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         }
                                     },
                                     onClick = {
-                                        vm.setSortOrder(SortOrder.ASC)
+                                        vm.updateSortOrder(SortOrder.ASC)
                                         showSettingsMenu = false; sortMenuLevel = 0
                                     }
                                 )
@@ -309,7 +309,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         }
                                     },
                                     onClick = {
-                                        vm.setSortOrder(SortOrder.DESC)
+                                        vm.updateSortOrder(SortOrder.DESC)
                                         showSettingsMenu = false; sortMenuLevel = 0
                                     }
                                 )
