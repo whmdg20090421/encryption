@@ -585,18 +585,21 @@ fun FileManagerScreen(onBack: () -> Unit) {
             )
         },
         bottomBar = {
-            BottomAppBar(
-                modifier = Modifier.fillMaxWidth(),
-                tonalElevation = 0.dp
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(80.dp)
             ) {
+                // 上方 60dp：按钮区域（排除系统手势识别）
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp),
+                        .height(60.dp)
+                        .systemGestureExclusion(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    // 后退按钮（约 1/6 宽度）
+                    // 后退按钮
                     Box(
                         modifier = Modifier.fillMaxWidth(1f / 6f),
                         contentAlignment = Alignment.Center
@@ -623,7 +626,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             Icon(Icons.Default.ArrowBack, contentDescription = "后退")
                         }
                     }
-                    // 前进按钮（约 1/6 宽度）
+                    // 前进按钮
                     Box(
                         modifier = Modifier.fillMaxWidth(1f / 6f),
                         contentAlignment = Alignment.Center
@@ -650,7 +653,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             Icon(Icons.Default.ArrowForward, contentDescription = "前进")
                         }
                     }
-                    // 新建按钮（约 1/6 宽度）
+                    // 新建按钮
                     Box(
                         modifier = Modifier.fillMaxWidth(1f / 6f),
                         contentAlignment = Alignment.Center
@@ -659,7 +662,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             Icon(Icons.Default.Add, contentDescription = "新建")
                         }
                     }
-                    // 同步按钮（约 1/6 宽度）
+                    // 同步按钮
                     Box(
                         modifier = Modifier.fillMaxWidth(1f / 6f),
                         contentAlignment = Alignment.Center
@@ -681,7 +684,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             Icon(Icons.Default.SwapHoriz, contentDescription = "同步路径")
                         }
                     }
-                    // 刷新按钮（重算文件夹大小 + 刷新列表）
+                    // 刷新按钮
                     Box(
                         modifier = Modifier.fillMaxWidth(1f / 6f),
                         contentAlignment = Alignment.Center
@@ -699,11 +702,50 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新")
                         }
                     }
+                    // 返回上一级按钮
                     Box(
                         modifier = Modifier.fillMaxWidth(1f / 6f),
                         contentAlignment = Alignment.Center
-                    ) { /* 预留 */ }
+                    ) {
+                        val currentFocusedPath = when (focusedPanel) {
+                            FocusedPanel.LEFT -> leftPath
+                            FocusedPanel.RIGHT -> rightPath
+                        }
+                        val effectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
+                        val parentPath = currentFocusedPath.substringBeforeLast('/').ifEmpty { "/" }
+                        val canGoUp = currentFocusedPath != effectiveRoot
+                            && currentFocusedPath.contains('/')
+                            && parentPath != currentFocusedPath
+                            && try { File(parentPath).canRead() } catch (_: Exception) { false }
+
+                        IconButton(
+                            onClick = {
+                                if (canGoUp) {
+                                    when (focusedPanel) {
+                                        FocusedPanel.LEFT -> {
+                                            leftNavState = leftNavState.navigate(parentPath)
+                                            leftPath = parentPath
+                                        }
+                                        FocusedPanel.RIGHT -> {
+                                            rightNavState = rightNavState.navigate(parentPath)
+                                            rightPath = parentPath
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = canGoUp
+                        ) {
+                            Icon(Icons.Default.ArrowUpward, contentDescription = "返回上一级")
+                        }
+                    }
                 }
+                // 下方 20dp：系统手势区域（白色，从底部上滑退出应用）
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(20.dp)
+                        .background(Color.White)
+                )
             }
         }
     ) { innerPadding ->
