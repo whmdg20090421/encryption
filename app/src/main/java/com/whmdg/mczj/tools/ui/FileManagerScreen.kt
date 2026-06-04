@@ -58,8 +58,10 @@ import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import android.system.Os
 import java.io.File
-import androidx.compose.ui.platform.systemGestureExclusion
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalView
+import android.graphics.Rect as AndroidRect
 
 enum class FocusedPanel { LEFT, RIGHT }
 enum class CreateMode { FILE, FOLDER }
@@ -593,11 +595,21 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     .height(80.dp)
             ) {
                 // 上方 60dp：按钮区域（排除系统手势识别）
+                val view = LocalView.current
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp)
-                        .systemGestureExclusion(),
+                        .onGloballyPositioned { coords ->
+                            val pos = coords.localToWindow(androidx.compose.ui.geometry.Offset.Zero)
+                            val rect = AndroidRect(
+                                pos.x.toInt(),
+                                pos.y.toInt(),
+                                (pos.x + coords.size.width).toInt(),
+                                (pos.y + coords.size.height).toInt()
+                            )
+                            view.systemGestureExclusionRects = listOf(rect)
+                        },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
