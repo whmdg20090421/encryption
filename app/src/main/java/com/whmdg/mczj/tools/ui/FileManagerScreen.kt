@@ -130,9 +130,7 @@ data class PanelNavState(
 @Composable
 fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     val context = LocalContext.current
-
     val vm: FileManagerViewModel = viewModel()
-    val context = LocalContext.current
 
     var hasStoragePermission by remember {
         mutableStateOf(Environment.isExternalStorageManager())
