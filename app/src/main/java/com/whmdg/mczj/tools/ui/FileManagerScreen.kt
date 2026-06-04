@@ -950,44 +950,55 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             contentPadding = PaddingValues(vertical = 4.dp)
                         ) {
                             items(historyList) { entry ->
-                                ListItem(
-                                    headlineContent = { Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                                    supportingContent = {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(50.dp)
+                                        .clickable {
+                                            if (entry.isDirectory) {
+                                                val testDir = File(entry.path)
+                                                if (testDir.exists() && testDir.canRead()) {
+                                                    when (focusedPanel) {
+                                                        FocusedPanel.LEFT -> {
+                                                            leftNavState = leftNavState.navigate(entry.path)
+                                                            leftPath = entry.path
+                                                        }
+                                                        FocusedPanel.RIGHT -> {
+                                                            rightNavState = rightNavState.navigate(entry.path)
+                                                            rightPath = entry.path
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                openFile(context, FileEntry(entry.path, entry.name, false))
+                                            }
+                                            showHistoryPanel = false
+                                        }
+                                        .padding(horizontal = 16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = if (entry.isDirectory) MaterialTheme.colorScheme.primary
+                                               else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            compactDate(entry.timestamp),
+                                            text = entry.name,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Text(
+                                            text = compactDate(entry.timestamp),
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
-                                    },
-                                    leadingContent = {
-                                        Icon(
-                                            imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
-                                            contentDescription = null,
-                                            tint = if (entry.isDirectory) MaterialTheme.colorScheme.primary
-                                                   else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    },
-                                    modifier = Modifier.clickable {
-                                        if (entry.isDirectory) {
-                                            val testDir = File(entry.path)
-                                            if (testDir.exists() && testDir.canRead()) {
-                                                when (focusedPanel) {
-                                                    FocusedPanel.LEFT -> {
-                                                        leftNavState = leftNavState.navigate(entry.path)
-                                                        leftPath = entry.path
-                                                    }
-                                                    FocusedPanel.RIGHT -> {
-                                                        rightNavState = rightNavState.navigate(entry.path)
-                                                        rightPath = entry.path
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            openFile(context, FileEntry(entry.path, entry.name, false))
-                                        }
-                                        showHistoryPanel = false
                                     }
-                                )
+                                }
                             }
                         }
                     }
