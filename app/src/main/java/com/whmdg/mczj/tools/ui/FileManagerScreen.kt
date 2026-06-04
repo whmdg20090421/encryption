@@ -550,10 +550,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 }
                             )
-                            VerticalDivider(
-                                modifier = Modifier.fillMaxHeight(),
-                                thickness = 1.dp
-                            )
                             FileBrowserPanel(
                                 entries = vm.rightEntries,
                                 isFocused = !leftFocused,
@@ -597,24 +593,18 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             )
                         }
                     ) { measurables, constraints ->
-                        val dividerWidth = 1.dp.roundToPx()
-                        val halfWidth = (constraints.maxWidth - dividerWidth) / 2
+                        val halfWidth = constraints.maxWidth / 2
                         val panelConstraints = constraints.copy(minWidth = halfWidth, maxWidth = halfWidth)
                         val leftPlaceable = measurables[0].measure(panelConstraints)
-                        val dividerPlaceable = measurables[1].measure(constraints.copy(minWidth = dividerWidth, maxWidth = dividerWidth, minHeight = constraints.maxHeight, maxHeight = constraints.maxHeight))
-                        val rightPlaceable = measurables[2].measure(panelConstraints)
+                        val rightPlaceable = measurables[1].measure(panelConstraints)
                         layout(constraints.maxWidth, constraints.maxHeight) {
                             // 先绘制非聚焦面板，再绘制聚焦面板（聚焦的在上层）
-                            val leftX = 0
-                            val rightX = halfWidth + dividerWidth
                             if (leftFocused) {
-                                rightPlaceable.placeRelative(rightX, 0)
-                                dividerPlaceable.placeRelative(halfWidth, 0)
-                                leftPlaceable.placeRelative(leftX, 0)
+                                rightPlaceable.placeRelative(halfWidth, 0)
+                                leftPlaceable.placeRelative(0, 0)
                             } else {
-                                leftPlaceable.placeRelative(leftX, 0)
-                                dividerPlaceable.placeRelative(halfWidth, 0)
-                                rightPlaceable.placeRelative(rightX, 0)
+                                leftPlaceable.placeRelative(0, 0)
+                                rightPlaceable.placeRelative(halfWidth, 0)
                             }
                         }
                     }
@@ -1482,7 +1472,7 @@ private fun FileBrowserPanel(
                     }
                 }
             },
-        shadowElevation = if (isFocused) 5.dp else 0.dp
+        shadowElevation = if (isFocused) 6.dp else 0.dp
     ) {
         if (entries.isEmpty() && parentPath == null) {
             Box(
