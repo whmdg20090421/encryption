@@ -78,6 +78,7 @@ data class FileEntry(
     val lastModified: Long = 0
 )
 
+@kotlinx.serialization.Serializable
 data class HistoryEntry(
     val name: String,
     val path: String,
@@ -191,7 +192,16 @@ fun FileManagerScreen(onBack: () -> Unit) {
         mutableStateOf(fmPrefs.getBoolean("recycle_bin_enabled", false))
     }
     var refreshVersion by remember { mutableStateOf(0L) }
-    var historyList by remember { mutableStateOf(listOf<HistoryEntry>()) }
+    val historyFile = remember { java.io.File(AppDataPaths.fileManager(context), "file_history.json") }
+    val historyJson = remember { kotlinx.serialization.json.Json { ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true } }
+    var historyList by remember {
+        mutableStateOf(
+            try {
+                if (historyFile.exists()) historyJson.decodeFromString<List<HistoryEntry>>(historyFile.readText())
+                else emptyList()
+            } catch (_: Exception) { emptyList() }
+        )
+    }
     var showHistoryPanel by remember { mutableStateOf(false) }
 
     // ── 文件夹大小数据库（存储在应用内部目录） ──
@@ -502,6 +512,13 @@ fun FileManagerScreen(onBack: () -> Unit) {
         DiagnosticLog.log("FileMgr", "LaunchedEffect[RIGHT] 触发 path=$rightPath showHidden=$showHiddenFiles")
         rightEntries = listDirectory(rightPath)
         DiagnosticLog.log("FileMgr", "LaunchedEffect[RIGHT] 完成 entries=${rightEntries.size}")
+    }
+
+    // 历史记录持久化
+    LaunchedEffect(historyList) {
+        try {
+            historyFile.writeText(historyJson.encodeToString(historyList))
+        } catch (_: Exception) {}
     }
 
     LaunchedEffect(Unit) {
@@ -914,7 +931,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .fillMaxHeight(0.5f)
+                            .fillMaxHeight(0.4f)
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,
@@ -926,16 +943,16 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .fillMaxHeight(0.5f)
+                            .fillMaxHeight(0.6f)
                             .align(Alignment.BottomCenter)
                             .drawBehind { drawRect(surfaceColor) }
                             .padding(top = 8.dp)
                     ) {
-                        // 标题行（宽度 80%）
+                        // 标题行
                         Row(
                             modifier = Modifier
-                                .fillMaxWidth(0.8f)
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
