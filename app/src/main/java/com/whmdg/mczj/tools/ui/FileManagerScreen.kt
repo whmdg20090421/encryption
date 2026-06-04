@@ -900,37 +900,54 @@ fun FileManagerScreen(onBack: () -> Unit) {
             }
 
             // ── 历史记录面板（从底部滑入，占屏幕一半高度） ──
+            if (showHistoryPanel) {
+                BackHandler { showHistoryPanel = false }
+            }
             AnimatedVisibility(
                 visible = showHistoryPanel,
                 enter = slideInVertically(initialOffsetY = { it }),
                 exit = slideOutVertically(targetOffsetY = { it }),
                 modifier = Modifier.align(Alignment.BottomCenter)
             ) {
-                val surfaceColor = MaterialTheme.colorScheme.surface
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.5f)
-                        .drawBehind { drawRect(surfaceColor) }
-                        .padding(top = 8.dp)
-                ) {
-                    // 标题行
-                    Row(
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // 上半部分：点击或右滑手势收起面板
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .fillMaxHeight(0.5f)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { showHistoryPanel = false }
+                            )
+                    )
+                    // 下半部分：历史面板内容
+                    val surfaceColor = MaterialTheme.colorScheme.surface
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight(0.5f)
+                            .align(Alignment.BottomCenter)
+                            .drawBehind { drawRect(surfaceColor) }
+                            .padding(top = 8.dp)
                     ) {
-                        Text(
-                            text = "历史记录",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        IconButton(onClick = { showHistoryPanel = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "关闭")
+                        // 标题行（宽度 80%）
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth(0.8f)
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "历史记录",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            IconButton(onClick = { showHistoryPanel = false }) {
+                                Icon(Icons.Default.Close, contentDescription = "关闭")
+                            }
                         }
-                    }
-                    HorizontalDivider()
+                        HorizontalDivider()
                     // 历史列表
                     if (historyList.isEmpty()) {
                         Box(
