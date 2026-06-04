@@ -40,6 +40,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.security.AndroidPermissionLevel
 import kotlinx.coroutines.launch
 

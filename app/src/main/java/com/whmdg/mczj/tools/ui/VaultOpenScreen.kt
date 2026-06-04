@@ -33,6 +33,7 @@ import com.whmdg.mczj.tools.encryption.services.VaultSession
 import com.whmdg.mczj.tools.ui.encryption.EncryptionProgressIcon
 import com.whmdg.mczj.tools.ui.encryption.EncryptionProgressPanel
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import com.whmdg.mczj.tools.AppDataPaths
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
