@@ -1252,14 +1252,27 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                             )
                                             Spacer(Modifier.width(12.dp))
                                             Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = entry.name,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                                Text(
-                                                    text = compactDate(entry.timestamp),
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = entry.name,
+                                                        maxLines = 1,
+                                                        modifier = Modifier.weight(1f, fill = false),
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        style = MaterialTheme.typography.bodyMedium
+                                                    )
+                                                    Text(
+                                                        text = compactDate(entry.timestamp),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                                StartEllipsisText(
+                                                    text = entry.path,
+                                                    modifier = Modifier.fillMaxWidth(),
                                                     style = MaterialTheme.typography.bodySmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
@@ -2200,7 +2213,9 @@ private fun compactDate(millis: Long): String {
 @Composable
 private fun StartEllipsisText(
     text: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.titleMedium,
+    color: Color = Color.Unspecified
 ) {
     var displayText by remember(text) { mutableStateOf(text) }
 
@@ -2210,7 +2225,8 @@ private fun StartEllipsisText(
         maxLines = 1,
         softWrap = false,
         overflow = TextOverflow.Clip,
-        style = MaterialTheme.typography.titleMedium,
+        style = style,
+        color = color,
         onTextLayout = { result ->
             if (result.hasVisualOverflow) {
                 val visible = result.getLineEnd(0)
