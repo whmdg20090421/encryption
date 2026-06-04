@@ -1,8 +1,6 @@
 package com.whmdg.mczj.tools.ui
 
 import android.graphics.Typeface
-import android.text.Editable
-import android.text.TextWatcher
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,7 +14,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.widget.CodeEditor
+import io.github.rosemoe.sora.widget.subscribeAlways
 import io.github.rosemoe.sora.langs.java.JavaLanguage
 import java.io.File
 
@@ -128,13 +128,9 @@ fun TextEditorScreen(filePath: String, onBack: () -> Unit) {
                         else null
                     )
                     // 监听文本变化
-                    text.addTextChangedListener(object : TextWatcher {
-                        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                        override fun afterTextChanged(s: Editable?) {
-                            if (!hasChanges) hasChanges = true
-                        }
-                    })
+                    subscribeAlways<ContentChangeEvent> {
+                        if (!hasChanges) hasChanges = true
+                    }
                     editorRef = this
                 }
             },
