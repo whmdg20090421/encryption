@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import android.util.Log
 import android.webkit.WebView
+import com.topjohnwu.superuser.Shell
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
@@ -11,6 +12,10 @@ import java.io.File
 class ToolsApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        // libsu: 配置全局 root shell（首次 Shell.cmd() 时懒创建，后续复用）
+        Shell.setDefaultBuilder(Shell.Builder.create()
+            .setFlags(Shell.FLAG_MOUNT_MASTER)
+            .setTimeout(10))
         installGlobalCrashHandler()
         migrateWebViewData()
         WebView.setDataDirectorySuffix("app")

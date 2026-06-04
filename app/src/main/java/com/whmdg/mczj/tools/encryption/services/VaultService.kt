@@ -7,6 +7,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.compose.runtime.mutableStateListOf
 import com.whmdg.mczj.tools.auth.Feature
 import com.whmdg.mczj.tools.auth.SecurityEnforcer
+import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.encryption.core.AesGcm256
 import com.whmdg.mczj.tools.encryption.core.HexCodec
 import com.whmdg.mczj.tools.encryption.core.KeyDerivation
@@ -183,7 +184,7 @@ class VaultService(private val context: Context) {
         if (deleteFiles) {
             try {
                 val dir = VaultPaths.resolveVault(context, rec.location, rec.relativePath)
-                dir.deleteRecursively()
+                SpecialPermissionVerifier.safeDelete(dir)
             } catch (e: Exception) {}
         }
         _db.removeVault(id)

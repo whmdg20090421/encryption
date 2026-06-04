@@ -106,6 +106,7 @@ dependencies {
     implementation(libs.sora.editor)
     implementation(libs.sora.language.java)
     implementation(libs.photoView)
+    implementation(libs.libsu.core)
     implementation(libs.androidx.appcompat)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

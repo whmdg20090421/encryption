@@ -17,6 +17,7 @@ webkit = "1.12.1"
 appcompat = "1.7.0"
 soraEditor = "0.24.5"
 photoView = "2.3.0"
+libsu = "6.0.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -46,6 +47,7 @@ sora-editor-bom = { group = "io.github.rosemoe", name = "editor-bom", version.re
 sora-editor = { group = "io.github.rosemoe", name = "editor" }
 sora-language-java = { group = "io.github.rosemoe", name = "language-java" }
 photoView = { group = "com.github.chrisbanes", name = "PhotoView", version.ref = "photoView" }
+libsu-core = { group = "com.github.topjohnwu.libsu", name = "core", version.ref = "libsu" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

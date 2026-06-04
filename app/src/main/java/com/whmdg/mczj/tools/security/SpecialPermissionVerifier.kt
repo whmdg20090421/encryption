@@ -2,12 +2,14 @@ package com.whmdg.mczj.tools.security
 
 import android.content.ComponentName
 import android.content.Context
+import com.topjohnwu.superuser.Shell
 import com.whmdg.mczj.tools.AppDataPaths
 import android.content.pm.PackageManager
 import android.provider.Settings
 import android.text.TextUtils
 import androidx.core.content.ContextCompat
 import android.app.admin.DevicePolicyManager
+import java.io.File
 
 object SpecialPermissionVerifier {
 
@@ -81,18 +83,12 @@ object SpecialPermissionVerifier {
     }
 
     /**
-     * 检测 Root 权限是否可用
+     * 检测 Root 权限是否可用（通过 libsu）
      */
     fun isRootAvailable(): Boolean {
         return try {
-            val process = Runtime.getRuntime().exec("su")
-            val os = java.io.DataOutputStream(process.outputStream)
-            os.writeBytes("id\n")
-            os.writeBytes("exit\n")
-            os.flush()
-            process.waitFor()
-            process.exitValue() == 0
-        } catch (e: Exception) {
+            Shell.isAppGrantedRoot() == true
+        } catch (_: Exception) {
             false
         }
     }
@@ -166,32 +162,15 @@ object SpecialPermissionVerifier {
     }
 
     /**
-     * 以 Root 权限执行 shell 命令并返回输出
+     * 以 Root 权限执行 shell 命令并返回输出（通过 libsu）
      */
     fun executeRootCommand(command: String): String {
-        val process = Runtime.getRuntime().exec("su")
-        val os = java.io.DataOutputStream(process.outputStream)
-        os.writeBytes("$command\n")
-        os.writeBytes("exit\n")
-        os.flush()
-
-        val reader = java.io.BufferedReader(java.io.InputStreamReader(process.inputStream))
-        val output = StringBuilder()
-        var line: String?
-        while (reader.readLine().also { line = it } != null) {
-            output.appendLine(line)
+        val result = Shell.cmd(command).exec()
+        if (!result.isSuccess) {
+            val err = result.getErr().joinToString("\n").trimEnd()
+            throw SecurityException("Root 命令执行失败 (exit ${result.getCode()}): $err")
         }
-        reader.close()
-        os.close()
-        process.waitFor()
-
-        if (process.exitValue() != 0) {
-            val errReader = java.io.BufferedReader(java.io.InputStreamReader(process.errorStream))
-            val errorOutput = errReader.readText()
-            errReader.close()
-            throw SecurityException("Root 命令执行失败 (exit ${process.exitValue()}): $errorOutput")
-        }
-        return output.toString().trimEnd()
+        return result.getOut().joinToString("\n").trimEnd()
     }
 
     /**
@@ -236,59 +215,53 @@ object SpecialPermissionVerifier {
     }
 
     /**
-     * 以 Root 权限执行 shell 命令，并行读取 stdout 和 stderr，不抛错。
+     * 以 Root 权限执行 shell 命令，不抛错（通过 libsu）。
      * 返回 (stdout, stderr, exitCode)
      */
     fun executeRootCommandFull(command: String): Triple<String, String, Int> {
-        val process = Runtime.getRuntime().exec("su")
-        val os = java.io.DataOutputStream(process.outputStream)
-        os.writeBytes("$command\n")
-        os.writeBytes("exit\n")
-        os.flush()
-
-        // 并发读 stdout 和 stderr，避免 pipe buffer 满导致 shell 阻塞
-        val stdoutBuf = StringBuilder()
-        val stderrBuf = StringBuilder()
-        val tOut = Thread {
-            try {
-                val r = java.io.BufferedReader(java.io.InputStreamReader(process.inputStream, Charsets.UTF_8))
-                r.useLines { lines -> lines.forEach { stdoutBuf.appendLine(it) } }
-            } catch (_: Exception) {}
-        }.apply { start() }
-        val tErr = Thread {
-            try {
-                val r = java.io.BufferedReader(java.io.InputStreamReader(process.errorStream, Charsets.UTF_8))
-                r.useLines { lines -> lines.forEach { stderrBuf.appendLine(it) } }
-            } catch (_: Exception) {}
-        }.apply { start() }
-
-        os.close()
-        process.waitFor()
-        tOut.join(2000)
-        tErr.join(2000)
-
-        return Triple(
-            stdoutBuf.toString().trimEnd(),
-            stderrBuf.toString().trimEnd(),
-            process.exitValue()
-        )
+        return try {
+            val result = Shell.cmd(command).exec()
+            Triple(
+                result.getOut().joinToString("\n").trimEnd(),
+                result.getErr().joinToString("\n").trimEnd(),
+                result.getCode()
+            )
+        } catch (e: Exception) {
+            Triple("", e.message ?: "Shell 执行异常", -1)
+        }
     }
 
     /**
-     * 以 Root 权限执行 shell 命令，不关心输出，仅判断成功/失败
+     * 以 Root 权限执行 shell 命令，不关心输出，仅判断成功/失败（通过 libsu）
      */
     fun executeRootCommandSilent(command: String): Boolean {
         return try {
-            val process = Runtime.getRuntime().exec("su")
-            val os = java.io.DataOutputStream(process.outputStream)
-            os.writeBytes("$command\n")
-            os.writeBytes("exit\n")
-            os.flush()
-            os.close()
-            process.waitFor()
-            process.exitValue() == 0
-        } catch (e: Exception) {
+            Shell.cmd(command).exec().isSuccess
+        } catch (_: Exception) {
             false
         }
+    }
+
+    /**
+     * 安全删除文件或目录。
+     * 策略：先用 Java File API 删除；若失败且 root 可用，则 chmod -R 777 后重试 Java 删除。
+     * 绝不使用 rm 命令。
+     */
+    fun safeDelete(file: File): Boolean {
+        // 1. 先尝试普通删除
+        val deleted = if (file.isDirectory) file.deleteRecursively() else file.delete()
+        if (deleted) return true
+
+        // 2. root 可用时，chmod 777 后重试
+        if (!isRootAvailable()) return false
+        val path = file.absolutePath
+        if (path.isEmpty() || path == "/" || path.isBlank()) return false
+        val escaped = path.replace("'", "'\\''")
+        // 目录需要递归 chmod，文件只需单层
+        val chmodCmd = if (file.isDirectory) "chmod -R 777 '$escaped'" else "chmod 777 '$escaped'"
+        executeRootCommandSilent(chmodCmd)
+
+        // 3. chmod 后重试 Java 删除
+        return if (file.isDirectory) file.deleteRecursively() else file.delete()
     }
 }

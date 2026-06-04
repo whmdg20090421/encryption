@@ -34,6 +34,7 @@ import com.whmdg.mczj.tools.ui.encryption.EncryptionProgressIcon
 import com.whmdg.mczj.tools.ui.encryption.EncryptionProgressPanel
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import com.whmdg.mczj.tools.AppDataPaths
+import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -433,7 +434,7 @@ fun VaultOpenScreen(
                     // Try rename first (same filesystem), fallback to copy+delete
                     if (!srcFile.renameTo(target)) {
                         srcFile.copyRecursively(target, overwrite = true)
-                        srcFile.deleteRecursively()
+                        SpecialPermissionVerifier.safeDelete(srcFile)
                     }
                 } else {
                     srcFile.copyRecursively(target, overwrite = true)
@@ -1003,8 +1004,8 @@ fun VaultOpenScreen(
                                                 overwrite = false
                                             )
                                             // Step 4: delete original
-                                            entry.file.delete()
-                                            renamedTemp.delete()
+                                            SpecialPermissionVerifier.safeDelete(entry.file)
+                                            SpecialPermissionVerifier.safeDelete(renamedTemp)
                                         }
                                         withContext(Dispatchers.Main) {
                                             showRenameDialog = null
@@ -1061,11 +1062,7 @@ fun VaultOpenScreen(
                                             target.length()
                                         }
 
-                                        if (target.isDirectory) {
-                                            target.deleteRecursively()
-                                        } else {
-                                            target.delete()
-                                        }
+                                        SpecialPermissionVerifier.safeDelete(target)
 
                                         // 删除后减去大小
                                         if (vaultService != null && deletedSize > 0) {

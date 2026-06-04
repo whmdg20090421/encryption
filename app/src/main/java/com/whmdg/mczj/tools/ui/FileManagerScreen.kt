@@ -1,16 +1,13 @@
 package com.whmdg.mczj.tools.ui
 
 import android.content.Context
-import android.content.Intent
 import android.graphics.BitmapFactory
-import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
-import android.webkit.MimeTypeMap
 import android.widget.Toast
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
-import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -33,7 +30,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.Color
@@ -54,13 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
-import com.whmdg.mczj.tools.AppDataPaths
-import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
-import android.system.Os
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.attribute.BasicFileAttributes
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
@@ -72,6 +65,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 enum class FocusedPanel { LEFT, RIGHT }
 enum class CreateMode { FILE, FOLDER }
@@ -137,79 +131,20 @@ data class PanelNavState(
 fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     val context = LocalContext.current
 
+    val vm: FileManagerViewModel = viewModel()
+    val context = LocalContext.current
+
     var hasStoragePermission by remember {
         mutableStateOf(Environment.isExternalStorageManager())
     }
-
-    // 引擎选择：Root or POSIX（security_prefs 管理，跨模块共享）
-    val secPrefs = remember { context.getSharedPreferences("security_prefs", Context.MODE_PRIVATE) }
-    // 向下兼容：旧版数据在 special_permissions 里，迁移过来
-    val legacySp = remember { context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE) }
-    val permissionLevel = remember {
-        secPrefs.getString("target_permission_level", null)
-            ?: legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
-    }
-    val isRootEngine = remember {
-        permissionLevel == "ROOT" && SpecialPermissionVerifier.isRootAvailable()
-    }
     val coroutineScope = rememberCoroutineScope()
 
-    // 文件管理器专用设置（同一个界面的设置存在同一个 XML）
-    val fmPrefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE) }
+    // ── 滚动状态（从 ViewModel 恢复） ──
+    val leftListState = rememberLazyListState(vm.leftFirstVisibleIndex, vm.leftFirstVisibleOffset)
+    val rightListState = rememberLazyListState(vm.rightFirstVisibleIndex, vm.rightFirstVisibleOffset)
 
-    // 安全默认目录
-    val safeDefault = "/storage/emulated/0"
-
-    // 校验目录是否可访问，不可用时回退到安全默认
-    fun resolveHome(saved: String): String {
-        val dir = File(saved)
-        if (!dir.exists() || !dir.isDirectory) return safeDefault
-        if (!isRootEngine && !dir.canRead()) return safeDefault
-        return saved
-    }
-
-    // 左右主目录 — 从 file_manager_prefs 读取，向下兼容旧版 special_permissions
-    val leftHomeDirectory = remember {
-        resolveHome(
-            fmPrefs.getString("left_home_directory", null)
-                ?: legacySp.getString("left_home_directory", safeDefault)
-                ?: safeDefault
-        )
-    }
-    val rightHomeDirectory = remember {
-        resolveHome(
-            fmPrefs.getString("right_home_directory", null)
-                ?: legacySp.getString("right_home_directory", safeDefault)
-                ?: safeDefault
-        )
-    }
-
-    var leftPath by remember { mutableStateOf(leftHomeDirectory) }
-    var rightPath by remember { mutableStateOf(rightHomeDirectory) }
-    var leftEntries by remember { mutableStateOf(listOf<FileEntry>()) }
-    var rightEntries by remember { mutableStateOf(listOf<FileEntry>()) }
-    var leftNavState by remember { mutableStateOf(PanelNavState(paths = listOf(leftHomeDirectory), index = 0)) }
-    var rightNavState by remember { mutableStateOf(PanelNavState(paths = listOf(rightHomeDirectory), index = 0)) }
-    var focusedPanel by remember { mutableStateOf(FocusedPanel.LEFT) }
-    var showHiddenFiles by remember {
-        mutableStateOf(fmPrefs.getBoolean("show_hidden_files", false))
-    }
+    // ── UI 本地状态 ──
     var showSettingsMenu by remember { mutableStateOf(false) }
-    var sortField by remember {
-        mutableStateOf(
-            when (fmPrefs.getString("sort_field", "NAME")) {
-                "SIZE" -> SortField.SIZE
-                "MODIFIED" -> SortField.MODIFIED
-                "CREATED" -> SortField.CREATED
-                else -> SortField.NAME
-            }
-        )
-    }
-    var sortOrder by remember {
-        mutableStateOf(
-            if (fmPrefs.getString("sort_order", "ASC") == "DESC") SortOrder.DESC else SortOrder.ASC
-        )
-    }
     var sortMenuLevel by remember { mutableStateOf(0) }
     val sortAscLabels = mapOf(
         SortField.NAME to "A到Z",
@@ -223,7 +158,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         SortField.MODIFIED to "最近到最早",
         SortField.CREATED to "最近到最早"
     )
-    var loadError by remember { mutableStateOf<Throwable?>(null) }
     var showCreateTypeDialog by remember { mutableStateOf(false) }
     var createMode by remember { mutableStateOf(CreateMode.FILE) }
     var showNameDialog by remember { mutableStateOf(false) }
@@ -232,432 +166,45 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var showRenameDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
-    var recycleBinEnabled by remember {
-        mutableStateOf(fmPrefs.getBoolean("recycle_bin_enabled", false))
-    }
-    var refreshVersion by remember { mutableStateOf(0L) }
-    val historyFile = remember { java.io.File(AppDataPaths.fileManager(context), "file_history.json") }
-    val historyJson = remember { kotlinx.serialization.json.Json { ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true } }
-    var historyList by remember {
-        mutableStateOf(
-            try {
-                if (historyFile.exists()) historyJson.decodeFromString<List<HistoryEntry>>(historyFile.readText())
-                else emptyList()
-            } catch (_: Exception) { emptyList() }
-        )
-    }
+    var recycleBinEnabled by remember { mutableStateOf(false) }
     var showHistoryPanel by remember { mutableStateOf(false) }
-    val bookmarkFile = remember { java.io.File(AppDataPaths.fileManager(context), "bookmarks.json") }
-    var bookmarkList by remember {
-        mutableStateOf(
-            try {
-                if (bookmarkFile.exists()) historyJson.decodeFromString<List<BookmarkEntry>>(bookmarkFile.readText())
-                else emptyList()
-            } catch (_: Exception) { emptyList() }
-        )
-    }
     var panelTab by remember { mutableStateOf(0) } // 0=历史, 1=书签
     var bookmarkDeleteVisible by remember { mutableStateOf(setOf<String>()) }
-
-    // ── 文件夹大小数据库（存储在应用内部目录） ──
-    var folderSizeDb by remember { mutableStateOf(FolderSizeDb.load(AppDataPaths.fileManager(context))) }
-
-    /** 计算目录直接内容大小：直接子文件 + 子文件夹 DB 值 */
-    fun calcDirDirectSize(db: FolderSizeDb, dir: File): Long {
-        val children = dir.listFiles() ?: return 0L
-        var total = 0L
-        for (child in children) {
-            if (child.isFile) {
-                total += child.length()
-            } else if (child.isDirectory) {
-                val childInfo = db.get(child.absolutePath)
-                if (childInfo != null) total += childInfo.size
-            }
-        }
-        return total
-    }
-
-    /**
-     * 刷新指定目录的文件夹大小（增量、自底向上冒泡）。
-     * 使用绝对路径作为 key，存储在应用内部目录的 folder_sizes.json 中。
-     */
-    fun refreshFolderSize(dirPath: String): FolderSizeDb {
-        val baseDir = File(dirPath)
-        val db = FolderSizeDb.load(AppDataPaths.fileManager(context))
-        if (!baseDir.exists() || !baseDir.isDirectory) return db
-
-        // 收集所有子文件夹
-        val subdirs = mutableListOf<String>()
-        fun collectSubdirs(dir: File) {
-            val children = dir.listFiles() ?: return
-            for (child in children) {
-                if (child.isDirectory) {
-                    subdirs.add(child.absolutePath)
-                    collectSubdirs(child)
-                }
-            }
-        }
-        collectSubdirs(baseDir)
-
-        // 按深度降序排序
-        subdirs.sortByDescending { it.count { c -> c == '/' } }
-
-        // 自底向上计算
-        for (absPath in subdirs) {
-            val dir = File(absPath)
-            val currentMtime = dir.lastModified()
-            val cached = db.get(absPath)
-            if (cached != null && cached.lastModified == currentMtime) continue
-            val size = calcDirDirectSize(db, dir)
-            db.put(absPath, FolderSizeInfo(size, currentMtime))
-        }
-
-        // 计算目标目录自身
-        val targetMtime = baseDir.lastModified()
-        val targetSize = calcDirDirectSize(db, baseDir)
-        db.put(dirPath, FolderSizeInfo(targetSize, targetMtime))
-
-        db.save(AppDataPaths.fileManager(context))
-        return db
-    }
-
-    // ── 普通引擎：File.listFiles（公开 API，无 hidden API 限制） ──
-    fun listWithFile(path: String, showHidden: Boolean, effectiveRoot: String): List<FileEntry> {
-        DiagnosticLog.log("FileEngine", "listFiles($path) showHidden=$showHidden")
-        val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-        val dir = File(normalizedPath)
-
-        if (!dir.exists()) {
-            DiagnosticLog.log("FileEngine", "目录不存在: $normalizedPath")
-            loadError = RuntimeException("目录不存在: $normalizedPath")
-            return emptyList()
-        }
-        if (!dir.isDirectory) {
-            DiagnosticLog.log("FileEngine", "路径不是目录: $normalizedPath")
-            loadError = RuntimeException("路径不是目录: $normalizedPath")
-            return emptyList()
-        }
-
-        val children = try {
-            dir.listFiles()
-        } catch (e: SecurityException) {
-            DiagnosticLog.log("FileEngine", "listFiles SecurityException: ${e.message}")
-            loadError = e
-            return emptyList()
-        }
-        if (children == null) {
-            DiagnosticLog.log("FileEngine", "listFiles 返回 null（权限不足或 I/O 错误）")
-            loadError = RuntimeException("无法列出目录（权限不足）: $normalizedPath")
-            return emptyList()
-        }
-        DiagnosticLog.log("FileEngine", "listFiles 返回 ${children.size} 项")
-
-        val entries = mutableListOf<FileEntry>()
-        var dirCount = 0
-        var fileCount = 0
-        var skipHidden = 0
-        for (child in children) {
-            val name = child.name
-            if (!showHidden && name.startsWith(".")) { skipHidden++; continue }
-            val isDir = try {
-                child.isDirectory
-            } catch (e: Exception) {
-                DiagnosticLog.log("FileEngine", "isDirectory 异常 $name: ${e.message}")
-                false
-            }
-            if (isDir) dirCount++ else fileCount++
-            val perm = try { formatPermission(Os.stat(child.absolutePath).st_mode) } catch (_: Exception) { "" }
-            val sz = if (isDir) 0L else try { child.length() } catch (_: Exception) { 0L }
-            val modified = try { child.lastModified() } catch (_: Exception) { 0L }
-            entries.add(FileEntry(child.absolutePath, name, isDir, perm, sz, modified))
-        }
-        DiagnosticLog.log("FileEngine", "统计: dirs=$dirCount, files=$fileCount, hidden 过滤=$skipHidden")
-
-        // 排序：文件夹在前，按名称升序
-        val sorted = entries.sortedWith(
-            compareByDescending<FileEntry> { it.isDirectory }
-                .thenBy { it.name.lowercase() }
-        )
-        entries.clear()
-        entries.addAll(sorted)
-        return entries
-    }
-
-    // ── ls 引擎：统一用 `ls -1Ap`，区别只是要不要 su ──
-    // useRoot=true → `su -c 'ls -1Ap …'`；false → 直接 `sh -c 'ls -1Ap …'`
-    // -1 单列, -A 显示隐藏但不含 . 和 .., -p 给目录加 '/' 后缀（无需另起 stat）
-    fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean, effectiveRoot: String): List<FileEntry> {
-        val entries = mutableListOf<FileEntry>()
-        val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-        val escapedPath = normalizedPath.replace("'", "'\\''")
-        val flags = if (showHidden) "-1Ap" else "-1p"
-        val command = "ls $flags '$escapedPath'"
-        val tag = if (useRoot) "LsRoot" else "LsShell"
-        DiagnosticLog.log(tag, "命令: $command")
-
-        val (stdout, stderr, exitCode) = try {
-            if (useRoot) SpecialPermissionVerifier.executeRootCommandFull(command)
-            else SpecialPermissionVerifier.executeShellCommandFull(command)
-        } catch (e: Throwable) {
-            // 精确识别注入到我们进程的 ApkAssets hook 噪声（来自 Magisk/Zygisk/LSPosed 模块）
-            val isApkAssetsNoise = e is java.io.IOException && (
-                e.stackTrace.any { it.className == "android.content.res.ApkAssets" } ||
-                        (e.message?.contains("Failed to load asset path") == true) ||
-                        (e.message?.contains(".apk from fd") == true)
-            )
-            if (isApkAssetsNoise) {
-                DiagnosticLog.log(tag, "忽略 hook 注入的 ApkAssets 噪声: ${e.message}")
-                return emptyList()
-            }
-            DiagnosticLog.log(tag, "execute 抛错: ${e.javaClass.simpleName}: ${e.message}")
-            loadError = if (e is Exception) e else RuntimeException(e)
-            return emptyList()
-        }
-        DiagnosticLog.log(tag, "exit=$exitCode stdout=${stdout.length}字符 stderr=${stderr.length}字符")
-        if (stderr.isNotBlank()) DiagnosticLog.log(tag, "stderr: ${stderr.take(500)}")
-        if (stdout.isNotBlank()) DiagnosticLog.log(tag, "stdout 前 500: ${stdout.take(500)}")
-
-        if (exitCode != 0 && stdout.isBlank()) {
-            loadError = SecurityException("ls 失败 (exit $exitCode): ${stderr.ifBlank { "(无 stderr)" }}")
-            return emptyList()
-        }
-
-        val lines = stdout.lines().map { it.trimEnd('\r') }.filter { it.isNotBlank() }
-        var dirCount = 0
-        var fileCount = 0
-        for (raw in lines) {
-            val isDir = raw.endsWith("/")
-            val name = if (isDir) raw.dropLast(1) else raw
-            if (name == "." || name == "..") continue
-            if (!showHidden && name.startsWith(".")) continue
-            if (isDir) dirCount++ else fileCount++
-            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-            val perm = try { formatPermission(Os.stat(childPath).st_mode) } catch (_: Exception) { "" }
-            val sz = if (isDir) 0L else try { File(childPath).length() } catch (_: Exception) { 0L }
-            val modified = try { File(childPath).lastModified() } catch (_: Exception) { 0L }
-            entries.add(FileEntry(childPath, name, isDir, perm, sz, modified))
-        }
-        DiagnosticLog.log(tag, "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
-
-        // 排序：文件夹在前，按名称升序
-        val sorted = entries.sortedWith(
-            compareByDescending<FileEntry> { it.isDirectory }
-                .thenBy { it.name.lowercase() }
-        )
-        entries.clear()
-        entries.addAll(sorted)
-        return entries
-    }
-
-    // ── 统一入口 ──
-    // - 有 root → `su -c ls`
-    // - 无 root → `sh -c ls`
-    // - ls 完全失败时，最后兜底 File.listFiles
-    fun listDirectory(path: String): List<FileEntry> {
-        DiagnosticLog.log("FileMgr", ">>> listDirectory START path=$path useRoot=$isRootEngine")
-        loadError = null
-        val t0 = System.currentTimeMillis()
-        val effectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
-
-        var entries = listWithLs(path, showHiddenFiles, useRoot = isRootEngine, effectiveRoot = effectiveRoot)
-
-        // 兜底：ls 完全没结果且报错 → 退到 File.listFiles
-        if (entries.isEmpty() && loadError != null) {
-            DiagnosticLog.log("FileMgr", "ls 失败，回退 File API")
-            val prevErr = loadError
-            loadError = null
-            val fileEntries = listWithFile(path, showHiddenFiles, effectiveRoot)
-            if (fileEntries.isNotEmpty()) {
-                entries = fileEntries
-            } else if (loadError == null) {
-                loadError = prevErr
-            }
-        }
-
-        // 填充创建时间（API 26+ 使用 NIO）
-        if (sortField == SortField.CREATED && android.os.Build.VERSION.SDK_INT >= 26) {
-            entries = entries.map { e ->
-                if (e.createdAt > 0) return@map e
-                val ct = try {
-                    Files.readAttributes(File(e.path).toPath(), BasicFileAttributes::class.java).creationTime().toMillis()
-                } catch (_: Exception) { e.lastModified }
-                e.copy(createdAt = ct)
-            }
-        }
-
-        // 自定义排序：文件夹在前，然后按用户选择的字段+顺序
-        entries = when (sortField) {
-            SortField.NAME -> if (sortOrder == SortOrder.ASC)
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
-            else
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
-            SortField.SIZE -> if (sortOrder == SortOrder.ASC)
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.size })
-            else
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.size })
-            SortField.MODIFIED -> if (sortOrder == SortOrder.ASC)
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.lastModified })
-            else
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.lastModified })
-            SortField.CREATED -> if (sortOrder == SortOrder.ASC)
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.createdAt })
-            else
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.createdAt })
-        }
-
-        val took = System.currentTimeMillis() - t0
-        DiagnosticLog.log("FileMgr", "<<< listDirectory END path=$path entries=${entries.size} took=${took}ms err=${loadError?.javaClass?.simpleName}")
-        return entries
-    }
-
-    fun openFile(context: Context, entry: FileEntry) {
-        DiagnosticLog.log("OpenFile", "请求打开: ${entry.path}")
-        val file = File(entry.path)
-        if (entry.name.endsWith(".apk", ignoreCase = true) ||
-            entry.name.endsWith(".apex", ignoreCase = true)
-        ) {
-            DiagnosticLog.log("OpenFile", "拒绝打开 apk/apex: ${entry.name}")
-            Toast.makeText(context, "APK 文件请在应用管理器中安装", Toast.LENGTH_SHORT).show()
-            return
-        }
-        // 内置文本编辑器支持的后缀
-        val textExtensions = setOf(
-            "txt", "md", "json", "xml", "html", "htm", "css", "js",
-            "kt", "java", "py", "sh", "bat", "log", "csv", "yaml", "yml",
-            "toml", "ini", "conf", "cfg", "properties", "gradle", "kts",
-            "c", "cpp", "h", "hpp", "rs", "go", "rb", "php", "sql",
-            "lua", "r", "swift", "dart", "ts", "jsx", "tsx", "vue"
-        )
-        val ext = entry.name.substringAfterLast('.', "").lowercase()
-        if (ext in textExtensions) {
-            DiagnosticLog.log("OpenFile", "内置编辑器打开: ${entry.name}")
-            onNavigate(Screen.TextEditor(entry.path))
-            return
-        }
-        // 内置图片查看器支持的后缀
-        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
-        if (ext in imageExtensions) {
-            DiagnosticLog.log("OpenFile", "内置查看器打开: ${entry.name}")
-            onNavigate(Screen.ImageViewer(entry.path))
-            return
-        }
-        try {
-            val uri: Uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                file
-            )
-            val extension = entry.name.substringAfterLast('.', "").lowercase()
-            val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
-                ?: "*/*"
-            DiagnosticLog.log("OpenFile", "uri=$uri ext='$extension' mime=$mimeType")
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, mimeType)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            val resolver = intent.resolveActivity(context.packageManager)
-            DiagnosticLog.log("OpenFile", "resolveActivity=${resolver?.flattenToString() ?: "(null)"}")
-            if (resolver != null) {
-                context.startActivity(intent)
-                DiagnosticLog.log("OpenFile", "startActivity 已调用")
-            } else {
-                Toast.makeText(context, "没有应用可以打开此文件", Toast.LENGTH_SHORT).show()
-            }
-        } catch (e: Exception) {
-            DiagnosticLog.log("OpenFile", "异常: ${e.javaClass.simpleName}: ${e.message}")
-            Toast.makeText(context, "无法打开文件: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { _ ->
         hasStoragePermission = Environment.isExternalStorageManager()
         if (hasStoragePermission) {
-            leftEntries = listDirectory(leftPath)
-            rightEntries = listDirectory(rightPath)
+            vm.refreshBoth()
         }
     }
 
-    LaunchedEffect(leftPath, showHiddenFiles, refreshVersion, sortField, sortOrder) {
-        DiagnosticLog.log("FileMgr", "LaunchedEffect[LEFT] 触发 path=$leftPath showHidden=$showHiddenFiles sort=$sortField/$sortOrder")
-        leftEntries = listDirectory(leftPath)
-        DiagnosticLog.log("FileMgr", "LaunchedEffect[LEFT] 完成 entries=${leftEntries.size}")
-    }
-    LaunchedEffect(rightPath, showHiddenFiles, refreshVersion, sortField, sortOrder) {
-        DiagnosticLog.log("FileMgr", "LaunchedEffect[RIGHT] 触发 path=$rightPath showHidden=$showHiddenFiles sort=$sortField/$sortOrder")
-        rightEntries = listDirectory(rightPath)
-        DiagnosticLog.log("FileMgr", "LaunchedEffect[RIGHT] 完成 entries=${rightEntries.size}")
-    }
-
     // 历史记录持久化
-    LaunchedEffect(historyList) {
-        try {
-            historyFile.writeText(historyJson.encodeToString(historyList))
-        } catch (_: Exception) {}
+    LaunchedEffect(vm.historyList) {
+        vm.saveHistory()
     }
     // 书签持久化
-    LaunchedEffect(bookmarkList) {
-        try {
-            bookmarkFile.writeText(historyJson.encodeToString(bookmarkList))
-        } catch (_: Exception) {}
+    LaunchedEffect(vm.bookmarkList) {
+        vm.saveBookmarks()
     }
 
     LaunchedEffect(Unit) {
         DiagnosticLog.beginSession("进入 FileManagerScreen")
-        DiagnosticLog.log("FileMgr", "FileManagerScreen 启动 isRootEngine=$isRootEngine permissionLevel=$permissionLevel hasStoragePerm=$hasStoragePermission")
+        DiagnosticLog.log("FileMgr", "FileManagerScreen 启动 isRootEngine=${vm.isRootEngine} hasStoragePerm=$hasStoragePermission")
         if (!hasStoragePermission) {
             Toast.makeText(context, "需要存储权限才能浏览文件", Toast.LENGTH_LONG).show()
-        }
-
-        // ── 一次性旧数据迁移 ──
-        if (legacySp.contains("show_hidden_files") && !fmPrefs.contains("show_hidden_files")) {
-            fmPrefs.edit().putBoolean("show_hidden_files", legacySp.getBoolean("show_hidden_files", false)).apply()
-        }
-        if (legacySp.contains("left_home_directory") && !fmPrefs.contains("left_home_directory")) {
-            fmPrefs.edit().putString("left_home_directory", legacySp.getString("left_home_directory", null)).apply()
-        }
-        if (legacySp.contains("right_home_directory") && !fmPrefs.contains("right_home_directory")) {
-            fmPrefs.edit().putString("right_home_directory", legacySp.getString("right_home_directory", null)).apply()
-        }
-        if (legacySp.contains("target_permission_level") && !secPrefs.contains("target_permission_level")) {
-            secPrefs.edit().putString("target_permission_level", legacySp.getString("target_permission_level", null)).apply()
         }
     }
 
     // 返回手势：子目录 → 回上一级，根目录 → 退出文件管理器
     BackHandler {
-        val current = when (focusedPanel) {
-            FocusedPanel.LEFT -> leftPath
-            FocusedPanel.RIGHT -> rightPath
-        }
-        val effectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
-        if (current != effectiveRoot && current.contains('/')) {
-            val parent = current.substringBeforeLast('/').ifEmpty { "/" }
-            if (parent != current) {
-                when (focusedPanel) {
-                    FocusedPanel.LEFT -> {
-                        leftNavState = leftNavState.navigate(parent)
-                        leftPath = parent
-                    }
-                    FocusedPanel.RIGHT -> {
-                        rightNavState = rightNavState.navigate(parent)
-                        rightPath = parent
-                    }
-                }
-            } else {
-                onBack()
-            }
-        } else {
+        if (!vm.goUp()) {
             onBack()
         }
     }
 
-    val currentPath = when (focusedPanel) {
-        FocusedPanel.LEFT -> leftPath
-        FocusedPanel.RIGHT -> rightPath
-    }
+    val currentPath = vm.currentPath
 
     Scaffold(
         topBar = {
@@ -686,13 +233,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             DropdownMenuItem(
                                 text = { Text("显示隐藏文件") },
                                 trailingIcon = {
-                                    if (showHiddenFiles) {
+                                    if (vm.showHiddenFiles) {
                                         Icon(Icons.Default.Check, contentDescription = null)
                                     }
                                 },
                                 onClick = {
-                                    showHiddenFiles = !showHiddenFiles
-                                    fmPrefs.edit().putBoolean("show_hidden_files", showHiddenFiles).apply()
+                                    vm.setShowHiddenFiles(!vm.showHiddenFiles)
                                     showSettingsMenu = false
                                 }
                             )
@@ -703,9 +249,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 DropdownMenuItem(
                                     text = { Text("排列顺序") },
                                     trailingIcon = {
-                                        val label = when (sortOrder) {
-                                            SortOrder.ASC -> sortAscLabels[sortField]
-                                            SortOrder.DESC -> sortDescLabels[sortField]
+                                        val label = when (vm.sortOrder) {
+                                            SortOrder.ASC -> sortAscLabels[vm.sortField]
+                                            SortOrder.DESC -> sortDescLabels[vm.sortField]
                                         }
                                         Text(label!!, style = MaterialTheme.typography.bodySmall)
                                     },
@@ -727,17 +273,17 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     DropdownMenuItem(
                                         text = { Text(fieldLabel) },
                                         trailingIcon = {
-                                            if (sortField == field) {
+                                            if (vm.sortField == field) {
                                                 Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                                             }
                                         },
-                                        onClick = { sortMenuLevel = 2; sortField = field }
+                                        onClick = { sortMenuLevel = 2; vm.setSortField(field) }
                                     )
                                 }
                             } else {
                                 // 第三级：升序/降序（上下文标签）
                                 DropdownMenuItem(
-                                    text = { Text("← ${when (sortField) {
+                                    text = { Text("← ${when (vm.sortField) {
                                         SortField.NAME -> "名称"
                                         SortField.SIZE -> "大小"
                                         SortField.MODIFIED -> "最后修改时间"
@@ -746,39 +292,34 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     onClick = { sortMenuLevel = 1 }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text(sortAscLabels[sortField]!!) },
+                                    text = { Text(sortAscLabels[vm.sortField]!!) },
                                     trailingIcon = {
-                                        if (sortOrder == SortOrder.ASC) {
+                                        if (vm.sortOrder == SortOrder.ASC) {
                                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                                         }
                                     },
                                     onClick = {
-                                        sortOrder = SortOrder.ASC
-                                        fmPrefs.edit().putString("sort_field", sortField.name).putString("sort_order", "ASC").apply()
+                                        vm.setSortOrder(SortOrder.ASC)
                                         showSettingsMenu = false; sortMenuLevel = 0
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text(sortDescLabels[sortField]!!) },
+                                    text = { Text(sortDescLabels[vm.sortField]!!) },
                                     trailingIcon = {
-                                        if (sortOrder == SortOrder.DESC) {
+                                        if (vm.sortOrder == SortOrder.DESC) {
                                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                                         }
                                     },
                                     onClick = {
-                                        sortOrder = SortOrder.DESC
-                                        fmPrefs.edit().putString("sort_field", sortField.name).putString("sort_order", "DESC").apply()
+                                        vm.setSortOrder(SortOrder.DESC)
                                         showSettingsMenu = false; sortMenuLevel = 0
                                     }
                                 )
                             }
                             HorizontalDivider()
                             // 添加书签
-                            val currentFocusedPath = when (focusedPanel) {
-                                FocusedPanel.LEFT -> leftPath
-                                FocusedPanel.RIGHT -> rightPath
-                            }
-                            val isAlreadyBookmarked = bookmarkList.any { it.path == currentFocusedPath }
+                            val currentFocusedPath = vm.currentPath
+                            val isAlreadyBookmarked = vm.bookmarkList.any { it.path == currentFocusedPath }
                             DropdownMenuItem(
                                 text = { Text("添加书签") },
                                 trailingIcon = {
@@ -789,7 +330,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onClick = {
                                     val folderName = currentFocusedPath.substringAfterLast('/').ifEmpty { "/" }
                                     if (!isAlreadyBookmarked) {
-                                        bookmarkList = listOf(BookmarkEntry(folderName, currentFocusedPath)) + bookmarkList
+                                        vm.bookmarkList = listOf(BookmarkEntry(folderName, currentFocusedPath)) + vm.bookmarkList
                                     }
                                     showSettingsMenu = false
                                 }
@@ -836,23 +377,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(
-                            onClick = {
-                                val nav = when (focusedPanel) {
-                                    FocusedPanel.LEFT -> leftNavState
-                                    FocusedPanel.RIGHT -> rightNavState
-                                }
-                                val back = nav.back()
-                                if (back != null) {
-                                    when (focusedPanel) {
-                                        FocusedPanel.LEFT -> { leftNavState = back; leftPath = back.current }
-                                        FocusedPanel.RIGHT -> { rightNavState = back; rightPath = back.current }
-                                    }
-                                }
-                            },
-                            enabled = when (focusedPanel) {
-                                FocusedPanel.LEFT -> leftNavState.canGoBack
-                                FocusedPanel.RIGHT -> rightNavState.canGoBack
-                            }
+                            onClick = { vm.goBack() },
+                            enabled = vm.currentNavState.canGoBack
                         ) {
                             Icon(Icons.Default.ArrowBack, contentDescription = "后退")
                         }
@@ -863,23 +389,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(
-                            onClick = {
-                                val nav = when (focusedPanel) {
-                                    FocusedPanel.LEFT -> leftNavState
-                                    FocusedPanel.RIGHT -> rightNavState
-                                }
-                                val fwd = nav.forward()
-                                if (fwd != null) {
-                                    when (focusedPanel) {
-                                        FocusedPanel.LEFT -> { leftNavState = fwd; leftPath = fwd.current }
-                                        FocusedPanel.RIGHT -> { rightNavState = fwd; rightPath = fwd.current }
-                                    }
-                                }
-                            },
-                            enabled = when (focusedPanel) {
-                                FocusedPanel.LEFT -> leftNavState.canGoForward
-                                FocusedPanel.RIGHT -> rightNavState.canGoForward
-                            }
+                            onClick = { vm.goForward() },
+                            enabled = vm.currentNavState.canGoForward
                         ) {
                             Icon(Icons.Default.ArrowForward, contentDescription = "前进")
                         }
@@ -898,20 +409,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
-                        IconButton(onClick = {
-                            when (focusedPanel) {
-                                FocusedPanel.LEFT -> {
-                                    rightPath = leftPath
-                                    rightNavState = rightNavState.navigate(leftPath)
-                                    rightEntries = listDirectory(rightPath)
-                                }
-                                FocusedPanel.RIGHT -> {
-                                    leftPath = rightPath
-                                    leftNavState = leftNavState.navigate(rightPath)
-                                    leftEntries = listDirectory(leftPath)
-                                }
-                            }
-                        }) {
+                        IconButton(onClick = { vm.syncPaths() }) {
                             Icon(Icons.Default.SwapHoriz, contentDescription = "同步路径")
                         }
                     }
@@ -920,16 +418,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
-                        IconButton(onClick = {
-                            when (focusedPanel) {
-                                FocusedPanel.LEFT -> {
-                                    leftEntries = listDirectory(leftPath)
-                                }
-                                FocusedPanel.RIGHT -> {
-                                    rightEntries = listDirectory(rightPath)
-                                }
-                            }
-                        }) {
+                        IconButton(onClick = { vm.refreshCurrent() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新")
                         }
                     }
@@ -938,32 +427,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
-                        val currentFocusedPath = when (focusedPanel) {
-                            FocusedPanel.LEFT -> leftPath
-                            FocusedPanel.RIGHT -> rightPath
-                        }
-                        val effectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
-                        val parentPath = currentFocusedPath.substringBeforeLast('/').ifEmpty { "/" }
-                        val canGoUp = currentFocusedPath != effectiveRoot
-                            && currentFocusedPath.contains('/')
-                            && parentPath != currentFocusedPath
+                        val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
+                        val parentPath = vm.currentPath.substringBeforeLast('/').ifEmpty { "/" }
+                        val canGoUp = vm.currentPath != effectiveRoot
+                            && vm.currentPath.contains('/')
+                            && parentPath != vm.currentPath
                             && try { File(parentPath).canRead() } catch (_: Exception) { false }
 
                         IconButton(
-                            onClick = {
-                                if (canGoUp) {
-                                    when (focusedPanel) {
-                                        FocusedPanel.LEFT -> {
-                                            leftNavState = leftNavState.navigate(parentPath)
-                                            leftPath = parentPath
-                                        }
-                                        FocusedPanel.RIGHT -> {
-                                            rightNavState = rightNavState.navigate(parentPath)
-                                            rightPath = parentPath
-                                        }
-                                    }
-                                }
-                            },
+                            onClick = { vm.goUp() },
                             enabled = canGoUp
                         ) {
                             Icon(Icons.Default.ArrowUpward, contentDescription = "返回上一级")
@@ -1021,50 +493,51 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     }
                 } else {
                     Row(modifier = Modifier.fillMaxSize()) {
-                        val leftEffectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
-                        val leftParentPath = if (leftPath != leftEffectiveRoot && leftPath.contains('/')) {
-                            leftPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-                                if (p != leftPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
+                        val leftEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
+                        val leftParentPath = if (vm.leftPath != leftEffectiveRoot && vm.leftPath.contains('/')) {
+                            vm.leftPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
+                                if (p != vm.leftPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
                             }
                         } else null
 
                         FileBrowserPanel(
-                            entries = leftEntries,
-                            isFocused = focusedPanel == FocusedPanel.LEFT,
-                            onFocus = { focusedPanel = FocusedPanel.LEFT },
+                            entries = vm.leftEntries,
+                            isFocused = vm.focusedPanel == FocusedPanel.LEFT,
+                            onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
                             onFolderClick = { entry ->
                                 DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
-                                DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$leftPath")
-                                val testDir = java.io.File(entry.path)
-                                val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
-                                if (accessible != null) {
-                                    focusedPanel = FocusedPanel.LEFT
-                                    leftNavState = leftNavState.navigate(entry.path)
-                                    leftPath = entry.path
-                                    historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
-                                } else {
-                                    Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
-                                }
+                                DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.leftPath}")
+                                vm.focusedPanel = FocusedPanel.LEFT
+                                vm.navigateToFolder(entry)
                             },
                             onFileClick = { entry ->
                                 DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
                                 DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
-                                focusedPanel = FocusedPanel.LEFT
-                                openFile(context, entry)
-                                historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + historyList
+                                vm.focusedPanel = FocusedPanel.LEFT
+                                val screen = vm.openFile(context, entry)
+                                if (screen != null) {
+                                    vm.saveScrollPosition(
+                                        leftListState.firstVisibleItemIndex,
+                                        leftListState.firstVisibleItemScrollOffset,
+                                        rightListState.firstVisibleItemIndex,
+                                        rightListState.firstVisibleItemScrollOffset
+                                    )
+                                    onNavigate(screen)
+                                }
+                                vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
                             },
                             onLongClick = { entry ->
                                 selectedEntry = entry
-                                focusedPanel = FocusedPanel.LEFT
+                                vm.focusedPanel = FocusedPanel.LEFT
                             },
                             modifier = Modifier.weight(1f),
-                            folderSizeDb = folderSizeDb,
+                            folderSizeDb = vm.folderSizeDb,
                             parentPath = leftParentPath,
+                            lazyListState = leftListState,
                             onNavigateUp = {
                                 if (leftParentPath != null) {
-                                    focusedPanel = FocusedPanel.LEFT
-                                    leftNavState = leftNavState.navigate(leftParentPath)
-                                    leftPath = leftParentPath
+                                    vm.focusedPanel = FocusedPanel.LEFT
+                                    vm.navigateUp(leftParentPath)
                                 }
                             }
                         )
@@ -1074,50 +547,51 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             thickness = 1.dp
                         )
 
-                        val rightEffectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
-                        val rightParentPath = if (rightPath != rightEffectiveRoot && rightPath.contains('/')) {
-                            rightPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-                                if (p != rightPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
+                        val rightEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
+                        val rightParentPath = if (vm.rightPath != rightEffectiveRoot && vm.rightPath.contains('/')) {
+                            vm.rightPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
+                                if (p != vm.rightPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
                             }
                         } else null
 
                         FileBrowserPanel(
-                            entries = rightEntries,
-                            isFocused = focusedPanel == FocusedPanel.RIGHT,
-                            onFocus = { focusedPanel = FocusedPanel.RIGHT },
+                            entries = vm.rightEntries,
+                            isFocused = vm.focusedPanel == FocusedPanel.RIGHT,
+                            onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
                             onFolderClick = { entry ->
                                 DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
-                                DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=$rightPath")
-                                val testDir = java.io.File(entry.path)
-                                val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
-                                if (accessible != null) {
-                                    focusedPanel = FocusedPanel.RIGHT
-                                    rightNavState = rightNavState.navigate(entry.path)
-                                    rightPath = entry.path
-                                    historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
-                                } else {
-                                    Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
-                                }
+                                DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.rightPath}")
+                                vm.focusedPanel = FocusedPanel.RIGHT
+                                vm.navigateToFolder(entry)
                             },
                             onFileClick = { entry ->
                                 DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
                                 DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
-                                focusedPanel = FocusedPanel.RIGHT
-                                openFile(context, entry)
-                                historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + historyList
+                                vm.focusedPanel = FocusedPanel.RIGHT
+                                val screen = vm.openFile(context, entry)
+                                if (screen != null) {
+                                    vm.saveScrollPosition(
+                                        leftListState.firstVisibleItemIndex,
+                                        leftListState.firstVisibleItemScrollOffset,
+                                        rightListState.firstVisibleItemIndex,
+                                        rightListState.firstVisibleItemScrollOffset
+                                    )
+                                    onNavigate(screen)
+                                }
+                                vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
                             },
                             onLongClick = { entry ->
                                 selectedEntry = entry
-                                focusedPanel = FocusedPanel.RIGHT
+                                vm.focusedPanel = FocusedPanel.RIGHT
                             },
                             modifier = Modifier.weight(1f),
-                            folderSizeDb = folderSizeDb,
+                            folderSizeDb = vm.folderSizeDb,
                             parentPath = rightParentPath,
+                            lazyListState = rightListState,
                             onNavigateUp = {
                                 if (rightParentPath != null) {
-                                    focusedPanel = FocusedPanel.RIGHT
-                                    rightNavState = rightNavState.navigate(rightParentPath)
-                                    rightPath = rightParentPath
+                                    vm.focusedPanel = FocusedPanel.RIGHT
+                                    vm.navigateUp(rightParentPath)
                                 }
                             }
                         )
@@ -1219,7 +693,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         ) { tab ->
                         if (tab == 0) {
                             // ── 历史列表 ──
-                            if (historyList.isEmpty()) {
+                            if (vm.historyList.isEmpty()) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -1236,28 +710,17 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     modifier = Modifier.fillMaxSize(),
                                     contentPadding = PaddingValues(vertical = 4.dp)
                                 ) {
-                                    items(historyList) { entry ->
+                                    items(vm.historyList) { entry ->
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .height(50.dp)
                                                 .clickable {
                                                     if (entry.isDirectory) {
-                                                        val testDir = File(entry.path)
-                                                        if (testDir.exists() && testDir.canRead()) {
-                                                            when (focusedPanel) {
-                                                                FocusedPanel.LEFT -> {
-                                                                    leftNavState = leftNavState.navigate(entry.path)
-                                                                    leftPath = entry.path
-                                                                }
-                                                                FocusedPanel.RIGHT -> {
-                                                                    rightNavState = rightNavState.navigate(entry.path)
-                                                                    rightPath = entry.path
-                                                                }
-                                                            }
-                                                        }
+                                                        vm.navigateToHistoryDir(entry)
                                                     } else {
-                                                        openFile(context, FileEntry(entry.path, entry.name, false))
+                                                        val screen = vm.openFile(context, FileEntry(entry.path, entry.name, false))
+                                                        if (screen != null) onNavigate(screen)
                                                     }
                                                     showHistoryPanel = false
                                                 }
@@ -1322,7 +785,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             }
                         } else {
                             // ── 书签列表 ──
-                            if (bookmarkList.isEmpty()) {
+                            if (vm.bookmarkList.isEmpty()) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -1339,7 +802,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     modifier = Modifier.fillMaxSize(),
                                     contentPadding = PaddingValues(vertical = 4.dp)
                                 ) {
-                                    items(bookmarkList) { bm ->
+                                    items(vm.bookmarkList) { bm ->
                                         val showDelete = bookmarkDeleteVisible.contains(bm.path)
                                         Row(
                                             modifier = Modifier
@@ -1350,19 +813,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                         if (showDelete) {
                                                             bookmarkDeleteVisible = bookmarkDeleteVisible - bm.path
                                                         } else {
-                                                            val testDir = File(bm.path)
-                                                            if (testDir.exists() && testDir.canRead()) {
-                                                                when (focusedPanel) {
-                                                                    FocusedPanel.LEFT -> {
-                                                                        leftNavState = leftNavState.navigate(bm.path)
-                                                                        leftPath = bm.path
-                                                                    }
-                                                                    FocusedPanel.RIGHT -> {
-                                                                        rightNavState = rightNavState.navigate(bm.path)
-                                                                        rightPath = bm.path
-                                                                    }
-                                                                }
-                                                            }
+                                                            vm.navigateToBookmark(bm)
                                                             showHistoryPanel = false
                                                         }
                                                     },
@@ -1399,7 +850,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             if (showDelete) {
                                                 IconButton(
                                                     onClick = {
-                                                        bookmarkList = bookmarkList.filter { it.path != bm.path }
+                                                        vm.bookmarkList = vm.bookmarkList.filter { it.path != bm.path }
                                                         bookmarkDeleteVisible = bookmarkDeleteVisible - bm.path
                                                     }
                                                 ) {
@@ -1427,7 +878,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
-                val isToRight = focusedPanel == FocusedPanel.LEFT
+                val isToRight = vm.focusedPanel == FocusedPanel.LEFT
 
                 Box(
                     modifier = Modifier
@@ -1466,7 +917,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             val entry = selectedEntry ?: return@clickable
                                             val source = File(entry.path)
                                             val destDir = File(
-                                                if (isToRight) rightPath else leftPath
+                                                if (isToRight) vm.rightPath else vm.leftPath
                                             )
                                             val dest = File(destDir, entry.name)
                                             try {
@@ -1476,8 +927,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                     source.copyTo(dest, overwrite = false)
                                                 }
                                                 Toast.makeText(context, "复制成功", Toast.LENGTH_SHORT).show()
-                                                leftEntries = listDirectory(leftPath)
-                                                rightEntries = listDirectory(rightPath)
+                                                vm.refreshBoth()
                                             } catch (e: Exception) {
                                                 Toast.makeText(context, "复制失败: ${e.message}", Toast.LENGTH_SHORT).show()
                                             }
@@ -1520,7 +970,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             val entry = selectedEntry ?: return@clickable
                                             val source = File(entry.path)
                                             val destDir = File(
-                                                if (isToRight) rightPath else leftPath
+                                                if (isToRight) vm.rightPath else vm.leftPath
                                             )
                                             val dest = File(destDir, entry.name)
                                             try {
@@ -1528,15 +978,14 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                 if (!moved) {
                                                     if (source.isDirectory) {
                                                         source.copyRecursively(dest, overwrite = false)
-                                                        source.deleteRecursively()
+                                                        SpecialPermissionVerifier.safeDelete(source)
                                                     } else {
                                                         source.copyTo(dest, overwrite = false)
-                                                        source.delete()
+                                                        SpecialPermissionVerifier.safeDelete(source)
                                                     }
                                                 }
                                                 Toast.makeText(context, "移动成功", Toast.LENGTH_SHORT).show()
-                                                leftEntries = listDirectory(leftPath)
-                                                rightEntries = listDirectory(rightPath)
+                                                vm.refreshBoth()
                                             } catch (e: Exception) {
                                                 Toast.makeText(context, "移动失败: ${e.message}", Toast.LENGTH_SHORT).show()
                                             }
@@ -1655,13 +1104,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                 selectedEntry = null
                                                 Toast.makeText(context, "正在计算大小...", Toast.LENGTH_SHORT).show()
                                                 coroutineScope.launch(Dispatchers.IO) {
-                                                    val updatedDb = refreshFolderSize(entry.path)
+                                                    val updatedDb = vm.refreshFolderSize(entry.path)
                                                     val sizeInfo = updatedDb.get(entry.path)
                                                     val sizeText = if (sizeInfo != null && sizeInfo.size > 0) compactSize(sizeInfo.size) else "0"
                                                     withContext(Dispatchers.Main) {
-                                                        folderSizeDb = updatedDb
-                                                        leftEntries = listDirectory(leftPath)
-                                                        rightEntries = listDirectory(rightPath)
+                                                        vm.applyFolderSizeDb(updatedDb)
                                                         Toast.makeText(context, "大小计算完毕: $sizeText", Toast.LENGTH_SHORT).show()
                                                     }
                                                 }
@@ -1766,9 +1213,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    ErrorDialog(error = loadError, onDismiss = {
+    ErrorDialog(error = vm.loadError, onDismiss = {
         DiagnosticLog.log("FileMgr", "关闭错误对话框")
-        loadError = null
+        vm.loadError = null
     })
 
     // ── 新建类型选择对话框 ──
@@ -1833,10 +1280,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     onClick = {
                         val name = createName.trim()
                         if (name.isBlank()) return@TextButton
-                        val currentPath = when (focusedPanel) {
-                            FocusedPanel.LEFT -> leftPath
-                            FocusedPanel.RIGHT -> rightPath
-                        }
+                        val currentPath = vm.currentPath
                         val target = File(currentPath, name)
                         if (target.exists()) {
                             Toast.makeText(context, "已存在同名文件或文件夹", Toast.LENGTH_SHORT).show()
@@ -1852,10 +1296,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                         if (success == true) {
                             Toast.makeText(context, "创建成功", Toast.LENGTH_SHORT).show()
-                            when (focusedPanel) {
-                                FocusedPanel.LEFT -> leftEntries = listDirectory(leftPath)
-                                FocusedPanel.RIGHT -> rightEntries = listDirectory(rightPath)
-                            }
+                            vm.refreshCurrent()
                         } else if (success == false) {
                             Toast.makeText(context, "创建失败", Toast.LENGTH_SHORT).show()
                         }
@@ -1915,8 +1356,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         val success = source.renameTo(dest)
                         if (success) {
                             Toast.makeText(context, "重命名成功", Toast.LENGTH_SHORT).show()
-                            leftEntries = listDirectory(leftPath)
-                            rightEntries = listDirectory(rightPath)
+                            vm.refreshBoth()
                         } else {
                             Toast.makeText(context, "重命名失败", Toast.LENGTH_SHORT).show()
                         }
@@ -1971,10 +1411,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     val entry = selectedEntry ?: return@TextButton
                     val file = File(entry.path)
                     try {
-                        if (file.isDirectory) file.deleteRecursively() else file.delete()
+                        SpecialPermissionVerifier.safeDelete(file)
                         Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
-                        leftEntries = listDirectory(leftPath)
-                        rightEntries = listDirectory(rightPath)
+                        vm.refreshBoth()
                     } catch (e: Exception) {
                         Toast.makeText(context, "删除失败: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
@@ -2004,7 +1443,8 @@ private fun FileBrowserPanel(
     modifier: Modifier = Modifier,
     folderSizeDb: FolderSizeDb = FolderSizeDb(),
     parentPath: String? = null,
-    onNavigateUp: () -> Unit = {}
+    onNavigateUp: () -> Unit = {},
+    lazyListState: LazyListState = rememberLazyListState()
 ) {
     Box(
         modifier = modifier
@@ -2033,6 +1473,7 @@ private fun FileBrowserPanel(
             }
         } else {
             LazyColumn(
+                state = lazyListState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(vertical = 4.dp)
             ) {
