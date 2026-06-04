@@ -616,12 +616,11 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             )
                             view.systemGestureExclusionRects = listOf(rect)
                         },
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceEvenly
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     // 后退按钮
                     Box(
-                        modifier = Modifier.fillMaxWidth(1f / 6f),
+                        modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(
@@ -648,7 +647,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     }
                     // 前进按钮
                     Box(
-                        modifier = Modifier.fillMaxWidth(1f / 6f),
+                        modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(
@@ -675,7 +674,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     }
                     // 新建按钮
                     Box(
-                        modifier = Modifier.fillMaxWidth(1f / 6f),
+                        modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(onClick = { showCreateTypeDialog = true }) {
@@ -684,7 +683,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     }
                     // 同步按钮
                     Box(
-                        modifier = Modifier.fillMaxWidth(1f / 6f),
+                        modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(onClick = {
@@ -706,7 +705,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     }
                     // 刷新按钮
                     Box(
-                        modifier = Modifier.fillMaxWidth(1f / 6f),
+                        modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(onClick = {
@@ -724,7 +723,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                     }
                     // 返回上一级按钮
                     Box(
-                        modifier = Modifier.fillMaxWidth(1f / 6f),
+                        modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
                         val currentFocusedPath = when (focusedPanel) {
