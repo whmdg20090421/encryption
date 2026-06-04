@@ -906,11 +906,12 @@ fun FileManagerScreen(onBack: () -> Unit) {
                 exit = slideOutVertically(targetOffsetY = { it }),
                 modifier = Modifier.align(Alignment.BottomCenter)
             ) {
+                val surfaceColor = MaterialTheme.colorScheme.surface
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .fillMaxHeight(0.5f)
-                        .drawBehind { drawRect(MaterialTheme.colorScheme.surface) }
+                        .drawBehind { drawRect(surfaceColor) }
                         .padding(top = 8.dp)
                 ) {
                     // 标题行
