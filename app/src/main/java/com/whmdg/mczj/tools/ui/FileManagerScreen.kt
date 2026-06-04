@@ -1444,7 +1444,7 @@ private fun FileBrowserPanel(
     onNavigateUp: () -> Unit = {},
     lazyListState: LazyListState = rememberLazyListState()
 ) {
-    Box(
+    Surface(
         modifier = modifier
             .fillMaxHeight()
             .clickable(onClick = onFocus)
@@ -1457,7 +1457,8 @@ private fun FileBrowserPanel(
                         }
                     }
                 }
-            }
+            },
+        shadowElevation = if (isFocused) 5.dp else 0.dp
     ) {
         if (entries.isEmpty() && parentPath == null) {
             Box(
