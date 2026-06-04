@@ -340,11 +340,17 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             )
         },
         bottomBar = {
-            Column(
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(80.dp)
+                    .height(80.dp),
+                shadowElevation = 6.dp
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(80.dp)
+                ) {
                 // 上方 60dp：按钮区域（排除系统手势识别 + 上滑触发历史面板）
                 val view = LocalView.current
                 Row(
@@ -448,6 +454,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         .height(20.dp)
                         .drawBehind { drawRect(Color.White) }
                 )
+                }
             }
         }
     ) { innerPadding ->
