@@ -66,6 +66,7 @@ import androidx.compose.ui.platform.LocalView
 import android.graphics.Rect as AndroidRect
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 
 enum class FocusedPanel { LEFT, RIGHT }
@@ -1132,10 +1133,15 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             .drawBehind { drawRect(surfaceColor) }
                             .padding(top = 8.dp)
                     ) {
-                        // 标题行：标签切换 + 关闭按钮
+                        // 标题行：标签切换 + 关闭按钮（clickable 拦截空白区域触摸）
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = {}
+                                )
                                 .padding(horizontal = 16.dp, vertical = 4.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
@@ -1162,7 +1168,17 @@ fun FileManagerScreen(onBack: () -> Unit) {
                             }
                         }
                         HorizontalDivider()
-                        // 内容区：历史 or 书签
+                        // 内容区：历史 or 书签（左右滑切换标签）
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(Unit) {
+                                    detectHorizontalDragGestures { _, dragAmount ->
+                                        if (dragAmount < -50) panelTab = 1
+                                        else if (dragAmount > 50) panelTab = 0
+                                    }
+                                }
+                        ) {
                         if (panelTab == 0) {
                             // ── 历史列表 ──
                             if (historyList.isEmpty()) {
@@ -1330,6 +1346,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                 }
                             }
                         }
+                        } // Box swipe
                     }
                 }
             }
