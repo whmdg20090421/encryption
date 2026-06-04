@@ -145,6 +145,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     // ── UI 本地状态 ──
     var showSettingsMenu by remember { mutableStateOf(false) }
     var sortMenuLevel by remember { mutableStateOf(0) }
+    var expandedSortField by remember { mutableStateOf<SortField?>(null) }
     val sortAscLabels = mapOf(
         SortField.NAME to "A到Z",
         SortField.SIZE to "小到大",
@@ -226,7 +227,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                         DropdownMenu(
                             expanded = showSettingsMenu,
-                            onDismissRequest = { showSettingsMenu = false; sortMenuLevel = 0 }
+                            onDismissRequest = { showSettingsMenu = false; sortMenuLevel = 0; expandedSortField = null }
                         ) {
                             // 显示隐藏文件
                             DropdownMenuItem(
@@ -243,77 +244,72 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             )
                             HorizontalDivider()
                             // 排序级联菜单
-                            if (sortMenuLevel == 0) {
-                                // 第一级：显示当前排序状态，点击展开子菜单
+                            Box {
                                 DropdownMenuItem(
                                     text = { Text("排列顺序") },
                                     trailingIcon = {
-                                        val label = when (vm.sortOrder) {
-                                            SortOrder.ASC -> sortAscLabels[vm.sortField]
-                                            SortOrder.DESC -> sortDescLabels[vm.sortField]
-                                        }
-                                        Text(label!!, style = MaterialTheme.typography.bodySmall)
+                                        Icon(Icons.Default.ArrowRight, contentDescription = null, modifier = Modifier.size(18.dp))
                                     },
-                                    onClick = { sortMenuLevel = 1 }
+                                    onClick = { expandedSortField = expandedSortField ?: vm.sortField }
                                 )
-                            } else if (sortMenuLevel == 1) {
-                                // 第二级：四个排序字段
-                                DropdownMenuItem(
-                                    text = { Text("← 排列顺序") },
-                                    onClick = { sortMenuLevel = 0 }
-                                )
-                                for (field in SortField.entries) {
-                                    val fieldLabel = when (field) {
-                                        SortField.NAME -> "名称"
-                                        SortField.SIZE -> "大小"
-                                        SortField.MODIFIED -> "最后修改时间"
-                                        SortField.CREATED -> "创建时间"
-                                    }
-                                    DropdownMenuItem(
-                                        text = { Text(fieldLabel) },
-                                        trailingIcon = {
-                                            if (vm.sortField == field) {
-                                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                // 二级菜单：四个排序字段
+                                DropdownMenu(
+                                    expanded = expandedSortField != null,
+                                    onDismissRequest = { expandedSortField = null }
+                                ) {
+                                    for (field in SortField.entries) {
+                                        val fieldLabel = when (field) {
+                                            SortField.NAME -> "名称"
+                                            SortField.SIZE -> "大小"
+                                            SortField.MODIFIED -> "最后修改时间"
+                                            SortField.CREATED -> "创建时间"
+                                        }
+                                        Box {
+                                            DropdownMenuItem(
+                                                text = { Text(fieldLabel) },
+                                                trailingIcon = {
+                                                    if (vm.sortField == field) {
+                                                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                    }
+                                                    Icon(Icons.Default.ArrowRight, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                },
+                                                onClick = { expandedSortField = field }
+                                            )
+                                            // 三级菜单：升序/降序
+                                            DropdownMenu(
+                                                expanded = expandedSortField == field,
+                                                onDismissRequest = { expandedSortField = null }
+                                            ) {
+                                                DropdownMenuItem(
+                                                    text = { Text(sortAscLabels[field]!!) },
+                                                    trailingIcon = {
+                                                        if (vm.sortField == field && vm.sortOrder == SortOrder.ASC) {
+                                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                        }
+                                                    },
+                                                    onClick = {
+                                                        vm.updateSortField(field)
+                                                        vm.updateSortOrder(SortOrder.ASC)
+                                                        showSettingsMenu = false; expandedSortField = null
+                                                    }
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text(sortDescLabels[field]!!) },
+                                                    trailingIcon = {
+                                                        if (vm.sortField == field && vm.sortOrder == SortOrder.DESC) {
+                                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                        }
+                                                    },
+                                                    onClick = {
+                                                        vm.updateSortField(field)
+                                                        vm.updateSortOrder(SortOrder.DESC)
+                                                        showSettingsMenu = false; expandedSortField = null
+                                                    }
+                                                )
                                             }
-                                        },
-                                        onClick = { sortMenuLevel = 2; vm.updateSortField(field) }
-                                    )
+                                        }
+                                    }
                                 }
-                            } else {
-                                // 第三级：升序/降序（上下文标签）
-                                DropdownMenuItem(
-                                    text = { Text("← ${when (vm.sortField) {
-                                        SortField.NAME -> "名称"
-                                        SortField.SIZE -> "大小"
-                                        SortField.MODIFIED -> "最后修改时间"
-                                        SortField.CREATED -> "创建时间"
-                                    }}") },
-                                    onClick = { sortMenuLevel = 1 }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(sortAscLabels[vm.sortField]!!) },
-                                    trailingIcon = {
-                                        if (vm.sortOrder == SortOrder.ASC) {
-                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        }
-                                    },
-                                    onClick = {
-                                        vm.updateSortOrder(SortOrder.ASC)
-                                        showSettingsMenu = false; sortMenuLevel = 0
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(sortDescLabels[vm.sortField]!!) },
-                                    trailingIcon = {
-                                        if (vm.sortOrder == SortOrder.DESC) {
-                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        }
-                                    },
-                                    onClick = {
-                                        vm.updateSortOrder(SortOrder.DESC)
-                                        showSettingsMenu = false; sortMenuLevel = 0
-                                    }
-                                )
                             }
                             HorizontalDivider()
                             // 添加书签
@@ -452,7 +448,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(20.dp)
-                        .drawBehind { drawRect(Color.White) }
+                        .drawBehind { drawRect(MaterialTheme.colorScheme.surface) }
                 )
                 }
             }

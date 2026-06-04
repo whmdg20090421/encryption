@@ -279,8 +279,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateSortField(field: SortField) {
         sortField = field
         fmPrefs.edit().putString("sort_field", field.name).apply()
-        leftEntries = listDirectory(leftPath)
-        rightEntries = listDirectory(rightPath)
     }
 
     fun updateSortOrder(order: SortOrder) {
