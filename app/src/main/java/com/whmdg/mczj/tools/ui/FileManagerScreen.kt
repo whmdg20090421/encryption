@@ -1905,7 +1905,6 @@ fun FileManagerScreen(onBack: () -> Unit) {
         )
     }
 }
-}
 
 @Composable
 private fun FileBrowserPanel(
