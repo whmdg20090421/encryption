@@ -36,7 +36,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
 import com.whmdg.mczj.tools.ui.components.categorizeFile
 import com.whmdg.mczj.tools.ui.components.extractExtension
@@ -56,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.io.File
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
 import android.graphics.Rect as AndroidRect
@@ -491,109 +491,132 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                     }
                 } else {
-                    Row(modifier = Modifier.fillMaxSize()) {
-                        val leftEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                        val leftParentPath = if (vm.leftPath != leftEffectiveRoot && vm.leftPath.contains('/')) {
-                            vm.leftPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-                                if (p != vm.leftPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
-                            }
-                        } else null
+                    val leftEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
+                    val leftParentPath = if (vm.leftPath != leftEffectiveRoot && vm.leftPath.contains('/')) {
+                        vm.leftPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
+                            if (p != vm.leftPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
+                        }
+                    } else null
 
-                        FileBrowserPanel(
-                            entries = vm.leftEntries,
-                            isFocused = vm.focusedPanel == FocusedPanel.LEFT,
-                            onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
-                            onFolderClick = { entry ->
-                                DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
-                                DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.leftPath}")
-                                vm.focusedPanel = FocusedPanel.LEFT
-                                vm.navigateToFolder(entry)
-                            },
-                            onFileClick = { entry ->
-                                DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
-                                DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
-                                vm.focusedPanel = FocusedPanel.LEFT
-                                val screen = vm.openFile(context, entry)
-                                if (screen != null) {
-                                    vm.saveScrollPosition(
-                                        leftListState.firstVisibleItemIndex,
-                                        leftListState.firstVisibleItemScrollOffset,
-                                        rightListState.firstVisibleItemIndex,
-                                        rightListState.firstVisibleItemScrollOffset
-                                    )
-                                    onNavigate(screen)
-                                }
-                                vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
-                            },
-                            onLongClick = { entry ->
-                                selectedEntry = entry
-                                vm.focusedPanel = FocusedPanel.LEFT
-                            },
-                            modifier = Modifier.weight(1f).graphicsLayer(translationZ = if (vm.focusedPanel == FocusedPanel.LEFT) 1f else 0f),
-                            folderSizeDb = vm.folderSizeDb,
-                            parentPath = leftParentPath,
-                            lazyListState = leftListState,
-                            onNavigateUp = {
-                                if (leftParentPath != null) {
+                    val rightEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
+                    val rightParentPath = if (vm.rightPath != rightEffectiveRoot && vm.rightPath.contains('/')) {
+                        vm.rightPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
+                            if (p != vm.rightPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
+                        }
+                    } else null
+
+                    val leftFocused = vm.focusedPanel == FocusedPanel.LEFT
+                    Layout(
+                        modifier = Modifier.fillMaxSize(),
+                        content = {
+                            FileBrowserPanel(
+                                entries = vm.leftEntries,
+                                isFocused = leftFocused,
+                                onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
+                                onFolderClick = { entry ->
+                                    DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
+                                    DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.leftPath}")
                                     vm.focusedPanel = FocusedPanel.LEFT
-                                    vm.navigateUp(leftParentPath)
+                                    vm.navigateToFolder(entry)
+                                },
+                                onFileClick = { entry ->
+                                    DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
+                                    DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
+                                    vm.focusedPanel = FocusedPanel.LEFT
+                                    val screen = vm.openFile(context, entry)
+                                    if (screen != null) {
+                                        vm.saveScrollPosition(
+                                            leftListState.firstVisibleItemIndex,
+                                            leftListState.firstVisibleItemScrollOffset,
+                                            rightListState.firstVisibleItemIndex,
+                                            rightListState.firstVisibleItemScrollOffset
+                                        )
+                                        onNavigate(screen)
+                                    }
+                                    vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
+                                },
+                                onLongClick = { entry ->
+                                    selectedEntry = entry
+                                    vm.focusedPanel = FocusedPanel.LEFT
+                                },
+                                modifier = Modifier,
+                                folderSizeDb = vm.folderSizeDb,
+                                parentPath = leftParentPath,
+                                lazyListState = leftListState,
+                                onNavigateUp = {
+                                    if (leftParentPath != null) {
+                                        vm.focusedPanel = FocusedPanel.LEFT
+                                        vm.navigateUp(leftParentPath)
+                                    }
                                 }
-                            }
-                        )
-
-                        VerticalDivider(
-                            modifier = Modifier.fillMaxHeight(),
-                            thickness = 1.dp
-                        )
-
-                        val rightEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                        val rightParentPath = if (vm.rightPath != rightEffectiveRoot && vm.rightPath.contains('/')) {
-                            vm.rightPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-                                if (p != vm.rightPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
-                            }
-                        } else null
-
-                        FileBrowserPanel(
-                            entries = vm.rightEntries,
-                            isFocused = vm.focusedPanel == FocusedPanel.RIGHT,
-                            onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
-                            onFolderClick = { entry ->
-                                DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
-                                DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.rightPath}")
-                                vm.focusedPanel = FocusedPanel.RIGHT
-                                vm.navigateToFolder(entry)
-                            },
-                            onFileClick = { entry ->
-                                DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
-                                DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
-                                vm.focusedPanel = FocusedPanel.RIGHT
-                                val screen = vm.openFile(context, entry)
-                                if (screen != null) {
-                                    vm.saveScrollPosition(
-                                        leftListState.firstVisibleItemIndex,
-                                        leftListState.firstVisibleItemScrollOffset,
-                                        rightListState.firstVisibleItemIndex,
-                                        rightListState.firstVisibleItemScrollOffset
-                                    )
-                                    onNavigate(screen)
-                                }
-                                vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
-                            },
-                            onLongClick = { entry ->
-                                selectedEntry = entry
-                                vm.focusedPanel = FocusedPanel.RIGHT
-                            },
-                            modifier = Modifier.weight(1f).graphicsLayer(translationZ = if (vm.focusedPanel == FocusedPanel.RIGHT) 1f else 0f),
-                            folderSizeDb = vm.folderSizeDb,
-                            parentPath = rightParentPath,
-                            lazyListState = rightListState,
-                            onNavigateUp = {
-                                if (rightParentPath != null) {
+                            )
+                            VerticalDivider(
+                                modifier = Modifier.fillMaxHeight(),
+                                thickness = 1.dp
+                            )
+                            FileBrowserPanel(
+                                entries = vm.rightEntries,
+                                isFocused = !leftFocused,
+                                onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
+                                onFolderClick = { entry ->
+                                    DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
+                                    DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.rightPath}")
                                     vm.focusedPanel = FocusedPanel.RIGHT
-                                    vm.navigateUp(rightParentPath)
+                                    vm.navigateToFolder(entry)
+                                },
+                                onFileClick = { entry ->
+                                    DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
+                                    DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
+                                    vm.focusedPanel = FocusedPanel.RIGHT
+                                    val screen = vm.openFile(context, entry)
+                                    if (screen != null) {
+                                        vm.saveScrollPosition(
+                                            leftListState.firstVisibleItemIndex,
+                                            leftListState.firstVisibleItemScrollOffset,
+                                            rightListState.firstVisibleItemIndex,
+                                            rightListState.firstVisibleItemScrollOffset
+                                        )
+                                        onNavigate(screen)
+                                    }
+                                    vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
+                                },
+                                onLongClick = { entry ->
+                                    selectedEntry = entry
+                                    vm.focusedPanel = FocusedPanel.RIGHT
+                                },
+                                modifier = Modifier,
+                                folderSizeDb = vm.folderSizeDb,
+                                parentPath = rightParentPath,
+                                lazyListState = rightListState,
+                                onNavigateUp = {
+                                    if (rightParentPath != null) {
+                                        vm.focusedPanel = FocusedPanel.RIGHT
+                                        vm.navigateUp(rightParentPath)
+                                    }
                                 }
+                            )
+                        }
+                    ) { measurables, constraints ->
+                        val dividerWidth = 1.dp.roundToPx()
+                        val halfWidth = (constraints.maxWidth - dividerWidth) / 2
+                        val panelConstraints = constraints.copy(minWidth = halfWidth, maxWidth = halfWidth)
+                        val leftPlaceable = measurables[0].measure(panelConstraints)
+                        val dividerPlaceable = measurables[1].measure(constraints.copy(minWidth = dividerWidth, maxWidth = dividerWidth, minHeight = constraints.maxHeight, maxHeight = constraints.maxHeight))
+                        val rightPlaceable = measurables[2].measure(panelConstraints)
+                        layout(constraints.maxWidth, constraints.maxHeight) {
+                            // 先绘制非聚焦面板，再绘制聚焦面板（聚焦的在上层）
+                            val leftX = 0
+                            val rightX = halfWidth + dividerWidth
+                            if (leftFocused) {
+                                rightPlaceable.placeRelative(rightX, 0)
+                                dividerPlaceable.placeRelative(halfWidth, 0)
+                                leftPlaceable.placeRelative(leftX, 0)
+                            } else {
+                                leftPlaceable.placeRelative(leftX, 0)
+                                dividerPlaceable.placeRelative(halfWidth, 0)
+                                rightPlaceable.placeRelative(rightX, 0)
                             }
-                        )
+                        }
                     }
                 }
             }
