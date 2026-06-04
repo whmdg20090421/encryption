@@ -443,12 +443,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                     }
                 }
-                // 下方 20dp：系统手势区域（白色，从底部上滑退出应用）
+                // 下方 20dp：系统手势区域（随主题颜色）
+                val surfaceColor = MaterialTheme.colorScheme.surface
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(20.dp)
-                        .drawBehind { drawRect(MaterialTheme.colorScheme.surface) }
+                        .drawBehind { drawRect(surfaceColor) }
                 )
                 }
             }
