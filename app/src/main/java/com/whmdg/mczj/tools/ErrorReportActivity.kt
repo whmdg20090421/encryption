@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
 
 /**
@@ -34,7 +35,7 @@ class ErrorReportActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val crashDir = File(filesDir, "crash_tmp")
+        val crashDir = File(AppDataPaths.diagnostics(this), "crash_tmp")
         val crashFile = File(crashDir, "latest_crash.txt")
         val crashText = try {
             crashFile.readText()

@@ -178,7 +178,7 @@ fun VaultOpenScreen(
 
     fun onClose() {
         // 刷新 deadline（正常退出时重置计时起点）
-        val lockPrefs = context.getSharedPreferences("vault_lock_prefs", android.content.Context.MODE_PRIVATE)
+        val lockPrefs = context.getSharedPreferences(AppDataPaths.PREFS_VAULT_LOCK, android.content.Context.MODE_PRIVATE)
         val durationMs = lockPrefs.getLong("duration_${session.record.id}", 0L)
         if (durationMs > 0) {
             try {

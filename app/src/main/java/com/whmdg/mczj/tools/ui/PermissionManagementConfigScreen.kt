@@ -27,7 +27,7 @@ data class PermissionMode(
 )
 
 fun checkModeAvailability(context: Context, mode: String): Boolean {
-    val sp = context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE)
+    val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
     val savedLevel = sp.getString("target_permission_level", "STANDARD") ?: "STANDARD"
     val hasRoot = SpecialPermissionVerifier.isRootAvailable() || savedLevel == "ROOT"
     val hasShizuku = SpecialPermissionVerifier.isShizukuAuthorized(context) || savedLevel == "ADB"
@@ -43,7 +43,7 @@ fun checkModeAvailability(context: Context, mode: String): Boolean {
 @Composable
 fun PermissionManagementConfigScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val prefs = context.getSharedPreferences("permission_management_mode", Context.MODE_PRIVATE)
+    val prefs = context.getSharedPreferences(AppDataPaths.PREFS_PERMISSION_MANAGEMENT, Context.MODE_PRIVATE)
     var selectedMode by remember { mutableStateOf(prefs.getString("mode", "NORMAL") ?: "NORMAL") }
     var showErrorDialog by remember { mutableStateOf<String?>(null) }
 

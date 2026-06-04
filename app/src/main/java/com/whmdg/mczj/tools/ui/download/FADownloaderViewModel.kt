@@ -159,7 +159,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
     private var dirConflictDeferred: CompletableDeferred<DirConflictAction>? = null
 
     private val prefs = application.getSharedPreferences(AppDataPaths.PREFS_BATCH_DOWNLOADER, Context.MODE_PRIVATE)
-    private val cachePrefs = application.getSharedPreferences("fa_download_cache", Context.MODE_PRIVATE)
+    private val cachePrefs = application.getSharedPreferences(AppDataPaths.PREFS_FA_CACHE, Context.MODE_PRIVATE)
 
     companion object {
         private const val FA_BASE = "https://www.furaffinity.net"
@@ -229,7 +229,7 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     // ── 作者历史管理 ──
 
-    private val historyPrefs = application.getSharedPreferences("fa_author_history", Context.MODE_PRIVATE)
+    private val historyPrefs = application.getSharedPreferences(AppDataPaths.PREFS_FA_HISTORY, Context.MODE_PRIVATE)
 
     init {
         // 加载作者历史

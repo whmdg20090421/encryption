@@ -128,7 +128,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
     // 引擎选择：Root or POSIX（security_prefs 管理，跨模块共享）
     val secPrefs = remember { context.getSharedPreferences("security_prefs", Context.MODE_PRIVATE) }
     // 向下兼容：旧版数据在 special_permissions 里，迁移过来
-    val legacySp = remember { context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE) }
+    val legacySp = remember { context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE) }
     val permissionLevel = remember {
         secPrefs.getString("target_permission_level", null)
             ?: legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
@@ -205,7 +205,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
     var showHistoryPanel by remember { mutableStateOf(false) }
 
     // ── 文件夹大小数据库（存储在应用内部目录） ──
-    var folderSizeDb by remember { mutableStateOf(FolderSizeDb.load(context.filesDir)) }
+    var folderSizeDb by remember { mutableStateOf(FolderSizeDb.load(AppDataPaths.fileManager(context))) }
 
     /** 计算目录直接内容大小：直接子文件 + 子文件夹 DB 值 */
     fun calcDirDirectSize(db: FolderSizeDb, dir: File): Long {
@@ -228,7 +228,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
      */
     fun refreshFolderSize(dirPath: String): FolderSizeDb {
         val baseDir = File(dirPath)
-        val db = FolderSizeDb.load(context.filesDir)
+        val db = FolderSizeDb.load(AppDataPaths.fileManager(context))
         if (!baseDir.exists() || !baseDir.isDirectory) return db
 
         // 收集所有子文件夹
@@ -262,7 +262,7 @@ fun FileManagerScreen(onBack: () -> Unit) {
         val targetSize = calcDirDirectSize(db, baseDir)
         db.put(dirPath, FolderSizeInfo(targetSize, targetMtime))
 
-        db.save(context.filesDir)
+        db.save(AppDataPaths.fileManager(context))
         return db
     }
 

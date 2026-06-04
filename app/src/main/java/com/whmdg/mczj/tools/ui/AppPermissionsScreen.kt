@@ -139,7 +139,7 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
     var showError by remember { mutableStateOf(false) }
 
     // 当前权限管理模式
-    val modePrefs = context.getSharedPreferences("permission_management_mode", Context.MODE_PRIVATE)
+    val modePrefs = context.getSharedPreferences(AppDataPaths.PREFS_PERMISSION_MANAGEMENT, Context.MODE_PRIVATE)
     val currentMode by remember { mutableStateOf(modePrefs.getString("mode", "NORMAL") ?: "NORMAL") }
     val isAppOpsMode = currentMode == "APPOPS" || currentMode == "PERMISSION_CONTROLLER"
     val useRootForOps = currentMode == "PERMISSION_CONTROLLER"

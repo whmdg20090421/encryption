@@ -391,7 +391,7 @@ private fun PermissionStatusPage(
                 Button(onClick = {
                     showSetDialog = false
                     if (PermissionGuideViewModel.validatePermissionLevel(context, viewingLevel)) {
-                        val sp = context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE)
+                        val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
                         sp.edit().putString("target_permission_level", viewingLevel.name).apply()
                         permissionStatuses = PermissionGuideViewModel.getPermissionStatusForLevel(context, viewingLevel)
                     } else {

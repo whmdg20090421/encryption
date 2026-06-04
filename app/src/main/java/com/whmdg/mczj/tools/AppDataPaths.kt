@@ -36,6 +36,7 @@ object AppDataPaths {
             migrated = true
             migrateFromExternal(context, dir)
             migrateScatteredFiles(context)
+            migrateFolderSizeDb(context)
         }
         return dir
     }
@@ -106,6 +107,27 @@ object AppDataPaths {
 
     /** RP-Hub SharedPreferences */
     const val PREFS_RP_HUB = "rp_hub_prefs"
+
+    /** 主题设置 SharedPreferences */
+    const val PREFS_THEME = "theme_prefs"
+
+    /** TEE 生物识别 SharedPreferences */
+    const val PREFS_TEE = "tee_passwords"
+
+    /** 保险箱锁定 SharedPreferences */
+    const val PREFS_VAULT_LOCK = "vault_lock_prefs"
+
+    /** 权限管理模式 SharedPreferences */
+    const val PREFS_PERMISSION_MANAGEMENT = "permission_management_mode"
+
+    /** 旧版特殊权限 SharedPreferences（多模块共享，逐步迁移到 PREFS_SECURITY） */
+    const val PREFS_LEGACY_SPECIAL_PERMISSIONS = "special_permissions"
+
+    /** FA 下载缓存 SharedPreferences */
+    const val PREFS_FA_CACHE = "fa_download_cache"
+
+    /** FA 授权历史 SharedPreferences */
+    const val PREFS_FA_HISTORY = "fa_author_history"
 
     /**
      * 将 SAF tree URI 转换为绝对文件路径。
@@ -198,6 +220,21 @@ object AppDataPaths {
 
         prefs.edit().putBoolean("scattered_migrated", true).apply()
         Log.i("AppDataPaths", "散落文件迁移完成")
+    }
+
+    /**
+     * 迁移 folder_sizes.json（文件管理器 FolderSizeDb）。
+     * 独立于 scattered_migrated，因为该文件在后期才加入 AppDataPaths 体系。
+     */
+    private fun migrateFolderSizeDb(context: Context) {
+        val prefs = context.getSharedPreferences("app_data_migration", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("folder_size_migrated", false)) return
+        val src = File(context.filesDir, "folder_sizes.json")
+        if (src.exists()) {
+            val dst = File(fileManager(context), "folder_sizes.json")
+            if (!dst.exists()) src.renameTo(dst)
+        }
+        prefs.edit().putBoolean("folder_size_migrated", true).apply()
     }
 
     private fun moveFile(src: File, dst: File) {

@@ -296,7 +296,7 @@ fun MainAppContainer() {
     val encryptionSettings = remember { EncryptionSettings(context) }
 
     LaunchedEffect(Unit) {
-        val sp = context.getSharedPreferences("special_permissions", Context.MODE_PRIVATE)
+        val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
         val target = sp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
         if (target != "NORMAL") {
             val isStillValid = when (target) {
@@ -946,7 +946,7 @@ fun VaultsListTab(
     var vaultListError by remember { mutableStateOf<Throwable?>(null) }
 
     // ── 保持打开时长（每个保险箱独立） ──
-    val lockPrefs = remember { context.getSharedPreferences("vault_lock_prefs", Context.MODE_PRIVATE) }
+    val lockPrefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_VAULT_LOCK, Context.MODE_PRIVATE) }
     var selectedVault by remember { mutableStateOf<VaultRecord?>(null) }
     // 0 = 立即锁定, 5/15/30/60 = 分钟
     var lockDurationMin by remember { mutableStateOf(0) }

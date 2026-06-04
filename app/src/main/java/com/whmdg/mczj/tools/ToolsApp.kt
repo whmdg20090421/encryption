@@ -5,6 +5,7 @@ import android.content.Intent
 import android.util.Log
 import android.webkit.WebView
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
 
 class ToolsApp : Application() {
@@ -56,7 +57,7 @@ class ToolsApp : Application() {
 
             // 写完整异常信息到临时文件（供 ErrorReportActivity 读取）
             try {
-                val crashDir = File(appCtx.filesDir, "crash_tmp").apply { mkdirs() }
+                val crashDir = File(AppDataPaths.diagnostics(appCtx), "crash_tmp").apply { mkdirs() }
                 val crashFile = File(crashDir, "latest_crash.txt")
                 crashFile.writeText(buildCrashText(thread, throwable))
             } catch (_: Exception) {}

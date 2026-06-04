@@ -40,7 +40,7 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         setContent {
-            val themePrefs = remember { getSharedPreferences("theme_prefs", MODE_PRIVATE) }
+            val themePrefs = remember { getSharedPreferences(AppDataPaths.PREFS_THEME, MODE_PRIVATE) }
 
             // ── 首次启动申请通知权限 ──
             val notifRequested = remember { themePrefs.getBoolean("notif_permission_requested", false) }
