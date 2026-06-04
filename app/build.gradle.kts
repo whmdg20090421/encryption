@@ -19,7 +19,7 @@ android {
         targetSdk = 36
         val gitCommitCount = try {
             val proc = ProcessBuilder("git", "rev-list", "--count", "HEAD")
-                .directory(rootProject.dir)
+                .directory(rootProject.projectDir)
                 .redirectErrorStream(true)
                 .start()
             proc.inputStream.bufferedReader().readText().trim().toIntOrNull() ?: 0
