@@ -55,9 +55,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.io.File
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import android.graphics.Rect as AndroidRect
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -144,7 +149,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── UI 本地状态 ──
     var showSettingsMenu by remember { mutableStateOf(false) }
-    var sortMenuLevel by remember { mutableStateOf(0) }
+    var sortSubMenuExpanded by remember { mutableStateOf(false) }
     var expandedSortField by remember { mutableStateOf<SortField?>(null) }
     val sortAscLabels = mapOf(
         SortField.NAME to "A到Z",
@@ -227,7 +232,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                         DropdownMenu(
                             expanded = showSettingsMenu,
-                            onDismissRequest = { showSettingsMenu = false; sortMenuLevel = 0; expandedSortField = null }
+                            onDismissRequest = { showSettingsMenu = false; sortSubMenuExpanded = false; expandedSortField = null }
                         ) {
                             // 显示隐藏文件
                             DropdownMenuItem(
@@ -245,67 +250,137 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             HorizontalDivider()
                             // 排序级联菜单
                             Box {
+                                var sortRowYPx by remember { mutableStateOf(0) }
+                                var secondMenuWidthPx by remember { mutableStateOf(0) }
+                                var clickedFieldYPx by remember { mutableStateOf(0) }
+                                val indicatorColor = MaterialTheme.colorScheme.onSurface
                                 DropdownMenuItem(
+                                    modifier = Modifier
+                                        .onGloballyPositioned { coords ->
+                                            sortRowYPx = coords.positionInRoot().y.toInt()
+                                        }
+                                        .drawBehind {
+                                            if (sortSubMenuExpanded) {
+                                                val triSize = 6.dp.toPx()
+                                                val centerY = size.height / 2f
+                                                val path = Path().apply {
+                                                    moveTo(0f, centerY - triSize)
+                                                    lineTo(triSize, centerY)
+                                                    lineTo(0f, centerY + triSize)
+                                                    close()
+                                                }
+                                                drawPath(path, color = indicatorColor)
+                                            }
+                                        }
+                                        .padding(start = if (sortSubMenuExpanded) 10.dp else 0.dp),
                                     text = { Text("排列顺序") },
                                     trailingIcon = {
                                         Icon(Icons.Default.ArrowRight, contentDescription = null, modifier = Modifier.size(18.dp))
                                     },
-                                    onClick = { expandedSortField = expandedSortField ?: vm.sortField }
+                                    onClick = { sortSubMenuExpanded = true }
                                 )
-                                // 二级菜单：四个排序字段
-                                DropdownMenu(
-                                    expanded = expandedSortField != null,
-                                    onDismissRequest = { expandedSortField = null }
-                                ) {
-                                    for (field in SortField.entries) {
-                                        val fieldLabel = when (field) {
-                                            SortField.NAME -> "名称"
-                                            SortField.SIZE -> "大小"
-                                            SortField.MODIFIED -> "最后修改时间"
-                                            SortField.CREATED -> "创建时间"
-                                        }
-                                        Box {
-                                            DropdownMenuItem(
-                                                text = { Text(fieldLabel) },
-                                                trailingIcon = {
-                                                    if (vm.sortField == field) {
-                                                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                // 二级菜单：四个排序字段（向左展开，顶部对齐"排列顺序"行）
+                                if (sortSubMenuExpanded) {
+                                    Popup(
+                                        alignment = Alignment.TopStart,
+                                        offset = IntOffset(-secondMenuWidthPx, sortRowYPx),
+                                        onDismissRequest = { sortSubMenuExpanded = false; expandedSortField = null }
+                                    ) {
+                                        Surface(
+                                            modifier = Modifier.onGloballyPositioned { coords ->
+                                                secondMenuWidthPx = coords.size.width
+                                            },
+                                            tonalElevation = 8.dp,
+                                            shadowElevation = 8.dp,
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Column(modifier = Modifier.widthIn(min = 100.dp, max = 280.dp).padding(vertical = 8.dp)) {
+                                                for (field in SortField.entries) {
+                                                    val fieldLabel = when (field) {
+                                                        SortField.NAME -> "名称"
+                                                        SortField.SIZE -> "大小"
+                                                        SortField.MODIFIED -> "最后修改时间"
+                                                        SortField.CREATED -> "创建时间"
                                                     }
-                                                    Icon(Icons.Default.ArrowRight, contentDescription = null, modifier = Modifier.size(18.dp))
-                                                },
-                                                onClick = { expandedSortField = field }
-                                            )
-                                            // 三级菜单：升序/降序
-                                            DropdownMenu(
-                                                expanded = expandedSortField == field,
-                                                onDismissRequest = { expandedSortField = null }
-                                            ) {
-                                                DropdownMenuItem(
-                                                    text = { Text(sortAscLabels[field]!!) },
-                                                    trailingIcon = {
-                                                        if (vm.sortField == field && vm.sortOrder == SortOrder.ASC) {
-                                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                    Box {
+                                                        var fieldRowYPx by remember { mutableStateOf(0) }
+                                                        DropdownMenuItem(
+                                                            modifier = Modifier
+                                                                .onGloballyPositioned { coords ->
+                                                                    fieldRowYPx = coords.positionInRoot().y.toInt()
+                                                                }
+                                                                .drawBehind {
+                                                                    if (expandedSortField == field) {
+                                                                        val triSize = 6.dp.toPx()
+                                                                        val centerY = size.height / 2f
+                                                                        val path = Path().apply {
+                                                                            moveTo(0f, centerY - triSize)
+                                                                            lineTo(triSize, centerY)
+                                                                            lineTo(0f, centerY + triSize)
+                                                                            close()
+                                                                        }
+                                                                        drawPath(path, color = indicatorColor)
+                                                                    }
+                                                                }
+                                                                .padding(start = if (expandedSortField == field) 10.dp else 0.dp),
+                                                            text = { Text(fieldLabel) },
+                                                            trailingIcon = {
+                                                                if (vm.sortField == field) {
+                                                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                                }
+                                                                Icon(Icons.Default.ArrowRight, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                            },
+                                                            onClick = { expandedSortField = field; clickedFieldYPx = fieldRowYPx }
+                                                        )
+                                                        // 三级菜单：升序/降序（向左展开，顶部对齐被点击的字段行）
+                                                        if (expandedSortField == field) {
+                                                            var thirdMenuWidthPx by remember { mutableStateOf(0) }
+                                                            Popup(
+                                                                alignment = Alignment.TopStart,
+                                                                offset = IntOffset(-thirdMenuWidthPx, clickedFieldYPx),
+                                                                onDismissRequest = { expandedSortField = null }
+                                                            ) {
+                                                                Surface(
+                                                                    modifier = Modifier.onGloballyPositioned { coords ->
+                                                                        thirdMenuWidthPx = coords.size.width
+                                                                    },
+                                                                    tonalElevation = 8.dp,
+                                                                    shadowElevation = 8.dp,
+                                                                    shape = RoundedCornerShape(4.dp)
+                                                                ) {
+                                                                    Column(modifier = Modifier.widthIn(min = 100.dp, max = 280.dp).padding(vertical = 8.dp)) {
+                                                                        DropdownMenuItem(
+                                                                            text = { Text(sortAscLabels[field]!!) },
+                                                                            trailingIcon = {
+                                                                                if (vm.sortField == field && vm.sortOrder == SortOrder.ASC) {
+                                                                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                                                }
+                                                                            },
+                                                                            onClick = {
+                                                                                vm.updateSortField(field)
+                                                                                vm.updateSortOrder(SortOrder.ASC)
+                                                                                showSettingsMenu = false; sortSubMenuExpanded = false; expandedSortField = null
+                                                                            }
+                                                                        )
+                                                                        DropdownMenuItem(
+                                                                            text = { Text(sortDescLabels[field]!!) },
+                                                                            trailingIcon = {
+                                                                                if (vm.sortField == field && vm.sortOrder == SortOrder.DESC) {
+                                                                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                                                }
+                                                                            },
+                                                                            onClick = {
+                                                                                vm.updateSortField(field)
+                                                                                vm.updateSortOrder(SortOrder.DESC)
+                                                                                showSettingsMenu = false; sortSubMenuExpanded = false; expandedSortField = null
+                                                                            }
+                                                                        )
+                                                                    }
+                                                                }
+                                                            }
                                                         }
-                                                    },
-                                                    onClick = {
-                                                        vm.updateSortField(field)
-                                                        vm.updateSortOrder(SortOrder.ASC)
-                                                        showSettingsMenu = false; expandedSortField = null
                                                     }
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text(sortDescLabels[field]!!) },
-                                                    trailingIcon = {
-                                                        if (vm.sortField == field && vm.sortOrder == SortOrder.DESC) {
-                                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                                        }
-                                                    },
-                                                    onClick = {
-                                                        vm.updateSortField(field)
-                                                        vm.updateSortOrder(SortOrder.DESC)
-                                                        showSettingsMenu = false; expandedSortField = null
-                                                    }
-                                                )
+                                                }
                                             }
                                         }
                                     }
