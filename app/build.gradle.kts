@@ -17,8 +17,15 @@ android {
         applicationId = "com.whmdg.mczj.tools"
         minSdk = 24
         targetSdk = 36
+        val gitCommitCount = try {
+            val proc = ProcessBuilder("git", "rev-list", "--count", "HEAD")
+                .directory(rootProject.dir)
+                .redirectErrorStream(true)
+                .start()
+            proc.inputStream.bufferedReader().readText().trim().toIntOrNull() ?: 0
+        } catch (_: Exception) { 0 }
+        versionCode = 1200000000 + gitCommitCount
         val ts = System.currentTimeMillis() / 1000
-        versionCode = (1200000000L + ts % 100000000).toInt()
         versionName = "2.2.%d".format(ts)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
