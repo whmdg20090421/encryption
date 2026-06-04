@@ -14,6 +14,8 @@ bouncycastle = "1.80"
 kotlinxSerializationJson = "1.8.0"
 shizuku = "13.1.5"
 webkit = "1.12.1"
+soraEditor = "0.24.5"
+photoView = "2.3.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -38,6 +40,10 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
 shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
+sora-editor-bom = { group = "io.github.rosemoe", name = "editor-bom", version.ref = "soraEditor" }
+sora-editor = { group = "io.github.rosemoe", name = "editor" }
+sora-language-java = { group = "io.github.rosemoe", name = "language-java" }
+photoView = { group = "com.github.chrisbanes", name = "PhotoView", version.ref = "photoView" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

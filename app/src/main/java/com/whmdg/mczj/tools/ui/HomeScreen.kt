@@ -132,6 +132,8 @@ sealed class Screen {
     object RpHub : Screen()
     object About : Screen()
     object Changelog : Screen()
+    data class TextEditor(val filePath: String) : Screen()
+    data class ImageViewer(val filePath: String) : Screen()
 }
 
 enum class ModuleId {
@@ -449,6 +451,19 @@ fun MainAppContainer() {
         }
         is Screen.FileManager -> {
             FileManagerScreen(
+                onBack = { navigateBack() },
+                onNavigate = { navigateTo(it) }
+            )
+        }
+        is Screen.TextEditor -> {
+            TextEditorScreen(
+                filePath = screen.filePath,
+                onBack = { navigateBack() }
+            )
+        }
+        is Screen.ImageViewer -> {
+            ImageViewerScreen(
+                filePath = screen.filePath,
                 onBack = { navigateBack() }
             )
         }

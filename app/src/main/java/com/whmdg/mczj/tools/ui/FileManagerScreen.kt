@@ -134,7 +134,7 @@ data class PanelNavState(
 @OptIn(ExperimentalMaterial3Api::class)
 // 系统文件管理器（FileManagerScreen）—— 不要与 VaultOpenScreen（保险箱文件浏览器）混淆
 @Composable
-fun FileManagerScreen(onBack: () -> Unit) {
+fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     val context = LocalContext.current
 
     var hasStoragePermission by remember {
@@ -518,6 +518,27 @@ fun FileManagerScreen(onBack: () -> Unit) {
         ) {
             DiagnosticLog.log("OpenFile", "拒绝打开 apk/apex: ${entry.name}")
             Toast.makeText(context, "APK 文件请在应用管理器中安装", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // 内置文本编辑器支持的后缀
+        val textExtensions = setOf(
+            "txt", "md", "json", "xml", "html", "htm", "css", "js",
+            "kt", "java", "py", "sh", "bat", "log", "csv", "yaml", "yml",
+            "toml", "ini", "conf", "cfg", "properties", "gradle", "kts",
+            "c", "cpp", "h", "hpp", "rs", "go", "rb", "php", "sql",
+            "lua", "r", "swift", "dart", "ts", "jsx", "tsx", "vue"
+        )
+        val ext = entry.name.substringAfterLast('.', "").lowercase()
+        if (ext in textExtensions) {
+            DiagnosticLog.log("OpenFile", "内置编辑器打开: ${entry.name}")
+            onNavigate(Screen.TextEditor(entry.path))
+            return
+        }
+        // 内置图片查看器支持的后缀
+        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
+        if (ext in imageExtensions) {
+            DiagnosticLog.log("OpenFile", "内置查看器打开: ${entry.name}")
+            onNavigate(Screen.ImageViewer(entry.path))
             return
         }
         try {
@@ -1243,13 +1264,31 @@ fun FileManagerScreen(onBack: () -> Unit) {
                                                 .padding(horizontal = 16.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Icon(
-                                                imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(20.dp),
-                                                tint = if (entry.isDirectory) MaterialTheme.colorScheme.primary
-                                                       else MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
+                                            val hExt = extractExtension(entry.name)
+                                            val hCategory = categorizeFile(hExt)
+                                            val hDrawableRes = if (!entry.isDirectory) getFileTypeDrawableRes(hCategory) else null
+                                            if (hDrawableRes != null) {
+                                                Icon(
+                                                    painter = painterResource(hDrawableRes),
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(20.dp),
+                                                    tint = Color.Unspecified
+                                                )
+                                            } else if (!entry.isDirectory && hCategory == FileCategory.APK) {
+                                                FileTypeIcon(
+                                                    filename = entry.name,
+                                                    filePath = entry.path,
+                                                    iconSize = 20.dp
+                                                )
+                                            } else {
+                                                Icon(
+                                                    imageVector = if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(20.dp),
+                                                    tint = if (entry.isDirectory) MaterialTheme.colorScheme.primary
+                                                           else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                             Spacer(Modifier.width(12.dp))
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Row(
