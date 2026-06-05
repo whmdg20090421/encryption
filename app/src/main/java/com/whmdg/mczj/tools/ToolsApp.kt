@@ -7,7 +7,7 @@ import android.webkit.WebView
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.disk.DiskCache
-import coil3.toOkioPath
+import okio.Path.Companion.toPath
 import com.topjohnwu.superuser.Shell
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.AppDataPaths
@@ -31,7 +31,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
         return ImageLoader.Builder(context)
             .diskCache {
                 DiskCache.Builder()
-                    .directory(diskCacheDir.toOkioPath())
+                    .directory(diskCacheDir.absolutePath.toPath())
                     .maxSizeBytes(100L * 1024 * 1024) // 100MB
                     .build()
             }
