@@ -373,7 +373,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
         if (ext in imageExtensions) {
             DiagnosticLog.log("OpenFile", "内置查看器打开: ${entry.name}")
-            return Screen.ImageViewer(entry.path)
+            val currentEntries = if (focusedPanel == FocusedPanel.LEFT) leftEntries else rightEntries
+            val imagePaths = currentEntries
+                .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions }
+                .map { it.path }
+            val startIndex = imagePaths.indexOf(entry.path).coerceAtLeast(0)
+            return Screen.ImageViewer(entry.path, imagePaths, startIndex)
         }
         // 外部 Intent
         try {

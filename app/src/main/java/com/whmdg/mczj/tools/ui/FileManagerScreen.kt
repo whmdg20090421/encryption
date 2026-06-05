@@ -209,18 +209,22 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    StartEllipsisText(
-                        text = currentPath,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.Home, contentDescription = "返回主页")
-                    }
-                },
+            Surface(
+                shadowElevation = 6.dp,
+                color = MaterialTheme.colorScheme.surface
+            ) {
+                TopAppBar(
+                    title = {
+                        StartEllipsisText(
+                            text = currentPath,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.Default.Home, contentDescription = "返回主页")
+                        }
+                    },
                 actions = {
                     Box {
                         IconButton(onClick = { showSettingsMenu = true }) {
@@ -287,6 +291,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     }
                 }
             )
+            }
         },
         bottomBar = {
             Surface(
@@ -1716,7 +1721,7 @@ private fun FileEntryRow(
             )
             val rightLabel = when {
                 entry.isDirectory -> folderSize.ifEmpty { "--" }
-                entry.size > 0 -> compactSize(entry.size)
+                !entry.isDirectory -> compactSize(entry.size)
                 else -> ""
             }
             if (rightLabel.isNotEmpty()) {
@@ -1751,7 +1756,8 @@ private fun formatPermission(mode: Int): String {
 }
 
 private fun compactSize(bytes: Long): String {
-    if (bytes <= 0) return ""
+    if (bytes < 0) return ""
+    if (bytes == 0L) return "0 B"
     val v = bytes.toDouble()
     return when {
         v < 1024 -> "%.0f B".format(v)

@@ -133,7 +133,7 @@ sealed class Screen {
     object About : Screen()
     object Changelog : Screen()
     data class TextEditor(val filePath: String) : Screen()
-    data class ImageViewer(val filePath: String) : Screen()
+    data class ImageViewer(val filePath: String, val imagePaths: List<String> = emptyList(), val startIndex: Int = 0) : Screen()
 }
 
 enum class ModuleId {
@@ -464,6 +464,8 @@ fun MainAppContainer() {
         is Screen.ImageViewer -> {
             ImageViewerScreen(
                 filePath = currentScreen.filePath,
+                imagePaths = currentScreen.imagePaths,
+                startIndex = currentScreen.startIndex,
                 onBack = { navigateBack() }
             )
         }
