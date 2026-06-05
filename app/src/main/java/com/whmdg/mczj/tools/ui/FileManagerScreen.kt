@@ -1630,11 +1630,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             Spacer(modifier = Modifier.height(8.dp))
 
                             // 三行：读、写、执行
-                            data class PermRow(val label: String, val owner: androidx.compose.runtime.MutableState<Boolean>, val group: androidx.compose.runtime.MutableState<Boolean>, val other: androidx.compose.runtime.MutableState<Boolean>)
+                            data class PermRow(val label: String, val ownerGet: () -> Boolean, val ownerSet: (Boolean) -> Unit, val groupGet: () -> Boolean, val groupSet: (Boolean) -> Unit, val otherGet: () -> Boolean, val otherSet: (Boolean) -> Unit)
                             val rows = listOf(
-                                PermRow("读", ::ownerRead, ::groupRead, ::otherRead),
-                                PermRow("写", ::ownerWrite, ::groupWrite, ::otherWrite),
-                                PermRow("执行", ::ownerExec, ::groupExec, ::otherExec)
+                                PermRow("读", { ownerRead }, { ownerRead = it }, { groupRead }, { groupRead = it }, { otherRead }, { otherRead = it }),
+                                PermRow("写", { ownerWrite }, { ownerWrite = it }, { groupWrite }, { groupWrite = it }, { otherWrite }, { otherWrite = it }),
+                                PermRow("执行", { ownerExec }, { ownerExec = it }, { groupExec }, { groupExec = it }, { otherExec }, { otherExec = it })
                             )
                             rows.forEach { row ->
                                 Row(
@@ -1646,14 +1646,18 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         style = MaterialTheme.typography.bodyMedium,
                                         modifier = Modifier.width(80.dp)
                                     )
-                                    listOf(row.owner, row.group, row.other).forEach { state ->
+                                    listOf(
+                                        row.ownerGet to row.ownerSet,
+                                        row.groupGet to row.groupSet,
+                                        row.otherGet to row.otherSet
+                                    ).forEach { (get, set) ->
                                         Box(
                                             modifier = Modifier.weight(1f),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Checkbox(
-                                                checked = state.value,
-                                                onCheckedChange = { state.value = it }
+                                                checked = get(),
+                                                onCheckedChange = { set(it) }
                                             )
                                         }
                                     }
