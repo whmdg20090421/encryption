@@ -524,14 +524,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 ?: CompressService.detectFormatByMagic(File(entry.path))
                 ?: return "不支持的压缩格式"
 
-            // RAR5 检测
+            // RAR5 检测：读取文件头 version byte，RAR5 的 header version >= 50
             if (format == "rar") {
-                val arch = com.github.junrar.Archive(File(entry.path))
-                val version = arch.mainHeader.archiverVersion
-                arch.close()
-                if (version >= 50) {
-                    return "不支持 RAR5+ 格式"
-                }
+                try {
+                    val fis = File(entry.path).inputStream()
+                    val header = ByteArray(7)
+                    fis.read(header)
+                    fis.close()
+                    // RAR 格式: "Rar!\x1a\x07" 后第7字节是 header version
+                    // RAR4: version byte = 0x01, RAR5: version byte >= 0x02
+                    if (header.size >= 7 && header[6].toInt() and 0xFF >= 2) {
+                        return "不支持 RAR5+ 格式"
+                    }
+                } catch (_: Exception) {}
             }
 
             // 密码验证
