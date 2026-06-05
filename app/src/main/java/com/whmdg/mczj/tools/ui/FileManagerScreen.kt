@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import java.io.File
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.Layout
@@ -1444,7 +1445,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     // ── 属性弹窗 ──
     if (showPropertyDialog && propertyData != null) {
         val data = propertyData!!
-        Dialog(onDismissRequest = { showPropertyDialog = false }) {
+        Dialog(onDismissRequest = { showPropertyDialog = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth(0.85f),
@@ -1594,7 +1595,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             selectedGroupName = groups.find { it.gid == originalGid }?.groupname ?: originalGid.toString()
         }
 
-        Dialog(onDismissRequest = { /* 禁止点击外部关闭 */ }) {
+        Dialog(onDismissRequest = { /* 禁止点击外部关闭 */ }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Card(
                 modifier = Modifier.fillMaxWidth(0.9f),
                 shape = RoundedCornerShape(24.dp),
@@ -1766,7 +1767,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         // ── 用户选择弹窗 ──
         if (showUserPicker) {
             val users = remember { vm.getSystemUsers() }
-            Dialog(onDismissRequest = { showUserPicker = false }) {
+            Dialog(onDismissRequest = { showUserPicker = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Card(
                     modifier = Modifier.fillMaxWidth(0.85f).fillMaxHeight(0.6f),
                     shape = RoundedCornerShape(24.dp),
@@ -1813,7 +1814,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         // ── 组选择弹窗 ──
         if (showGroupPicker) {
             val groups = remember { vm.getSystemGroups() }
-            Dialog(onDismissRequest = { showGroupPicker = false }) {
+            Dialog(onDismissRequest = { showGroupPicker = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Card(
                     modifier = Modifier.fillMaxWidth(0.85f).fillMaxHeight(0.6f),
                     shape = RoundedCornerShape(24.dp),
