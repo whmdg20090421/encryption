@@ -702,9 +702,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 打开压缩包内的文件（按需解压）。
-     * 文本类 → ByteArray 传给 TextEditor
-     * 图片类 → 解压到临时文件传给 ImageViewer
-     * 其他 → 解压到临时文件用 Intent 打开
+     * 小于 50MB → 解压到内存（ByteArray），速度快
+     * 大于等于 50MB → 解压到磁盘临时文件，避免内存溢出
      */
     fun openFileInArchive(context: Context, entry: FileEntry): Screen? {
         val memFs = archiveMemFs ?: return null
@@ -720,27 +719,35 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
         val ext = entry.name.substringAfterLast('.', "").lowercase()
 
+        val useMemory = memEntry.size in 1 until EXTRACT_TO_MEMORY_THRESHOLD
+
         return try {
             if (ext in textExtensions) {
-                // 文本文件：解压到内存
+                // 文本文件：解压到内存再写临时文件（文本编辑器需要文件路径）
                 val data = CompressService.extractSingleFile(
                     archiveFilePath, archiveFormat, archivePassword, memEntry
                 )
-                // 临时写到 cacheDir 供 TextEditor 使用
-                val tempDir = File(AppDataPaths.archiveCache(context), archiveFilePath.hashCode().toString().take(16))
-                if (!tempDir.exists()) tempDir.mkdirs()
-                File(tempDir, ".active").createNewFile()
+                val tempDir = getArchiveTempDir(context)
                 val tempFile = File(tempDir, memEntry.name)
                 tempFile.writeBytes(data)
                 Screen.TextEditor(tempFile.absolutePath)
             } else if (ext in imageExtensions) {
-                // 图片文件：解压到临时文件
-                val tempDir = File(AppDataPaths.archiveCache(context), archiveFilePath.hashCode().toString().take(16))
-                if (!tempDir.exists()) tempDir.mkdirs()
-                File(tempDir, ".active").createNewFile()
-                val tempFile = CompressService.extractSingleFileToDisk(
-                    archiveFilePath, archiveFormat, archivePassword, memEntry, tempDir
-                )
+                // 图片文件
+                val tempDir = getArchiveTempDir(context)
+                val tempFile = if (useMemory) {
+                    // 小于 50MB：解压到内存再写临时文件
+                    val data = CompressService.extractSingleFile(
+                        archiveFilePath, archiveFormat, archivePassword, memEntry
+                    )
+                    val f = File(tempDir, memEntry.name)
+                    f.writeBytes(data)
+                    f
+                } else {
+                    // 大于等于 50MB：直接解压到磁盘
+                    CompressService.extractSingleFileToDisk(
+                        archiveFilePath, archiveFormat, archivePassword, memEntry, tempDir
+                    )
+                }
                 // 构建图片列表（压缩包内所有图片）
                 val currentEntries = if (focusedPanel == FocusedPanel.LEFT) leftEntries else rightEntries
                 val imagePaths = currentEntries
@@ -748,22 +755,38 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     .mapNotNull { e ->
                         val me = memFs.entries[e.path] as? CompressService.ArchiveMemFile ?: return@mapNotNull null
                         try {
-                            val tf = CompressService.extractSingleFileToDisk(
-                                archiveFilePath, archiveFormat, archivePassword, me, tempDir
-                            )
+                            val imgData = if (me.size in 1 until EXTRACT_TO_MEMORY_THRESHOLD) {
+                                CompressService.extractSingleFile(archiveFilePath, archiveFormat, archivePassword, me)
+                            } else null
+                            val tf = if (imgData != null) {
+                                val f = File(tempDir, me.name)
+                                f.writeBytes(imgData)
+                                f
+                            } else {
+                                CompressService.extractSingleFileToDisk(
+                                    archiveFilePath, archiveFormat, archivePassword, me, tempDir
+                                )
+                            }
                             tf.absolutePath
                         } catch (_: Exception) { null }
                     }
                 val startIndex = imagePaths.indexOf(tempFile.absolutePath).coerceAtLeast(0)
                 Screen.ImageViewer(tempFile.absolutePath, imagePaths, startIndex)
             } else {
-                // 其他文件：解压到临时文件，用 Intent 打开
-                val tempDir = File(AppDataPaths.archiveCache(context), archiveFilePath.hashCode().toString().take(16))
-                if (!tempDir.exists()) tempDir.mkdirs()
-                File(tempDir, ".active").createNewFile()
-                val tempFile = CompressService.extractSingleFileToDisk(
-                    archiveFilePath, archiveFormat, archivePassword, memEntry, tempDir
-                )
+                // 其他文件
+                val tempDir = getArchiveTempDir(context)
+                val tempFile = if (useMemory) {
+                    val data = CompressService.extractSingleFile(
+                        archiveFilePath, archiveFormat, archivePassword, memEntry
+                    )
+                    val f = File(tempDir, memEntry.name)
+                    f.writeBytes(data)
+                    f
+                } else {
+                    CompressService.extractSingleFileToDisk(
+                        archiveFilePath, archiveFormat, archivePassword, memEntry, tempDir
+                    )
+                }
                 try {
                     val uri = androidx.core.content.FileProvider.getUriForFile(
                         context, "${context.packageName}.fileprovider", tempFile
@@ -784,6 +807,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             Toast.makeText(context, "解压失败: ${e.message}", Toast.LENGTH_SHORT).show()
             null
         }
+    }
+
+    /** 获取压缩包临时解压目录，创建 .active 标记防止启动清理 */
+    private fun getArchiveTempDir(context: Context): File {
+        val tempDir = File(AppDataPaths.archiveCache(context), archiveFilePath.hashCode().toString().take(16))
+        if (!tempDir.exists()) tempDir.mkdirs()
+        File(tempDir, ".active").createNewFile()
+        return tempDir
     }
 
     /** 获取压缩包内文件的压缩率信息文本 */
@@ -1373,6 +1404,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
+        /** 按需解压阈值：小于此大小的文件解压到内存，大于等于此大小解压到磁盘 */
+        private const val EXTRACT_TO_MEMORY_THRESHOLD = 50L * 1024 * 1024 // 50MB
+
         fun formatPermission(mode: Int): String {
             val type = when (mode and 0xF000) {
                 0x4000 -> 'd'
