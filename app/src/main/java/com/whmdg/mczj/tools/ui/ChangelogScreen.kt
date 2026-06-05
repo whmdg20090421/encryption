@@ -29,6 +29,22 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V2.3",
+        date = "2026-06-05",
+        items = listOf(
+            "内置文本编辑器：集成 Sora Editor，支持 Java/Kotlin/XML 等语法高亮，替代外部编辑器跳转",
+            "图片查看器：PhotoView 手势缩放 + HorizontalPager 左右翻页，底部半透明页码指示器，缩放时禁用翻页防冲突",
+            "Coil 异步图片加载：替换 BitmapFactory 同步解码，内存+磁盘双缓存（100MB），消除 500+ 图片列表卡顿",
+            "文件/文件夹属性弹窗：长按→「关于」查看名称、路径、类型、大小、权限、所有者、用户组等详细信息",
+            "排序菜单重新设计：居中弹窗替代下拉菜单，按名称/大小/修改时间排序，升降序独立标签",
+            "大小排序优化：文件夹与文件分组排列（文件夹在前），使用 folderSizeDb 缓存数据加速",
+            "导航自动刷新：切换目录时自动刷新文件列表，修复返回后文件状态不更新的关键 bug",
+            "0 字节文件显示「0 B」而非空白",
+            "文件管理器顶栏 6dp 阴影，与底部工具栏视觉统一",
+            "文件管理器滚动保持 + libsu 迁移 + safeDelete 安全删除"
+        )
+    ),
+    ChangelogVersion(
         version = "V2.2.1",
         date = "2026-06-04",
         items = listOf(
