@@ -1241,6 +1241,36 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         }
                                     }
                                 }
+                            } else if (vm.isInArchive) {
+                                // ── 压缩包模式：仅显示"关于" ──
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                val entry = selectedEntry ?: return@clickable
+                                                propertyData = vm.getPropertyData(entry)
+                                                propertyEntry = entry
+                                                showPropertyDialog = true
+                                                selectedEntry = null
+                                            }
+                                            .padding(vertical = 16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.Info,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("关于", style = MaterialTheme.typography.bodyLarge)
+                                        }
+                                    }
+                                }
                             } else {
                             // ── 第一行：复制 / 移动 ──
                             Row(

@@ -576,7 +576,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun navigateInArchive(entry: FileEntry) {
         if (!entry.isDirectory) return
         val memFs = archiveMemFs ?: return
-        val targetPath = if (archivePath == "/") "/${entry.name}" else "$archivePath/${entry.name}"
+        val targetPath = if (archivePath == "/") entry.name else "$archivePath/${entry.name}"
         // 验证目标路径在压缩包内存在
         val normalizedPath = targetPath.trimEnd('/')
         val hasDir = memFs.entries.containsKey(normalizedPath) &&
@@ -586,7 +586,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             Toast.makeText(context, "目录不存在: ${entry.name}", Toast.LENGTH_SHORT).show()
             return
         }
-        archivePath = targetPath
+        archivePath = "/$targetPath"
         val entries = listArchiveDir(targetPath)
         if (focusedPanel == FocusedPanel.LEFT) {
             leftEntries = entries
@@ -633,44 +633,44 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun listArchiveDir(dirPath: String): List<FileEntry> {
         val memFs = archiveMemFs ?: return emptyList()
         val normalized = dirPath.trimEnd('/')
-        val prefix = if (normalized == "/" || normalized.isEmpty()) "" else "$normalized/"
+        // prefix 统一不带前导 /，与 entries map key 格式一致
+        val prefix = if (normalized == "/" || normalized.isEmpty()) "" else normalized.removePrefix("/") + "/"
 
         val dirs = mutableSetOf<String>()
         val files = mutableListOf<FileEntry>()
 
         for ((path, entry) in memFs.entries) {
+            // path 统一去掉前导 / 再处理
+            val cleanPath = path.removePrefix("/")
             if (prefix.isEmpty()) {
                 // 根目录：取第一级
-                val relative = path.removePrefix("/")
-                if (relative.isEmpty()) continue
-                val slashIdx = relative.indexOf('/')
+                if (cleanPath.isEmpty()) continue
+                val slashIdx = cleanPath.indexOf('/')
                 if (slashIdx < 0) {
-                    // 直接子文件
                     if (entry is CompressService.ArchiveMemFile) {
                         files.add(FileEntry(
-                            path = path,
+                            path = cleanPath,
                             name = entry.name,
                             isDirectory = false,
                             size = entry.size,
                             lastModified = 0
                         ))
                     } else if (entry is CompressService.ArchiveMemDir) {
-                        dirs.add(relative)
+                        dirs.add(cleanPath)
                     }
                 } else {
-                    // 子文件夹中的文件 → 只取文件夹名
-                    dirs.add(relative.substring(0, slashIdx))
+                    dirs.add(cleanPath.substring(0, slashIdx))
                 }
             } else {
                 // 子目录：匹配前缀
-                if (!path.startsWith(prefix) && !path.startsWith("/$prefix")) continue
-                val relative = path.removePrefix(prefix).removePrefix("/")
+                if (!cleanPath.startsWith(prefix)) continue
+                val relative = cleanPath.removePrefix(prefix)
                 if (relative.isEmpty()) continue
                 val slashIdx = relative.indexOf('/')
                 if (slashIdx < 0) {
                     if (entry is CompressService.ArchiveMemFile) {
                         files.add(FileEntry(
-                            path = path,
+                            path = cleanPath,
                             name = entry.name,
                             isDirectory = false,
                             size = entry.size,
@@ -687,7 +687,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         val entries = mutableListOf<FileEntry>()
         for (dirName in dirs.sorted()) {
-            val fullPath = if (prefix.isEmpty()) "/$dirName" else "$prefix$dirName"
+            val fullPath = if (prefix.isEmpty()) dirName else "$prefix$dirName"
             entries.add(FileEntry(
                 path = fullPath,
                 name = dirName,
