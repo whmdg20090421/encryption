@@ -872,7 +872,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 ) {
                     Card(
                         modifier = Modifier
-                            .width(220.dp)
+                            .fillMaxWidth(0.8f)
                             .wrapContentHeight(),
                         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
                         colors = CardDefaults.cardColors(
@@ -1448,7 +1448,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         Dialog(onDismissRequest = { showPropertyDialog = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Card(
                 modifier = Modifier
-                    .fillMaxWidth(0.85f),
+                    .fillMaxWidth(0.8f),
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surface
@@ -1597,7 +1597,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
         Dialog(onDismissRequest = { /* 禁止点击外部关闭 */ }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Card(
-                modifier = Modifier.fillMaxWidth(0.9f),
+                modifier = Modifier.fillMaxWidth(0.8f),
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
@@ -1769,7 +1769,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             val users = remember { vm.getSystemUsers() }
             Dialog(onDismissRequest = { showUserPicker = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(0.85f).fillMaxHeight(0.6f),
+                    modifier = Modifier.fillMaxWidth(0.8f).fillMaxHeight(0.6f),
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
@@ -1816,7 +1816,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             val groups = remember { vm.getSystemGroups() }
             Dialog(onDismissRequest = { showGroupPicker = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(0.85f).fillMaxHeight(0.6f),
+                    modifier = Modifier.fillMaxWidth(0.8f).fillMaxHeight(0.6f),
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
