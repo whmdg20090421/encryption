@@ -4,12 +4,15 @@ import android.app.Application
 import android.content.Intent
 import android.util.Log
 import android.webkit.WebView
+import coil3.ImageLoader
+import coil3.SingletonImageLoader
+import coil3.disk.DiskCache
 import com.topjohnwu.superuser.Shell
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
 
-class ToolsApp : Application() {
+class ToolsApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
         // libsu: 配置全局 root shell（首次 Shell.cmd() 时懒创建，后续复用）
@@ -19,6 +22,20 @@ class ToolsApp : Application() {
         installGlobalCrashHandler()
         migrateWebViewData()
         WebView.setDataDirectorySuffix("app")
+    }
+
+    override fun newImageLoader(context: android.content.Context): ImageLoader {
+        val diskCacheDir = context.getExternalFilesDir(null)?.resolve("image_cache")
+            ?: context.cacheDir.resolve("image_cache")
+        return ImageLoader.Builder(context)
+            .crossfade(true)
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(diskCacheDir)
+                    .maxSizeBytes(100L * 1024 * 1024) // 100MB
+                    .build()
+            }
+            .build()
     }
 
     /**

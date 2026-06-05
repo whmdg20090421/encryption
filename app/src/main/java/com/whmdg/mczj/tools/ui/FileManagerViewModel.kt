@@ -329,9 +329,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     return cached?.size ?: -1L // -1 表示未统计
                 }
                 if (sortOrder == SortOrder.ASC)
-                    entries.sortedWith(compareBy<FileEntry> { effectiveSize(it).let { s -> if (s < 0) Long.MAX_VALUE else s } })
+                    entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { effectiveSize(it).let { s -> if (s < 0) Long.MAX_VALUE else s } })
                 else
-                    entries.sortedWith(compareByDescending<FileEntry> { effectiveSize(it).let { s -> if (s < 0) Long.MIN_VALUE else s } })
+                    entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { effectiveSize(it).let { s -> if (s < 0) Long.MIN_VALUE else s } })
             }
             SortField.MODIFIED -> if (sortOrder == SortOrder.ASC)
                 entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.lastModified })

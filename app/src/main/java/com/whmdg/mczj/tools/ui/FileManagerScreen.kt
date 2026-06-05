@@ -1,7 +1,6 @@
 package com.whmdg.mczj.tools.ui
 
 import android.content.Context
-import android.graphics.BitmapFactory
 import android.os.Environment
 import android.provider.Settings
 import android.widget.Toast
@@ -20,15 +19,14 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.*
+import coil3.compose.AsyncImage
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -1630,27 +1628,17 @@ private fun FileEntryRow(
                 val isImageFile = category == FileCategory.IMAGE && !entry.isDirectory
                     && entry.name != "返回上一级"
 
-                // 图片文件：显示缩略图
-                val thumbnailBitmap = remember(entry.path, isImageFile) {
-                    if (!isImageFile) return@remember null
-                    try {
-                        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                        BitmapFactory.decodeFile(entry.path, opts)
-                        opts.inSampleSize = maxOf(
-                            opts.outWidth / 48, opts.outHeight / 48, 1
-                        ).coerceAtLeast(1)
-                        opts.inJustDecodeBounds = false
-                        BitmapFactory.decodeFile(entry.path, opts)?.asImageBitmap()
-                    } catch (_: Exception) { null }
-                }
-
-                if (thumbnailBitmap != null) {
-                    Image(
-                        painter = BitmapPainter(thumbnailBitmap),
+                if (isImageFile) {
+                    val imagePlaceholder = getFileTypeDrawableRes(category)
+                    AsyncImage(
+                        model = entry.path,
                         contentDescription = null,
                         modifier = Modifier
                             .size(28.dp)
-                            .clip(RoundedCornerShape(4.dp))
+                            .clip(RoundedCornerShape(4.dp)),
+                        contentScale = ContentScale.Crop,
+                        placeholder = imagePlaceholder?.let { painterResource(it) },
+                        error = imagePlaceholder?.let { painterResource(it) }
                     )
                 } else {
                     val fileDrawableRes = if (!entry.isDirectory && entry.name != "返回上一级") {
