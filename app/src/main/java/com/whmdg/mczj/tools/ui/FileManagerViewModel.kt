@@ -695,6 +695,74 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    // ── 权限编辑 ──
+
+    data class SystemUser(val uid: Int, val username: String)
+    data class SystemGroup(val gid: Int, val groupname: String)
+
+    fun getSystemUsers(): List<SystemUser> {
+        if (!isRootEngine) return emptyList()
+        val (stdout, _, exitCode) = try {
+            SpecialPermissionVerifier.executeRootCommandFull("cat /etc/passwd")
+        } catch (_: Exception) { return emptyList() }
+        if (exitCode != 0 || stdout.isBlank()) return emptyList()
+        return stdout.lines().mapNotNull { line ->
+            val parts = line.split(":")
+            if (parts.size >= 3) {
+                val uid = parts[2].toIntOrNull()
+                if (uid != null) SystemUser(uid, parts[0]) else null
+            } else null
+        }.sortedBy { it.uid }
+    }
+
+    fun getSystemGroups(): List<SystemGroup> {
+        if (!isRootEngine) return emptyList()
+        val (stdout, _, exitCode) = try {
+            SpecialPermissionVerifier.executeRootCommandFull("cat /etc/group")
+        } catch (_: Exception) { return emptyList() }
+        if (exitCode != 0 || stdout.isBlank()) return emptyList()
+        return stdout.lines().mapNotNull { line ->
+            val parts = line.split(":")
+            if (parts.size >= 3) {
+                val gid = parts[2].toIntOrNull()
+                if (gid != null) SystemGroup(gid, parts[0]) else null
+            } else null
+        }.sortedBy { it.gid }
+    }
+
+    /**
+     * 应用权限修改。成功返回 null，失败返回错误信息。
+     * 如果中途失败，会尝试回滚到原始权限。
+     */
+    fun applyPermissions(path: String, mode: Int, uid: Int, gid: Int, originalMode: Int, originalUid: Int, originalGid: Int): String? {
+        val escapedPath = path.replace("'", "'\\''")
+
+        // chmod
+        val octal = String.format("%o", mode and 0x1FF)
+        val (_, chmodErr, chmodExit) = try {
+            SpecialPermissionVerifier.executeRootCommandFull("chmod $octal '$escapedPath'")
+        } catch (e: Exception) { return "chmod 执行异常: ${e.message}" }
+        if (chmodExit != 0) return "chmod 失败 (exit $chmodExit): $chmodErr"
+
+        // chown
+        val (_, chownErr, chownExit) = try {
+            SpecialPermissionVerifier.executeRootCommandFull("chown $uid:$gid '$escapedPath'")
+        } catch (e: Exception) {
+            // 回滚 chmod
+            val rollbackOctal = String.format("%o", originalMode and 0x1FF)
+            try { SpecialPermissionVerifier.executeRootCommandFull("chmod $rollbackOctal '$escapedPath'") } catch (_: Exception) {}
+            return "chown 执行异常: ${e.message}"
+        }
+        if (chownExit != 0) {
+            // 回滚 chmod
+            val rollbackOctal = String.format("%o", originalMode and 0x1FF)
+            try { SpecialPermissionVerifier.executeRootCommandFull("chmod $rollbackOctal '$escapedPath'") } catch (_: Exception) {}
+            return "chown 失败 (exit $chownExit): $chownErr"
+        }
+
+        return null
+    }
+
     companion object {
         fun formatPermission(mode: Int): String {
             val type = when (mode and 0xF000) {

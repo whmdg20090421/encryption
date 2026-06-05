@@ -172,6 +172,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var bookmarkDeleteVisible by remember { mutableStateOf(setOf<String>()) }
     var showPropertyDialog by remember { mutableStateOf(false) }
     var propertyData by remember { mutableStateOf<FilePropertyData?>(null) }
+    var propertyEntry by remember { mutableStateOf<FileEntry?>(null) }
+    var showPermissionEditor by remember { mutableStateOf(false) }
+    var permissionEditorData by remember { mutableStateOf<FilePropertyData?>(null) }
+    var permissionEditorEntry by remember { mutableStateOf<FileEntry?>(null) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -1118,6 +1122,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             .clickable {
                                                 val entry = selectedEntry ?: return@clickable
                                                 propertyData = vm.getPropertyData(entry)
+                                                propertyEntry = entry
                                                 showPropertyDialog = true
                                                 selectedEntry = null
                                             }
@@ -1194,6 +1199,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     .clickable {
                                         val entry = selectedEntry ?: return@clickable
                                         propertyData = vm.getPropertyData(entry)
+                                        propertyEntry = entry
                                         showPropertyDialog = true
                                         selectedEntry = null
                                     }
@@ -1441,8 +1447,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         Dialog(onDismissRequest = { showPropertyDialog = false }) {
             Card(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp),
+                    .fillMaxWidth(0.85f),
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surface
@@ -1465,9 +1470,37 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     PropertyRow("类型", data.type)
                     PropertyRow("大小", data.sizeDisplay)
                     PropertyRow("修改时间", data.modifiedTime)
-                    PropertyRowWithButton("权限", data.permission)
-                    PropertyRowWithButton("所有者", data.owner)
-                    PropertyRowWithButton("用户组", data.group)
+
+                    // 权限信息容器
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.3f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            PropertyRowWithButton("权限", data.permission, hasRoot = vm.isRootEngine, onClick = {
+                                permissionEditorData = data
+                                permissionEditorEntry = propertyEntry
+                                showPropertyDialog = false
+                                showPermissionEditor = true
+                            })
+                            PropertyRowWithButton("所有者", data.owner, hasRoot = vm.isRootEngine, onClick = {
+                                permissionEditorData = data
+                                permissionEditorEntry = propertyEntry
+                                showPropertyDialog = false
+                                showPermissionEditor = true
+                            })
+                            PropertyRowWithButton("用户组", data.group, hasRoot = vm.isRootEngine, onClick = {
+                                permissionEditorData = data
+                                permissionEditorEntry = propertyEntry
+                                showPropertyDialog = false
+                                showPermissionEditor = true
+                            })
+                        }
+                    }
 
                     if (data.isDirectory) {
                         PropertyRow("文件数", data.fileCount.toString())
@@ -1490,6 +1523,330 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                         TextButton(onClick = { showPropertyDialog = false }) {
                             Text("关闭")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 权限编辑弹窗 ──
+    if (showPermissionEditor && permissionEditorData != null && permissionEditorEntry != null) {
+        val entry = permissionEditorEntry!!
+        val stat = try { android.system.Os.stat(entry.path) } catch (_: Exception) { null }
+        val originalMode = stat?.st_mode ?: 0
+        val originalUid = stat?.st_uid ?: 0
+        val originalGid = stat?.st_gid ?: 0
+
+        // 当前权限位（9个checkbox状态）
+        var ownerRead by remember { mutableStateOf(originalMode and 0b100_000_000 != 0) }
+        var ownerWrite by remember { mutableStateOf(originalMode and 0b010_000_000 != 0) }
+        var ownerExec by remember { mutableStateOf(originalMode and 0b001_000_000 != 0) }
+        var groupRead by remember { mutableStateOf(originalMode and 0b000_100_000 != 0) }
+        var groupWrite by remember { mutableStateOf(originalMode and 0b000_010_000 != 0) }
+        var groupExec by remember { mutableStateOf(originalMode and 0b000_001_000 != 0) }
+        var otherRead by remember { mutableStateOf(originalMode and 0b000_000_100 != 0) }
+        var otherWrite by remember { mutableStateOf(originalMode and 0b000_000_010 != 0) }
+        var otherExec by remember { mutableStateOf(originalMode and 0b000_000_001 != 0) }
+
+        // 当前选中的 UID/GID
+        var selectedUid by remember { mutableStateOf(originalUid) }
+        var selectedGid by remember { mutableStateOf(originalGid) }
+        var selectedUserName by remember { mutableStateOf(originalUid.toString()) }
+        var selectedGroupName by remember { mutableStateOf(originalGid.toString()) }
+
+        // 用户/组选择弹窗
+        var showUserPicker by remember { mutableStateOf(false) }
+        var showGroupPicker by remember { mutableStateOf(false) }
+
+        // 应用状态
+        var applying by remember { mutableStateOf(false) }
+        var errorMsg by remember { mutableStateOf<String?>(null) }
+
+        // 计算当前权限数字和符号
+        val currentMode = (if (ownerRead) 0b100_000_000 else 0) or
+                (if (ownerWrite) 0b010_000_000 else 0) or
+                (if (ownerExec) 0b001_000_000 else 0) or
+                (if (groupRead) 0b000_100_000 else 0) or
+                (if (groupWrite) 0b000_010_000 else 0) or
+                (if (groupExec) 0b000_001_000 else 0) or
+                (if (otherRead) 0b000_000_100 else 0) or
+                (if (otherWrite) 0b000_000_010 else 0) or
+                (if (otherExec) 0b000_000_001 else 0)
+        val octalStr = String.format("%o", currentMode)
+        val symbolStr = buildString {
+            append(if (ownerRead) 'r' else '-')
+            append(if (ownerWrite) 'w' else '-')
+            append(if (ownerExec) 'x' else '-')
+            append(if (groupRead) 'r' else '-')
+            append(if (groupWrite) 'w' else '-')
+            append(if (groupExec) 'x' else '-')
+            append(if (otherRead) 'r' else '-')
+            append(if (otherWrite) 'w' else '-')
+            append(if (otherExec) 'x' else '-')
+        }
+
+        // 初始化用户名/组名
+        LaunchedEffect(Unit) {
+            val users = vm.getSystemUsers()
+            val groups = vm.getSystemGroups()
+            selectedUserName = users.find { it.uid == originalUid }?.username ?: originalUid.toString()
+            selectedGroupName = groups.find { it.gid == originalGid }?.groupname ?: originalGid.toString()
+        }
+
+        Dialog(onDismissRequest = { /* 禁止点击外部关闭 */ }) {
+            Card(
+                modifier = Modifier.fillMaxWidth(0.9f),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("权限编辑", style = MaterialTheme.typography.titleLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                    Text(entry.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                    // ── 权限网格 ──
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.3f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            // 表头
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                Spacer(modifier = Modifier.width(80.dp))
+                                listOf("所有者", "用户组", "其他").forEach { header ->
+                                    Text(
+                                        text = header,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                                        modifier = Modifier.weight(1f),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // 三行：读、写、执行
+                            data class PermRow(val label: String, val owner: androidx.compose.runtime.MutableState<Boolean>, val group: androidx.compose.runtime.MutableState<Boolean>, val other: androidx.compose.runtime.MutableState<Boolean>)
+                            val rows = listOf(
+                                PermRow("读", ::ownerRead, ::groupRead, ::otherRead),
+                                PermRow("写", ::ownerWrite, ::groupWrite, ::otherWrite),
+                                PermRow("执行", ::ownerExec, ::groupExec, ::otherExec)
+                            )
+                            rows.forEach { row ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = row.label,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.width(80.dp)
+                                    )
+                                    listOf(row.owner, row.group, row.other).forEach { state ->
+                                        Box(
+                                            modifier = Modifier.weight(1f),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Checkbox(
+                                                checked = state.value,
+                                                onCheckedChange = { state.value = it }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── 数字和符号显示 ──
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = symbolStr,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(
+                            text = "($octalStr)",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                        )
+                    }
+
+                    HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+
+                    // ── 所有者选择 ──
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.3f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable { showUserPicker = true },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("所有者", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(60.dp))
+                                Text(selectedUserName, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                Text("($originalUid)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            HorizontalDivider(thickness = 0.3.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable { showGroupPicker = true },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("用户组", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(60.dp))
+                                Text(selectedGroupName, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                Text("($originalGid)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+
+                    // 错误信息
+                    if (errorMsg != null) {
+                        Text(errorMsg!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+
+                    // ── 按钮 ──
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = {
+                            showPermissionEditor = false
+                            showPropertyDialog = true
+                        }) {
+                            Text("取消")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(
+                            onClick = {
+                                applying = true
+                                errorMsg = null
+                                val result = vm.applyPermissions(
+                                    path = entry.path,
+                                    mode = currentMode,
+                                    uid = selectedUid,
+                                    gid = selectedGid,
+                                    originalMode = originalMode,
+                                    originalUid = originalUid,
+                                    originalGid = originalGid
+                                )
+                                applying = false
+                                if (result != null) {
+                                    errorMsg = result
+                                } else {
+                                    showPermissionEditor = false
+                                    // 刷新文件列表
+                                    vm.refreshCurrent()
+                                }
+                            },
+                            enabled = !applying
+                        ) {
+                            Text(if (applying) "应用中..." else "确认")
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── 用户选择弹窗 ──
+        if (showUserPicker) {
+            val users = remember { vm.getSystemUsers() }
+            Dialog(onDismissRequest = { showUserPicker = false }) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.85f).fillMaxHeight(0.6f),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("选择所有者", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        LazyColumn(modifier = Modifier.weight(1f)) {
+                            items(users) { user ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedUid = user.uid
+                                            selectedUserName = user.username
+                                            showUserPicker = false
+                                        }
+                                        .padding(vertical = 10.dp, horizontal = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(user.username, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                    Text("(${user.uid})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    RadioButton(
+                                        selected = selectedUid == user.uid,
+                                        onClick = {
+                                            selectedUid = user.uid
+                                            selectedUserName = user.username
+                                            showUserPicker = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { showUserPicker = false }) { Text("取消") }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── 组选择弹窗 ──
+        if (showGroupPicker) {
+            val groups = remember { vm.getSystemGroups() }
+            Dialog(onDismissRequest = { showGroupPicker = false }) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.85f).fillMaxHeight(0.6f),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("选择用户组", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        LazyColumn(modifier = Modifier.weight(1f)) {
+                            items(groups) { group ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedGid = group.gid
+                                            selectedGroupName = group.groupname
+                                            showGroupPicker = false
+                                        }
+                                        .padding(vertical = 10.dp, horizontal = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(group.groupname, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                    Text("(${group.gid})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    RadioButton(
+                                        selected = selectedGid == group.gid,
+                                        onClick = {
+                                            selectedGid = group.gid
+                                            selectedGroupName = group.groupname
+                                            showGroupPicker = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { showGroupPicker = false }) { Text("取消") }
                         }
                     }
                 }
@@ -1907,7 +2264,7 @@ private fun PropertyRow(label: String, value: String) {
 }
 
 @Composable
-private fun PropertyRowWithButton(label: String, value: String) {
+private fun PropertyRowWithButton(label: String, value: String, hasRoot: Boolean = false, onClick: () -> Unit = {}) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
@@ -1924,10 +2281,14 @@ private fun PropertyRowWithButton(label: String, value: String) {
             modifier = Modifier.weight(1f)
         )
         TextButton(
-            onClick = { /* TODO */ },
-            enabled = false
+            onClick = onClick,
+            enabled = hasRoot
         ) {
-            Text("更改", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
+            Text(
+                "更改",
+                color = if (hasRoot) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            )
         }
     }
 }
