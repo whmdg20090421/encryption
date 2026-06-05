@@ -26,6 +26,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import coil3.compose.AsyncImage
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -48,6 +50,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -143,6 +146,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     val rightListState = rememberLazyListState(vm.rightFirstVisibleIndex, vm.rightFirstVisibleOffset)
 
     // ── UI 本地状态 ──
+    var showDrawer by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
     var showSortDialog by remember { mutableStateOf(false) }
     var tempSortField by remember { mutableStateOf(vm.sortField) }
@@ -227,11 +231,14 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         )
                     },
                     navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.Default.Home, contentDescription = "返回主页")
+                        IconButton(onClick = { showDrawer = true }) {
+                            Icon(Icons.Default.Menu, contentDescription = "菜单")
                         }
                     },
                 actions = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.Home, contentDescription = "返回主页")
+                    }
                     Box {
                         IconButton(onClick = { showSettingsMenu = true }) {
                             Icon(Icons.Default.Settings, contentDescription = "设置")
@@ -848,6 +855,104 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                         } // AnimatedContent
                         } // Box swipe
+                    }
+                }
+            }
+
+            // ── 左侧功能菜单抽屉 ──
+            if (showDrawer) {
+                BackHandler { showDrawer = false }
+            }
+            AnimatedVisibility(
+                visible = showDrawer,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // 右侧 30% 点击关闭
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { showDrawer = false }
+                            )
+                    )
+                    // 左侧菜单面板 70%
+                    var toolsExpanded by remember { mutableStateOf(false) }
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(0.7f),
+                        color = MaterialTheme.colorScheme.surface,
+                        shadowElevation = 8.dp
+                    ) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            // 标题栏
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shadowElevation = 4.dp,
+                                color = MaterialTheme.colorScheme.surface
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "功能菜单",
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                    IconButton(onClick = { showDrawer = false }) {
+                                        Icon(Icons.Default.Close, contentDescription = "关闭")
+                                    }
+                                }
+                            }
+                            // 菜单内容
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                // ── 本地 ──
+                                DrawerSectionHeader(title = "本地")
+                                // 本地内容（待填充）
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .padding(horizontal = 16.dp),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    Text(
+                                        "暂无内容",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                HorizontalDivider()
+                                // ── 工具 ──
+                                DrawerSectionHeader(
+                                    title = "工具",
+                                    expandable = true,
+                                    expanded = toolsExpanded,
+                                    onClick = { toolsExpanded = !toolsExpanded }
+                                )
+                                AnimatedVisibility(visible = toolsExpanded) {
+                                    Column {
+                                        DrawerMenuItem(
+                                            icon = Icons.Default.Delete,
+                                            label = "回收站",
+                                            onClick = { /* UI 占位，待实现 */ }
+                                        )
+                                    }
+                                }
+                                HorizontalDivider()
+                            }
+                        }
                     }
                 }
             }
@@ -2294,6 +2399,74 @@ private fun PropertyRowWithButton(label: String, value: String, hasRoot: Boolean
                 color = if (hasRoot) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
             )
+        }
+    }
+}
+
+@Composable
+private fun DrawerSectionHeader(
+    title: String,
+    expandable: Boolean = false,
+    expanded: Boolean = false,
+    onClick: () -> Unit = {}
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (expandable) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold
+        )
+        if (expandable) {
+            Icon(
+                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun DrawerMenuItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    subtitle: String? = null,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(24.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
