@@ -16,6 +16,24 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.BasicFileAttributes
 import android.system.Os
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+data class FilePropertyData(
+    val name: String,
+    val directory: String,
+    val type: String,
+    val sizeBytes: Long,
+    val sizeDisplay: String,
+    val modifiedTime: String,
+    val permission: String,
+    val owner: String,
+    val group: String,
+    val fileCount: Int,
+    val folderCount: Int,
+    val isDirectory: Boolean
+)
 
 class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -585,6 +603,98 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return entries
     }
 
+    fun getPropertyData(entry: FileEntry): FilePropertyData {
+        val file = File(entry.path)
+        val stat = try { Os.stat(entry.path) } catch (_: Exception) { null }
+
+        val mode = stat?.st_mode ?: 0
+        val permission = if (stat != null) {
+            "${formatPermission(mode)}(${String.format("%03d", mode and 0x1FF)})"
+        } else ""
+
+        val owner = stat?.st_uid?.toString() ?: ""
+        val group = stat?.st_gid?.toString() ?: ""
+
+        val modifiedTime = if (entry.lastModified > 0) {
+            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(entry.lastModified))
+        } else ""
+
+        val sizeDisplay = if (entry.isDirectory) {
+            val cached = folderSizeDb.get(entry.path)
+            val bytes = cached?.size ?: 0L
+            if (bytes > 0) "${formatSize(bytes)} ($bytes)" else "0 B (0)"
+        } else {
+            "${formatSize(entry.size)} (${entry.size})"
+        }
+
+        val parentPath = file.parent ?: ""
+
+        // 类型描述
+        val type = if (entry.isDirectory) {
+            "文件夹"
+        } else {
+            val ext = entry.name.substringAfterLast('.', "").lowercase()
+            when (ext) {
+                "png" -> "PNG 图片"
+                "jpg", "jpeg" -> "JPEG 图片"
+                "gif" -> "GIF 图片"
+                "webp" -> "WebP 图片"
+                "bmp" -> "BMP 图片"
+                "mp4" -> "MP4 视频"
+                "mkv" -> "MKV 视频"
+                "avi" -> "AVI 视频"
+                "mp3" -> "MP3 音频"
+                "flac" -> "FLAC 音频"
+                "wav" -> "WAV 音频"
+                "zip" -> "ZIP 压缩包"
+                "rar" -> "RAR 压缩包"
+                "7z" -> "7Z 压缩包"
+                "tar" -> "TAR 归档"
+                "gz" -> "GZ 压缩"
+                "apk" -> "APK 安装包"
+                "txt" -> "文本文件"
+                "pdf" -> "PDF 文档"
+                "doc", "docx" -> "Word 文档"
+                "xls", "xlsx" -> "Excel 表格"
+                "json" -> "JSON 文件"
+                "xml" -> "XML 文件"
+                "html", "htm" -> "HTML 文件"
+                "js" -> "JavaScript 文件"
+                "kt" -> "Kotlin 文件"
+                "java" -> "Java 文件"
+                "py" -> "Python 文件"
+                "sh" -> "Shell 脚本"
+                else -> if (ext.isNotEmpty()) "${ext.uppercase()} 文件" else "文件"
+            }
+        }
+
+        var fileCount = 0
+        var folderCount = 0
+        if (entry.isDirectory) {
+            val children = try { file.listFiles() } catch (_: Exception) { null }
+            if (children != null) {
+                for (child in children) {
+                    if (child.isDirectory) folderCount++ else fileCount++
+                }
+            }
+        }
+
+        return FilePropertyData(
+            name = entry.name,
+            directory = parentPath,
+            type = type,
+            sizeBytes = entry.size,
+            sizeDisplay = sizeDisplay,
+            modifiedTime = modifiedTime,
+            permission = permission,
+            owner = owner,
+            group = group,
+            fileCount = fileCount,
+            folderCount = folderCount,
+            isDirectory = entry.isDirectory
+        )
+    }
+
     companion object {
         fun formatPermission(mode: Int): String {
             val type = when (mode and 0xF000) {
@@ -604,6 +714,18 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 sb.append(if ((mode shr shift) and 1 != 0) rwx[2 - shift % 3] else '-')
             }
             return sb.toString()
+        }
+
+        fun formatSize(bytes: Long): String {
+            if (bytes < 0) return ""
+            if (bytes == 0L) return "0 B"
+            val v = bytes.toDouble()
+            return when {
+                v < 1024 -> "%.0f B".format(v)
+                v < 1024 * 1024 -> "%.1f K".format(v / 1024)
+                v < 1024 * 1024 * 1024 -> "%.1f M".format(v / (1024 * 1024))
+                else -> "%.1f G".format(v / (1024 * 1024 * 1024))
+            }
         }
     }
 }

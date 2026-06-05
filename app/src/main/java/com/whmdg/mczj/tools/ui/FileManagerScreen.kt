@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import java.io.File
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.Layout
@@ -169,6 +170,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var showHistoryPanel by remember { mutableStateOf(false) }
     var panelTab by remember { mutableStateOf(0) } // 0=历史, 1=书签
     var bookmarkDeleteVisible by remember { mutableStateOf(setOf<String>()) }
+    var showPropertyDialog by remember { mutableStateOf(false) }
+    var propertyData by remember { mutableStateOf<FilePropertyData?>(null) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -1113,7 +1116,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         modifier = Modifier
                                             .weight(1f)
                                             .clickable {
-                                                Toast.makeText(context, "属性", Toast.LENGTH_SHORT).show()
+                                                val entry = selectedEntry ?: return@clickable
+                                                propertyData = vm.getPropertyData(entry)
+                                                showPropertyDialog = true
                                                 selectedEntry = null
                                             }
                                             .padding(vertical = 16.dp),
@@ -1176,6 +1181,33 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             Text("分享", style = MaterialTheme.typography.bodyLarge)
                                         }
                                     }
+                                }
+                            }
+                            // ── 第四行：关于 ──
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        val entry = selectedEntry ?: return@clickable
+                                        propertyData = vm.getPropertyData(entry)
+                                        showPropertyDialog = true
+                                        selectedEntry = null
+                                    }
+                                    .padding(vertical = 16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.Info,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("关于", style = MaterialTheme.typography.bodyLarge)
                                 }
                             }
                         }
@@ -1401,6 +1433,68 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 }
             }
         )
+    }
+
+    // ── 属性弹窗 ──
+    if (showPropertyDialog && propertyData != null) {
+        val data = propertyData!!
+        Dialog(onDismissRequest = { showPropertyDialog = false }) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "属性",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                    )
+
+                    PropertyRow("名称", data.name)
+                    PropertyRow("目录", data.directory)
+                    PropertyRow("类型", data.type)
+                    PropertyRow("大小", data.sizeDisplay)
+                    PropertyRow("修改时间", data.modifiedTime)
+                    PropertyRowWithButton("权限", data.permission)
+                    PropertyRowWithButton("所有者", data.owner)
+                    PropertyRowWithButton("用户组", data.group)
+
+                    if (data.isDirectory) {
+                        PropertyRow("文件数", data.fileCount.toString())
+                        PropertyRow("文件夹数", data.folderCount.toString())
+                    }
+
+                    HorizontalDivider(
+                        thickness = 0.5.dp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        TextButton(
+                            onClick = { /* TODO */ },
+                            enabled = false
+                        ) {
+                            Text("更多", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
+                        }
+                        TextButton(onClick = { showPropertyDialog = false }) {
+                            Text("关闭")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // ── 排序对话框 ──
@@ -1789,4 +1883,51 @@ private fun StartEllipsisText(
             }
         }
     )
+}
+
+@Composable
+private fun PropertyRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(80.dp)
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+            softWrap = true
+        )
+    }
+}
+
+@Composable
+private fun PropertyRowWithButton(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(80.dp)
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(
+            onClick = { /* TODO */ },
+            enabled = false
+        ) {
+            Text("更改", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
+        }
+    }
 }
