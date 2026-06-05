@@ -19,6 +19,15 @@ import android.system.Os
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class RecycleBinEntry(
+    val binName: String,
+    val originalPath: String,
+    val deletedAt: Long,
+    val isDirectory: Boolean
+)
 
 data class FilePropertyData(
     val name: String,
@@ -74,6 +83,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var refreshVersion by mutableStateOf(0L)
         private set
+
+    // ── 回收站 ──
+    var isInRecycleBin by mutableStateOf(false)
+        private set
+    private val recycleBinJson = kotlinx.serialization.json.Json {
+        ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true
+    }
+    private var recycleBinMetaList by mutableStateOf(listOf<RecycleBinEntry>())
 
     // ── 历史 & 书签 ──
     private val historyJson = kotlinx.serialization.json.Json {
@@ -177,6 +194,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 核心导航：切换路径 + 刷新列表 ──
     fun navigateTo(path: String) {
+        if (isInRecycleBin) isInRecycleBin = false
         if (focusedPanel == FocusedPanel.LEFT) {
             if (leftPath == path) return
             leftNavState = leftNavState.navigate(path)
@@ -263,6 +281,170 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshBoth() {
         leftEntries = listDirectory(leftPath)
         rightEntries = listDirectory(rightPath)
+    }
+
+    // ── 回收站操作 ──
+
+    private fun loadRecycleBinMeta() {
+        val metaFile = AppDataPaths.recycleBinMeta(context)
+        recycleBinMetaList = try {
+            if (metaFile.exists()) recycleBinJson.decodeFromString<List<RecycleBinEntry>>(metaFile.readText())
+            else emptyList()
+        } catch (_: Exception) { emptyList() }
+    }
+
+    private fun saveRecycleBinMeta() {
+        try {
+            AppDataPaths.recycleBinMeta(context).writeText(recycleBinJson.encodeToString(recycleBinMetaList))
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * 移动文件到回收站。成功返回 null，失败返回错误信息。
+     */
+    fun moveToRecycleBin(entry: FileEntry): String? {
+        val binDir = AppDataPaths.recycleBin(context)
+        val source = File(entry.path)
+        if (!source.exists()) return "文件不存在"
+
+        // 同名冲突时追加时间戳后缀
+        var targetName = entry.name
+        var target = File(binDir, targetName)
+        if (target.exists()) {
+            val ts = System.currentTimeMillis() / 1000
+            val dotIdx = entry.name.lastIndexOf('.')
+            targetName = if (dotIdx > 0) {
+                "${entry.name.substring(0, dotIdx)}_${ts}${entry.name.substring(dotIdx)}"
+            } else {
+                "${entry.name}_${ts}"
+            }
+            target = File(binDir, targetName)
+        }
+
+        try {
+            val moved = source.renameTo(target)
+            if (!moved) {
+                // renameTo 失败，尝试 copy + delete
+                if (source.isDirectory) {
+                    source.copyRecursively(target, overwrite = false)
+                } else {
+                    source.copyTo(target, overwrite = false)
+                }
+                SpecialPermissionVerifier.safeDelete(source)
+            }
+        } catch (e: Exception) {
+            return e.message ?: "移动失败"
+        }
+
+        // 写入元数据
+        recycleBinMetaList = recycleBinMetaList + RecycleBinEntry(
+            binName = targetName,
+            originalPath = entry.path,
+            deletedAt = System.currentTimeMillis(),
+            isDirectory = entry.isDirectory
+        )
+        saveRecycleBinMeta()
+        return null
+    }
+
+    /**
+     * 永久删除回收站中的文件。成功返回 null，失败返回错误信息。
+     */
+    fun permanentDelete(binName: String): String? {
+        val binDir = AppDataPaths.recycleBin(context)
+        val file = File(binDir, binName)
+        if (!file.exists()) {
+            // 文件已不存在，只清理元数据
+            recycleBinMetaList = recycleBinMetaList.filter { it.binName != binName }
+            saveRecycleBinMeta()
+            return null
+        }
+        return try {
+            SpecialPermissionVerifier.safeDelete(file)
+            recycleBinMetaList = recycleBinMetaList.filter { it.binName != binName }
+            saveRecycleBinMeta()
+            null
+        } catch (e: Exception) {
+            e.message ?: "删除失败"
+        }
+    }
+
+    /**
+     * 从回收站恢复文件到原位置。成功返回 null，失败返回错误信息。
+     */
+    fun restoreFromRecycleBin(binName: String): String? {
+        val binDir = AppDataPaths.recycleBin(context)
+        val file = File(binDir, binName)
+        val meta = recycleBinMetaList.find { it.binName == binName }
+            ?: return "元数据不存在"
+
+        val originalPath = meta.originalPath
+        val originalFile = File(originalPath)
+
+        // 检查原路径父目录是否存在
+        val parentDir = originalFile.parentFile
+        if (parentDir == null || !parentDir.exists()) {
+            return "原目录不存在: ${parentDir?.absolutePath}"
+        }
+
+        // 检查原路径是否已有同名文件
+        if (originalFile.exists()) {
+            return "目标位置已存在同名文件: ${originalFile.name}"
+        }
+
+        try {
+            val moved = file.renameTo(originalFile)
+            if (!moved) {
+                if (file.isDirectory) {
+                    file.copyRecursively(originalFile, overwrite = false)
+                } else {
+                    file.copyTo(originalFile, overwrite = false)
+                }
+                SpecialPermissionVerifier.safeDelete(file)
+            }
+        } catch (e: Exception) {
+            return e.message ?: "恢复失败"
+        }
+
+        // 从元数据中移除
+        recycleBinMetaList = recycleBinMetaList.filter { it.binName != binName }
+        saveRecycleBinMeta()
+        return null
+    }
+
+    /**
+     * 进入回收站视图：将聚焦面板的 entries 替换为回收站内容。
+     */
+    fun enterRecycleBin() {
+        loadRecycleBinMeta()
+        val binDir = AppDataPaths.recycleBin(context)
+        val entries = (binDir.listFiles() ?: emptyArray())
+            .filter { it.name != ".meta.json" }
+            .map { f ->
+                FileEntry(
+                    path = f.absolutePath,
+                    name = f.name,
+                    isDirectory = f.isDirectory,
+                    size = if (f.isFile) f.length() else 0,
+                    lastModified = f.lastModified()
+                )
+            }
+            .sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
+
+        isInRecycleBin = true
+        if (focusedPanel == FocusedPanel.LEFT) {
+            leftEntries = entries
+        } else {
+            rightEntries = entries
+        }
+    }
+
+    /**
+     * 退出回收站视图，恢复到正常目录浏览。
+     */
+    fun exitRecycleBin() {
+        isInRecycleBin = false
+        refreshCurrent()
     }
 
     // ── 设置 ──

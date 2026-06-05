@@ -76,6 +76,20 @@ object AppDataPaths {
         return dir
     }
 
+    /** 回收站目录（外部 media 目录，卸载后保留） */
+    fun recycleBin(context: Context): File {
+        val mediaDir = context.getExternalMediaDirs().firstOrNull()
+            ?: File(context.getExternalFilesDir(null), "recycle_bin")
+        val dir = File(mediaDir, "recycle_bin")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 回收站元数据文件 */
+    fun recycleBinMeta(context: Context): File {
+        return File(recycleBin(context), ".meta.json")
+    }
+
     /**
      * WebView 数据目录（由 setDataDirectorySuffix("app") 决定）。
      * 包含：RP-Hub IndexedDB/localStorage、FA 登录 Cookie 等。

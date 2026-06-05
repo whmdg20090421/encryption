@@ -171,7 +171,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var showRenameDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
-    var recycleBinEnabled by remember { mutableStateOf(false) }
+    var recycleBinEnabled by remember { mutableStateOf(true) }
+    var showForceDeleteDialog by remember { mutableStateOf(false) }
+    var forceDeleteEntry by remember { mutableStateOf<FileEntry?>(null) }
+    var showPermanentDeleteDialog by remember { mutableStateOf(false) }
+    var permanentDeleteTarget by remember { mutableStateOf<String?>(null) }
     var showHistoryPanel by remember { mutableStateOf(false) }
     var panelTab by remember { mutableStateOf(0) } // 0=历史, 1=书签
     var bookmarkDeleteVisible by remember { mutableStateOf(setOf<String>()) }
@@ -208,9 +212,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // 返回手势：子目录 → 回上一级，根目录 → 退出文件管理器
+    // 返回手势：回收站 → 退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
     BackHandler {
-        if (!vm.goUp()) {
+        if (vm.isInRecycleBin) {
+            vm.exitRecycleBin()
+        } else if (!vm.goUp()) {
             onBack()
         }
     }
@@ -226,7 +232,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 TopAppBar(
                     title = {
                         StartEllipsisText(
-                            text = currentPath,
+                            text = if (vm.isInRecycleBin) "回收站" else currentPath,
                             modifier = Modifier.fillMaxWidth()
                         )
                     },
@@ -489,10 +495,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 isFocused = leftFocused,
                                 onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
                                 onFolderClick = { entry ->
-                                    DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
-                                    DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.leftPath}")
                                     vm.focusedPanel = FocusedPanel.LEFT
-                                    vm.navigateToFolder(entry)
+                                    if (vm.isInRecycleBin) {
+                                        // 回收站模式下不允许进入子文件夹
+                                        Toast.makeText(context, "请先退出回收站模式", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
+                                        DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.leftPath}")
+                                        vm.navigateToFolder(entry)
+                                    }
                                 },
                                 onFileClick = { entry ->
                                     DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
@@ -530,10 +541,14 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 isFocused = !leftFocused,
                                 onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
                                 onFolderClick = { entry ->
-                                    DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
-                                    DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.rightPath}")
                                     vm.focusedPanel = FocusedPanel.RIGHT
-                                    vm.navigateToFolder(entry)
+                                    if (vm.isInRecycleBin) {
+                                        Toast.makeText(context, "请先退出回收站模式", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
+                                        DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.rightPath}")
+                                        vm.navigateToFolder(entry)
+                                    }
                                 },
                                 onFileClick = { entry ->
                                     DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
@@ -946,7 +961,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         DrawerMenuItem(
                                             icon = Icons.Default.Delete,
                                             label = "回收站",
-                                            onClick = { /* UI 占位，待实现 */ }
+                                            onClick = {
+                                                vm.enterRecycleBin()
+                                                showDrawer = false
+                                            }
                                         )
                                     }
                                 }
@@ -989,6 +1007,75 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 .fillMaxWidth()
                                 .wrapContentHeight()
                         ) {
+                            if (vm.isInRecycleBin) {
+                                // ── 回收站模式：永久删除 / 恢复到原位置 ──
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // 左列：永久删除
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                val entry = selectedEntry ?: return@clickable
+                                                permanentDeleteTarget = entry.name
+                                                showPermanentDeleteDialog = true
+                                                selectedEntry = null
+                                            }
+                                            .padding(vertical = 16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.DeleteForever,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                            Spacer(Modifier.width(4.dp))
+                                            Text(
+                                                "永久删除",
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                    }
+                                    VerticalDivider(
+                                        modifier = Modifier.height(24.dp),
+                                        thickness = 0.5.dp,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                                    )
+                                    // 右列：恢复到原位置
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable {
+                                                val entry = selectedEntry ?: return@clickable
+                                                val error = vm.restoreFromRecycleBin(entry.name)
+                                                if (error == null) {
+                                                    Toast.makeText(context, "已恢复到原位置", Toast.LENGTH_SHORT).show()
+                                                    vm.enterRecycleBin() // 刷新回收站列表
+                                                } else {
+                                                    Toast.makeText(context, "恢复失败: $error", Toast.LENGTH_SHORT).show()
+                                                }
+                                                selectedEntry = null
+                                            }
+                                            .padding(vertical = 16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.Restore,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("恢复到原位置", style = MaterialTheme.typography.bodyLarge)
+                                        }
+                                    }
+                                }
+                            } else {
                             // ── 第一行：复制 / 移动 ──
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1322,6 +1409,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     Text("关于", style = MaterialTheme.typography.bodyLarge)
                                 }
                             }
+                            } // else (非回收站模式)
                         }
                     }
                 }
@@ -1508,30 +1596,40 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     Spacer(Modifier.height(12.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(start = 4.dp)
+                        modifier = Modifier
+                            .clickable { recycleBinEnabled = !recycleBinEnabled }
+                            .padding(start = 4.dp)
                     ) {
                         Checkbox(
                             checked = recycleBinEnabled,
-                            onCheckedChange = null,
-                            enabled = false
+                            onCheckedChange = { recycleBinEnabled = it }
                         )
-                        Text(
-                            "移动到回收站",
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                        )
+                        Text("移动到回收站")
                     }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     val entry = selectedEntry ?: return@TextButton
-                    val file = File(entry.path)
-                    try {
-                        SpecialPermissionVerifier.safeDelete(file)
-                        Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
-                        vm.refreshBoth()
-                    } catch (e: Exception) {
-                        Toast.makeText(context, "删除失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                    if (recycleBinEnabled) {
+                        val error = vm.moveToRecycleBin(entry)
+                        if (error == null) {
+                            Toast.makeText(context, "已移至回收站", Toast.LENGTH_SHORT).show()
+                            vm.refreshBoth()
+                        } else {
+                            // 移动失败，询问是否永久删除
+                            forceDeleteEntry = entry
+                            showForceDeleteDialog = true
+                        }
+                    } else {
+                        val file = File(entry.path)
+                        try {
+                            SpecialPermissionVerifier.safeDelete(file)
+                            Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
+                            vm.refreshBoth()
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "删除失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
                     }
                     showDeleteDialog = false
                     selectedEntry = null
@@ -1541,6 +1639,68 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── 强制删除确认对话框（移动到回收站失败时） ──
+    if (showForceDeleteDialog && forceDeleteEntry != null) {
+        AlertDialog(
+            onDismissRequest = { showForceDeleteDialog = false; forceDeleteEntry = null },
+            title = { Text("删除") },
+            text = { Text("无法移动到回收站，是否永久删除？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val entry = forceDeleteEntry ?: return@TextButton
+                    val file = File(entry.path)
+                    try {
+                        SpecialPermissionVerifier.safeDelete(file)
+                        Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
+                        vm.refreshBoth()
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "删除失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                    showForceDeleteDialog = false
+                    forceDeleteEntry = null
+                }) {
+                    Text("是")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showForceDeleteDialog = false; forceDeleteEntry = null }) {
+                    Text("否")
+                }
+            }
+        )
+    }
+
+    // ── 回收站永久删除确认对话框 ──
+    if (showPermanentDeleteDialog && permanentDeleteTarget != null) {
+        AlertDialog(
+            onDismissRequest = { showPermanentDeleteDialog = false; permanentDeleteTarget = null },
+            title = { Text("永久删除") },
+            text = { Text("确定要永久删除「${permanentDeleteTarget}」吗？此操作不可撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val name = permanentDeleteTarget ?: return@TextButton
+                    val error = vm.permanentDelete(name)
+                    if (error == null) {
+                        Toast.makeText(context, "已永久删除", Toast.LENGTH_SHORT).show()
+                        vm.enterRecycleBin() // 刷新回收站列表
+                    } else {
+                        Toast.makeText(context, "删除失败: $error", Toast.LENGTH_SHORT).show()
+                    }
+                    showPermanentDeleteDialog = false
+                    permanentDeleteTarget = null
+                    selectedEntry = null
+                }) {
+                    Text("确定", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermanentDeleteDialog = false; permanentDeleteTarget = null }) {
                     Text("取消")
                 }
             }
