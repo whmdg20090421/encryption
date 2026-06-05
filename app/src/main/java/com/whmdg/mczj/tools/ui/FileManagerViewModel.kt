@@ -279,6 +279,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateSortField(field: SortField) {
         sortField = field
         fmPrefs.edit().putString("sort_field", field.name).apply()
+        leftEntries = listDirectory(leftPath)
+        rightEntries = listDirectory(rightPath)
     }
 
     fun updateSortOrder(order: SortOrder) {
@@ -340,10 +342,18 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
             else
                 entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
-            SortField.SIZE -> if (sortOrder == SortOrder.ASC)
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.size })
-            else
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.size })
+            SortField.SIZE -> {
+                // 获取条目的有效大小：文件用 entry.size，已统计目录用 folderSizeDb，未统计目录用 -1
+                fun effectiveSize(entry: FileEntry): Long {
+                    if (!entry.isDirectory) return entry.size
+                    val cached = folderSizeDb.get(entry.path)
+                    return cached?.size ?: -1L // -1 表示未统计
+                }
+                if (sortOrder == SortOrder.ASC)
+                    entries.sortedWith(compareBy<FileEntry> { effectiveSize(it).let { s -> if (s < 0) Long.MAX_VALUE else s } })
+                else
+                    entries.sortedWith(compareByDescending<FileEntry> { effectiveSize(it).let { s -> if (s < 0) Long.MIN_VALUE else s } })
+            }
             SortField.MODIFIED -> if (sortOrder == SortOrder.ASC)
                 entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.lastModified })
             else

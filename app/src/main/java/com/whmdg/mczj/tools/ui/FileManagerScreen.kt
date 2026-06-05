@@ -147,7 +147,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var showSortDialog by remember { mutableStateOf(false) }
     var tempSortField by remember { mutableStateOf(vm.sortField) }
     var tempSortOrder by remember { mutableStateOf(vm.sortOrder) }
-    var showOtherFields by remember { mutableStateOf(false) }
     var selectedEntry by remember { mutableStateOf<FileEntry?>(null) }
     val sortAscLabels = mapOf(
         SortField.NAME to "A到Z",
@@ -261,7 +260,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onClick = {
                                     tempSortField = vm.sortField
                                     tempSortOrder = vm.sortOrder
-                                    showOtherFields = false
                                     showSortDialog = true
                                     showSettingsMenu = false
                                 }
@@ -1410,81 +1408,43 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             SortField.MODIFIED to "最后修改时间",
             SortField.CREATED to "创建时间"
         )
-        val otherFields = SortField.entries.filter { it != tempSortField }
 
         AlertDialog(
             onDismissRequest = { showSortDialog = false },
             title = { Text("排列顺序") },
             text = {
                 Column {
-                    // 当前选中的排序字段（带动画展开其他选项）
-                    val currentLabel = fieldLabels[tempSortField] ?: "名称"
-                    val currentOrderLabel = if (tempSortOrder == SortOrder.ASC) {
-                        when (tempSortField) {
-                            SortField.NAME -> "A到Z"
-                            SortField.SIZE -> "小到大"
-                            SortField.MODIFIED -> "最早到最近"
-                            SortField.CREATED -> "最早到最近"
-                        }
-                    } else {
-                        when (tempSortField) {
-                            SortField.NAME -> "Z到A"
-                            SortField.SIZE -> "大到小"
-                            SortField.MODIFIED -> "最近到最早"
-                            SortField.CREATED -> "最近到最早"
-                        }
-                    }
-
-                    // 点击当前字段展开/收起其他选项
-                    Surface(
-                        onClick = { showOtherFields = !showOtherFields },
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                    // 排序字段列表（始终显示全部4项，当前选中的高亮）
+                    Text(
+                        text = "排序方式",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    for (field in SortField.entries) {
+                        val isSelected = tempSortField == field
+                        Surface(
+                            onClick = { tempSortField = field },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = currentLabel,
-                                style = MaterialTheme.typography.bodyLarge,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(
-                                text = currentOrderLabel,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Icon(
-                                Icons.Default.ArrowDropDown,
-                                contentDescription = null,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-
-                    // 丝滑动画展开其他选项
-                    AnimatedVisibility(
-                        visible = showOtherFields,
-                        enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-                        exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
-                    ) {
-                        Column {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            for (field in otherFields) {
-                                Surface(
-                                    onClick = {
-                                        tempSortField = field
-                                        showOtherFields = false
-                                    },
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        text = fieldLabels[field] ?: "",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = fieldLabels[field] ?: "",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (isSelected) {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer
                                     )
                                 }
                             }
