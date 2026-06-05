@@ -22,6 +22,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
             .setTimeout(10))
         installGlobalCrashHandler()
         migrateWebViewData()
+        AppDataPaths.cleanArchiveCache(this)
         WebView.setDataDirectorySuffix("app")
     }
 

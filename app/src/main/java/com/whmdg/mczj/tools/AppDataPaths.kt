@@ -90,6 +90,24 @@ object AppDataPaths {
         return File(recycleBin(context), ".meta.json")
     }
 
+    /** 压缩包临时解压目录（cacheDir，应用重启自动清理） */
+    fun archiveCache(context: Context): File {
+        val dir = File(context.cacheDir, "archive_temp")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 应用启动时清理旧的临时解压文件（仅删除无 .active 标记的目录） */
+    fun cleanArchiveCache(context: Context) {
+        val dir = File(context.cacheDir, "archive_temp")
+        if (!dir.exists()) return
+        dir.listFiles()?.forEach { sub ->
+            if (sub.isDirectory && !File(sub, ".active").exists()) {
+                sub.deleteRecursively()
+            }
+        }
+    }
+
     /**
      * WebView 数据目录（由 setDataDirectorySuffix("app") 决定）。
      * 包含：RP-Hub IndexedDB/localStorage、FA 登录 Cookie 等。

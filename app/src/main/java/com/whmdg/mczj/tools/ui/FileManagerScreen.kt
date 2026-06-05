@@ -5,6 +5,7 @@ import android.os.Environment
 import android.provider.Settings
 import android.widget.Toast
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import androidx.compose.runtime.rememberCoroutineScope
@@ -206,6 +207,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var compressUseAes by remember { mutableStateOf(true) }
     var compressOutputPath by remember { mutableStateOf("") }
 
+    // ── 压缩包浏览状态 ──
+    var showArchivePasswordDialog by remember { mutableStateOf(false) }
+    var archivePasswordInput by remember { mutableStateOf("") }
+    var archivePendingEntry by remember { mutableStateOf<FileEntry?>(null) }
+    var showArchiveOpening by remember { mutableStateOf(false) }
+    var archiveOpenError by remember { mutableStateOf<String?>(null) }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { _ ->
@@ -232,9 +240,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // 返回手势：回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
+    // 返回手势：压缩包内 → 回上一级或退出压缩包，回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
     BackHandler {
-        if (vm.isInRecycleBin) {
+        if (vm.isInArchive) {
+            if (!vm.goUpInArchive()) {
+                vm.exitArchive()
+            }
+        } else if (vm.isInRecycleBin) {
             if (!vm.goUpInRecycleBin()) {
                 vm.exitRecycleBin()
             }
@@ -253,8 +265,17 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             ) {
                 TopAppBar(
                     title = {
+                        val titleText = when {
+                            vm.isInArchive -> {
+                                val relPath = vm.archivePath.removePrefix("/")
+                                if (relPath.isEmpty()) vm.archiveFileName
+                                else "${vm.archiveFileName}/$relPath"
+                            }
+                            vm.isInRecycleBin -> "回收站"
+                            else -> currentPath
+                        }
                         StartEllipsisText(
-                            text = if (vm.isInRecycleBin) "回收站" else currentPath,
+                            text = titleText,
                             modifier = Modifier.fillMaxWidth()
                         )
                     },
@@ -455,7 +476,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
-                        val canGoUp = if (vm.isInRecycleBin) {
+                        val canGoUp = if (vm.isInArchive) {
+                            !vm.isAtArchiveRoot
+                        } else if (vm.isInRecycleBin) {
                             !vm.isAtRecycleBinRoot
                         } else {
                             val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
@@ -468,7 +491,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
                         IconButton(
                             onClick = {
-                                if (vm.isInRecycleBin) vm.goUpInRecycleBin()
+                                if (vm.isInArchive) vm.goUpInArchive()
+                                else if (vm.isInRecycleBin) vm.goUpInRecycleBin()
                                 else vm.goUp()
                             },
                             enabled = canGoUp
@@ -530,7 +554,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     }
                 } else {
                     val leftEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                    val leftParentPath = if (vm.isInRecycleBin) {
+                    val leftParentPath = if (vm.isInArchive) {
+                        if (vm.isAtArchiveRoot) null else "archive_parent"
+                    } else if (vm.isInRecycleBin) {
                         if (vm.isAtRecycleBinRoot) null
                         else java.io.File(vm.recycleBinPath).parentFile?.absolutePath?.let { p ->
                             if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
@@ -542,7 +568,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     } else null
 
                     val rightEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                    val rightParentPath = if (vm.isInRecycleBin) {
+                    val rightParentPath = if (vm.isInArchive) {
+                        if (vm.isAtArchiveRoot) null else "archive_parent"
+                    } else if (vm.isInRecycleBin) {
                         if (vm.isAtRecycleBinRoot) null
                         else java.io.File(vm.recycleBinPath).parentFile?.absolutePath?.let { p ->
                             if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
@@ -563,7 +591,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.LEFT
-                                    if (vm.isInRecycleBin) {
+                                    if (vm.isInArchive) {
+                                        vm.navigateInArchive(entry)
+                                    } else if (vm.isInRecycleBin) {
                                         vm.navigateInRecycleBin(entry)
                                     } else {
                                         DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
@@ -575,17 +605,44 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
                                     DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                     vm.focusedPanel = FocusedPanel.LEFT
-                                    val screen = vm.openFile(context, entry)
-                                    if (screen != null) {
-                                        vm.saveScrollPosition(
-                                            leftListState.firstVisibleItemIndex,
-                                            leftListState.firstVisibleItemScrollOffset,
-                                            rightListState.firstVisibleItemIndex,
-                                            rightListState.firstVisibleItemScrollOffset
-                                        )
-                                        onNavigate(screen)
+                                    if (vm.isInArchive) {
+                                        // 压缩包内文件点击 → 按需解压并打开
+                                        val screen = vm.openFileInArchive(context, entry)
+                                        if (screen != null) onNavigate(screen)
+                                    } else {
+                                        // 压缩包拦截
+                                        val archiveFormat = CompressService.detectFormat(entry.name)
+                                        if (archiveFormat != null) {
+                                            archivePendingEntry = entry
+                                            if (CompressService.isEncrypted(entry.path, archiveFormat)) {
+                                                archivePasswordInput = ""
+                                                showArchivePasswordDialog = true
+                                            } else {
+                                                showArchiveOpening = true
+                                                coroutineScope.launch(Dispatchers.IO) {
+                                                    val error = vm.openArchive(entry, "")
+                                                    withContext(Dispatchers.Main) {
+                                                        showArchiveOpening = false
+                                                        if (error != null) {
+                                                            Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            val screen = vm.openFile(context, entry)
+                                            if (screen != null) {
+                                                vm.saveScrollPosition(
+                                                    leftListState.firstVisibleItemIndex,
+                                                    leftListState.firstVisibleItemScrollOffset,
+                                                    rightListState.firstVisibleItemIndex,
+                                                    rightListState.firstVisibleItemScrollOffset
+                                                )
+                                                onNavigate(screen)
+                                            }
+                                            vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
+                                        }
                                     }
-                                    vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
                                 },
                                 onLongClick = { entry ->
                                     selectedEntry = entry
@@ -596,14 +653,18 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 parentPath = leftParentPath,
                                 lazyListState = leftListState,
                                 onNavigateUp = {
-                                    if (vm.isInRecycleBin) {
+                                    if (vm.isInArchive) {
+                                        vm.focusedPanel = FocusedPanel.LEFT
+                                        vm.goUpInArchive()
+                                    } else if (vm.isInRecycleBin) {
                                         vm.focusedPanel = FocusedPanel.LEFT
                                         vm.goUpInRecycleBin()
                                     } else if (leftParentPath != null) {
                                         vm.focusedPanel = FocusedPanel.LEFT
                                         vm.navigateTo(leftParentPath)
                                     }
-                                }
+                                },
+                                archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null
                             )
                             FileBrowserPanel(
                                 entries = vm.rightEntries,
@@ -611,7 +672,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.RIGHT
-                                    if (vm.isInRecycleBin) {
+                                    if (vm.isInArchive) {
+                                        vm.navigateInArchive(entry)
+                                    } else if (vm.isInRecycleBin) {
                                         vm.navigateInRecycleBin(entry)
                                     } else {
                                         DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
@@ -623,17 +686,44 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
                                     DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                     vm.focusedPanel = FocusedPanel.RIGHT
-                                    val screen = vm.openFile(context, entry)
-                                    if (screen != null) {
-                                        vm.saveScrollPosition(
-                                            leftListState.firstVisibleItemIndex,
-                                            leftListState.firstVisibleItemScrollOffset,
-                                            rightListState.firstVisibleItemIndex,
-                                            rightListState.firstVisibleItemScrollOffset
-                                        )
-                                        onNavigate(screen)
+                                    if (vm.isInArchive) {
+                                        // 压缩包内文件点击 → 按需解压并打开
+                                        val screen = vm.openFileInArchive(context, entry)
+                                        if (screen != null) onNavigate(screen)
+                                    } else {
+                                        // 压缩包拦截
+                                        val archiveFormat = CompressService.detectFormat(entry.name)
+                                        if (archiveFormat != null) {
+                                            archivePendingEntry = entry
+                                            if (CompressService.isEncrypted(entry.path, archiveFormat)) {
+                                                archivePasswordInput = ""
+                                                showArchivePasswordDialog = true
+                                            } else {
+                                                showArchiveOpening = true
+                                                coroutineScope.launch(Dispatchers.IO) {
+                                                    val error = vm.openArchive(entry, "")
+                                                    withContext(Dispatchers.Main) {
+                                                        showArchiveOpening = false
+                                                        if (error != null) {
+                                                            Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            val screen = vm.openFile(context, entry)
+                                            if (screen != null) {
+                                                vm.saveScrollPosition(
+                                                    leftListState.firstVisibleItemIndex,
+                                                    leftListState.firstVisibleItemScrollOffset,
+                                                    rightListState.firstVisibleItemIndex,
+                                                    rightListState.firstVisibleItemScrollOffset
+                                                )
+                                                onNavigate(screen)
+                                            }
+                                            vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
+                                        }
                                     }
-                                    vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
                                 },
                                 onLongClick = { entry ->
                                     selectedEntry = entry
@@ -644,14 +734,18 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 parentPath = rightParentPath,
                                 lazyListState = rightListState,
                                 onNavigateUp = {
-                                    if (vm.isInRecycleBin) {
+                                    if (vm.isInArchive) {
+                                        vm.focusedPanel = FocusedPanel.RIGHT
+                                        vm.goUpInArchive()
+                                    } else if (vm.isInRecycleBin) {
                                         vm.focusedPanel = FocusedPanel.RIGHT
                                         vm.goUpInRecycleBin()
                                     } else if (rightParentPath != null) {
                                         vm.focusedPanel = FocusedPanel.RIGHT
                                         vm.navigateTo(rightParentPath)
                                     }
-                                }
+                                },
+                                archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null
                             )
                         }
                     ) { measurables, constraints ->
@@ -2451,36 +2545,37 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             )
                         }
 
-                        // 输出路径开关 + ZIP加密方式
+                        // 输出路径开关
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            // 左侧：输出路径开关
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "其余基于定义窗口路径",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Switch(
+                                checked = compressOutputToOtherPanel,
+                                onCheckedChange = { compressOutputToOtherPanel = it },
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+
+                        // ZIP加密方式（仅zip格式时显示）
+                        if (selectedFormat == "zip") {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
                                 Text(
-                                    text = "其余基于定义窗口路径",
+                                    text = "加密方式",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Switch(
-                                    checked = compressOutputToOtherPanel,
-                                    onCheckedChange = { compressOutputToOtherPanel = it },
-                                    modifier = Modifier.size(32.dp)
-                                )
-                            }
-
-                            // 右侧：ZIP加密方式（仅zip格式时显示）
-                            if (selectedFormat == "zip") {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "加密方式",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
                                     TextButton(
                                         onClick = { compressUseAes = false },
                                         contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
@@ -2652,6 +2747,135 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 Text("取消", color = MaterialTheme.colorScheme.primary)
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 压缩包密码输入对话框 ──
+    if (showArchivePasswordDialog && archivePendingEntry != null) {
+        var passwordVisible by remember { mutableStateOf(false) }
+        var verifying by remember { mutableStateOf(false) }
+        var errorMsg by remember { mutableStateOf<String?>(null) }
+
+        AlertDialog(
+            onDismissRequest = {
+                showArchivePasswordDialog = false
+                archivePendingEntry = null
+                archivePasswordInput = ""
+                errorMsg = null
+            },
+            title = { Text("请输入密码") },
+            text = {
+                Column {
+                    Text(
+                        text = "「${archivePendingEntry!!.name}」已加密",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    TextField(
+                        value = archivePasswordInput,
+                        onValueChange = { archivePasswordInput = it; errorMsg = null },
+                        singleLine = true,
+                        label = { Text("密码") },
+                        modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent
+                        ),
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }, modifier = Modifier.size(24.dp)) {
+                                Icon(
+                                    if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    )
+                    if (errorMsg != null) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(errorMsg!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (archivePasswordInput.isEmpty()) {
+                            errorMsg = "请输入密码"
+                            return@TextButton
+                        }
+                        verifying = true
+                        errorMsg = null
+                        val entry = archivePendingEntry!!
+                        val password = archivePasswordInput
+                        coroutineScope.launch(Dispatchers.IO) {
+                            val error = vm.openArchive(entry, password)
+                            withContext(Dispatchers.Main) {
+                                verifying = false
+                                if (error != null) {
+                                    errorMsg = error
+                                } else {
+                                    showArchivePasswordDialog = false
+                                    archivePendingEntry = null
+                                    archivePasswordInput = ""
+                                }
+                            }
+                        }
+                    },
+                    enabled = !verifying && archivePasswordInput.isNotEmpty()
+                ) {
+                    Text(if (verifying) "验证中..." else "确认")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showArchivePasswordDialog = false
+                    archivePendingEntry = null
+                    archivePasswordInput = ""
+                    errorMsg = null
+                }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── 压缩包正在打开进度面板 ──
+    if (showArchiveOpening) {
+        val isDark = isSystemInDarkTheme()
+        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.8f),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "正在打开...",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     }
                 }
             }
@@ -2844,7 +3068,8 @@ private fun FileBrowserPanel(
     folderSizeDb: FolderSizeDb = FolderSizeDb(),
     parentPath: String? = null,
     onNavigateUp: () -> Unit = {},
-    lazyListState: LazyListState = rememberLazyListState()
+    lazyListState: LazyListState = rememberLazyListState(),
+    archiveSizeProvider: ((FileEntry) -> String)? = null
 ) {
     Surface(
         modifier = modifier
@@ -2892,20 +3117,25 @@ private fun FileBrowserPanel(
                 }
                 items(entries, key = { it.path }) { entry ->
                     val dirSize = if (entry.isDirectory) {
-                        val cached = folderSizeDb.get(entry.path)
-                        if (cached != null) {
-                            if (cached.size == 0L) {
+                        if (archiveSizeProvider != null) ""
+                        else {
+                            val cached = folderSizeDb.get(entry.path)
+                            if (cached != null) {
+                                if (cached.size == 0L) {
+                                    val dir = File(entry.path)
+                                    val children = try { dir.listFiles() } catch (_: Exception) { null }
+                                    if (children == null) "✕" else "0MB"
+                                } else {
+                                    compactSize(cached.size)
+                                }
+                            } else {
                                 val dir = File(entry.path)
                                 val children = try { dir.listFiles() } catch (_: Exception) { null }
-                                if (children == null) "✕" else "0MB"
-                            } else {
-                                compactSize(cached.size)
+                                if (children == null) "✕" else ""
                             }
-                        } else {
-                            val dir = File(entry.path)
-                            val children = try { dir.listFiles() } catch (_: Exception) { null }
-                            if (children == null) "✕" else ""
                         }
+                    } else if (archiveSizeProvider != null) {
+                        archiveSizeProvider(entry)
                     } else ""
                     FileEntryRow(
                         entry = entry,
