@@ -12,6 +12,10 @@ import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import com.whmdg.mczj.tools.util.CompressService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.BasicFileAttributes
@@ -988,6 +992,69 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         return null
+    }
+
+    // ── 压缩功能 ──
+
+    /** 压缩任务取消标志 */
+    val compressCancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * 执行压缩。
+     * @param entry 要压缩的文件/文件夹
+     * @param fileName 输出文件名（含后缀）
+     * @param format 压缩格式
+     * @param level 压缩级别
+     * @param password 密码（空=不加密）
+     * @param useAes zip 加密方式（true=AES, false=ZipCrypto）
+     * @param outputToOtherPanel 是否输出到非聚焦面板目录
+     * @param onProgress 进度回调
+     * @param onComplete 完成回调 (success, outputPath?, error?)
+     */
+    fun compress(
+        entry: FileEntry,
+        fileName: String,
+        format: String,
+        level: Int,
+        password: String,
+        useAes: Boolean,
+        outputToOtherPanel: Boolean,
+        onProgress: (Int, Int, Float) -> Unit,
+        onComplete: (Boolean, String?, String?) -> Unit
+    ) {
+        compressCancelFlag.set(false)
+
+        val outputDir = if (outputToOtherPanel) {
+            if (focusedPanel == FocusedPanel.LEFT) rightPath else leftPath
+        } else {
+            if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
+        }
+
+        val outputPath = java.io.File(outputDir, fileName).absolutePath
+
+        val options = CompressService.CompressOptions(
+            sourcePath = entry.path,
+            outputPath = outputPath,
+            format = format,
+            compressionLevel = level,
+            password = password,
+            useAes = useAes
+        )
+
+        CoroutineScope(Dispatchers.IO).launch {
+            CompressService.compress(options, compressCancelFlag, object : CompressService.ProgressCallback {
+                override fun onProgress(info: CompressService.ProgressInfo) {
+                    onProgress(info.currentFile, info.totalFiles, info.progress)
+                }
+
+                override fun onComplete(success: Boolean, outPath: String?, error: String?) {
+                    onComplete(success, outPath, error)
+                    if (success) {
+                        refreshCurrent()
+                    }
+                }
+            })
+        }
     }
 
     companion object {

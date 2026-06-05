@@ -24,9 +24,9 @@ android {
                 .start()
             proc.inputStream.bufferedReader().readText().trim().toIntOrNull() ?: 0
         } catch (_: Exception) { 0 }
-        versionCode = 1200000000 + gitCommitCount
+        versionCode = 1400000000 + gitCommitCount
         val ts = System.currentTimeMillis() / 1000
-        versionName = "2.3.%d".format(ts)
+        versionName = "2.4.%d".format(ts)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -116,6 +116,12 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.libsu.core)
     implementation(libs.androidx.appcompat)
+
+    // 压缩/解压
+    implementation("net.lingala.zip4j:zip4j:2.11.5")          // ZIP + AES 加密
+    implementation("org.apache.commons:commons-compress:1.26.1") // TAR/GZ/BZ2/XZ/7z
+    implementation("com.github.junrar:junrar:7.5.5")           // RAR 解压
+    implementation("org.tukaani:xz:1.9")                       // XZ 压缩（commons-compress 依赖）
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
