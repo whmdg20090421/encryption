@@ -87,6 +87,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     // ── 回收站 ──
     var isInRecycleBin by mutableStateOf(false)
         private set
+    var recycleBinPath by mutableStateOf("")
+        private set
     private val recycleBinJson = kotlinx.serialization.json.Json {
         ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true
     }
@@ -418,7 +420,50 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun enterRecycleBin() {
         loadRecycleBinMeta()
         val binDir = AppDataPaths.recycleBin(context)
-        val entries = (binDir.listFiles() ?: emptyArray())
+        recycleBinPath = binDir.absolutePath
+        isInRecycleBin = true
+        val entries = listRecycleBinDir(binDir)
+        if (focusedPanel == FocusedPanel.LEFT) {
+            leftEntries = entries
+        } else {
+            rightEntries = entries
+        }
+    }
+
+    /** 在回收站内进入子文件夹 */
+    fun navigateInRecycleBin(entry: FileEntry) {
+        if (!entry.isDirectory) return
+        val dir = java.io.File(entry.path)
+        if (!dir.exists() || !dir.canRead()) {
+            Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
+            return
+        }
+        recycleBinPath = entry.path
+        val entries = listRecycleBinDir(dir)
+        if (focusedPanel == FocusedPanel.LEFT) {
+            leftEntries = entries
+        } else {
+            rightEntries = entries
+        }
+    }
+
+    /** 在回收站内返回上一级 */
+    fun goUpInRecycleBin(): Boolean {
+        val binRoot = AppDataPaths.recycleBin(context).absolutePath
+        if (recycleBinPath == binRoot) return false
+        val parent = java.io.File(recycleBinPath).parentFile ?: return false
+        recycleBinPath = parent.absolutePath
+        val entries = listRecycleBinDir(parent)
+        if (focusedPanel == FocusedPanel.LEFT) {
+            leftEntries = entries
+        } else {
+            rightEntries = entries
+        }
+        return true
+    }
+
+    private fun listRecycleBinDir(dir: java.io.File): List<FileEntry> {
+        return (dir.listFiles() ?: emptyArray())
             .filter { it.name != ".meta.json" }
             .map { f ->
                 FileEntry(
@@ -430,13 +475,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             .sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
+    }
 
-        isInRecycleBin = true
-        if (focusedPanel == FocusedPanel.LEFT) {
-            leftEntries = entries
-        } else {
-            rightEntries = entries
-        }
+    /** 回收站是否在根目录 */
+    val isAtRecycleBinRoot: Boolean get() {
+        val binRoot = AppDataPaths.recycleBin(context).absolutePath
+        return recycleBinPath == binRoot
     }
 
     /**
@@ -444,6 +488,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun exitRecycleBin() {
         isInRecycleBin = false
+        recycleBinPath = ""
         refreshCurrent()
     }
 

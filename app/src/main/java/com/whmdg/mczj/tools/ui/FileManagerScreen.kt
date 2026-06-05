@@ -151,6 +151,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var showSortDialog by remember { mutableStateOf(false) }
     var tempSortField by remember { mutableStateOf(vm.sortField) }
     var tempSortOrder by remember { mutableStateOf(vm.sortOrder) }
+    var showSortSizeRefreshDialog by remember { mutableStateOf(false) }
+    var unmeasuredDirs by remember { mutableStateOf(listOf<FileEntry>()) }
     var selectedEntry by remember { mutableStateOf<FileEntry?>(null) }
     val sortAscLabels = mapOf(
         SortField.NAME to "A到Z",
@@ -212,10 +214,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // 返回手势：回收站 → 退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
+    // 返回手势：回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
     BackHandler {
         if (vm.isInRecycleBin) {
-            vm.exitRecycleBin()
+            if (!vm.goUpInRecycleBin()) {
+                vm.exitRecycleBin()
+            }
         } else if (!vm.goUp()) {
             onBack()
         }
@@ -304,6 +308,34 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         vm.bookmarkList = listOf(BookmarkEntry(folderName, currentFocusedPath)) + vm.bookmarkList
                                     }
                                     showSettingsMenu = false
+                                }
+                            )
+                            HorizontalDivider()
+                            // 刷新当前列表大小
+                            DropdownMenuItem(
+                                text = { Text("刷新当前列表大小") },
+                                trailingIcon = {
+                                    Icon(Icons.Default.FolderSpecial, contentDescription = null, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    val entriesToSize = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftEntries else vm.rightEntries
+                                    val dirs = entriesToSize.filter { it.isDirectory }
+                                    if (dirs.isEmpty()) {
+                                        Toast.makeText(context, "当前列表没有文件夹", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "正在统计 ${dirs.size} 个文件夹大小...", Toast.LENGTH_SHORT).show()
+                                        coroutineScope.launch(Dispatchers.IO) {
+                                            var db = vm.folderSizeDb
+                                            for (dir in dirs) {
+                                                db = vm.refreshFolderSize(dir.path)
+                                            }
+                                            vm.applyFolderSizeDb(db)
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(context, "大小统计完毕", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
                                 }
                             )
                         }
@@ -405,15 +437,22 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
-                        val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                        val parentPath = vm.currentPath.substringBeforeLast('/').ifEmpty { "/" }
-                        val canGoUp = vm.currentPath != effectiveRoot
-                            && vm.currentPath.contains('/')
-                            && parentPath != vm.currentPath
-                            && try { File(parentPath).canRead() } catch (_: Exception) { false }
+                        val canGoUp = if (vm.isInRecycleBin) {
+                            !vm.isAtRecycleBinRoot
+                        } else {
+                            val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
+                            val parentPath = vm.currentPath.substringBeforeLast('/').ifEmpty { "/" }
+                            vm.currentPath != effectiveRoot
+                                && vm.currentPath.contains('/')
+                                && parentPath != vm.currentPath
+                                && try { File(parentPath).canRead() } catch (_: Exception) { false }
+                        }
 
                         IconButton(
-                            onClick = { vm.goUp() },
+                            onClick = {
+                                if (vm.isInRecycleBin) vm.goUpInRecycleBin()
+                                else vm.goUp()
+                            },
                             enabled = canGoUp
                         ) {
                             Icon(Icons.Default.ArrowUpward, contentDescription = "返回上一级")
@@ -473,14 +512,24 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     }
                 } else {
                     val leftEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                    val leftParentPath = if (vm.leftPath != leftEffectiveRoot && vm.leftPath.contains('/')) {
+                    val leftParentPath = if (vm.isInRecycleBin) {
+                        if (vm.isAtRecycleBinRoot) null
+                        else java.io.File(vm.recycleBinPath).parentFile?.absolutePath?.let { p ->
+                            if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
+                        }
+                    } else if (vm.leftPath != leftEffectiveRoot && vm.leftPath.contains('/')) {
                         vm.leftPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
                             if (p != vm.leftPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
                         }
                     } else null
 
                     val rightEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                    val rightParentPath = if (vm.rightPath != rightEffectiveRoot && vm.rightPath.contains('/')) {
+                    val rightParentPath = if (vm.isInRecycleBin) {
+                        if (vm.isAtRecycleBinRoot) null
+                        else java.io.File(vm.recycleBinPath).parentFile?.absolutePath?.let { p ->
+                            if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
+                        }
+                    } else if (vm.rightPath != rightEffectiveRoot && vm.rightPath.contains('/')) {
                         vm.rightPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
                             if (p != vm.rightPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
                         }
@@ -497,8 +546,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.LEFT
                                     if (vm.isInRecycleBin) {
-                                        // 回收站模式下不允许进入子文件夹
-                                        Toast.makeText(context, "请先退出回收站模式", Toast.LENGTH_SHORT).show()
+                                        vm.navigateInRecycleBin(entry)
                                     } else {
                                         DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
                                         DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.leftPath}")
@@ -530,7 +578,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 parentPath = leftParentPath,
                                 lazyListState = leftListState,
                                 onNavigateUp = {
-                                    if (leftParentPath != null) {
+                                    if (vm.isInRecycleBin) {
+                                        vm.focusedPanel = FocusedPanel.LEFT
+                                        vm.goUpInRecycleBin()
+                                    } else if (leftParentPath != null) {
                                         vm.focusedPanel = FocusedPanel.LEFT
                                         vm.navigateTo(leftParentPath)
                                     }
@@ -543,7 +594,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.RIGHT
                                     if (vm.isInRecycleBin) {
-                                        Toast.makeText(context, "请先退出回收站模式", Toast.LENGTH_SHORT).show()
+                                        vm.navigateInRecycleBin(entry)
                                     } else {
                                         DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
                                         DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.rightPath}")
@@ -575,7 +626,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 parentPath = rightParentPath,
                                 lazyListState = rightListState,
                                 onNavigateUp = {
-                                    if (rightParentPath != null) {
+                                    if (vm.isInRecycleBin) {
+                                        vm.focusedPanel = FocusedPanel.RIGHT
+                                        vm.goUpInRecycleBin()
+                                    } else if (rightParentPath != null) {
                                         vm.focusedPanel = FocusedPanel.RIGHT
                                         vm.navigateTo(rightParentPath)
                                     }
@@ -1343,7 +1397,52 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         }
                                     }
                                 }
-                                // 极淡的分割线
+                                // 右列：留空
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                            // ── 第四行：关于 / 分享 ──
+                            HorizontalDivider(
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // 左列：关于
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            val entry = selectedEntry ?: return@clickable
+                                            propertyData = vm.getPropertyData(entry)
+                                            propertyEntry = entry
+                                            showPropertyDialog = true
+                                            selectedEntry = null
+                                        }
+                                        .padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isToRight) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("关于", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(
+                                                Icons.Default.Info,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    } else {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.Info,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Text("关于", style = MaterialTheme.typography.bodyLarge)
+                                        }
+                                    }
+                                }
                                 VerticalDivider(
                                     modifier = Modifier.height(24.dp),
                                     thickness = 0.5.dp,
@@ -1379,34 +1478,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             Text("分享", style = MaterialTheme.typography.bodyLarge)
                                         }
                                     }
-                                }
-                            }
-                            // ── 第四行：关于 ──
-                            HorizontalDivider(
-                                thickness = 0.5.dp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        val entry = selectedEntry ?: return@clickable
-                                        propertyData = vm.getPropertyData(entry)
-                                        propertyEntry = entry
-                                        showPropertyDialog = true
-                                        selectedEntry = null
-                                    }
-                                    .padding(vertical = 16.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Default.Info,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("关于", style = MaterialTheme.typography.bodyLarge)
                                 }
                             }
                             } // else (非回收站模式)
@@ -2216,9 +2287,33 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    vm.updateSortField(tempSortField)
-                    vm.updateSortOrder(tempSortOrder)
-                    showSortDialog = false
+                    if (tempSortField == SortField.SIZE) {
+                        // 检查是否有未统计大小的文件夹
+                        val currentEntries = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftEntries else vm.rightEntries
+                        val unmeasured = currentEntries.filter { entry ->
+                            if (!entry.isDirectory) return@filter false
+                            val cached = vm.folderSizeDb.get(entry.path)
+                            if (cached != null) return@filter false // 已统计
+                            // 检查是否空文件夹或权限不足
+                            val dir = File(entry.path)
+                            val children = try { dir.listFiles() } catch (_: Exception) { null }
+                            if (children == null || children.isEmpty()) return@filter false
+                            true
+                        }
+                        if (unmeasured.isNotEmpty()) {
+                            unmeasuredDirs = unmeasured
+                            showSortDialog = false
+                            showSortSizeRefreshDialog = true
+                        } else {
+                            vm.updateSortField(tempSortField)
+                            vm.updateSortOrder(tempSortOrder)
+                            showSortDialog = false
+                        }
+                    } else {
+                        vm.updateSortField(tempSortField)
+                        vm.updateSortOrder(tempSortOrder)
+                        showSortDialog = false
+                    }
                 }) {
                     Text("确定")
                 }
@@ -2226,6 +2321,48 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             dismissButton = {
                 TextButton(onClick = { showSortDialog = false }) {
                     Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── 排序前刷新大小确认对话框 ──
+    if (showSortSizeRefreshDialog) {
+        AlertDialog(
+            onDismissRequest = { showSortSizeRefreshDialog = false },
+            title = { Text("统计大小") },
+            text = { Text("当前列表有 ${unmeasuredDirs.size} 个文件夹尚未统计大小，是否先统计再排序？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSortSizeRefreshDialog = false
+                    // 先执行大小统计
+                    val dirsToMeasure = unmeasuredDirs
+                    Toast.makeText(context, "正在统计 ${dirsToMeasure.size} 个文件夹大小...", Toast.LENGTH_SHORT).show()
+                    coroutineScope.launch(Dispatchers.IO) {
+                        var db = vm.folderSizeDb
+                        for (dir in dirsToMeasure) {
+                            db = vm.refreshFolderSize(dir.path)
+                        }
+                        vm.applyFolderSizeDb(db)
+                        withContext(Dispatchers.Main) {
+                            // 统计完成后应用排序
+                            vm.updateSortField(tempSortField)
+                            vm.updateSortOrder(tempSortOrder)
+                            Toast.makeText(context, "大小统计完毕，已按大小排序", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }) {
+                    Text("是")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showSortSizeRefreshDialog = false
+                    // 直接应用排序，不统计
+                    vm.updateSortField(tempSortField)
+                    vm.updateSortOrder(tempSortOrder)
+                }) {
+                    Text("否，直接排序")
                 }
             }
         )
