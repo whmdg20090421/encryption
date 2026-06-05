@@ -503,7 +503,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onNavigateUp = {
                                     if (leftParentPath != null) {
                                         vm.focusedPanel = FocusedPanel.LEFT
-                                        vm.navigateUp(leftParentPath)
+                                        vm.navigateTo(leftParentPath)
                                     }
                                 }
                             )
@@ -544,7 +544,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onNavigateUp = {
                                     if (rightParentPath != null) {
                                         vm.focusedPanel = FocusedPanel.RIGHT
-                                        vm.navigateUp(rightParentPath)
+                                        vm.navigateTo(rightParentPath)
                                     }
                                 }
                             )

@@ -157,18 +157,27 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         rightFirstVisibleOffset = rightOffset
     }
 
+    // ── 核心导航：切换路径 + 刷新列表 ──
+    fun navigateTo(path: String) {
+        if (focusedPanel == FocusedPanel.LEFT) {
+            if (leftPath == path) return
+            leftNavState = leftNavState.navigate(path)
+            leftPath = path
+            leftEntries = listDirectory(path)
+        } else {
+            if (rightPath == path) return
+            rightNavState = rightNavState.navigate(path)
+            rightPath = path
+            rightEntries = listDirectory(path)
+        }
+    }
+
     // ── 导航操作 ──
     fun navigateToFolder(entry: FileEntry) {
         val testDir = File(entry.path)
         val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
         if (accessible != null) {
-            if (focusedPanel == FocusedPanel.LEFT) {
-                leftNavState = leftNavState.navigate(entry.path)
-                leftPath = entry.path
-            } else {
-                rightNavState = rightNavState.navigate(entry.path)
-                rightPath = entry.path
-            }
+            navigateTo(entry.path)
             historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
         } else {
             Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
@@ -178,58 +187,28 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun navigateToHistoryDir(entry: HistoryEntry) {
         val testDir = File(entry.path)
         if (testDir.exists() && testDir.canRead()) {
-            if (focusedPanel == FocusedPanel.LEFT) {
-                leftNavState = leftNavState.navigate(entry.path)
-                leftPath = entry.path
-            } else {
-                rightNavState = rightNavState.navigate(entry.path)
-                rightPath = entry.path
-            }
+            navigateTo(entry.path)
         }
     }
 
     fun navigateToBookmark(bm: BookmarkEntry) {
         val testDir = File(bm.path)
         if (testDir.exists() && testDir.canRead()) {
-            if (focusedPanel == FocusedPanel.LEFT) {
-                leftNavState = leftNavState.navigate(bm.path)
-                leftPath = bm.path
-            } else {
-                rightNavState = rightNavState.navigate(bm.path)
-                rightPath = bm.path
-            }
-        }
-    }
-
-    fun navigateUp(parentPath: String) {
-        if (focusedPanel == FocusedPanel.LEFT) {
-            leftNavState = leftNavState.navigate(parentPath)
-            leftPath = parentPath
-        } else {
-            rightNavState = rightNavState.navigate(parentPath)
-            rightPath = parentPath
+            navigateTo(bm.path)
         }
     }
 
     fun goBack(): Boolean {
         val nav = if (focusedPanel == FocusedPanel.LEFT) leftNavState else rightNavState
         val back = nav.back() ?: return false
-        if (focusedPanel == FocusedPanel.LEFT) {
-            leftNavState = back; leftPath = back.current
-        } else {
-            rightNavState = back; rightPath = back.current
-        }
+        navigateTo(back.current)
         return true
     }
 
     fun goForward(): Boolean {
         val nav = if (focusedPanel == FocusedPanel.LEFT) leftNavState else rightNavState
         val fwd = nav.forward() ?: return false
-        if (focusedPanel == FocusedPanel.LEFT) {
-            leftNavState = fwd; leftPath = fwd.current
-        } else {
-            rightNavState = fwd; rightPath = fwd.current
-        }
+        navigateTo(fwd.current)
         return true
     }
 
@@ -239,7 +218,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (path == effectiveRoot || !path.contains('/')) return false
         val parent = path.substringBeforeLast('/').ifEmpty { "/" }
         if (parent == path) return false
-        navigateUp(parent)
+        navigateTo(parent)
         return true
     }
 
