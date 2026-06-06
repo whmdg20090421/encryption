@@ -196,6 +196,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var permissionEditorData by remember { mutableStateOf<FilePropertyData?>(null) }
     var permissionEditorEntry by remember { mutableStateOf<FileEntry?>(null) }
 
+    // ── 外部打开警告 ──
+    var forceOpenError by remember { mutableStateOf<String?>(null) }
+
     // ── 压缩相关状态 ──
     var showCompressDialog by remember { mutableStateOf(false) }
     var compressEntry by remember { mutableStateOf<FileEntry?>(null) }
@@ -1664,6 +1667,62 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         DiagnosticLog.log("FileMgr", "关闭错误对话框")
         vm.loadError = null
     })
+
+    // ── 外部打开警告对话框 ──
+    vm.pendingExternalEntry?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { vm.pendingExternalEntry = null },
+            title = { Text("无法打开文件") },
+            text = { Text("该文件「${entry.name}」可能无法使用外部应用打开，是否强行打开？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.pendingExternalEntry = null
+                    val error = vm.forceOpenExternalFile(context, entry)
+                    if (error != null) forceOpenError = error
+                }) {
+                    Text("强行打开")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.pendingExternalEntry = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── 强行打开失败详情 ──
+    if (forceOpenError != null) {
+        AlertDialog(
+            onDismissRequest = { forceOpenError = null },
+            title = { Text("打开失败", color = MaterialTheme.colorScheme.error) },
+            text = {
+                val scrollState = rememberScrollState()
+                Box(modifier = Modifier.heightIn(max = 240.dp).verticalScroll(scrollState)) {
+                    Text(
+                        text = forceOpenError!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    )
+                }
+            },
+            confirmButton = {
+                Row {
+                    OutlinedButton(onClick = {
+                        val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        cb.setPrimaryClip(android.content.ClipData.newPlainText("Error Info", forceOpenError))
+                        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                    }) {
+                        Text("复制")
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Button(onClick = { forceOpenError = null }) {
+                        Text("关闭")
+                    }
+                }
+            }
+        )
+    }
 
     // ── 新建类型选择对话框 ──
     if (showCreateTypeDialog) {

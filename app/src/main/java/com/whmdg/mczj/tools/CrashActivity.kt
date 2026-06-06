@@ -19,12 +19,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import java.io.File
 import java.io.FileOutputStream
 
@@ -110,6 +108,7 @@ private fun CrashScreen(
     exitWriteFd: Int
 ) {
     val context = LocalContext.current
+    val colorScheme = MaterialTheme.colorScheme
 
     /* 格式化时间戳 */
     val timeStr = if (timestamp > 0) {
@@ -143,7 +142,7 @@ private fun CrashScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF1A0000))  /* 深红黑色背景 */
+            .background(colorScheme.errorContainer.copy(alpha = 0.3f))
             .systemBarsPadding()
     ) {
         Column(
@@ -156,7 +155,7 @@ private fun CrashScreen(
                 text = "Native 层崩溃",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFFFF6B6B)
+                color = colorScheme.error
             )
 
             Spacer(Modifier.height(8.dp))
@@ -164,7 +163,7 @@ private fun CrashScreen(
             Text(
                 text = "应用底层发生不可恢复的错误，已终止运行。",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFFFFB3B3)
+                color = colorScheme.onErrorContainer.copy(alpha = 0.8f)
             )
 
             Spacer(Modifier.height(24.dp))
@@ -173,7 +172,7 @@ private fun CrashScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF2D0A0A))
+                colors = CardDefaults.cardColors(containerColor = colorScheme.errorContainer.copy(alpha = 0.5f))
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     InfoRow("信号", "$signalName (#$signalNumber)")
@@ -189,7 +188,7 @@ private fun CrashScreen(
                     text = "报告已保存: $path",
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
-                    color = Color(0xFF888888)
+                    color = colorScheme.onSurfaceVariant
                 )
             }
 
@@ -212,7 +211,7 @@ private fun CrashScreen(
                     },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color(0xFFFF6B6B)
+                        contentColor = colorScheme.error
                     )
                 ) {
                     Text("复制")
@@ -225,7 +224,7 @@ private fun CrashScreen(
                     },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFFF4444)
+                        containerColor = colorScheme.error
                     )
                 ) {
                     Text("退出应用")
@@ -237,6 +236,7 @@ private fun CrashScreen(
 
 @Composable
 private fun InfoRow(label: String, value: String) {
+    val colorScheme = MaterialTheme.colorScheme
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -245,14 +245,14 @@ private fun InfoRow(label: String, value: String) {
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
-            color = Color(0xFF888888),
+            color = colorScheme.onSurfaceVariant,
             modifier = Modifier.width(80.dp)
         )
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
             fontFamily = FontFamily.Monospace,
-            color = Color(0xFFFFCCCC)
+            color = colorScheme.onErrorContainer
         )
     }
 }

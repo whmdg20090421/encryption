@@ -331,10 +331,10 @@ object CompressService {
         callback: ProgressCallback
     ) {
         val source = File(options.sourcePath)
-        val allFiles = collectFiles(source)
-        val imageFiles = allFiles.filter { file ->
-            file.isFile && file.extension.lowercase() in IMAGE_EXTENSIONS
-        }
+        val allFiles = collectFiles(source).filter { it.isFile }
+        val jpegExtensions = setOf("jpg", "jpeg")
+        val imageFiles = allFiles.filter { it.extension.lowercase() in IMAGE_EXTENSIONS }
+        val nonImageFiles = allFiles.filter { it.extension.lowercase() !in IMAGE_EXTENSIONS }
 
         if (imageFiles.isEmpty()) {
             callback.onComplete(false, null, "未找到可处理的图片文件")
@@ -354,10 +354,9 @@ object CompressService {
             com.awxkee.jxlcoder.JxlEffort.GLACIER,     // 10
         )
         val effort = effortArray[options.compressionLevel.coerceIn(1, 10) - 1]
-        val total = imageFiles.size
+        val total = allFiles.size
         val counter = AtomicInteger(0)
 
-        // 打包成 ZIP 时先编码到临时目录，否则直接输出
         val workDir = if (options.jxlPackZip) {
             File(options.outputPath).parentFile!!.resolve(".jxl_tmp_${System.currentTimeMillis()}").apply { mkdirs() }
         } else if (source.isDirectory) {
@@ -374,27 +373,49 @@ object CompressService {
                     return
                 }
 
-                val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
-                if (bitmap == null) {
-                    Log.w(TAG, "无法解码图片: ${file.name}")
-                    counter.incrementAndGet()
-                    continue
-                }
-
-                val jxlBytes = com.awxkee.jxlcoder.JxlCoder.encode(bitmap, compressionOption = com.awxkee.jxlcoder.JxlCompressionOption.LOSSLESS, quality = 100, effort = effort)
-                bitmap.recycle()
-
                 val relativePath = file.absolutePath.removePrefix(source.absolutePath).removePrefix("/")
                 val outFile = File(workDir, relativePath.substringBeforeLast('.') + ".jxl")
                 outFile.parentFile?.mkdirs()
-                outFile.writeBytes(jxlBytes)
+
+                if (file.extension.lowercase() in jpegExtensions) {
+                    // JPG/JPEG：无损转码，直接打包 DCT 系数，体积不会增大
+                    val jpegBytes = file.readBytes()
+                    val jxlBytes = com.awxkee.jxlcoder.JxlCoder.construct(jpegBytes)
+                    outFile.writeBytes(jxlBytes)
+                } else {
+                    // 其他图片：解码像素后无损编码
+                    val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                    if (bitmap == null) {
+                        Log.w(TAG, "无法解码图片: ${file.name}")
+                        counter.incrementAndGet()
+                        continue
+                    }
+                    val jxlBytes = com.awxkee.jxlcoder.JxlCoder.encode(bitmap, compressionOption = com.awxkee.jxlcoder.JxlCompressionOption.LOSSLESS, quality = 100, effort = effort)
+                    bitmap.recycle()
+                    outFile.writeBytes(jxlBytes)
+                }
+
+                val count = counter.incrementAndGet()
+                callback.onProgress(ProgressInfo(count, total, count.toFloat() / total, file.name))
+            }
+
+            // 非图片文件：直接复制到输出目录
+            for (file in nonImageFiles) {
+                if (cancelFlag.get()) {
+                    if (options.jxlPackZip) workDir.deleteRecursively()
+                    callback.onComplete(false, null, "已取消")
+                    return
+                }
+                val relativePath = file.absolutePath.removePrefix(source.absolutePath).removePrefix("/")
+                val outFile = File(workDir, relativePath)
+                outFile.parentFile?.mkdirs()
+                file.copyTo(outFile, overwrite = true)
 
                 val count = counter.incrementAndGet()
                 callback.onProgress(ProgressInfo(count, total, count.toFloat() / total, file.name))
             }
 
             val resultPath = if (options.jxlPackZip) {
-                // 编码完成，打包成 ZIP
                 val zipFile = File(options.outputPath)
                 packDirToZip(workDir, zipFile, options.password, options.useAes, cancelFlag, callback)
                 workDir.deleteRecursively()

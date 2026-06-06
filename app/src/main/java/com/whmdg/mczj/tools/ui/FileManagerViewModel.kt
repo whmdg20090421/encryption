@@ -97,6 +97,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var jxlPackZip by mutableStateOf(false)
         private set
+    var pendingExternalEntry by mutableStateOf<FileEntry?>(null)
 
     // ── 压缩包浏览 ──
     var isInArchive by mutableStateOf(false)
@@ -736,7 +737,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             "c", "cpp", "h", "hpp", "rs", "go", "rb", "php", "sql",
             "lua", "r", "swift", "dart", "ts", "jsx", "tsx", "vue"
         )
-        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl")
+        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
         val ext = entry.name.substringAfterLast('.', "").lowercase()
 
         val useMemory = memEntry.size in 1 until EXTRACT_TO_MEMORY_THRESHOLD
@@ -1014,7 +1015,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             DiagnosticLog.log("OpenFile", "内置编辑器打开: ${entry.name}")
             return Screen.TextEditor(entry.path)
         }
-        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl")
+        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
         if (ext in imageExtensions) {
             DiagnosticLog.log("OpenFile", "内置查看器打开: ${entry.name}")
             val currentEntries = if (focusedPanel == FocusedPanel.LEFT) leftEntries else rightEntries
@@ -1041,15 +1042,45 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             DiagnosticLog.log("OpenFile", "resolveActivity=${resolver?.flattenToString() ?: "(null)"}")
             if (resolver != null) {
                 context.startActivity(intent)
-                DiagnosticLog.log("OpenFile", "startActivity 已调用")
+                DiagnosticLog.log("OpenFile", "startActivity 已调用，匹配: ${resolver.flattenToString()}")
             } else {
-                Toast.makeText(context, "没有应用可以打开此文件", Toast.LENGTH_SHORT).show()
+                // 没有匹配的应用，设置待处理状态由 UI 弹出警告
+                pendingExternalEntry = entry
+                return null
             }
         } catch (e: Exception) {
             DiagnosticLog.log("OpenFile", "异常: ${e.javaClass.simpleName}: ${e.message}")
+            DiagnosticLog.exportCrashReport(context, e, "外部Intent打开失败: ${entry.path}")
             Toast.makeText(context, "无法打开文件: ${e.message}", Toast.LENGTH_SHORT).show()
         }
         return null
+    }
+
+    /**
+     * 强行用外部 Intent 打开文件（忽略 resolveActivity 检查）。
+     * 返回 null 表示成功，返回错误信息表示失败。
+     */
+    fun forceOpenExternalFile(context: Context, entry: FileEntry): String? {
+        return try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", File(entry.path)
+            )
+            val extension = entry.name.substringAfterLast('.', "").lowercase()
+            val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            DiagnosticLog.log("OpenFile", "强行打开: uri=$uri mime=$mimeType")
+            context.startActivity(intent)
+            DiagnosticLog.log("OpenFile", "强行打开 startActivity 已调用")
+            null
+        } catch (e: Exception) {
+            DiagnosticLog.log("OpenFile", "强行打开异常: ${e.javaClass.simpleName}: ${e.message}")
+            DiagnosticLog.exportCrashReport(context, e, "强行打开失败: ${entry.path}")
+            "错误类型: ${e.javaClass.simpleName}\n文件: ${entry.path}\n\n${e.stackTraceToString()}"
+        }
     }
 
     // ── 文件夹大小 ──
