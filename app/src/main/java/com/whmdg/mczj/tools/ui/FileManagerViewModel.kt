@@ -261,7 +261,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 从历史记录点击文件：导航到文件所在父目录，并记录待滚动目标文件名。
      */
     var pendingScrollToFile by mutableStateOf<String?>(null)
-        private set
 
     fun navigateToHistoryFile(entry: HistoryEntry) {
         val file = File(entry.path)
@@ -1061,8 +1060,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 return null
             }
             // 使用 createChooser 弹出应用选择器，让用户选择用哪个应用打开
-            val chooser = Intent.createChooser(intent, "选择应用打开")
-            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val chooser = android.content.Intent.createChooser(intent, "选择应用打开")
+            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
             DiagnosticLog.log("OpenFile", "startActivity 已调用，匹配: ${resolver.flattenToString()}")
         } catch (e: Exception) {
