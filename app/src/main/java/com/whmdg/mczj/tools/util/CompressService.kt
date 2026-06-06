@@ -323,6 +323,7 @@ object CompressService {
         "jpg", "jpeg", "png", "webp", "bmp", "gif", "tiff", "tif", "heic", "heif", "avif"
     )
 
+    @Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER")
     private fun compressJxl(
         options: CompressOptions,
         cancelFlag: AtomicBoolean,
@@ -341,8 +342,19 @@ object CompressService {
         }
 
         // Effort 1-10，Quality 锁定 100（无损）
-        val effortValue = options.compressionLevel.coerceIn(1, 10)
-        val effort = com.awxkee.jxlcoder.JxlEffort.entries.first { it.value == effortValue }
+        val effortArray = arrayOf(
+            com.awxkee.jxlcoder.JxlEffort.LIGHTNING,   // 1
+            com.awxkee.jxlcoder.JxlEffort.THUNDER,     // 2
+            com.awxkee.jxlcoder.JxlEffort.FALCON,      // 3
+            com.awxkee.jxlcoder.JxlEffort.CHEETAH,     // 4
+            com.awxkee.jxlcoder.JxlEffort.HARE,        // 5
+            com.awxkee.jxlcoder.JxlEffort.WOMBAT,      // 6
+            com.awxkee.jxlcoder.JxlEffort.SQUIRREL,    // 7
+            com.awxkee.jxlcoder.JxlEffort.KITTEN,      // 8
+            com.awxkee.jxlcoder.JxlEffort.TORTOISE,    // 9
+            com.awxkee.jxlcoder.JxlEffort.GLACIER,     // 10
+        )
+        val effort = effortArray[options.compressionLevel.coerceIn(1, 10) - 1]
         val total = imageFiles.size
         val counter = AtomicInteger(0)
 
@@ -367,7 +379,7 @@ object CompressService {
                     continue
                 }
 
-                val jxlBytes = com.awxkee.jxlcoder.JxlCoder.encode(bitmap, quality = 100, effort = effort)
+                val jxlBytes = com.awxkee.jxlcoder.JxlCoder.encode(bitmap, compressionOption = com.awxkee.jxlcoder.JxlCompressionOption.LOSSLESS, quality = 100, effort = effort)
                 bitmap.recycle()
 
                 // 输出文件：保持相对目录结构，扩展名改为 .jxl
