@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.viewinterop.AndroidView
 import com.github.chrisbanes.photoview.PhotoView
+import com.whmdg.mczj.tools.util.DiagnosticLog
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -75,7 +76,17 @@ fun ImageViewerScreen(
                 AndroidView(
                     factory = { ctx ->
                         PhotoView(ctx).apply {
-                            setImageURI(Uri.fromFile(file))
+                            if (file.extension.equals("jxl", ignoreCase = true)) {
+                                try {
+                                    val bytes = file.readBytes()
+                                    val bitmap = com.awxkee.jxlcoder.JxlCoder.decode(bytes)
+                                    setImageBitmap(bitmap)
+                                } catch (e: Exception) {
+                                    DiagnosticLog.log("ImageViewer", "JXL 解码失败: ${e.message}")
+                                }
+                            } else {
+                                setImageURI(Uri.fromFile(file))
+                            }
                             maximumScale = 5f
                             minimumScale = 1f
                             setOnScaleChangeListener { _, _, _ ->

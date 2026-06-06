@@ -736,7 +736,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             "c", "cpp", "h", "hpp", "rs", "go", "rb", "php", "sql",
             "lua", "r", "swift", "dart", "ts", "jsx", "tsx", "vue"
         )
-        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
+        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl")
         val ext = entry.name.substringAfterLast('.', "").lowercase()
 
         val useMemory = memEntry.size in 1 until EXTRACT_TO_MEMORY_THRESHOLD
@@ -1014,7 +1014,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             DiagnosticLog.log("OpenFile", "内置编辑器打开: ${entry.name}")
             return Screen.TextEditor(entry.path)
         }
-        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
+        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl")
         if (ext in imageExtensions) {
             DiagnosticLog.log("OpenFile", "内置查看器打开: ${entry.name}")
             val currentEntries = if (focusedPanel == FocusedPanel.LEFT) leftEntries else rightEntries
