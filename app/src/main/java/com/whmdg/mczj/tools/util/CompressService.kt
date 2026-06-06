@@ -380,7 +380,7 @@ object CompressService {
                 if (file.extension.lowercase() in jpegExtensions) {
                     // JPG/JPEG：无损转码，直接打包 DCT 系数，体积不会增大
                     val jpegBytes = file.readBytes()
-                    val jxlBytes = com.awxkee.jxlcoder.JxlCoder.construct(jpegBytes)
+                    val jxlBytes = com.awxkee.jxlcoder.JxlEncoder.fromJpegData(jpegBytes, effort = effort, distance = 0f)
                     outFile.writeBytes(jxlBytes)
                 } else {
                     // 其他图片：解码像素后无损编码
