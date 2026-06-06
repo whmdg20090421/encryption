@@ -17,6 +17,7 @@ import com.whmdg.mczj.tools.util.CompressService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.attribute.BasicFileAttributes
@@ -93,6 +94,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var isInRecycleBin by mutableStateOf(false)
         private set
     var recycleBinPath by mutableStateOf("")
+        private set
+    var jxlPackZip by mutableStateOf(false)
         private set
 
     // ── 压缩包浏览 ──
@@ -186,6 +189,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             else -> SortField.NAME
         }
         sortOrder = if (fmPrefs.getString("sort_order", "ASC") == "DESC") SortOrder.DESC else SortOrder.ASC
+        jxlPackZip = fmPrefs.getBoolean("jxl_pack_zip", false)
 
         // 加载文件夹大小数据库
         folderSizeDb = FolderSizeDb.load(AppDataPaths.fileManager(context))
@@ -874,6 +878,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         rightEntries = listDirectory(rightPath)
     }
 
+    fun updateJxlPackZip(value: Boolean) {
+        jxlPackZip = value
+        fmPrefs.edit().putBoolean("jxl_pack_zip", value).apply()
+    }
+
     fun updateSortField(field: SortField) {
         sortField = field
         fmPrefs.edit().putString("sort_field", field.name).apply()
@@ -1434,6 +1443,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * @param password 密码（空=不加密）
      * @param useAes zip 加密方式（true=AES, false=ZipCrypto）
      * @param outputToOtherPanel 是否输出到非聚焦面板目录
+     * @param jxlPackZip JXL 格式是否打包成 ZIP
      * @param onProgress 进度回调
      * @param onComplete 完成回调 (success, outputPath?, error?)
      */
@@ -1445,6 +1455,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         password: String,
         useAes: Boolean,
         outputToOtherPanel: Boolean,
+        jxlPackZip: Boolean = false,
         onProgress: (Int, Int, Float) -> Unit,
         onComplete: (Boolean, String?, String?) -> Unit
     ) {
@@ -1464,7 +1475,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             format = format,
             compressionLevel = level,
             password = password,
-            useAes = useAes
+            useAes = useAes,
+            jxlPackZip = jxlPackZip
         )
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -1474,8 +1486,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 override fun onComplete(success: Boolean, outPath: String?, error: String?) {
-                    onComplete(success, outPath, error)
-                    if (success) {
+                    CoroutineScope(Dispatchers.Main).launch {
+                        onComplete(success, outPath, error)
                         refreshCurrent()
                     }
                 }

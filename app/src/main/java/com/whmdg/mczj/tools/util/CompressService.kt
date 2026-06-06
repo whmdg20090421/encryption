@@ -39,6 +39,7 @@ object CompressService {
         val compressionLevel: Int,    // 0-9 (format dependent)
         val password: String = "",    // 空=不加密
         val useAes: Boolean = true,   // zip 加密方式
+        val jxlPackZip: Boolean = false, // JXL 是否打包成 ZIP
     )
 
     data class ProgressInfo(
@@ -330,7 +331,6 @@ object CompressService {
         callback: ProgressCallback
     ) {
         val source = File(options.sourcePath)
-        // 收集所有图片文件
         val allFiles = collectFiles(source)
         val imageFiles = allFiles.filter { file ->
             file.isFile && file.extension.lowercase() in IMAGE_EXTENSIONS
@@ -341,7 +341,6 @@ object CompressService {
             return
         }
 
-        // Effort 1-10，Quality 锁定 100（无损）
         val effortArray = arrayOf(
             com.awxkee.jxlcoder.JxlEffort.LIGHTNING,   // 1
             com.awxkee.jxlcoder.JxlEffort.THUNDER,     // 2
@@ -358,8 +357,10 @@ object CompressService {
         val total = imageFiles.size
         val counter = AtomicInteger(0)
 
-        // 输出目录：文件夹压缩 → 同名子目录，单文件 → 直接使用 outputPath
-        val outDir = if (source.isDirectory) {
+        // 打包成 ZIP 时先编码到临时目录，否则直接输出
+        val workDir = if (options.jxlPackZip) {
+            File(options.outputPath).parentFile!!.resolve(".jxl_tmp_${System.currentTimeMillis()}").apply { mkdirs() }
+        } else if (source.isDirectory) {
             File(options.outputPath).apply { mkdirs() }
         } else {
             File(options.outputPath).parentFile!!
@@ -368,6 +369,7 @@ object CompressService {
         try {
             for (file in imageFiles) {
                 if (cancelFlag.get()) {
+                    if (options.jxlPackZip) workDir.deleteRecursively()
                     callback.onComplete(false, null, "已取消")
                     return
                 }
@@ -382,26 +384,86 @@ object CompressService {
                 val jxlBytes = com.awxkee.jxlcoder.JxlCoder.encode(bitmap, compressionOption = com.awxkee.jxlcoder.JxlCompressionOption.LOSSLESS, quality = 100, effort = effort)
                 bitmap.recycle()
 
-                // 输出文件：保持相对目录结构，扩展名改为 .jxl
                 val relativePath = file.absolutePath.removePrefix(source.absolutePath).removePrefix("/")
-                val outFile = File(outDir, relativePath.substringBeforeLast('.') + ".jxl")
+                val outFile = File(workDir, relativePath.substringBeforeLast('.') + ".jxl")
                 outFile.parentFile?.mkdirs()
                 outFile.writeBytes(jxlBytes)
 
                 val count = counter.incrementAndGet()
                 callback.onProgress(ProgressInfo(count, total, count.toFloat() / total, file.name))
             }
-            // 单文件压缩完成时输出的是 .jxl 文件路径
-            val resultPath = if (source.isDirectory) {
-                outDir.absolutePath
+
+            val resultPath = if (options.jxlPackZip) {
+                // 编码完成，打包成 ZIP
+                val zipFile = File(options.outputPath)
+                packDirToZip(workDir, zipFile, options.password, options.useAes, cancelFlag, callback)
+                workDir.deleteRecursively()
+                zipFile.absolutePath
+            } else if (source.isDirectory) {
+                workDir.absolutePath
             } else {
                 val baseName = source.nameWithoutExtension
-                File(outDir, "$baseName.jxl").absolutePath
+                File(workDir, "$baseName.jxl").absolutePath
             }
             callback.onComplete(true, resultPath, null)
         } catch (e: Exception) {
             Log.e(TAG, "JXL 压缩失败", e)
+            if (options.jxlPackZip) workDir.deleteRecursively()
             callback.onComplete(false, null, e.message ?: "JXL 压缩失败")
+        }
+    }
+
+    /** 将目录打包成 ZIP 文件 */
+    private fun packDirToZip(
+        sourceDir: File,
+        zipFile: File,
+        password: String,
+        useAes: Boolean,
+        cancelFlag: AtomicBoolean,
+        callback: ProgressCallback
+    ) {
+        if (password.isNotEmpty()) {
+            val z = net.lingala.zip4j.ZipFile(zipFile.absolutePath)
+            z.isUseZip64Format = true
+            val params = net.lingala.zip4j.model.ZipParameters().apply {
+                compressionMethod = net.lingala.zip4j.model.enums.CompressionMethod.DEFLATE
+                compressionLevel = net.lingala.zip4j.model.enums.CompressionLevel.NORMAL
+                isEncryptFiles = true
+                encryptionMethod = if (useAes) {
+                    net.lingala.zip4j.model.enums.EncryptionMethod.AES
+                } else {
+                    net.lingala.zip4j.model.enums.EncryptionMethod.ZIP_STANDARD
+                }
+                if (useAes) {
+                    aesKeyStrength = net.lingala.zip4j.model.enums.AesKeyStrength.KEY_STRENGTH_256
+                }
+                password = password.toCharArray()
+            }
+            val files = sourceDir.walkTopDown().filter { it.isFile }.toList()
+            for (f in files) {
+                if (cancelFlag.get()) return
+                val relPath = f.relativeTo(sourceDir).path
+                params.fileNameInZip = relPath
+                z.addFile(f, params)
+            }
+        } else {
+            java.util.zip.ZipOutputStream(java.io.BufferedOutputStream(java.io.FileOutputStream(zipFile))).use { zos ->
+                val files = sourceDir.walkTopDown().filter { it.isFile }.toList()
+                for (f in files) {
+                    if (cancelFlag.get()) return
+                    val relPath = f.relativeTo(sourceDir).path
+                    zos.putNextEntry(java.util.zip.ZipEntry(relPath))
+                    java.io.BufferedInputStream(java.io.FileInputStream(f), 8192).use { bis ->
+                        val buf = ByteArray(8192)
+                        var len: Int
+                        while (bis.read(buf).also { len = it } != -1) {
+                            if (cancelFlag.get()) return
+                            zos.write(buf, 0, len)
+                        }
+                    }
+                    zos.closeEntry()
+                }
+            }
         }
     }
 

@@ -2399,8 +2399,20 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         // 格式切换时更新后缀和压缩级别
         LaunchedEffect(selectedFormat) {
             val baseName = entry.name.substringBeforeLast(".")
-            fileName = baseName + (suffixMap[selectedFormat] ?: ".zip")
+            fileName = if (selectedFormat == "jxl") {
+                baseName + if (vm.jxlPackZip) ".jxl.zip" else ".jxl"
+            } else {
+                baseName + (suffixMap[selectedFormat] ?: ".zip")
+            }
             compressLevel = defaultLevel
+        }
+
+        // JXL 打包开关切换时更新后缀
+        LaunchedEffect(vm.jxlPackZip) {
+            if (selectedFormat == "jxl") {
+                val baseName = entry.name.substringBeforeLast(".")
+                fileName = baseName + if (vm.jxlPackZip) ".jxl.zip" else ".jxl"
+            }
         }
 
         Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -2548,8 +2560,28 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             }
                         }
 
-                        // 密码输入栏（JXL 不支持加密）
-                        if (selectedFormat != "jxl") Column {
+                        // JXL 打包成 ZIP 开关
+                        if (selectedFormat == "jxl") {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "打包成 ZIP 压缩包",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Switch(
+                                    checked = vm.jxlPackZip,
+                                    onCheckedChange = { vm.updateJxlPackZip(it) },
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                        }
+
+                        // 密码输入栏（JXL 不打包时不支持加密）
+                        if (selectedFormat != "jxl" || vm.jxlPackZip) Column {
                             Text(
                                 text = "密码（不加密请留空）",
                                 style = MaterialTheme.typography.bodySmall,
@@ -2666,6 +2698,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     password = compressPassword,
                                     useAes = compressUseAes,
                                     outputToOtherPanel = compressOutputToOtherPanel,
+                                    jxlPackZip = vm.jxlPackZip,
                                     onProgress = { current, total, progress ->
                                         compressCurrentFile = current
                                         compressTotalFiles = total
@@ -2673,11 +2706,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     },
                                     onComplete = { success, outPath, error ->
                                         compressOutputPath = outPath ?: ""
+                                        showCompressProgress = false
                                         if (success) {
-                                            showCompressProgress = false
                                             Toast.makeText(context, "压缩完成: ${outPath?.substringAfterLast('/')}", Toast.LENGTH_SHORT).show()
                                         } else if (error != "已取消") {
-                                            showCompressProgress = false
                                             Toast.makeText(context, "压缩失败: $error", Toast.LENGTH_SHORT).show()
                                         }
                                     }
