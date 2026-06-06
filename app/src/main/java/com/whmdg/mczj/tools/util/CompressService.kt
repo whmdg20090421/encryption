@@ -340,11 +340,11 @@ object CompressService {
             return
         }
 
-        // quality 0-100（0=最低质量，100=无损）
-        val quality = options.compressionLevel.coerceIn(0, 100)
+        // Effort 1-10，Quality 锁定 100（无损）
+        val effortValue = options.compressionLevel.coerceIn(1, 10)
+        val effort = com.awxkee.jxlcoder.JxlEffort.entries.first { it.value == effortValue }
         val total = imageFiles.size
         val counter = AtomicInteger(0)
-        val effort = com.awxkee.jxlcoder.JxlEffort.SQUIRREL
 
         // 输出目录：文件夹压缩 → 同名子目录，单文件 → 直接使用 outputPath
         val outDir = if (source.isDirectory) {
@@ -367,7 +367,7 @@ object CompressService {
                     continue
                 }
 
-                val jxlBytes = com.awxkee.jxlcoder.JxlCoder.encode(bitmap, quality = quality, effort = effort)
+                val jxlBytes = com.awxkee.jxlcoder.JxlCoder.encode(bitmap, quality = 100, effort = effort)
                 bitmap.recycle()
 
                 // 输出文件：保持相对目录结构，扩展名改为 .jxl
@@ -436,14 +436,14 @@ object CompressService {
     fun getLevelRange(format: String): IntRange? = when (format) {
         "zip", "7z", "tar.gz", "tar.xz" -> 0..9
         "tar.bz2" -> 1..9  // BZip2 blockSize 参数，最小为 1
-        "jxl" -> 0..100    // JPEG XL quality（0=最低质量，100=无损）
+        "jxl" -> 1..10     // JPEG XL Effort（1=最快，10=最大压缩比）
         "tar" -> null  // 仅打包，无压缩
         else -> 0..9
     }
 
     /** 各格式默认压缩级别 */
     fun getDefaultLevel(format: String): Int = when (format) {
-        "jxl" -> 75  // 默认高质量
+        "jxl" -> 7  // SQUIRREL
         else -> 5
     }
 

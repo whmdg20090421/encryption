@@ -2388,11 +2388,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             "tar.gz" -> 0..9
             "tar.bz2" -> 1..9   // BZip2 blockSize 参数，最小为 1
             "tar.xz" -> 0..9
-            "jxl" -> 0..100     // JPEG XL quality（0=最低质量，100=无损）
+            "jxl" -> 1..10      // JPEG XL Effort（1=最快，10=最大压缩比）
             else -> 0..9
         }
         val defaultLevel = when (selectedFormat) {
-            "jxl" -> 75  // 默认高质量
+            "jxl" -> 7  // SQUIRREL
             else -> 5
         }
 
