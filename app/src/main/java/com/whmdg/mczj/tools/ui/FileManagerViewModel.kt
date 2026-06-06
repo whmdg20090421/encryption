@@ -257,6 +257,21 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 从历史记录点击文件：导航到文件所在父目录，并记录待滚动目标文件名。
+     */
+    var pendingScrollToFile by mutableStateOf<String?>(null)
+        private set
+
+    fun navigateToHistoryFile(entry: HistoryEntry) {
+        val file = File(entry.path)
+        val parentDir = file.parentFile ?: return
+        if (parentDir.exists() && parentDir.canRead()) {
+            pendingScrollToFile = file.name
+            navigateTo(parentDir.absolutePath)
+        }
+    }
+
     fun navigateToBookmark(bm: BookmarkEntry) {
         val testDir = File(bm.path)
         if (testDir.exists() && testDir.canRead()) {
@@ -1040,14 +1055,16 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
             val resolver = intent.resolveActivity(context.packageManager)
             DiagnosticLog.log("OpenFile", "resolveActivity=${resolver?.flattenToString() ?: "(null)"}")
-            if (resolver != null) {
-                context.startActivity(intent)
-                DiagnosticLog.log("OpenFile", "startActivity 已调用，匹配: ${resolver.flattenToString()}")
-            } else {
+            if (resolver == null) {
                 // 没有匹配的应用，设置待处理状态由 UI 弹出警告
                 pendingExternalEntry = entry
                 return null
             }
+            // 使用 createChooser 弹出应用选择器，让用户选择用哪个应用打开
+            val chooser = Intent.createChooser(intent, "选择应用打开")
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(chooser)
+            DiagnosticLog.log("OpenFile", "startActivity 已调用，匹配: ${resolver.flattenToString()}")
         } catch (e: Exception) {
             DiagnosticLog.log("OpenFile", "异常: ${e.javaClass.simpleName}: ${e.message}")
             DiagnosticLog.exportCrashReport(context, e, "外部Intent打开失败: ${entry.path}")
@@ -1073,7 +1090,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             DiagnosticLog.log("OpenFile", "强行打开: uri=$uri mime=$mimeType")
-            context.startActivity(intent)
+            val chooser = android.content.Intent.createChooser(intent, "选择应用打开")
+            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(chooser)
             DiagnosticLog.log("OpenFile", "强行打开 startActivity 已调用")
             null
         } catch (e: Exception) {

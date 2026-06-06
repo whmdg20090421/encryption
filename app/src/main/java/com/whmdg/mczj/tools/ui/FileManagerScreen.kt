@@ -234,6 +234,17 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     LaunchedEffect(vm.bookmarkList) {
         vm.saveBookmarks()
     }
+    // 历史记录点击文件后滚动到目标文件
+    LaunchedEffect(vm.pendingScrollToFile, vm.leftEntries, vm.rightEntries) {
+        val targetName = vm.pendingScrollToFile ?: return@LaunchedEffect
+        val entries = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftEntries else vm.rightEntries
+        val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
+        val index = entries.indexOfFirst { !it.isDirectory && it.name == targetName }
+        if (index >= 0) {
+            listState.scrollToItem(index)
+            vm.pendingScrollToFile = null
+        }
+    }
 
     LaunchedEffect(Unit) {
         DiagnosticLog.beginSession("进入 FileManagerScreen")
@@ -890,8 +901,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                     if (entry.isDirectory) {
                                                         vm.navigateToHistoryDir(entry)
                                                     } else {
-                                                        val screen = vm.openFile(context, FileEntry(entry.path, entry.name, false))
-                                                        if (screen != null) onNavigate(screen)
+                                                        vm.navigateToHistoryFile(entry)
                                                     }
                                                     showHistoryPanel = false
                                                 }
