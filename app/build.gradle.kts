@@ -122,6 +122,7 @@ dependencies {
     implementation("org.apache.commons:commons-compress:1.26.1") // TAR/GZ/BZ2/XZ/7z
     implementation("com.github.junrar:junrar:7.5.5")           // RAR 解压
     implementation("org.tukaani:xz:1.9")                       // XZ 压缩（commons-compress 依赖）
+    implementation(libs.jxl.coder)                              // JPEG XL 图片压缩
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

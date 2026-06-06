@@ -70,6 +70,7 @@ object CompressService {
                 "tar.gz" -> compressTar(options, cancelFlag, callback, "gz")
                 "tar.bz2" -> compressTar(options, cancelFlag, callback, "bz2")
                 "tar.xz" -> compressTar(options, cancelFlag, callback, "xz")
+                "jxl" -> compressJxl(options, cancelFlag, callback)
                 else -> callback.onComplete(false, null, "不支持的格式: ${options.format}")
             }
         } catch (e: Exception) {
@@ -316,6 +317,82 @@ object CompressService {
         callback.onComplete(true, options.outputPath, null)
     }
 
+    // ── JPEG XL 图片压缩 ──
+
+    private val IMAGE_EXTENSIONS = setOf(
+        "jpg", "jpeg", "png", "webp", "bmp", "gif", "tiff", "tif", "heic", "heif", "avif"
+    )
+
+    private fun compressJxl(
+        options: CompressOptions,
+        cancelFlag: AtomicBoolean,
+        callback: ProgressCallback
+    ) {
+        val source = File(options.sourcePath)
+        // 收集所有图片文件
+        val allFiles = collectFiles(source)
+        val imageFiles = allFiles.filter { file ->
+            file.isFile && file.extension.lowercase() in IMAGE_EXTENSIONS
+        }
+
+        if (imageFiles.isEmpty()) {
+            callback.onComplete(false, null, "未找到可处理的图片文件")
+            return
+        }
+
+        // level 0-9 → distance 0.0-9.0（0=无损，1=近无损，值越大压缩比越高）
+        val distance = options.compressionLevel.toFloat().coerceIn(0f, 9f)
+        val total = imageFiles.size
+        val counter = AtomicInteger(0)
+        val coder = com.awxkee.jxlcoder.JxlCoder()
+
+        // 输出目录：文件夹压缩 → 同名子目录，单文件 → 直接使用 outputPath
+        val outDir = if (source.isDirectory) {
+            File(options.outputPath).apply { mkdirs() }
+        } else {
+            File(options.outputPath).parentFile!!
+        }
+
+        try {
+            for (file in imageFiles) {
+                if (cancelFlag.get()) {
+                    callback.onComplete(false, null, "已取消")
+                    return
+                }
+
+                val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                if (bitmap == null) {
+                    Log.w(TAG, "无法解码图片: ${file.name}")
+                    counter.incrementAndGet()
+                    continue
+                }
+
+                val jxlBytes = coder.encode(bitmap, distance)
+                bitmap.recycle()
+
+                // 输出文件：保持相对目录结构，扩展名改为 .jxl
+                val relativePath = file.absolutePath.removePrefix(source.absolutePath).removePrefix("/")
+                val outFile = File(outDir, relativePath.substringBeforeLast('.') + ".jxl")
+                outFile.parentFile?.mkdirs()
+                outFile.writeBytes(jxlBytes)
+
+                val count = counter.incrementAndGet()
+                callback.onProgress(ProgressInfo(count, total, count.toFloat() / total, file.name))
+            }
+            // 单文件压缩完成时输出的是 .jxl 文件路径
+            val resultPath = if (source.isDirectory) {
+                outDir.absolutePath
+            } else {
+                val baseName = source.nameWithoutExtension
+                File(outDir, "$baseName.jxl").absolutePath
+            }
+            callback.onComplete(true, resultPath, null)
+        } catch (e: Exception) {
+            Log.e(TAG, "JXL 压缩失败", e)
+            callback.onComplete(false, null, e.message ?: "JXL 压缩失败")
+        }
+    }
+
     // ── 工具函数 ──
 
     /** 递归收集文件和目录 */
@@ -351,21 +428,21 @@ object CompressService {
         "tar.gz" -> ".tar.gz"
         "tar.bz2" -> ".tar.bz2"
         "tar.xz" -> ".tar.xz"
-        "rar" -> ".rar"
+        "jxl" -> ".jxl"
         else -> ".zip"
     }
 
     /** 各格式压缩级别范围 */
     fun getLevelRange(format: String): IntRange? = when (format) {
-        "zip", "7z", "tar.gz", "tar.bz2", "tar.xz" -> 0..9
-        "rar" -> 0..5
+        "zip", "7z", "tar.gz", "tar.xz", "jxl" -> 0..9
+        "tar.bz2" -> 1..9  // BZip2 blockSize 参数，最小为 1
         "tar" -> null  // 仅打包，无压缩
         else -> 0..9
     }
 
     /** 各格式默认压缩级别 */
     fun getDefaultLevel(format: String): Int = when (format) {
-        "rar" -> 3
+        "jxl" -> 1  // 默认近无损
         else -> 5
     }
 
@@ -388,7 +465,9 @@ object CompressService {
 
     class ArchiveMemDir(
         override val name: String,
-        override val path: String
+        override val path: String,
+        var size: Long = 0,          // 目录内所有文件的原始大小之和
+        var compressedSize: Long = 0 // 目录内所有文件的压缩后大小之和
     ) : ArchiveMemEntry()
 
     class ArchiveMemFile(
@@ -403,6 +482,39 @@ object CompressService {
     interface ArchiveReader {
         fun readEntry(entry: ArchiveMemFile): ByteArray
         fun close()
+    }
+
+    /**
+     * 自底向上计算每个目录的 size / compressedSize。
+     * 按路径深度降序排列，子目录先于父目录处理，
+     * 这样父目录聚合时子目录的值已经算好了。
+     */
+    private fun calcDirSizes(entries: MutableMap<String, ArchiveMemEntry>) {
+        val dirs = entries.values.filterIsInstance<ArchiveMemDir>()
+            .sortedByDescending { it.path.count { c -> c == '/' } }
+        for (dir in dirs) {
+            val prefix = dir.path + "/"
+            var sumSize = 0L
+            var sumCompressed = 0L
+            for ((path, entry) in entries) {
+                if (!path.startsWith(prefix)) continue
+                val remainder = path.removePrefix(prefix)
+                // 只统计直接子项（子目录或文件），不重复统计孙辈
+                if (remainder.contains('/')) continue
+                when (entry) {
+                    is ArchiveMemFile -> {
+                        sumSize += entry.size
+                        sumCompressed += entry.compressedSize
+                    }
+                    is ArchiveMemDir -> {
+                        sumSize += entry.size
+                        sumCompressed += entry.compressedSize
+                    }
+                }
+            }
+            dir.size = sumSize
+            dir.compressedSize = sumCompressed
+        }
     }
 
     /**
@@ -591,6 +703,7 @@ object CompressService {
             }
         }
 
+        calcDirSizes(entries)
         val reader = ZipArchiveReader(archivePath, password)
         return ArchiveMemFs(entries, reader, "zip", password)
     }
@@ -638,6 +751,7 @@ object CompressService {
         }
         sevenZFile.close()
 
+        calcDirSizes(entries)
         val reader = SevenZArchiveReader(archivePath, password)
         return ArchiveMemFs(entries, reader, "7z", password)
     }
@@ -694,6 +808,7 @@ object CompressService {
             tarIn.close()
         }
 
+        calcDirSizes(entries)
         val reader = TarArchiveReader(archivePath, format)
         return ArchiveMemFs(entries, reader, format, "")
     }
@@ -740,6 +855,7 @@ object CompressService {
         }
         arch.close()
 
+        calcDirSizes(entries)
         val reader = RarArchiveReader(archivePath, password)
         return ArchiveMemFs(entries, reader, "rar", password)
     }

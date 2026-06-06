@@ -554,12 +554,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             archiveFileName = entry.name
             archiveFormat = format
             archivePassword = password
-            archivePath = "/"
-            archiveRootPath = "/"
+            archivePath = ""
+            archiveRootPath = ""
             isInArchive = true
 
             // 设置聚焦面板的 entries 为压缩包根目录内容
-            val rootEntries = listArchiveDir("/")
+            val rootEntries = listArchiveDir("")
             if (focusedPanel == FocusedPanel.LEFT) {
                 leftEntries = rootEntries
             } else {
@@ -576,7 +576,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun navigateInArchive(entry: FileEntry) {
         if (!entry.isDirectory) return
         val memFs = archiveMemFs ?: return
-        val targetPath = if (archivePath == "/") entry.name else "$archivePath/${entry.name}"
+        val targetPath = if (archivePath.isEmpty()) entry.name else "$archivePath/${entry.name}"
         // 验证目标路径在压缩包内存在
         val normalizedPath = targetPath.trimEnd('/')
         val hasDir = memFs.entries.containsKey(normalizedPath) &&
@@ -586,7 +586,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             Toast.makeText(context, "目录不存在: ${entry.name}", Toast.LENGTH_SHORT).show()
             return
         }
-        archivePath = "/$targetPath"
+        archivePath = targetPath
         val entries = listArchiveDir(targetPath)
         if (focusedPanel == FocusedPanel.LEFT) {
             leftEntries = entries
@@ -598,7 +598,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 在压缩包内返回上一级 */
     fun goUpInArchive(): Boolean {
         if (archivePath == archiveRootPath) return false
-        val parent = archivePath.substringBeforeLast("/", "").ifEmpty { "/" }
+        val parent = archivePath.substringBeforeLast("/", "")
         archivePath = parent
         val entries = listArchiveDir(parent)
         if (focusedPanel == FocusedPanel.LEFT) {
@@ -613,6 +613,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun exitArchive() {
         // 关闭 reader 释放句柄
         try { archiveMemFs?.reader?.close() } catch (_: Exception) {}
+        // 先保存路径用于清理临时文件，再清空状态
+        val tempFileHash = archiveFilePath.hashCode().toString().take(16)
         archiveMemFs = null
         isInArchive = false
         archivePath = ""
@@ -623,7 +625,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         archivePassword = ""
         // 清理临时解压文件
         try {
-            val tempDir = File(AppDataPaths.archiveCache(context), archiveFilePath.hashCode().toString().take(16))
+            val tempDir = File(AppDataPaths.archiveCache(context), tempFileHash)
             if (tempDir.exists()) tempDir.deleteRecursively()
         } catch (_: Exception) {}
         refreshCurrent()
@@ -636,7 +638,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // prefix 统一不带前导 /，与 entries map key 格式一致
         val prefix = if (normalized == "/" || normalized.isEmpty()) "" else normalized.removePrefix("/") + "/"
 
-        val dirs = mutableSetOf<String>()
+        val dirNames = mutableSetOf<String>()
         val files = mutableListOf<FileEntry>()
 
         for ((path, entry) in memFs.entries) {
@@ -656,10 +658,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                             lastModified = 0
                         ))
                     } else if (entry is CompressService.ArchiveMemDir) {
-                        dirs.add(cleanPath)
+                        dirNames.add(cleanPath)
                     }
                 } else {
-                    dirs.add(cleanPath.substring(0, slashIdx))
+                    dirNames.add(cleanPath.substring(0, slashIdx))
                 }
             } else {
                 // 子目录：匹配前缀
@@ -677,27 +679,41 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                             lastModified = 0
                         ))
                     } else if (entry is CompressService.ArchiveMemDir) {
-                        dirs.add(relative)
+                        dirNames.add(relative)
                     }
                 } else {
-                    dirs.add(relative.substring(0, slashIdx))
+                    dirNames.add(relative.substring(0, slashIdx))
                 }
             }
         }
 
-        val entries = mutableListOf<FileEntry>()
-        for (dirName in dirs.sorted()) {
+        // 构建目录 FileEntry（带 ArchiveMemDir.size）
+        val dirEntries = dirNames.map { dirName ->
             val fullPath = if (prefix.isEmpty()) dirName else "$prefix$dirName"
-            entries.add(FileEntry(
+            val dirSize = (memFs.entries[fullPath] as? CompressService.ArchiveMemDir)?.size ?: 0L
+            FileEntry(
                 path = fullPath,
                 name = dirName,
                 isDirectory = true,
-                size = 0,
+                size = dirSize,
                 lastModified = 0
-            ))
+            )
         }
-        entries.addAll(files.sortedBy { it.name.lowercase() })
-        return entries
+
+        // 合并并排序（目录优先，然后按 sortField 排序）
+        val allEntries = dirEntries + files
+        return when (sortField) {
+            SortField.NAME -> if (sortOrder == SortOrder.ASC)
+                allEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
+            else
+                allEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
+            SortField.SIZE -> if (sortOrder == SortOrder.ASC)
+                allEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.size })
+            else
+                allEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.size } )
+            SortField.MODIFIED -> allEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
+            SortField.CREATED -> allEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
+        }
     }
 
     /**
@@ -821,16 +837,24 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun getArchiveSizeText(entry: FileEntry): String {
         val memFs = archiveMemFs ?: return ""
         val memEntry = memFs.entries[entry.path] ?: return ""
-        if (memEntry is CompressService.ArchiveMemDir) return ""
-        if (memEntry is CompressService.ArchiveMemFile) {
-            if (memEntry.size <= 0) return ""
-            if (memEntry.compressedSize > 0) {
-                val ratio = (memEntry.compressedSize * 100 / memEntry.size).toInt()
-                return "(${formatSize(memEntry.compressedSize)}/${formatSize(memEntry.size)})($ratio%)"
+        when (memEntry) {
+            is CompressService.ArchiveMemDir -> {
+                if (memEntry.size <= 0) return ""
+                if (memEntry.compressedSize > 0) {
+                    val ratio = (memEntry.compressedSize * 100 / memEntry.size).toInt()
+                    return "(${formatSize(memEntry.compressedSize)}/${formatSize(memEntry.size)})($ratio%)"
+                }
+                return formatSize(memEntry.size)
             }
-            return formatSize(memEntry.size)
+            is CompressService.ArchiveMemFile -> {
+                if (memEntry.size <= 0) return ""
+                if (memEntry.compressedSize > 0) {
+                    val ratio = (memEntry.compressedSize * 100 / memEntry.size).toInt()
+                    return "(${formatSize(memEntry.compressedSize)}/${formatSize(memEntry.size)})($ratio%)"
+                }
+                return formatSize(memEntry.size)
+            }
         }
-        return ""
     }
 
     /**
@@ -853,15 +877,31 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateSortField(field: SortField) {
         sortField = field
         fmPrefs.edit().putString("sort_field", field.name).apply()
-        leftEntries = listDirectory(leftPath)
-        rightEntries = listDirectory(rightPath)
+        if (isInArchive) {
+            val entries = listArchiveDir(archivePath)
+            if (focusedPanel == FocusedPanel.LEFT) leftEntries = entries else rightEntries = entries
+        } else if (isInRecycleBin) {
+            val entries = listRecycleBinDir(java.io.File(recycleBinPath))
+            if (focusedPanel == FocusedPanel.LEFT) leftEntries = entries else rightEntries = entries
+        } else {
+            leftEntries = listDirectory(leftPath)
+            rightEntries = listDirectory(rightPath)
+        }
     }
 
     fun updateSortOrder(order: SortOrder) {
         sortOrder = order
         fmPrefs.edit().putString("sort_order", order.name).apply()
-        leftEntries = listDirectory(leftPath)
-        rightEntries = listDirectory(rightPath)
+        if (isInArchive) {
+            val entries = listArchiveDir(archivePath)
+            if (focusedPanel == FocusedPanel.LEFT) leftEntries = entries else rightEntries = entries
+        } else if (isInRecycleBin) {
+            val entries = listRecycleBinDir(java.io.File(recycleBinPath))
+            if (focusedPanel == FocusedPanel.LEFT) leftEntries = entries else rightEntries = entries
+        } else {
+            leftEntries = listDirectory(leftPath)
+            rightEntries = listDirectory(rightPath)
+        }
     }
 
     fun forceRefresh() {
@@ -1181,6 +1221,46 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun getPropertyData(entry: FileEntry): FilePropertyData {
+        // 压缩包模式：使用内存元数据，不访问文件系统
+        if (isInArchive) {
+            val memEntry = archiveMemFs?.entries?.get(entry.path)
+            val sizeBytes = when (memEntry) {
+                is CompressService.ArchiveMemFile -> memEntry.size
+                is CompressService.ArchiveMemDir -> memEntry.size
+                else -> entry.size
+            }
+            val sizeDisplay = if (sizeBytes > 0) "${formatSize(sizeBytes)} ($sizeBytes)" else "0 B (0)"
+            val type = if (entry.isDirectory) "文件夹" else {
+                val ext = entry.name.substringAfterLast('.', "").lowercase()
+                if (ext.isNotEmpty()) "${ext.uppercase()} 文件" else "文件"
+            }
+            var fileCount = 0
+            var folderCount = 0
+            if (entry.isDirectory && memEntry is CompressService.ArchiveMemDir) {
+                val prefix = entry.path + "/"
+                for ((path, child) in archiveMemFs!!.entries) {
+                    if (!path.startsWith(prefix)) continue
+                    val remainder = path.removePrefix(prefix)
+                    if (remainder.contains('/')) continue
+                    if (child is CompressService.ArchiveMemDir) folderCount++ else fileCount++
+                }
+            }
+            return FilePropertyData(
+                name = entry.name,
+                directory = archiveFileName,
+                type = type,
+                sizeBytes = sizeBytes,
+                sizeDisplay = sizeDisplay,
+                modifiedTime = "",
+                permission = "",
+                owner = "",
+                group = "",
+                fileCount = fileCount,
+                folderCount = folderCount,
+                isDirectory = entry.isDirectory
+            )
+        }
+
         val file = File(entry.path)
         val stat = try { Os.stat(entry.path) } catch (_: Exception) { null }
 

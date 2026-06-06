@@ -2361,11 +2361,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     if (showCompressDialog && compressEntry != null) {
         val entry = compressEntry!!
         val isDark = isSystemInDarkTheme()
-        val formats = listOf("zip", "7z", "tar", "tar.gz", "tar.bz2", "tar.xz", "rar")
+        val formats = listOf("zip", "7z", "tar", "tar.gz", "tar.bz2", "tar.xz", "jxl")
+        // 格式显示名（带标注）
+        val formatLabels = mapOf(
+            "jxl" to "jxl (图片)"
+        )
         val suffixMap = mapOf(
             "zip" to ".zip", "7z" to ".7z", "tar" to ".tar",
             "tar.gz" to ".tar.gz", "tar.bz2" to ".tar.bz2", "tar.xz" to ".tar.xz",
-            "rar" to ".rar"
+            "jxl" to ".jxl"
         )
 
         var selectedFormat by remember { mutableStateOf("zip") }
@@ -2376,18 +2380,19 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         var showLevelDropdown by remember { mutableStateOf(false) }
         var fileName by remember { mutableStateOf(entry.name + ".zip") }
 
+        // 各格式实际支持的压缩等级范围
         val levelRange = when (selectedFormat) {
             "zip" -> 0..9
             "7z" -> 0..9
             "tar" -> null
             "tar.gz" -> 0..9
-            "tar.bz2" -> 0..9
+            "tar.bz2" -> 1..9   // BZip2 blockSize 参数，最小为 1
             "tar.xz" -> 0..9
-            "rar" -> 0..5
+            "jxl" -> 0..9       // 映射到 Butteraugli distance（0=无损，9=高压缩）
             else -> 0..9
         }
         val defaultLevel = when (selectedFormat) {
-            "rar" -> 3
+            "jxl" -> 1  // 默认近无损
             else -> 5
         }
 
@@ -2475,7 +2480,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text(selectedFormat, style = MaterialTheme.typography.bodyLarge)
+                                            Text(formatLabels[selectedFormat] ?: selectedFormat, style = MaterialTheme.typography.bodyLarge)
                                             Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
                                         }
                                     }
@@ -2485,7 +2490,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     ) {
                                         formats.forEach { format ->
                                             DropdownMenuItem(
-                                                text = { Text(format) },
+                                                text = { Text(formatLabels[format] ?: format) },
                                                 onClick = {
                                                     selectedFormat = format
                                                     showFormatDropdown = false
@@ -2543,8 +2548,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             }
                         }
 
-                        // 密码输入栏
-                        Column {
+                        // 密码输入栏（JXL 不支持加密）
+                        if (selectedFormat != "jxl") Column {
                             Text(
                                 text = "密码（不加密请留空）",
                                 style = MaterialTheme.typography.bodySmall,
@@ -2646,10 +2651,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 Text("取消", color = MaterialTheme.colorScheme.primary)
                             }
                             TextButton(onClick = {
-                                if (selectedFormat == "rar") {
-                                    Toast.makeText(context, "RAR 格式仅支持解压，不支持压缩", Toast.LENGTH_SHORT).show()
-                                    return@TextButton
-                                }
                                 showCompressDialog = false
                                 compressCurrentFile = 0
                                 compressTotalFiles = 0
@@ -3005,26 +3006,33 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             confirmButton = {
                 TextButton(onClick = {
                     if (tempSortField == SortField.SIZE) {
-                        // 检查是否有未统计大小的文件夹
-                        val currentEntries = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftEntries else vm.rightEntries
-                        val unmeasured = currentEntries.filter { entry ->
-                            if (!entry.isDirectory) return@filter false
-                            val cached = vm.folderSizeDb.get(entry.path)
-                            if (cached != null) return@filter false // 已统计
-                            // 检查是否空文件夹或权限不足
-                            val dir = File(entry.path)
-                            val children = try { dir.listFiles() } catch (_: Exception) { null }
-                            if (children == null || children.isEmpty()) return@filter false
-                            true
-                        }
-                        if (unmeasured.isNotEmpty()) {
-                            unmeasuredDirs = unmeasured
-                            showSortDialog = false
-                            showSortSizeRefreshDialog = true
-                        } else {
+                        // 压缩包模式：文件夹大小已从索引获取，无需统计
+                        if (vm.isInArchive) {
                             vm.updateSortField(tempSortField)
                             vm.updateSortOrder(tempSortOrder)
                             showSortDialog = false
+                        } else {
+                            // 检查是否有未统计大小的文件夹
+                            val currentEntries = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftEntries else vm.rightEntries
+                            val unmeasured = currentEntries.filter { entry ->
+                                if (!entry.isDirectory) return@filter false
+                                val cached = vm.folderSizeDb.get(entry.path)
+                                if (cached != null) return@filter false // 已统计
+                                // 检查是否空文件夹或权限不足
+                                val dir = File(entry.path)
+                                val children = try { dir.listFiles() } catch (_: Exception) { null }
+                                if (children == null || children.isEmpty()) return@filter false
+                                true
+                            }
+                            if (unmeasured.isNotEmpty()) {
+                                unmeasuredDirs = unmeasured
+                                showSortDialog = false
+                                showSortSizeRefreshDialog = true
+                            } else {
+                                vm.updateSortField(tempSortField)
+                                vm.updateSortOrder(tempSortOrder)
+                                showSortDialog = false
+                            }
                         }
                     } else {
                         vm.updateSortField(tempSortField)
@@ -3147,7 +3155,7 @@ private fun FileBrowserPanel(
                 }
                 items(entries, key = { it.path }) { entry ->
                     val dirSize = if (entry.isDirectory) {
-                        if (archiveSizeProvider != null) ""
+                        if (archiveSizeProvider != null) archiveSizeProvider(entry)
                         else {
                             val cached = folderSizeDb.get(entry.path)
                             if (cached != null) {
