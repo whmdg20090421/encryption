@@ -423,27 +423,20 @@ object CompressService {
         callback: ProgressCallback
     ) {
         if (password.isNotEmpty()) {
-            val z = net.lingala.zip4j.ZipFile(zipFile.absolutePath)
-            z.isUseZip64Format = true
+            val z = net.lingala.zip4j.ZipFile(zipFile.absolutePath, password.toCharArray())
             val params = net.lingala.zip4j.model.ZipParameters().apply {
-                compressionMethod = net.lingala.zip4j.model.enums.CompressionMethod.DEFLATE
-                compressionLevel = net.lingala.zip4j.model.enums.CompressionLevel.NORMAL
                 isEncryptFiles = true
                 encryptionMethod = if (useAes) {
                     net.lingala.zip4j.model.enums.EncryptionMethod.AES
                 } else {
                     net.lingala.zip4j.model.enums.EncryptionMethod.ZIP_STANDARD
                 }
-                if (useAes) {
-                    aesKeyStrength = net.lingala.zip4j.model.enums.AesKeyStrength.KEY_STRENGTH_256
-                }
-                password = password.toCharArray()
+                aesKeyStrength = if (useAes) net.lingala.zip4j.model.enums.AesKeyStrength.KEY_STRENGTH_256 else null
             }
             val files = sourceDir.walkTopDown().filter { it.isFile }.toList()
             for (f in files) {
                 if (cancelFlag.get()) return
-                val relPath = f.relativeTo(sourceDir).path
-                params.fileNameInZip = relPath
+                params.fileNameInZip = f.relativeTo(sourceDir).path
                 z.addFile(f, params)
             }
         } else {
@@ -451,8 +444,7 @@ object CompressService {
                 val files = sourceDir.walkTopDown().filter { it.isFile }.toList()
                 for (f in files) {
                     if (cancelFlag.get()) return
-                    val relPath = f.relativeTo(sourceDir).path
-                    zos.putNextEntry(java.util.zip.ZipEntry(relPath))
+                    zos.putNextEntry(java.util.zip.ZipEntry(f.relativeTo(sourceDir).path))
                     java.io.BufferedInputStream(java.io.FileInputStream(f), 8192).use { bis ->
                         val buf = ByteArray(8192)
                         var len: Int
