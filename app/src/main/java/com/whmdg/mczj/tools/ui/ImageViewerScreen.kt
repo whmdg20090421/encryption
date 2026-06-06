@@ -1,6 +1,8 @@
 package com.whmdg.mczj.tools.ui
 
 import android.net.Uri
+import android.view.GestureDetector
+import android.view.MotionEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,9 +34,6 @@ fun ImageViewerScreen(
     val initialPage = if (imagePaths.isNotEmpty()) startIndex.coerceIn(0, paths.size - 1) else 0
 
     val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { paths.size })
-
-    // 跟踪当前页是否处于放大状态，放大时禁止 pager 滑动
-    var isZoomed by remember { mutableStateOf(false) }
 
     val currentFile = remember(pagerState.currentPage) { File(paths[pagerState.currentPage]) }
 
@@ -69,7 +68,7 @@ fun ImageViewerScreen(
         ) {
             HorizontalPager(
                 state = pagerState,
-                userScrollEnabled = !isZoomed,
+                userScrollEnabled = true,
                 modifier = Modifier.fillMaxSize()
             ) { page ->
                 val file = File(paths[page])
@@ -89,8 +88,27 @@ fun ImageViewerScreen(
                             }
                             maximumScale = 5f
                             minimumScale = 1f
-                            setOnScaleChangeListener { _, _, _ ->
-                                isZoomed = scale > 1.01f
+
+                            // 双击缩放：仅 1x ↔ 2x，不放大到 5x
+                            setOnDoubleTapListener(object : GestureDetector.SimpleOnGestureListener() {
+                                override fun onDoubleTap(e: MotionEvent): Boolean {
+                                    val targetScale = if (scale > 1.5f) 1f else 2f
+                                    setScale(targetScale, e.x, e.y, true)
+                                    return true
+                                }
+                            })
+
+                            // 边缘滑动翻页：放大状态下，滑到图片边缘时允许 pager 翻页
+                            setOnMatrixChangeListener {
+                                val displayRect = displayRect ?: return@setOnMatrixChangeListener
+                                val viewWidth = width.toFloat()
+                                if (displayRect.width() > viewWidth) {
+                                    val atLeftEdge = displayRect.left >= -1f
+                                    val atRightEdge = displayRect.right <= viewWidth + 1f
+                                    setAllowParentInterceptOnEdge(atLeftEdge || atRightEdge)
+                                } else {
+                                    setAllowParentInterceptOnEdge(true)
+                                }
                             }
                         }
                     },
