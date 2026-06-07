@@ -793,11 +793,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 modifier = Modifier.align(Alignment.BottomCenter)
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    // 上半部分：点击或右滑手势收起面板
+                    // 上半部分：暗色遮罩 + 点击收起面板
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .fillMaxHeight(0.4f)
+                            .background(Color.Black.copy(alpha = 0.4f))
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null,

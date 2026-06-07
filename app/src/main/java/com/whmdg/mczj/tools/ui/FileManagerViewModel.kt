@@ -1327,8 +1327,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             "${formatPermission(mode)}(${String.format("%03d", mode and 0x1FF)})"
         } else ""
 
-        val owner = stat?.st_uid?.toString() ?: ""
-        val group = stat?.st_gid?.toString() ?: ""
+        val owner = stat?.st_uid?.let { resolveUserName(it) } ?: ""
+        val group = stat?.st_gid?.let { resolveGroupName(it) } ?: ""
 
         val modifiedTime = if (entry.lastModified > 0) {
             SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(entry.lastModified))
@@ -1443,6 +1443,28 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (gid != null) SystemGroup(gid, parts[0]) else null
             } else null
         }.sortedBy { it.gid }
+    }
+
+    /** 读取 /etc/passwd 解析 UID→用户名（无需 root） */
+    private fun resolveUserName(uid: Int): String {
+        val name = try {
+            File("/etc/passwd").readLines().firstNotNullOfOrNull { line ->
+                val parts = line.split(":")
+                if (parts.size >= 3 && parts[2].toIntOrNull() == uid) parts[0] else null
+            }
+        } catch (_: Exception) { null }
+        return if (name != null) "$name ($uid)" else uid.toString()
+    }
+
+    /** 读取 /etc/group 解析 GID→组名（无需 root） */
+    private fun resolveGroupName(gid: Int): String {
+        val name = try {
+            File("/etc/group").readLines().firstNotNullOfOrNull { line ->
+                val parts = line.split(":")
+                if (parts.size >= 3 && parts[2].toIntOrNull() == gid) parts[0] else null
+            }
+        } catch (_: Exception) { null }
+        return if (name != null) "$name ($gid)" else gid.toString()
     }
 
     /**
