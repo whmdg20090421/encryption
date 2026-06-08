@@ -9,9 +9,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
-import com.whmdg.mczj.tools.BuildConfig
 import rikka.shizuku.Shizuku
-import rikka.shizuku.UserServiceArgs
 
 /**
  * Shizuku 授权工具类
@@ -36,13 +34,14 @@ object ShizukuAuthorizer {
     private var bindStartTime = 0L
     private val pendingCallbacks = mutableListOf<(Boolean) -> Unit>()
 
-    private val userServiceArgs: UserServiceArgs by lazy {
-        UserServiceArgs(
-            ComponentName(BuildConfig.APPLICATION_ID, ShellService::class.java.name)
+    private fun getUserServiceArgs(): Shizuku.UserServiceArgs {
+        val ctx = appContext ?: throw IllegalStateException("ShizukuAuthorizer 未初始化，appContext 为空")
+        return Shizuku.UserServiceArgs(
+            ComponentName(ctx.packageName, ShellService::class.java.name)
         )
             .daemon(false)
             .processNameSuffix("shell_service")
-            .version(BuildConfig.VERSION_CODE)
+            .version(1)
     }
 
     /**
@@ -96,7 +95,7 @@ object ShizukuAuthorizer {
         }
 
         try {
-            Shizuku.bindUserService(userServiceArgs, object : ServiceConnection {
+            Shizuku.bindUserService(getUserServiceArgs(), object : ServiceConnection {
                 override fun onServiceConnected(name: ComponentName, binder: IBinder) {
                     val elapsed = System.currentTimeMillis() - bindStartTime
                     val service = IShellService.Stub.asInterface(binder)
