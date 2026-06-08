@@ -200,6 +200,66 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         rightEntries = listDirectory(rHome)
     }
 
+    /**
+     * 通过 shell 命令列出目录内容（Shizuku / Root / 普通 shell）。
+     * 用于访问 Android/data 等受 Scoped Storage 保护的目录。
+     * @return 条目列表，失败返回空列表并设置 loadError
+     */
+    private fun listDirEntriesViaShell(path: String, showHidden: Boolean, longFormat: Boolean = false): List<FileEntry> {
+        val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
+        val escapedPath = normalizedPath.replace("'", "'\\''")
+        val flags = buildString {
+            append("-l")
+            if (showHidden) append("a")
+            append("p")
+        }
+        val command = "ls $flags '$escapedPath'"
+
+        val useShizuku = permissionLevel == "ADB" && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+        val (stdout, stderr, exitCode) = try {
+            when {
+                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(command)
+                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(command)
+                else -> return emptyList()
+            }
+        } catch (e: Throwable) {
+            DiagnosticLog.log("ShellLs", "执行异常: ${e.message}")
+            return emptyList()
+        }
+
+        DiagnosticLog.log("ShellLs", "cmd=$command exit=$exitCode out=${stdout.length} err=${stderr.length}")
+        if (exitCode != 0 && stdout.isBlank()) {
+            DiagnosticLog.log("ShellLs", "失败: $stderr")
+            return emptyList()
+        }
+
+        val entries = mutableListOf<FileEntry>()
+        for (raw in stdout.lines()) {
+            val line = raw.trimEnd('\r')
+            if (line.isBlank()) continue
+            // 跳过 "total N" 行
+            if (line.startsWith("total ")) continue
+
+            // 解析 ls -lap 输出: drwxrwx--x  4 root sdcard_rw  4096 2024-01-01 00:00 dirname/
+            val parts = line.split("\\s+".toRegex())
+            if (parts.size < 7) continue
+
+            val perms = parts[0]
+            if (perms.length < 10) continue
+
+            val nameWithSlash = parts.drop(6).joinToString(" ")
+            if (nameWithSlash == "." || nameWithSlash == "..") continue
+            val isDir = nameWithSlash.endsWith("/")
+            val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+            if (!showHidden && name.startsWith(".")) continue
+
+            val size = parts[4].toLongOrNull() ?: 0L
+            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, 0L))
+        }
+        return entries
+    }
+
     // ── 便捷属性 ──
     val currentPath: String get() = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
     val currentNavState: PanelNavState get() = if (focusedPanel == FocusedPanel.LEFT) leftNavState else rightNavState
@@ -246,7 +306,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             navigateTo(entry.path)
             historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
         } else {
-            Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
+            // Android/data 等受保护目录：尝试 Shizuku/Root shell 列出
+            val shellEntries = listDirEntriesViaShell(entry.path, showHiddenFiles)
+            if (shellEntries.isNotEmpty()) {
+                navigateTo(entry.path)
+                historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
+            } else {
+                Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -1118,6 +1185,18 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         collectSubdirs(baseDir)
+
+        // File.listFiles() 对 Android/data 等受保护目录返回 null → 用 shell 底层冒泡计算
+        val isProtected = dirPath.contains("/Android/data") || dirPath.contains("/Android/obb")
+        if (subdirs.isEmpty() && isProtected) {
+            val useShizuku = permissionLevel == "ADB" && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+            if (isRootEngine || useShizuku) {
+                calcDirSizeWithShell(db, dirPath)
+                db.save(AppDataPaths.fileManager(context))
+                return db
+            }
+        }
+
         subdirs.sortByDescending { it.count { c -> c == '/' } }
 
         for (absPath in subdirs) {
@@ -1155,6 +1234,76 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         return total
+    }
+
+    /** 通过 shell 命令计算受保护目录（如 Android/data）的大小，遵循底层冒泡排序 */
+    private fun calcDirSizeWithShell(db: FolderSizeDb, dirPath: String) {
+        // 1. shell 列出当前目录子项
+        val children = listDirChildrenViaShell(dirPath) ?: return
+
+        var totalSize = 0L
+        val subdirs = mutableListOf<String>()
+
+        // 2. 累加文件大小，收集子目录
+        for (child in children) {
+            if (child.isDirectory) {
+                subdirs.add(child.path)
+            } else {
+                totalSize += child.size
+            }
+        }
+
+        // 3. 子目录底层冒泡排序
+        subdirs.sortByDescending { it.count { c -> c == '/' } }
+
+        for (subPath in subdirs) {
+            val cached = db.get(subPath)
+            // 缓存有效则直接用
+            if (cached != null && cached.size > 0) {
+                totalSize += cached.size
+                continue
+            }
+            // 递归计算子目录大小（同样的 shell 冒泡方式）
+            calcDirSizeWithShell(db, subPath)
+            val info = db.get(subPath)
+            if (info != null) totalSize += info.size
+        }
+
+        db.put(dirPath, FolderSizeInfo(totalSize, File(dirPath).lastModified()))
+    }
+
+    /** 通过 shell 列出目录直接子项（含文件大小），用于受保护目录 */
+    private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? {
+        val escapedPath = dirPath.replace("'", "'\\''")
+        val cmd = "ls -lap '$escapedPath'"
+        val useShizuku = permissionLevel == "ADB" && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+        val (stdout, _, exitCode) = try {
+            when {
+                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(cmd)
+                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(cmd)
+                else -> return null
+            }
+        } catch (_: Exception) { return null }
+        if (exitCode != 0 || stdout.isBlank()) return null
+
+        val entries = mutableListOf<FileEntry>()
+        for (raw in stdout.lines()) {
+            val line = raw.trimEnd('\r')
+            if (line.isBlank() || line.startsWith("total ")) continue
+            val parts = line.split("\\s+".toRegex())
+            if (parts.size < 7) continue
+            val perms = parts[0]
+            if (perms.length < 10) continue
+            val nameWithSlash = parts.drop(6).joinToString(" ")
+            if (nameWithSlash == "." || nameWithSlash == "..") continue
+            val isDir = nameWithSlash.endsWith("/")
+            val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+            if (name.startsWith(".")) continue  // 跳过隐藏文件
+            val size = parts[4].toLongOrNull() ?: 0L
+            val childPath = "$dirPath/$name"
+            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, 0L))
+        }
+        return entries
     }
 
     private fun listWithFile(path: String, showHidden: Boolean, effectiveRoot: String): List<FileEntry> {
@@ -1221,14 +1370,34 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val entries = mutableListOf<FileEntry>()
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
         val escapedPath = normalizedPath.replace("'", "'\\''")
-        val flags = if (showHidden) "-1Ap" else "-1p"
-        val command = "ls $flags '$escapedPath'"
-        val tag = if (useRoot) "LsRoot" else "LsShell"
+
+        // 判断是否使用 Shizuku（ADB 权限 + Shizuku 在线）
+        val useShizuku = !useRoot && permissionLevel == "ADB" && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+
+        // Shizuku 使用长格式 ls -lap 以获取文件大小和时间戳
+        val lsFlags = if (useShizuku) {
+            buildString {
+                append("-l")
+                if (showHidden) append("a")
+                append("p")
+            }
+        } else {
+            if (showHidden) "-1Ap" else "-1p"
+        }
+        val command = "ls $lsFlags '$escapedPath'"
+        val tag = when {
+            useRoot -> "LsRoot"
+            useShizuku -> "LsShizuku"
+            else -> "LsShell"
+        }
         DiagnosticLog.log(tag, "命令: $command")
 
         val (stdout, stderr, exitCode) = try {
-            if (useRoot) SpecialPermissionVerifier.executeRootCommandFull(command)
-            else SpecialPermissionVerifier.executeShellCommandFull(command)
+            when {
+                useRoot -> SpecialPermissionVerifier.executeRootCommandFull(command)
+                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(command)
+                else -> SpecialPermissionVerifier.executeShellCommandFull(command)
+            }
         } catch (e: Throwable) {
             val isApkAssetsNoise = e is java.io.IOException && (
                 e.stackTrace.any { it.className == "android.content.res.ApkAssets" } ||
@@ -1255,17 +1424,39 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val lines = stdout.lines().map { it.trimEnd('\r') }.filter { it.isNotBlank() }
         var dirCount = 0
         var fileCount = 0
-        for (raw in lines) {
-            val isDir = raw.endsWith("/")
-            val name = if (isDir) raw.dropLast(1) else raw
-            if (name == "." || name == "..") continue
-            if (!showHidden && name.startsWith(".")) continue
-            if (isDir) dirCount++ else fileCount++
-            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-            val perm = try { formatPermission(Os.stat(childPath).st_mode) } catch (_: Exception) { "" }
-            val sz = if (isDir) 0L else try { File(childPath).length() } catch (_: Exception) { 0L }
-            val modified = try { File(childPath).lastModified() } catch (_: Exception) { 0L }
-            entries.add(FileEntry(childPath, name, isDir, perm, sz, modified))
+
+        if (useShizuku || useRoot) {
+            // 长格式解析 ls -lap: drwxrwx--x  4 root sdcard_rw  4096 2024-01-01 00:00 dirname/
+            for (raw in lines) {
+                if (raw.startsWith("total ")) continue
+                val parts = raw.split("\\s+".toRegex())
+                if (parts.size < 7) continue
+                val perms = parts[0]
+                if (perms.length < 10) continue
+                val nameWithSlash = parts.drop(6).joinToString(" ")
+                if (nameWithSlash == "." || nameWithSlash == "..") continue
+                val isDir = nameWithSlash.endsWith("/")
+                val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+                if (!showHidden && name.startsWith(".")) continue
+                if (isDir) dirCount++ else fileCount++
+                val sz = parts[4].toLongOrNull() ?: 0L
+                val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+                entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else sz, 0L))
+            }
+        } else {
+            // 短格式解析 ls -1p: dirname/ 或 filename
+            for (raw in lines) {
+                val isDir = raw.endsWith("/")
+                val name = if (isDir) raw.dropLast(1) else raw
+                if (name == "." || name == "..") continue
+                if (!showHidden && name.startsWith(".")) continue
+                if (isDir) dirCount++ else fileCount++
+                val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+                val perm = try { formatPermission(Os.stat(childPath).st_mode) } catch (_: Exception) { "" }
+                val sz = if (isDir) 0L else try { File(childPath).length() } catch (_: Exception) { 0L }
+                val modified = try { File(childPath).lastModified() } catch (_: Exception) { 0L }
+                entries.add(FileEntry(childPath, name, isDir, perm, sz, modified))
+            }
         }
         DiagnosticLog.log(tag, "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
 
@@ -1390,6 +1581,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (children != null) {
                 for (child in children) {
                     if (child.isDirectory) folderCount++ else fileCount++
+                }
+            } else if (entry.path.contains("/Android/data") || entry.path.contains("/Android/obb")) {
+                // 受保护目录：通过 shell 统计子项数量
+                val shellEntries = listDirEntriesViaShell(entry.path, showHiddenFiles)
+                for (se in shellEntries) {
+                    if (se.isDirectory) folderCount++ else fileCount++
                 }
             }
         }

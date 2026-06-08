@@ -166,7 +166,7 @@ class PermissionGuideViewModel : ViewModel() {
                 AndroidPermissionLevel.STANDARD -> true
                 AndroidPermissionLevel.ACCESSIBILITY -> SpecialPermissionVerifier.isAccessibilityEnabled(context)
                 AndroidPermissionLevel.ADB -> SpecialPermissionVerifier.isShizukuAuthorized(context)
-                AndroidPermissionLevel.DEBUGGER -> SpecialPermissionVerifier.isAdbEnabled(context)
+                AndroidPermissionLevel.DEBUGGER -> SpecialPermissionVerifier.isAdbEnabled(context) && !SpecialPermissionVerifier.isShizukuAuthorized(context)
                 AndroidPermissionLevel.ADMIN -> SpecialPermissionVerifier.isDeviceAdminActive(context)
                 AndroidPermissionLevel.ROOT -> SpecialPermissionVerifier.isRootAvailable()
             }
@@ -196,7 +196,7 @@ class PermissionGuideViewModel : ViewModel() {
                 AndroidPermissionLevel.STANDARD -> baseStatuses
                 AndroidPermissionLevel.ACCESSIBILITY -> baseStatuses + PermissionStatus("无障碍服务", isGranted = SpecialPermissionVerifier.isAccessibilityEnabled(context))
                 AndroidPermissionLevel.ADB -> baseStatuses + PermissionStatus("Shizuku 权限", isGranted = SpecialPermissionVerifier.isShizukuAuthorized(context))
-                AndroidPermissionLevel.DEBUGGER -> baseStatuses + PermissionStatus("ADB 权限", isGranted = SpecialPermissionVerifier.isAdbEnabled(context))
+                AndroidPermissionLevel.DEBUGGER -> baseStatuses + PermissionStatus("ADB 权限", isGranted = SpecialPermissionVerifier.isAdbEnabled(context) && !SpecialPermissionVerifier.isShizukuAuthorized(context))
                 AndroidPermissionLevel.ADMIN -> baseStatuses + PermissionStatus("设备管理器", isGranted = SpecialPermissionVerifier.isDeviceAdminActive(context))
                 AndroidPermissionLevel.ROOT -> baseStatuses + PermissionStatus("Root 权限", isGranted = SpecialPermissionVerifier.isRootAvailable())
             }
