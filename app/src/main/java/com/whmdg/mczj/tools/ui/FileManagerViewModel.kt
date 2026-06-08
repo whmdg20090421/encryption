@@ -215,7 +215,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
         val command = "ls $flags '$escapedPath'"
 
-        val useShizuku = permissionLevel == "ADB" && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+        val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (stdout, stderr, exitCode) = try {
             when {
                 isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(command)
@@ -1189,7 +1189,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // File.listFiles() 对 Android/data 等受保护目录返回 null → 用 shell 底层冒泡计算
         val isProtected = dirPath.contains("/Android/data") || dirPath.contains("/Android/obb")
         if (subdirs.isEmpty() && isProtected) {
-            val useShizuku = permissionLevel == "ADB" && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+            val useShizuku = SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
             if (isRootEngine || useShizuku) {
                 calcDirSizeWithShell(db, dirPath)
                 db.save(AppDataPaths.fileManager(context))
@@ -1276,7 +1276,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? {
         val escapedPath = dirPath.replace("'", "'\\''")
         val cmd = "ls -lap '$escapedPath'"
-        val useShizuku = permissionLevel == "ADB" && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+        val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (stdout, _, exitCode) = try {
             when {
                 isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(cmd)
@@ -1372,7 +1372,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val escapedPath = normalizedPath.replace("'", "'\\''")
 
         // 判断是否使用 Shizuku（ADB 权限 + Shizuku 在线）
-        val useShizuku = !useRoot && permissionLevel == "ADB" && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+        val useShizuku = !useRoot && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
 
         // Shizuku 使用长格式 ls -lap 以获取文件大小和时间戳
         val lsFlags = if (useShizuku) {
