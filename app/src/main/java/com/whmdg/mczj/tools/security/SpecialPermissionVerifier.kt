@@ -60,15 +60,20 @@ object SpecialPermissionVerifier {
      * 检测 Shizuku 是否已启动且已授权本应用（使用 Shizuku SDK）
      */
     fun isShizukuAuthorized(context: Context): Boolean {
-        ShizukuAuthorizer.initialize()
-        return ShizukuAuthorizer.isShizukuServiceRunning() && ShizukuAuthorizer.hasShizukuPermission()
+        ShizukuAuthorizer.initialize(context)
+        val authorized = ShizukuAuthorizer.isShizukuServiceRunning() && ShizukuAuthorizer.hasShizukuPermission()
+        // 预热 UserService 绑定
+        if (authorized) {
+            ShizukuAuthorizer.ensureBound { /* 静默预热 */ }
+        }
+        return authorized
     }
 
     /**
      * 检测 Shizuku 服务是否在运行
      */
     fun isShizukuRunning(context: Context): Boolean {
-        ShizukuAuthorizer.initialize()
+        ShizukuAuthorizer.initialize(context)
         return ShizukuAuthorizer.isShizukuServiceRunning()
     }
 
