@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Base64
 import android.util.Log
 import android.widget.Toast
 import rikka.shizuku.Shizuku
@@ -302,16 +303,18 @@ object ShizukuAuthorizer {
     }
 
     /**
-     * 解析 UserService 返回的编码结果。
-     * 格式: "stdout---STDERR---\nstderr---EXIT---\nexitCode"
+     * 解析 UserService 返回的 Base64 编码结果。
+     * 格式: "stdoutBase64\nstderrBase64\nexitCode"
      */
     private fun parseResult(result: String): Triple<String, String, Int> {
-        val stderrSplit = result.split("---STDERR---\n", limit = 2)
-        val stdout = stderrSplit[0].trimEnd()
-        val rest = stderrSplit.getOrElse(1) { "" }
-        val exitSplit = rest.split("---EXIT---\n", limit = 2)
-        val stderr = exitSplit[0].trimEnd()
-        val exitCode = exitSplit.getOrElse(1) { "-1" }.trim().toIntOrNull() ?: -1
+        val lines = result.split("\n", limit = 3)
+        val stdout = try {
+            Base64.decode(lines.getOrElse(0) { "" }, Base64.NO_WRAP).toString(Charsets.UTF_8)
+        } catch (_: Exception) { "" }
+        val stderr = try {
+            Base64.decode(lines.getOrElse(1) { "" }, Base64.NO_WRAP).toString(Charsets.UTF_8)
+        } catch (_: Exception) { "" }
+        val exitCode = lines.getOrElse(2) { "-1" }.trim().toIntOrNull() ?: -1
         return Triple(stdout, stderr, exitCode)
     }
 
