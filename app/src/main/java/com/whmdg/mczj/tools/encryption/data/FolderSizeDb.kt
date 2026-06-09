@@ -27,7 +27,12 @@ data class FolderSizeDb(
             val file = File(vaultDir, FILE_NAME)
             if (!file.exists()) return FolderSizeDb()
             return try {
-                json.decodeFromString(file.readText())
+                val db = json.decodeFromString<FolderSizeDb>(file.readText())
+                // 清理 ./ 和 ../ 脏数据
+                db.folders.keys.removeAll { key ->
+                    key.endsWith("/.") || key.endsWith("/..") || key == "." || key == ".."
+                }
+                db
             } catch (_: Exception) {
                 FolderSizeDb()
             }
@@ -42,6 +47,8 @@ data class FolderSizeDb(
     fun get(relativePath: String): FolderSizeInfo? = folders[relativePath]
 
     fun put(relativePath: String, info: FolderSizeInfo) {
+        // 拦截 ./ 和 ../ 路径
+        if (relativePath.endsWith("/.") || relativePath.endsWith("/..") || relativePath == "." || relativePath == "..") return
         folders[relativePath] = info
     }
 

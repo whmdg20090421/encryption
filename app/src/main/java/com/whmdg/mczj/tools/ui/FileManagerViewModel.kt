@@ -248,9 +248,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (perms.length < 10) continue
 
             val nameWithSlash = parts.drop(7).joinToString(" ")
-            if (nameWithSlash == "." || nameWithSlash == "..") continue
             val isDir = nameWithSlash.endsWith("/")
             val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+            if (name == "." || name == "..") continue
             if (!showHidden && name.startsWith(".")) continue
 
             val size = parts[4].toLongOrNull() ?: 0L
@@ -1314,9 +1314,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val perms = parts[0]
             if (perms.length < 10) continue
             val nameWithSlash = parts.drop(7).joinToString(" ")
-            if (nameWithSlash == "." || nameWithSlash == "..") continue
             val isDir = nameWithSlash.endsWith("/")
             val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+            if (name == "." || name == "..") continue
             if (name.startsWith(".")) continue  // 跳过隐藏文件
             val size = parts[4].toLongOrNull() ?: 0L
             val childPath = "$dirPath/$name"
@@ -1456,9 +1456,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val perms = parts[0]
                 if (perms.length < 10) continue
                 val nameWithSlash = parts.drop(7).joinToString(" ")
-                if (nameWithSlash == "." || nameWithSlash == "..") continue
                 val isDir = nameWithSlash.endsWith("/")
                 val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+                if (name == "." || name == "..") continue
                 if (!showHidden && name.startsWith(".")) continue
                 if (isDir) dirCount++ else fileCount++
                 val sz = parts[4].toLongOrNull() ?: 0L
