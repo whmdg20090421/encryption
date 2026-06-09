@@ -3264,14 +3264,18 @@ private fun FileBrowserPanel(
                                 if (cached.size == 0L) {
                                     val dir = File(entry.path)
                                     val children = try { dir.listFiles() } catch (_: Exception) { null }
-                                    if (children == null) "✕" else "0MB"
+                                    if (children == null) {
+                                        if (SpecialPermissionVerifier.isShizukuAuthorized(context)) "--" else "✕"
+                                    } else "0MB"
                                 } else {
                                     compactSize(cached.size)
                                 }
                             } else {
                                 val dir = File(entry.path)
                                 val children = try { dir.listFiles() } catch (_: Exception) { null }
-                                if (children == null) "✕" else ""
+                                if (children == null) {
+                                    if (SpecialPermissionVerifier.isShizukuAuthorized(context)) "--" else "✕"
+                                } else ""
                             }
                         }
                     } else if (archiveSizeProvider != null) {

@@ -314,6 +314,20 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (shellEntries.isNotEmpty()) {
                 navigateTo(entry.path)
                 historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
+                // 受保护目录自动计算文件夹大小
+                val isProtected = entry.path.contains("/Android/data") || entry.path.contains("/Android/obb")
+                if (isProtected) {
+                    Thread {
+                        val db = FolderSizeDb.load(AppDataPaths.fileManager(context))
+                        calcDirSizeWithShell(db, entry.path)
+                        db.save(AppDataPaths.fileManager(context))
+                        kotlinx.coroutines.Dispatchers.Main.let { main ->
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                folderSizeDb = db
+                            }
+                        }
+                    }.start()
+                }
             } else if (!testDir.exists()) {
                 Toast.makeText(context, "文件夹不存在: ${entry.name}", Toast.LENGTH_SHORT).show()
             } else {
