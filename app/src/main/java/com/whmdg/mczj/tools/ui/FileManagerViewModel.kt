@@ -242,12 +242,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
             // 解析 ls -lap 输出: drwxrwx--x  4 root sdcard_rw  4096 2024-01-01 00:00 dirname/
             val parts = line.split("\\s+".toRegex())
-            if (parts.size < 7) continue
+            if (parts.size < 8) continue
 
             val perms = parts[0]
             if (perms.length < 10) continue
 
-            val nameWithSlash = parts.drop(6).joinToString(" ")
+            val nameWithSlash = parts.drop(7).joinToString(" ")
             if (nameWithSlash == "." || nameWithSlash == "..") continue
             val isDir = nameWithSlash.endsWith("/")
             val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
@@ -1291,10 +1291,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val line = raw.trimEnd('\r')
             if (line.isBlank() || line.startsWith("total ")) continue
             val parts = line.split("\\s+".toRegex())
-            if (parts.size < 7) continue
+            if (parts.size < 8) continue
             val perms = parts[0]
             if (perms.length < 10) continue
-            val nameWithSlash = parts.drop(6).joinToString(" ")
+            val nameWithSlash = parts.drop(7).joinToString(" ")
             if (nameWithSlash == "." || nameWithSlash == "..") continue
             val isDir = nameWithSlash.endsWith("/")
             val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
@@ -1430,10 +1430,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             for (raw in lines) {
                 if (raw.startsWith("total ")) continue
                 val parts = raw.split("\\s+".toRegex())
-                if (parts.size < 7) continue
+                if (parts.size < 8) continue
                 val perms = parts[0]
                 if (perms.length < 10) continue
-                val nameWithSlash = parts.drop(6).joinToString(" ")
+                val nameWithSlash = parts.drop(7).joinToString(" ")
                 if (nameWithSlash == "." || nameWithSlash == "..") continue
                 val isDir = nameWithSlash.endsWith("/")
                 val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
