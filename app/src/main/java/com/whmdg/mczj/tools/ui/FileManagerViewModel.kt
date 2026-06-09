@@ -255,7 +255,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
             val size = parts[4].toLongOrNull() ?: 0L
             val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, 0L))
+            val modified = try {
+                SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
+            } catch (_: Exception) { 0L }
+            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, modified))
         }
         return entries
     }
@@ -311,6 +314,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (shellEntries.isNotEmpty()) {
                 navigateTo(entry.path)
                 historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
+            } else if (!testDir.exists()) {
+                Toast.makeText(context, "文件夹不存在: ${entry.name}", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
             }
@@ -1301,7 +1306,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (name.startsWith(".")) continue  // 跳过隐藏文件
             val size = parts[4].toLongOrNull() ?: 0L
             val childPath = "$dirPath/$name"
-            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, 0L))
+            val modified = try {
+                SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
+            } catch (_: Exception) { 0L }
+            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, modified))
         }
         return entries
     }
@@ -1441,7 +1449,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (isDir) dirCount++ else fileCount++
                 val sz = parts[4].toLongOrNull() ?: 0L
                 val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-                entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else sz, 0L))
+                val modified = try {
+                    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
+                } catch (_: Exception) { 0L }
+                entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else sz, modified))
             }
         } else {
             // 短格式解析 ls -1p: dirname/ 或 filename
