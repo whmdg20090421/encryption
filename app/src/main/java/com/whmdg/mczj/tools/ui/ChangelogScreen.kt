@@ -29,6 +29,23 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V2.5",
+        date = "2026-06-09",
+        items = listOf(
+            "Shizuku UserService 迁移：从已废弃的 newProcess（fork+exec ~50ms）迁移到 UserService（Binder IPC ~1ms），异步绑定不阻塞主线程，首次连接 Toast 提示耗时",
+            "Android/data & obb 完整访问：Shizuku/Root 双引擎支持受保护目录浏览、文件夹大小统计、进入时自动后台计算",
+            "Shell 诊断日志：设置 debug_mode 开关控制，写入外部存储 shell_debug.log，记录命令/原始 Base64/解码结果，用于排查 Shizuku 执行问题",
+            "文件属性增强：显示用户/组名称，ls -lap 解析正确跳过 7 个元数据字段",
+            "文件夹大小显示优化：受保护目录 Shizuku 可用时显示 -- 而非红色 ✕",
+            "JPEG XL 图片压缩：支持 .jxl 文件查看、JPEG 转 JXL 无损压缩、JXL 打包 ZIP",
+            "压缩包内置浏览：ZIP/7z/RAR/TAR 浏览，50MB 按需解压阈值，内存/磁盘双策略",
+            "图片查看器增强：双击 1x↔2x 切换、边缘滑动翻页、缩放时禁用翻页防冲突",
+            "外部打开警告对话框：非图片/视频/音频/文本文件打开前二次确认",
+            "历史记录优化：文件点击导航到父目录并高亮目标，外部打开使用应用选择器",
+            "CrashActivity Material 配色 + 错误提示区分「文件夹不存在」和「权限不足」"
+        )
+    ),
+    ChangelogVersion(
         version = "V2.4",
         date = "2026-06-05",
         items = listOf(
