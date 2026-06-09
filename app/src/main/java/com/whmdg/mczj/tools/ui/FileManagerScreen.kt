@@ -3211,6 +3211,7 @@ private fun FileBrowserPanel(
     lazyListState: LazyListState = rememberLazyListState(),
     archiveSizeProvider: ((FileEntry) -> String)? = null
 ) {
+    val context = LocalContext.current
     Surface(
         modifier = modifier
             .fillMaxHeight()
