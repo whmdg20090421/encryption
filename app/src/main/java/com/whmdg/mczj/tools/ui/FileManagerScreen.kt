@@ -690,6 +690,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 },
                                 modifier = Modifier,
                                 folderSizeDb = vm.folderSizeDb,
+                                listChildren = { path -> vm.listChildrenOrNull(path) },
                                 parentPath = leftParentPath,
                                 lazyListState = leftListState,
                                 onNavigateUp = {
@@ -771,6 +772,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 },
                                 modifier = Modifier,
                                 folderSizeDb = vm.folderSizeDb,
+                                listChildren = { path -> vm.listChildrenOrNull(path) },
                                 parentPath = rightParentPath,
                                 lazyListState = rightListState,
                                 onNavigateUp = {
@@ -3400,7 +3402,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 val cached = vm.folderSizeDb.get(entry.path)
                                 if (cached != null) return@filter false // 已统计
                                 // 检查是否空文件夹或权限不足（受保护路径走 shell）
-                                val children = vm.listChildrenOrNull(entry.path)
+                                val children = listChildren?.invoke(entry.path)
                                 if (children == null || children.isEmpty()) return@filter false
                                 true
                             }
@@ -3484,6 +3486,7 @@ private fun FileBrowserPanel(
     onLongClick: (FileEntry) -> Unit,
     modifier: Modifier = Modifier,
     folderSizeDb: FolderSizeDb = FolderSizeDb(),
+    listChildren: ((String) -> List<FileEntry>?)? = null,
     parentPath: String? = null,
     onNavigateUp: () -> Unit = {},
     lazyListState: LazyListState = rememberLazyListState(),
@@ -3548,7 +3551,7 @@ private fun FileBrowserPanel(
                                 }
                             } else {
                                 // 未统计：检查是否可访问（受保护路径走 shell）
-                                val children = vm.listChildrenOrNull(entry.path)
+                                val children = listChildren?.invoke(entry.path)
                                 if (children == null) {
                                     if (SpecialPermissionVerifier.isShizukuAuthorized(context)) "--" else "✕"
                                 } else ""
