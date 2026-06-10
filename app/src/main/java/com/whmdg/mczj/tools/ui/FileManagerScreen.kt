@@ -3402,7 +3402,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 val cached = vm.folderSizeDb.get(entry.path)
                                 if (cached != null) return@filter false // 已统计
                                 // 检查是否空文件夹或权限不足（受保护路径走 shell）
-                                val children = listChildren?.invoke(entry.path)
+                                val children = vm.listChildrenOrNull(entry.path)
                                 if (children == null || children.isEmpty()) return@filter false
                                 true
                             }
