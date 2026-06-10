@@ -201,6 +201,60 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 判断路径是否位于受 Scoped Storage 保护的目录下。
+     */
+    private fun isProtectedPath(path: String): Boolean =
+        path.contains("/Android/data") || path.contains("/Android/obb")
+
+    /**
+     * 通过 shell 检查路径是否存在（对 Android/data 等受保护路径使用 Shizuku/Root）。
+     * 普通路径直接用 Java File API。
+     */
+    private fun shellPathExists(path: String): Boolean {
+        if (!isProtectedPath(path)) return File(path).exists()
+        val escaped = path.replace("'", "'\\''")
+        val useShizuku = SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+        val (_, _, exit) = try {
+            when {
+                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -e '$escaped'")
+                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand("test -e '$escaped'")
+                else -> return File(path).exists()
+            }
+        } catch (_: Exception) { return false }
+        return exit == 0
+    }
+
+    /**
+     * 通过 shell 检查路径是否为目录。
+     */
+    private fun shellIsDirectory(path: String): Boolean {
+        if (!isProtectedPath(path)) return File(path).isDirectory
+        val escaped = path.replace("'", "'\\''")
+        val useShizuku = SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+        val (_, _, exit) = try {
+            when {
+                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -d '$escaped'")
+                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand("test -d '$escaped'")
+                else -> return File(path).isDirectory
+            }
+        } catch (_: Exception) { return false }
+        return exit == 0
+    }
+
+    /**
+     * 根据当前引擎执行 shell 命令（Root 优先，回退 Shizuku）。
+     * 用于受保护路径的文件操作。
+     */
+    private fun executeShell(cmd: String): Triple<String, String, Int> {
+        val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+        return when {
+            isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(cmd)
+            useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(cmd)
+            else -> Triple("", "无可用权限引擎", -1)
+        }
+    }
+
+    /**
      * 通过 shell 命令列出目录内容（Shizuku / Root / 普通 shell）。
      * 用于访问 Android/data 等受 Scoped Storage 保护的目录。
      * @return 条目列表，失败返回空列表并设置 loadError
@@ -303,43 +357,49 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 导航操作 ──
     fun navigateToFolder(entry: FileEntry) {
-        val testDir = File(entry.path)
-        val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
-        if (accessible != null) {
-            navigateTo(entry.path)
-            historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
-        } else {
-            // Android/data 等受保护目录：尝试 Shizuku/Root shell 列出
+        if (isProtectedPath(entry.path)) {
+            // Android/data 等受保护目录：跳过 Java File API，统一用 shell
             val shellEntries = listDirEntriesViaShell(entry.path, showHiddenFiles)
             if (shellEntries.isNotEmpty()) {
                 navigateTo(entry.path)
                 historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
                 // 受保护目录自动计算文件夹大小
-                val isProtected = entry.path.contains("/Android/data") || entry.path.contains("/Android/obb")
-                if (isProtected) {
-                    Thread {
-                        val db = FolderSizeDb.load(AppDataPaths.fileManager(context))
-                        calcDirSizeWithShell(db, entry.path)
-                        db.save(AppDataPaths.fileManager(context))
-                        kotlinx.coroutines.Dispatchers.Main.let { main ->
-                            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                folderSizeDb = db
-                            }
-                        }
-                    }.start()
-                }
-            } else if (!testDir.exists()) {
-                Toast.makeText(context, "文件夹不存在: ${entry.name}", Toast.LENGTH_SHORT).show()
-            } else {
+                Thread {
+                    val db = FolderSizeDb.load(AppDataPaths.fileManager(context))
+                    calcDirSizeWithShell(db, entry.path)
+                    db.save(AppDataPaths.fileManager(context))
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        folderSizeDb = db
+                    }
+                }.start()
+            } else if (shellPathExists(entry.path)) {
                 Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "文件夹不存在: ${entry.name}", Toast.LENGTH_SHORT).show()
             }
+            return
+        }
+
+        // 普通路径：Java File API
+        val testDir = File(entry.path)
+        val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
+        if (accessible != null) {
+            navigateTo(entry.path)
+            historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
+        } else if (!testDir.exists()) {
+            Toast.makeText(context, "文件夹不存在: ${entry.name}", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
         }
     }
 
     fun navigateToHistoryDir(entry: HistoryEntry) {
-        val testDir = File(entry.path)
-        if (testDir.exists() && testDir.canRead()) {
-            navigateTo(entry.path)
+        if (isProtectedPath(entry.path)) {
+            val shellEntries = listDirEntriesViaShell(entry.path, showHiddenFiles)
+            if (shellEntries.isNotEmpty()) navigateTo(entry.path)
+        } else {
+            val testDir = File(entry.path)
+            if (testDir.exists() && testDir.canRead()) navigateTo(entry.path)
         }
     }
 
@@ -351,16 +411,25 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun navigateToHistoryFile(entry: HistoryEntry) {
         val file = File(entry.path)
         val parentDir = file.parentFile ?: return
-        if (parentDir.exists() && parentDir.canRead()) {
+        if (isProtectedPath(parentDir.absolutePath)) {
+            val shellEntries = listDirEntriesViaShell(parentDir.absolutePath, showHiddenFiles)
+            if (shellEntries.isNotEmpty()) {
+                pendingScrollToFile = file.name
+                navigateTo(parentDir.absolutePath)
+            }
+        } else if (parentDir.exists() && parentDir.canRead()) {
             pendingScrollToFile = file.name
             navigateTo(parentDir.absolutePath)
         }
     }
 
     fun navigateToBookmark(bm: BookmarkEntry) {
-        val testDir = File(bm.path)
-        if (testDir.exists() && testDir.canRead()) {
-            navigateTo(bm.path)
+        if (isProtectedPath(bm.path)) {
+            val shellEntries = listDirEntriesViaShell(bm.path, showHiddenFiles)
+            if (shellEntries.isNotEmpty()) navigateTo(bm.path)
+        } else {
+            val testDir = File(bm.path)
+            if (testDir.exists() && testDir.canRead()) navigateTo(bm.path)
         }
     }
 
@@ -434,8 +503,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun moveToRecycleBin(entry: FileEntry): String? {
         val binDir = AppDataPaths.recycleBin(context)
-        val source = File(entry.path)
-        if (!source.exists()) return "文件不存在"
+        if (!shellPathExists(entry.path)) return "文件不存在"
 
         // 同名冲突时追加时间戳后缀
         var targetName = entry.name
@@ -451,19 +519,34 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             target = File(binDir, targetName)
         }
 
-        try {
-            val moved = source.renameTo(target)
-            if (!moved) {
-                // renameTo 失败，尝试 copy + delete
-                if (source.isDirectory) {
-                    source.copyRecursively(target, overwrite = false)
-                } else {
-                    source.copyTo(target, overwrite = false)
+        if (isProtectedPath(entry.path)) {
+            // 受保护路径：使用 shell cp + rm
+            val escapedSrc = entry.path.replace("'", "'\\''")
+            val escapedDst = target.absolutePath.replace("'", "'\\''")
+            val cpFlag = if (entry.isDirectory) "-rf" else "-f"
+            val (_, cpErr, cpExit) = try {
+                executeShell("cp $cpFlag '$escapedSrc' '$escapedDst'")
+            } catch (e: Exception) { return e.message ?: "复制失败" }
+            if (cpExit != 0) return "复制失败: $cpErr"
+            // 删除源文件
+            val rmFlag = if (entry.isDirectory) "-rf" else "-f"
+            executeShell("rm $rmFlag '$escapedSrc'")
+        } else {
+            // 普通路径：Java File API
+            val source = File(entry.path)
+            try {
+                val moved = source.renameTo(target)
+                if (!moved) {
+                    if (entry.isDirectory) {
+                        source.copyRecursively(target, overwrite = false)
+                    } else {
+                        source.copyTo(target, overwrite = false)
+                    }
+                    SpecialPermissionVerifier.safeDelete(source)
                 }
-                SpecialPermissionVerifier.safeDelete(source)
+            } catch (e: Exception) {
+                return e.message ?: "移动失败"
             }
-        } catch (e: Exception) {
-            return e.message ?: "移动失败"
         }
 
         // 写入元数据
@@ -475,6 +558,131 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         )
         saveRecycleBinMeta()
         return null
+    }
+
+    /**
+     * 重命名文件或文件夹。成功返回 null，失败返回错误信息。
+     */
+    fun renameEntry(entry: FileEntry, newName: String): String? {
+        val source = File(entry.path)
+        val parent = source.parentFile ?: return "无法获取父目录"
+        val dest = File(parent, newName)
+
+        if (isProtectedPath(entry.path)) {
+            val escapedSrc = entry.path.replace("'", "'\\''")
+            val escapedDst = dest.absolutePath.replace("'", "'\\''")
+            val (_, err, exit) = try {
+                executeShell("mv '$escapedSrc' '$escapedDst'")
+            } catch (e: Exception) { return e.message ?: "重命名失败" }
+            return if (exit == 0) null else "重命名失败: $err"
+        }
+
+        if (dest.exists()) return "已存在同名文件或文件夹"
+        return try {
+            if (source.renameTo(dest)) null else "重命名失败"
+        } catch (e: Exception) { e.message ?: "重命名失败" }
+    }
+
+    /**
+     * 永久删除文件或文件夹。成功返回 null，失败返回错误信息。
+     */
+    fun deleteEntry(entry: FileEntry): String? {
+        if (isProtectedPath(entry.path)) {
+            val escaped = entry.path.replace("'", "'\\''")
+            val flag = if (entry.isDirectory) "-rf" else "-f"
+            val (_, err, exit) = try {
+                executeShell("rm $flag '$escaped'")
+            } catch (e: Exception) { return e.message ?: "删除失败" }
+            return if (exit == 0) null else "删除失败: $err"
+        }
+        val file = File(entry.path)
+        return try {
+            if (SpecialPermissionVerifier.safeDelete(file)) null else "删除失败"
+        } catch (e: Exception) { e.message ?: "删除失败" }
+    }
+
+    /**
+     * 创建文件或文件夹。成功返回 null，失败返回错误信息。
+     */
+    fun createEntry(parentPath: String, name: String, isFolder: Boolean): String? {
+        val target = File(parentPath, name)
+
+        if (isProtectedPath(parentPath)) {
+            val escaped = target.absolutePath.replace("'", "'\\''")
+            val cmd = if (isFolder) "mkdir '$escaped'" else "touch '$escaped'"
+            val (_, err, exit) = try {
+                executeShell(cmd)
+            } catch (e: Exception) { return e.message ?: "创建失败" }
+            return if (exit == 0) null else "创建失败: $err"
+        }
+
+        if (target.exists()) return "已存在同名文件或文件夹"
+        return try {
+            val success = if (isFolder) target.mkdir() else target.createNewFile()
+            if (success) null else "创建失败"
+        } catch (e: Exception) { e.message ?: "创建失败" }
+    }
+
+    /**
+     * 移动文件/文件夹到目标目录。成功返回 null，失败返回错误信息。
+     */
+    fun moveEntry(source: FileEntry, destDir: String): String? {
+        val dest = File(destDir, source.name)
+
+        if (isProtectedPath(source.path) || isProtectedPath(destDir)) {
+            val escapedSrc = source.path.replace("'", "'\\''")
+            val escapedDst = dest.absolutePath.replace("'", "'\\''")
+            val cpFlag = if (source.isDirectory) "-rf" else "-f"
+            val (_, cpErr, cpExit) = try {
+                executeShell("cp $cpFlag '$escapedSrc' '$escapedDst'")
+            } catch (e: Exception) { return e.message ?: "移动失败" }
+            if (cpExit != 0) return "移动失败: $cpErr"
+            // 删除源
+            val rmFlag = if (source.isDirectory) "-rf" else "-f"
+            executeShell("rm $rmFlag '$escapedSrc'")
+            return null
+        }
+
+        val sourceFile = File(source.path)
+        return try {
+            val moved = sourceFile.renameTo(dest)
+            if (!moved) {
+                if (source.isDirectory) {
+                    sourceFile.copyRecursively(dest, overwrite = false)
+                } else {
+                    sourceFile.copyTo(dest, overwrite = false)
+                }
+                SpecialPermissionVerifier.safeDelete(sourceFile)
+            }
+            null
+        } catch (e: Exception) { e.message ?: "移动失败" }
+    }
+
+    /**
+     * 复制文件或文件夹到目标目录。成功返回 null，失败返回错误信息。
+     */
+    fun copyEntry(source: FileEntry, destDir: String): String? {
+        val dest = File(destDir, source.name)
+
+        if (isProtectedPath(source.path) || isProtectedPath(destDir)) {
+            val escapedSrc = source.path.replace("'", "'\\''")
+            val escapedDst = dest.absolutePath.replace("'", "'\\''")
+            val flag = if (source.isDirectory) "-rf" else "-f"
+            val (_, err, exit) = try {
+                executeShell("cp $flag '$escapedSrc' '$escapedDst'")
+            } catch (e: Exception) { return e.message ?: "复制失败" }
+            return if (exit == 0) null else "复制失败: $err"
+        }
+
+        val sourceFile = File(source.path)
+        return try {
+            if (source.isDirectory) {
+                sourceFile.copyRecursively(dest, overwrite = false)
+            } else {
+                sourceFile.copyTo(dest, overwrite = false)
+            }
+            null
+        } catch (e: Exception) { e.message ?: "复制失败" }
     }
 
     /**
@@ -1037,7 +1245,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         var entries = listWithLs(path, showHiddenFiles, useRoot = isRootEngine, effectiveRoot = effectiveRoot)
 
         // 兜底：ls 完全没结果且报错 → 退到 File.listFiles
-        if (entries.isEmpty() && loadError != null) {
+        // Android/data 等受保护路径跳过兜底，因为 File API 无法访问
+        val isProtectedPath = path.contains("/Android/data") || path.contains("/Android/obb")
+        if (entries.isEmpty() && loadError != null && !isProtectedPath) {
             DiagnosticLog.log("FileMgr", "ls 失败，回退 File API")
             val prevErr = loadError
             loadError = null

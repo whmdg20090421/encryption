@@ -1516,21 +1516,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         .weight(1f)
                                         .clickable {
                                             val entry = selectedEntry ?: return@clickable
-                                            val source = File(entry.path)
-                                            val destDir = File(
-                                                if (isToRight) vm.rightPath else vm.leftPath
-                                            )
-                                            val dest = File(destDir, entry.name)
-                                            try {
-                                                if (source.isDirectory) {
-                                                    source.copyRecursively(dest, overwrite = false)
-                                                } else {
-                                                    source.copyTo(dest, overwrite = false)
-                                                }
+                                            val destDir = if (isToRight) vm.rightPath else vm.leftPath
+                                            val error = vm.copyEntry(entry, destDir)
+                                            if (error == null) {
                                                 Toast.makeText(context, "复制成功", Toast.LENGTH_SHORT).show()
                                                 vm.refreshBoth()
-                                            } catch (e: Exception) {
-                                                Toast.makeText(context, "复制失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "复制失败: $error", Toast.LENGTH_SHORT).show()
                                             }
                                             selectedEntry = null
                                         }
@@ -1569,26 +1561,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         .weight(1f)
                                         .clickable {
                                             val entry = selectedEntry ?: return@clickable
-                                            val source = File(entry.path)
-                                            val destDir = File(
-                                                if (isToRight) vm.rightPath else vm.leftPath
-                                            )
-                                            val dest = File(destDir, entry.name)
-                                            try {
-                                                val moved = source.renameTo(dest)
-                                                if (!moved) {
-                                                    if (source.isDirectory) {
-                                                        source.copyRecursively(dest, overwrite = false)
-                                                        SpecialPermissionVerifier.safeDelete(source)
-                                                    } else {
-                                                        source.copyTo(dest, overwrite = false)
-                                                        SpecialPermissionVerifier.safeDelete(source)
-                                                    }
-                                                }
+                                            val destDir = if (isToRight) vm.rightPath else vm.leftPath
+                                            val error = vm.moveEntry(entry, destDir)
+                                            if (error == null) {
                                                 Toast.makeText(context, "移动成功", Toast.LENGTH_SHORT).show()
                                                 vm.refreshBoth()
-                                            } catch (e: Exception) {
-                                                Toast.makeText(context, "移动失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "移动失败: $error", Toast.LENGTH_SHORT).show()
                                             }
                                             selectedEntry = null
                                         }
@@ -2013,24 +1992,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         val name = createName.trim()
                         if (name.isBlank()) return@TextButton
                         val currentPath = vm.currentPath
-                        val target = File(currentPath, name)
-                        if (target.exists()) {
-                            Toast.makeText(context, "已存在同名文件或文件夹", Toast.LENGTH_SHORT).show()
-                            return@TextButton
-                        }
-                        val success = try {
-                            if (createMode == CreateMode.FOLDER) target.mkdir()
-                            else target.createNewFile()
-                        } catch (e: Exception) {
-                            DiagnosticLog.log("FileMgr", "创建失败: ${e.message}")
-                            Toast.makeText(context, "创建失败: ${e.message}", Toast.LENGTH_SHORT).show()
-                            null
-                        }
-                        if (success == true) {
+                        val isFolder = createMode == CreateMode.FOLDER
+                        val error = vm.createEntry(currentPath, name, isFolder)
+                        if (error == null) {
                             Toast.makeText(context, "创建成功", Toast.LENGTH_SHORT).show()
                             vm.refreshCurrent()
-                        } else if (success == false) {
-                            Toast.makeText(context, "创建失败", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "创建失败: $error", Toast.LENGTH_SHORT).show()
                         }
                         showNameDialog = false
                         createName = ""
@@ -2077,23 +2045,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         renameText = ""
                         return@TextButton
                     }
-                    val source = File(entry.path)
-                    val parent = source.parentFile ?: return@TextButton
-                    val dest = File(parent, newName)
-                    if (dest.exists()) {
-                        Toast.makeText(context, "已存在同名文件或文件夹", Toast.LENGTH_SHORT).show()
-                        return@TextButton
-                    }
-                    try {
-                        val success = source.renameTo(dest)
-                        if (success) {
-                            Toast.makeText(context, "重命名成功", Toast.LENGTH_SHORT).show()
-                            vm.refreshBoth()
-                        } else {
-                            Toast.makeText(context, "重命名失败", Toast.LENGTH_SHORT).show()
-                        }
-                    } catch (e: Exception) {
-                        Toast.makeText(context, "重命名失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                    val error = vm.renameEntry(entry, newName)
+                    if (error == null) {
+                        Toast.makeText(context, "重命名成功", Toast.LENGTH_SHORT).show()
+                        vm.refreshBoth()
+                    } else {
+                        Toast.makeText(context, "重命名失败: $error", Toast.LENGTH_SHORT).show()
                     }
                     showRenameDialog = false
                     renameText = ""
@@ -2150,13 +2107,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             showForceDeleteDialog = true
                         }
                     } else {
-                        val file = File(entry.path)
-                        try {
-                            SpecialPermissionVerifier.safeDelete(file)
+                        val error = vm.deleteEntry(entry)
+                        if (error == null) {
                             Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
                             vm.refreshBoth()
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "删除失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "删除失败: $error", Toast.LENGTH_SHORT).show()
                         }
                     }
                     showDeleteDialog = false
@@ -2182,13 +2138,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             confirmButton = {
                 TextButton(onClick = {
                     val entry = forceDeleteEntry ?: return@TextButton
-                    val file = File(entry.path)
-                    try {
-                        SpecialPermissionVerifier.safeDelete(file)
+                    val error = vm.deleteEntry(entry)
+                    if (error == null) {
                         Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
                         vm.refreshBoth()
-                    } catch (e: Exception) {
-                        Toast.makeText(context, "删除失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "删除失败: $error", Toast.LENGTH_SHORT).show()
                     }
                     showForceDeleteDialog = false
                     forceDeleteEntry = null
