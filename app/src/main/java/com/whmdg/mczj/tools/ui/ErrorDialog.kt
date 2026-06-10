@@ -69,7 +69,7 @@ fun ErrorDialog(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 240.dp)
+                            .heightIn(max = 400.dp)
                             .verticalScroll(scrollState)
                     ) {
                         Column {
@@ -154,7 +154,7 @@ fun ErrorDialog(
                     }
                 } else {
                     Button(onClick = onDismiss) {
-                        Text("关闭")
+                        Text("知道了")
                     }
                 }
             }
@@ -166,5 +166,16 @@ private fun buildShortErrorText(error: Throwable): String {
     val sb = StringBuilder()
     sb.appendLine("异常类型: ${error.javaClass.name}")
     sb.appendLine("消息: ${error.message ?: "(无消息)"}")
+    error.cause?.let { cause ->
+        sb.appendLine("原因: ${cause.javaClass.simpleName}: ${cause.message ?: "(无消息)"}")
+    }
+    sb.appendLine()
+    sb.appendLine("堆栈摘要:")
+    error.stackTrace.take(8).forEach { frame ->
+        sb.appendLine("  at $frame")
+    }
+    if (error.stackTrace.size > 8) {
+        sb.appendLine("  ... 共 ${error.stackTrace.size} 帧")
+    }
     return sb.toString().trimEnd()
 }

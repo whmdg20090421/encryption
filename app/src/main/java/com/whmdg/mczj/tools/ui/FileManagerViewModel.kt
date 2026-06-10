@@ -64,6 +64,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private val legacySp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
     val isRootEngine: Boolean
     private val permissionLevel: String
+    /** 当前是否有可用的 shell 引擎（Root/libsu 或 Shizuku/ADB） */
+    private val hasShellEngine: Boolean
+        get() = isRootEngine || SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
 
     // ── 文件管理器偏好 ──
     private val fmPrefs = context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE)
@@ -170,7 +173,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         fun resolveHome(saved: String): String {
             val dir = File(saved)
             if (!dir.exists() || !dir.isDirectory) return safeDefault
-            if (!isRootEngine && !dir.canRead()) return safeDefault
+            if (!hasShellEngine && !dir.canRead()) return safeDefault
             return saved
         }
         val lHome = resolveHome(
@@ -218,7 +221,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 普通路径直接用 Java File API。
      */
     private fun shellPathExists(path: String): Boolean {
-        if (!isProtectedPath(path)) return File(path).exists()
+        if (!hasShellEngine) return File(path).exists()
         val escaped = path.replace("'", "'\\''")
         val useShizuku = SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (_, _, exit) = try {
@@ -235,7 +238,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 通过 shell 检查路径是否为目录。
      */
     private fun shellIsDirectory(path: String): Boolean {
-        if (!isProtectedPath(path)) return File(path).isDirectory
+        if (!hasShellEngine) return File(path).isDirectory
         val escaped = path.replace("'", "'\\''")
         val useShizuku = SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (_, _, exit) = try {
@@ -263,12 +266,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 用于替代 Java File.listFiles()，受保护路径走 shell。
      */
     fun listChildrenOrNull(path: String): List<FileEntry>? {
-        if (!isProtectedPath(path)) {
-            return try { File(path).listFiles()?.map { f ->
-                FileEntry(f.absolutePath, f.name, f.isDirectory, "", if (f.isDirectory) 0L else f.length(), f.lastModified())
-            } } catch (_: Exception) { null }
-        }
-        return listDirChildrenViaShell(path)
+        if (hasShellEngine) return listDirChildrenViaShell(path)
+        return try { File(path).listFiles()?.map { f ->
+            FileEntry(f.absolutePath, f.name, f.isDirectory, "", if (f.isDirectory) 0L else f.length(), f.lastModified())
+        } } catch (_: Exception) { null }
     }
 
     /**
@@ -405,38 +406,43 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 导航操作 ──
     fun navigateToFolder(entry: FileEntry) {
-        if (isProtectedPath(entry.path)) {
-            // Android/data 等受保护目录：跳过 Java File API，统一用 shell
+        if (hasShellEngine) {
+            // 最高权限优先：Root(libsu) 或 Shizuku/ADB
             listDirEntriesViaShell(entry.path, showHiddenFiles)
             if (lastShellStderr.isBlank()) {
-                // ls 成功（空列表 = 空目录，可正常打开）
                 navigateTo(entry.path)
                 historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
             } else {
-                // ls 失败，显示实际报错
-                Toast.makeText(context, formatShellError(entry.name, lastShellStderr), Toast.LENGTH_SHORT).show()
+                // shell 失败，回退 Java API
+                val testDir = File(entry.path)
+                val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
+                if (accessible != null) {
+                    navigateTo(entry.path)
+                    historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
+                } else {
+                    Toast.makeText(context, formatShellError(entry.name, lastShellStderr), Toast.LENGTH_LONG).show()
+                }
             }
-            return
-        }
-
-        // 普通路径：Java File API
-        val testDir = File(entry.path)
-        val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
-        if (accessible != null) {
-            navigateTo(entry.path)
-            historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
-        } else if (!testDir.exists()) {
-            Toast.makeText(context, "文件夹不存在: ${entry.name}", Toast.LENGTH_SHORT).show()
         } else {
-            Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
+            // 无 shell 引擎，用 Java File API
+            val testDir = File(entry.path)
+            val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
+            if (accessible != null) {
+                navigateTo(entry.path)
+                historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
+            } else if (!testDir.exists()) {
+                Toast.makeText(context, "文件夹不存在: ${entry.name}", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
     fun navigateToHistoryDir(entry: HistoryEntry) {
-        if (isProtectedPath(entry.path)) {
+        if (hasShellEngine) {
             listDirEntriesViaShell(entry.path, showHiddenFiles)
             if (lastShellStderr.isBlank()) navigateTo(entry.path)
-            else Toast.makeText(context, formatShellError(entry.name, lastShellStderr), Toast.LENGTH_SHORT).show()
+            else Toast.makeText(context, formatShellError(entry.name, lastShellStderr), Toast.LENGTH_LONG).show()
         } else {
             val testDir = File(entry.path)
             if (testDir.exists() && testDir.canRead()) navigateTo(entry.path)
@@ -451,13 +457,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun navigateToHistoryFile(entry: HistoryEntry) {
         val file = File(entry.path)
         val parentDir = file.parentFile ?: return
-        if (isProtectedPath(parentDir.absolutePath)) {
+        if (hasShellEngine) {
             listDirEntriesViaShell(parentDir.absolutePath, showHiddenFiles)
             if (lastShellStderr.isBlank()) {
                 pendingScrollToFile = file.name
                 navigateTo(parentDir.absolutePath)
             } else {
-                Toast.makeText(context, formatShellError(parentDir.name, lastShellStderr), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, formatShellError(parentDir.name, lastShellStderr), Toast.LENGTH_LONG).show()
             }
         } else if (parentDir.exists() && parentDir.canRead()) {
             pendingScrollToFile = file.name
@@ -466,10 +472,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun navigateToBookmark(bm: BookmarkEntry) {
-        if (isProtectedPath(bm.path)) {
+        if (hasShellEngine) {
             listDirEntriesViaShell(bm.path, showHiddenFiles)
             if (lastShellStderr.isBlank()) navigateTo(bm.path)
-            else Toast.makeText(context, formatShellError(bm.name, lastShellStderr), Toast.LENGTH_SHORT).show()
+            else Toast.makeText(context, formatShellError(bm.name, lastShellStderr), Toast.LENGTH_LONG).show()
         } else {
             val testDir = File(bm.path)
             if (testDir.exists() && testDir.canRead()) navigateTo(bm.path)
@@ -628,8 +634,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             target = File(binDir, targetName)
         }
 
-        if (isProtectedPath(entry.path)) {
-            // 受保护路径：使用 shell cp + rm
+        if (hasShellEngine) {
             val escapedSrc = entry.path.replace("'", "'\\''")
             val escapedDst = target.absolutePath.replace("'", "'\\''")
             val cpFlag = if (entry.isDirectory) "-rf" else "-f"
@@ -637,11 +642,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 executeShell("cp $cpFlag '$escapedSrc' '$escapedDst'")
             } catch (e: Exception) { return e.message ?: "复制失败" }
             if (cpExit != 0) return "复制失败: $cpErr"
-            // 删除源文件
             val rmFlag = if (entry.isDirectory) "-rf" else "-f"
             executeShell("rm $rmFlag '$escapedSrc'")
         } else {
-            // 普通路径：Java File API
             val source = File(entry.path)
             try {
                 val moved = source.renameTo(target)
@@ -677,7 +680,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val parent = source.parentFile ?: return "无法获取父目录"
         val dest = File(parent, newName)
 
-        if (isProtectedPath(entry.path)) {
+        if (hasShellEngine) {
             val escapedSrc = entry.path.replace("'", "'\\''")
             val escapedDst = dest.absolutePath.replace("'", "'\\''")
             val (_, err, exit) = try {
@@ -696,7 +699,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 永久删除文件或文件夹。成功返回 null，失败返回错误信息。
      */
     fun deleteEntry(entry: FileEntry): String? {
-        if (isProtectedPath(entry.path)) {
+        if (hasShellEngine) {
             val escaped = entry.path.replace("'", "'\\''")
             val flag = if (entry.isDirectory) "-rf" else "-f"
             val (_, err, exit) = try {
@@ -716,7 +719,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun createEntry(parentPath: String, name: String, isFolder: Boolean): String? {
         val target = File(parentPath, name)
 
-        if (isProtectedPath(parentPath)) {
+        if (hasShellEngine) {
             val escaped = target.absolutePath.replace("'", "'\\''")
             val cmd = if (isFolder) "mkdir '$escaped'" else "touch '$escaped'"
             val (_, err, exit) = try {
@@ -738,7 +741,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun moveEntry(source: FileEntry, destDir: String): String? {
         val dest = File(destDir, source.name)
 
-        if (isProtectedPath(source.path) || isProtectedPath(destDir)) {
+        if (hasShellEngine) {
             val escapedSrc = source.path.replace("'", "'\\''")
             val escapedDst = dest.absolutePath.replace("'", "'\\''")
             val cpFlag = if (source.isDirectory) "-rf" else "-f"
@@ -746,7 +749,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 executeShell("cp $cpFlag '$escapedSrc' '$escapedDst'")
             } catch (e: Exception) { return e.message ?: "移动失败" }
             if (cpExit != 0) return "移动失败: $cpErr"
-            // 删除源
             val rmFlag = if (source.isDirectory) "-rf" else "-f"
             executeShell("rm $rmFlag '$escapedSrc'")
             return null
@@ -773,7 +775,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun copyEntry(source: FileEntry, destDir: String): String? {
         val dest = File(destDir, source.name)
 
-        if (isProtectedPath(source.path) || isProtectedPath(destDir)) {
+        if (hasShellEngine) {
             val escapedSrc = source.path.replace("'", "'\\''")
             val escapedDst = dest.absolutePath.replace("'", "'\\''")
             val flag = if (source.isDirectory) "-rf" else "-f"
@@ -1755,13 +1757,39 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val file = File(entry.path)
         val stat = try { Os.stat(entry.path) } catch (_: Exception) { null }
 
+        // Os.stat 失败时回退到 shell ls -lapd（如路径含括号等特殊字符）
+        var shellPermission = ""
+        var shellOwner = ""
+        var shellGroup = ""
+        if (stat == null && hasShellEngine) {
+            val escaped = entry.path.replace("'", "'\\''")
+            val (lsOut, _, lsExit) = try {
+                executeShell("ls -lapd '$escaped'")
+            } catch (_: Exception) { Triple("", "", -1) }
+            if (lsExit == 0 && lsOut.isNotBlank()) {
+                val line = lsOut.lines().firstOrNull { it.isNotBlank() && !it.startsWith("total ") }
+                if (line != null) {
+                    val parts = line.split("\\s+".toRegex())
+                    if (parts.size >= 7) {
+                        val permStr = parts[0]  // e.g. "drwxrwxrwx"
+                        shellOwner = parts[2]
+                        shellGroup = parts[3]
+                        val modeFromShell = parseRwxToMode(permStr)
+                        if (modeFromShell != 0) {
+                            shellPermission = "${permStr}(${String.format("%03o", modeFromShell and 0x1FF)})"
+                        }
+                    }
+                }
+            }
+        }
+
         val mode = stat?.st_mode ?: 0
         val permission = if (stat != null) {
-            "${formatPermission(mode)}(${String.format("%03d", mode and 0x1FF)})"
-        } else ""
+            "${formatPermission(mode)}(${String.format("%03o", mode and 0x1FF)})"
+        } else shellPermission
 
-        val owner = stat?.st_uid?.let { resolveUserName(it) } ?: ""
-        val group = stat?.st_gid?.let { resolveGroupName(it) } ?: ""
+        val owner = stat?.st_uid?.let { resolveUserName(it) } ?: shellOwner
+        val group = stat?.st_gid?.let { resolveGroupName(it) } ?: shellGroup
 
         val modifiedTime = if (entry.lastModified > 0) {
             SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(entry.lastModified))
@@ -1824,8 +1852,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 for (child in children) {
                     if (child.isDirectory) folderCount++ else fileCount++
                 }
-            } else if (entry.path.contains("/Android/data") || entry.path.contains("/Android/obb")) {
-                // 受保护目录：通过 shell 统计子项数量
+            } else if (hasShellEngine) {
+                // Java API 失败，通过 shell 统计子项数量
                 val shellEntries = listDirEntriesViaShell(entry.path, showHiddenFiles)
                 for (se in shellEntries) {
                     if (se.isDirectory) folderCount++ else fileCount++
@@ -2027,6 +2055,30 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 sb.append(if ((mode shr shift) and 1 != 0) rwx[2 - shift % 3] else '-')
             }
             return sb.toString()
+        }
+
+        /** 将 rwx 权限字符串（如 "drwxrwxrwx"）解析为 mode 整数 */
+        fun parseRwxToMode(perm: String): Int {
+            if (perm.length < 10) return 0
+            var mode = 0
+            // 文件类型
+            mode = when (perm[0]) {
+                'd' -> 0x4000
+                '-' -> 0x8000
+                'l' -> 0xA000
+                'b' -> 0x6000
+                'c' -> 0x2000
+                'p' -> 0x1000
+                's' -> 0xC000
+                else -> 0
+            }
+            // 9 位 rwx 权限
+            for (i in 1..9) {
+                if (perm[i] != '-') {
+                    mode = mode or (1 shl (9 - i))
+                }
+            }
+            return mode
         }
 
         fun formatSize(bytes: Long): String {
