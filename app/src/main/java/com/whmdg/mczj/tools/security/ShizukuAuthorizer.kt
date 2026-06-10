@@ -10,7 +10,7 @@ import android.os.Looper
 import android.util.Base64
 import android.util.Log
 import android.widget.Toast
-import com.whmdg.mczj.tools.util.ShellDebugLog
+
 import rikka.shizuku.Shizuku
 
 /**
@@ -240,35 +240,24 @@ object ShizukuAuthorizer {
      * @return Triple(stdout, stderr, exitCode)
      */
     fun executeCommand(command: String): Triple<String, String, Int> {
-        val ctx = appContext
         // 快速路径：UserService 已就绪
         val service = shellService
         if (service != null) {
             return try {
                 val rawResult = service.execute(command)
-                if (ctx != null) ShellDebugLog.log(ctx, "UserService", "cmd=$command")
-                if (ctx != null) ShellDebugLog.log(ctx, "UserService", "rawBase64=${rawResult.take(200)}")
-                val parsed = parseResult(rawResult)
-                if (ctx != null) {
-                    ShellDebugLog.log(ctx, "UserService", "exit=${parsed.third} stdout=${parsed.first.length}字符 stderr=${parsed.second.length}字符")
-                    if (parsed.first.isNotBlank()) ShellDebugLog.log(ctx, "UserService", "stdout前500: ${parsed.first.take(500)}")
-                    if (parsed.second.isNotBlank()) ShellDebugLog.log(ctx, "UserService", "stderr: ${parsed.second.take(300)}")
-                }
-                parsed
+                parseResult(rawResult)
             } catch (e: Exception) {
                 // binder 死亡等，清除缓存并回退
                 synchronized(bindLock) {
                     shellService = null
                 }
                 Log.w(TAG, "UserService 调用失败，回退到 newProcess: ${e.message}")
-                if (ctx != null) ShellDebugLog.log(ctx, "UserService", "异常回退: ${e.message}")
                 executeCommandViaNewProcess(command)
             }
         }
 
         // 慢路径：触发异步绑定，当前调用先用 newProcess 兜底
         ensureBound { /* 后续调用自动走快速路径 */ }
-        if (ctx != null) ShellDebugLog.log(ctx, "newProcess", "cmd=$command (UserService 未就绪)")
         return executeCommandViaNewProcess(command)
     }
 

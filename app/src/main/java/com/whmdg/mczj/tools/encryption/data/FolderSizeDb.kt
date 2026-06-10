@@ -1,63 +1,73 @@
 package com.whmdg.mczj.tools.encryption.data
 
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import java.io.File
 
-@Serializable
 data class FolderSizeInfo(
     val size: Long = 0,
     val lastModified: Long = 0
 )
 
-@Serializable
-data class FolderSizeDb(
-    val folders: MutableMap<String, FolderSizeInfo> = mutableMapOf()
-) {
+/**
+ * 文件夹大小数据库（v1.1 文本格式）。
+ * 文件第一行为版本标识 "v1.1"，不匹配则删除重建。
+ */
+class FolderSizeDb {
     companion object {
-        private val json = Json {
-            ignoreUnknownKeys = true
-            prettyPrint = false
-            encodeDefaults = true
-        }
+        private const val CURRENT_VERSION = "v1.1"
+        private const val FILE_NAME = "folder_sizes.txt"
 
-        private const val FILE_NAME = "folder_sizes.json"
-
-        fun load(vaultDir: File): FolderSizeDb {
-            val file = File(vaultDir, FILE_NAME)
+        fun load(dir: File): FolderSizeDb {
+            val file = File(dir, FILE_NAME)
             if (!file.exists()) return FolderSizeDb()
             return try {
-                val db = json.decodeFromString<FolderSizeDb>(file.readText())
-                // 清理 ./ 和 ../ 脏数据
-                db.folders.keys.removeAll { key ->
-                    key.endsWith("/.") || key.endsWith("/..") || key == "." || key == ".."
+                val lines = file.readLines()
+                if (lines.isEmpty() || lines[0] != CURRENT_VERSION) {
+                    file.delete()
+                    return FolderSizeDb()
+                }
+                val db = FolderSizeDb()
+                for (i in 1 until lines.size) {
+                    val line = lines[i]
+                    if (line.isBlank()) continue
+                    val parts = line.split("\t")
+                    if (parts.size >= 2) {
+                        val path = parts[0]
+                        val size = parts[1].toLongOrNull() ?: 0L
+                        db.folders[path] = FolderSizeInfo(size, 0)
+                    }
                 }
                 db
             } catch (_: Exception) {
+                file.delete()
                 FolderSizeDb()
             }
         }
     }
 
-    fun save(vaultDir: File) {
-        val file = File(vaultDir, FILE_NAME)
-        file.writeText(json.encodeToString(serializer(), this))
+    val folders: MutableMap<String, FolderSizeInfo> = mutableMapOf()
+
+    fun save(dir: File) {
+        val file = File(dir, FILE_NAME)
+        val sb = StringBuilder()
+        sb.appendLine(CURRENT_VERSION)
+        for ((path, info) in folders) {
+            sb.appendLine("$path\t${info.size}")
+        }
+        file.writeText(sb.toString())
     }
 
-    fun get(relativePath: String): FolderSizeInfo? = folders[relativePath]
+    fun get(path: String): FolderSizeInfo? = folders[path]
 
-    fun put(relativePath: String, info: FolderSizeInfo) {
-        // 拦截 ./ 和 ../ 路径
-        if (relativePath.endsWith("/.") || relativePath.endsWith("/..") || relativePath == "." || relativePath == "..") return
-        folders[relativePath] = info
+    fun put(path: String, info: FolderSizeInfo) {
+        folders[path] = info
     }
 
-    fun remove(relativePath: String) {
-        folders.remove(relativePath)
+    fun remove(path: String) {
+        folders.remove(path)
     }
 
-    fun removeDescendants(relativePath: String) {
-        val prefix = if (relativePath.isEmpty()) "" else "$relativePath/"
-        folders.keys.removeAll { it == relativePath || it.startsWith(prefix) }
+    fun removeDescendants(path: String) {
+        val prefix = if (path.isEmpty()) "" else "$path/"
+        folders.keys.removeAll { it == path || it.startsWith(prefix) }
     }
 }

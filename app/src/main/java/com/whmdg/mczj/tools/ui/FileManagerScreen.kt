@@ -403,17 +403,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     if (dirs.isEmpty()) {
                                         Toast.makeText(context, "当前列表没有文件夹", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        Toast.makeText(context, "正在统计 ${dirs.size} 个文件夹大小...", Toast.LENGTH_SHORT).show()
-                                        coroutineScope.launch(Dispatchers.IO) {
-                                            var db = vm.folderSizeDb
-                                            for (dir in dirs) {
-                                                db = vm.refreshFolderSize(dir.path)
-                                            }
-                                            vm.applyFolderSizeDb(db)
-                                            withContext(Dispatchers.Main) {
-                                                Toast.makeText(context, "大小统计完毕", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
+                                        Toast.makeText(context, "大小统计功能待重构", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             )
@@ -1682,18 +1672,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         modifier = Modifier
                                             .weight(1f)
                                             .clickable {
-                                                val entry = selectedEntry ?: return@clickable
                                                 selectedEntry = null
-                                                Toast.makeText(context, "正在计算大小...", Toast.LENGTH_SHORT).show()
-                                                coroutineScope.launch(Dispatchers.IO) {
-                                                    val updatedDb = vm.refreshFolderSize(entry.path)
-                                                    val sizeInfo = updatedDb.get(entry.path)
-                                                    val sizeText = if (sizeInfo != null && sizeInfo.size > 0) compactSize(sizeInfo.size) else "0"
-                                                    withContext(Dispatchers.Main) {
-                                                        vm.applyFolderSizeDb(updatedDb)
-                                                        Toast.makeText(context, "大小计算完毕: $sizeText", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
+                                                Toast.makeText(context, "大小统计功能待重构", Toast.LENGTH_SHORT).show()
                                             }
                                             .padding(vertical = 16.dp),
                                         contentAlignment = Alignment.Center
@@ -3442,22 +3422,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             confirmButton = {
                 TextButton(onClick = {
                     showSortSizeRefreshDialog = false
-                    // 先执行大小统计
-                    val dirsToMeasure = unmeasuredDirs
-                    Toast.makeText(context, "正在统计 ${dirsToMeasure.size} 个文件夹大小...", Toast.LENGTH_SHORT).show()
-                    coroutineScope.launch(Dispatchers.IO) {
-                        var db = vm.folderSizeDb
-                        for (dir in dirsToMeasure) {
-                            db = vm.refreshFolderSize(dir.path)
-                        }
-                        vm.applyFolderSizeDb(db)
-                        withContext(Dispatchers.Main) {
-                            // 统计完成后应用排序
-                            vm.updateSortField(tempSortField)
-                            vm.updateSortOrder(tempSortOrder)
-                            Toast.makeText(context, "大小统计完毕，已按大小排序", Toast.LENGTH_SHORT).show()
-                        }
-                    }
+                    Toast.makeText(context, "大小统计功能待重构", Toast.LENGTH_SHORT).show()
                 }) {
                     Text("是")
                 }
