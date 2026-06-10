@@ -85,6 +85,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var sortOrder by mutableStateOf(SortOrder.ASC)
         private set
     var loadError by mutableStateOf<Throwable?>(null)
+    // 最近一次 listDirEntriesViaShell 的 stderr，用于调用方判断失败原因
+    private var lastShellStderr = ""
     var folderSizeDb by mutableStateOf(FolderSizeDb())
         private set
     var refreshVersion by mutableStateOf(0L)
@@ -255,9 +257,21 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 格式化 shell 错误信息，输出中文提示 + 原始英文报错。
+     */
+    private fun formatShellError(name: String, stderr: String): String {
+        val detail = stderr.trim().ifBlank { "未知错误" }
+        return when {
+            detail.contains("Permission denied", ignoreCase = true) -> "$name 权限不足: $detail"
+            detail.contains("No such file or directory", ignoreCase = true) -> "$name 不存在: $detail"
+            else -> "$name 错误: $detail"
+        }
+    }
+
+    /**
      * 通过 shell 命令列出目录内容（Shizuku / Root / 普通 shell）。
      * 用于访问 Android/data 等受 Scoped Storage 保护的目录。
-     * @return 条目列表，失败返回空列表并设置 loadError
+     * @return 条目列表，失败返回空列表并设置 lastShellStderr
      */
     private fun listDirEntriesViaShell(path: String, showHidden: Boolean, longFormat: Boolean = false): List<FileEntry> {
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
@@ -274,18 +288,24 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             when {
                 isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(command)
                 useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(command)
-                else -> return emptyList()
+                else -> {
+                    lastShellStderr = "无可用权限引擎"
+                    return emptyList()
+                }
             }
         } catch (e: Throwable) {
             DiagnosticLog.log("ShellLs", "执行异常: ${e.message}")
+            lastShellStderr = e.message ?: "执行异常"
             return emptyList()
         }
 
         DiagnosticLog.log("ShellLs", "cmd=$command exit=$exitCode out=${stdout.length} err=${stderr.length}")
         if (exitCode != 0 && stdout.isBlank()) {
             DiagnosticLog.log("ShellLs", "失败: $stderr")
+            lastShellStderr = stderr
             return emptyList()
         }
+        lastShellStderr = ""
 
         val entries = mutableListOf<FileEntry>()
         for (raw in stdout.lines()) {
@@ -359,8 +379,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun navigateToFolder(entry: FileEntry) {
         if (isProtectedPath(entry.path)) {
             // Android/data 等受保护目录：跳过 Java File API，统一用 shell
-            val shellEntries = listDirEntriesViaShell(entry.path, showHiddenFiles)
-            if (shellEntries.isNotEmpty()) {
+            listDirEntriesViaShell(entry.path, showHiddenFiles)
+            if (lastShellStderr.isBlank()) {
+                // ls 成功（空列表 = 空目录，可正常打开）
                 navigateTo(entry.path)
                 historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
                 // 受保护目录自动计算文件夹大小
@@ -372,10 +393,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         folderSizeDb = db
                     }
                 }.start()
-            } else if (shellPathExists(entry.path)) {
-                Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(context, "文件夹不存在: ${entry.name}", Toast.LENGTH_SHORT).show()
+                // ls 失败，显示实际报错
+                Toast.makeText(context, formatShellError(entry.name, lastShellStderr), Toast.LENGTH_SHORT).show()
             }
             return
         }
@@ -395,8 +415,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun navigateToHistoryDir(entry: HistoryEntry) {
         if (isProtectedPath(entry.path)) {
-            val shellEntries = listDirEntriesViaShell(entry.path, showHiddenFiles)
-            if (shellEntries.isNotEmpty()) navigateTo(entry.path)
+            listDirEntriesViaShell(entry.path, showHiddenFiles)
+            if (lastShellStderr.isBlank()) navigateTo(entry.path)
+            else Toast.makeText(context, formatShellError(entry.name, lastShellStderr), Toast.LENGTH_SHORT).show()
         } else {
             val testDir = File(entry.path)
             if (testDir.exists() && testDir.canRead()) navigateTo(entry.path)
@@ -412,10 +433,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val file = File(entry.path)
         val parentDir = file.parentFile ?: return
         if (isProtectedPath(parentDir.absolutePath)) {
-            val shellEntries = listDirEntriesViaShell(parentDir.absolutePath, showHiddenFiles)
-            if (shellEntries.isNotEmpty()) {
+            listDirEntriesViaShell(parentDir.absolutePath, showHiddenFiles)
+            if (lastShellStderr.isBlank()) {
                 pendingScrollToFile = file.name
                 navigateTo(parentDir.absolutePath)
+            } else {
+                Toast.makeText(context, formatShellError(parentDir.name, lastShellStderr), Toast.LENGTH_SHORT).show()
             }
         } else if (parentDir.exists() && parentDir.canRead()) {
             pendingScrollToFile = file.name
@@ -425,8 +448,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun navigateToBookmark(bm: BookmarkEntry) {
         if (isProtectedPath(bm.path)) {
-            val shellEntries = listDirEntriesViaShell(bm.path, showHiddenFiles)
-            if (shellEntries.isNotEmpty()) navigateTo(bm.path)
+            listDirEntriesViaShell(bm.path, showHiddenFiles)
+            if (lastShellStderr.isBlank()) navigateTo(bm.path)
+            else Toast.makeText(context, formatShellError(bm.name, lastShellStderr), Toast.LENGTH_SHORT).show()
         } else {
             val testDir = File(bm.path)
             if (testDir.exists() && testDir.canRead()) navigateTo(bm.path)

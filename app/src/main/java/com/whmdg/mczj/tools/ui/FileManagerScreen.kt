@@ -1751,6 +1751,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         }
                                     }
                                 }
+                                // 极淡的分割线
+                                VerticalDivider(
+                                    modifier = Modifier.height(24.dp),
+                                    thickness = 0.5.dp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
+                                )
                                 // 右列：压缩
                                 Box(
                                     modifier = Modifier
