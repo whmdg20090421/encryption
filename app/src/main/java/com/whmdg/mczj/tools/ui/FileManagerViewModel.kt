@@ -226,8 +226,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val useShizuku = SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (_, _, exit) = try {
             when {
-                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -e '$escaped'")
-                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand("test -e '$escaped'")
+                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("cd '$escaped' 2>/dev/null")
+                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand("cd '$escaped' 2>/dev/null")
                 else -> return File(path).exists()
             }
         } catch (_: Exception) { return false }
@@ -243,8 +243,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val useShizuku = SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (_, _, exit) = try {
             when {
-                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -d '$escaped'")
-                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand("test -d '$escaped'")
+                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("cd '$escaped' 2>/dev/null && test -d .")
+                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand("cd '$escaped' 2>/dev/null && test -d .")
                 else -> return File(path).isDirectory
             }
         } catch (_: Exception) { return false }
@@ -310,7 +310,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (showHidden) append("a")
             append("p")
         }
-        val command = "ls $flags '$escapedPath'"
+        // 用 cd + ls 避免路径中括号等特殊字符被 shell 解析
+        val command = "cd '$escapedPath' && ls $flags"
 
         val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (stdout, stderr, exitCode) = try {
@@ -420,7 +421,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     navigateTo(entry.path)
                     historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
                 } else {
-                    Toast.makeText(context, formatShellError(entry.name, lastShellStderr), Toast.LENGTH_LONG).show()
+                    loadError = RuntimeException("${formatShellError(entry.name, lastShellStderr)}\n路径: ${entry.path}")
                 }
             }
         } else {
@@ -431,9 +432,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 navigateTo(entry.path)
                 historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
             } else if (!testDir.exists()) {
-                Toast.makeText(context, "文件夹不存在: ${entry.name}", Toast.LENGTH_SHORT).show()
+                loadError = RuntimeException("文件夹不存在: ${entry.name}\n路径: ${entry.path}")
             } else {
-                Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
+                loadError = RuntimeException("权限不足: ${entry.name}\n路径: ${entry.path}")
             }
         }
     }
@@ -442,7 +443,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (hasShellEngine) {
             listDirEntriesViaShell(entry.path, showHiddenFiles)
             if (lastShellStderr.isBlank()) navigateTo(entry.path)
-            else Toast.makeText(context, formatShellError(entry.name, lastShellStderr), Toast.LENGTH_LONG).show()
+            else loadError = RuntimeException("${formatShellError(entry.name, lastShellStderr)}\n路径: ${entry.path}")
         } else {
             val testDir = File(entry.path)
             if (testDir.exists() && testDir.canRead()) navigateTo(entry.path)
@@ -463,7 +464,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 pendingScrollToFile = file.name
                 navigateTo(parentDir.absolutePath)
             } else {
-                Toast.makeText(context, formatShellError(parentDir.name, lastShellStderr), Toast.LENGTH_LONG).show()
+                loadError = RuntimeException("${formatShellError(parentDir.name, lastShellStderr)}\n路径: ${parentDir.absolutePath}")
             }
         } else if (parentDir.exists() && parentDir.canRead()) {
             pendingScrollToFile = file.name
@@ -475,7 +476,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (hasShellEngine) {
             listDirEntriesViaShell(bm.path, showHiddenFiles)
             if (lastShellStderr.isBlank()) navigateTo(bm.path)
-            else Toast.makeText(context, formatShellError(bm.name, lastShellStderr), Toast.LENGTH_LONG).show()
+            else loadError = RuntimeException("${formatShellError(bm.name, lastShellStderr)}\n路径: ${bm.path}")
         } else {
             val testDir = File(bm.path)
             if (testDir.exists() && testDir.canRead()) navigateTo(bm.path)
@@ -1513,7 +1514,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 通过 shell 列出目录直接子项（含文件大小），用于受保护目录 */
     private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? {
         val escapedPath = dirPath.replace("'", "'\\''")
-        val cmd = "ls -lap '$escapedPath'"
+        val cmd = "cd '$escapedPath' && ls -lap"
         val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (stdout, _, exitCode) = try {
             when {
@@ -1625,7 +1626,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             if (showHidden) "-1Ap" else "-1p"
         }
-        val command = "ls $lsFlags '$escapedPath'"
+        val command = "cd '$escapedPath' && ls $lsFlags"
         val tag = when {
             useRoot -> "LsRoot"
             useShizuku -> "LsShizuku"
