@@ -15,20 +15,23 @@ import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
  *   - POSIX 保证：目录直接 children 增删改时其 mtime 变化（但子目录内部变化不会传播）
  *     → "mtime 未变"意味着自身直接文件层未变，但子树内部可能变了，仍要应用子目录 delta
  *
- * 进度回调在累加阶段逐目录触发；BFS 阶段不报告进度。
+ * 进度回调：
+ *   - BFS 阶段：每扫描一个目录调用 onScanned
+ *   - 累加阶段：每计算完一个目录调用 onProgress
  */
 fun calculateFolderSize(
     rootPath: String,
     accessor: FileAccessor,
     db: FolderSizeDb,
+    onScanned: (count: Int, currentFolder: String) -> Unit,
     onProgress: (processed: Int, total: Int, currentFolder: String) -> Unit,
     isCancelled: () -> Boolean
 ): SizeCalcResult {
     val snapshot = db.getDescendants(rootPath)
     return if (snapshot.isEmpty()) {
-        fullScan(rootPath, accessor, db, onProgress, isCancelled)
+        fullScan(rootPath, accessor, db, onScanned, onProgress, isCancelled)
     } else {
-        diffScan(rootPath, snapshot, accessor, db, onProgress, isCancelled)
+        diffScan(rootPath, snapshot, accessor, db, onScanned, onProgress, isCancelled)
     }
 }
 
@@ -45,6 +48,7 @@ private fun fullScan(
     rootPath: String,
     accessor: FileAccessor,
     db: FolderSizeDb,
+    onScanned: (Int, String) -> Unit,
     onProgress: (Int, Int, String) -> Unit,
     isCancelled: () -> Boolean
 ): SizeCalcResult {
@@ -57,11 +61,14 @@ private fun fullScan(
     queue.add(rootPath to 0)
     depth[rootPath] = 0
 
+    var scanned = 0
     while (queue.isNotEmpty()) {
         if (isCancelled()) return SizeCalcResult.Cancelled
         val (dir, d) = queue.removeFirst()
         val list = accessor.listChildren(dir) ?: return SizeCalcResult.PermissionDenied(dir)
         children[dir] = list
+        scanned++
+        onScanned(scanned, dir)
         for (e in list) {
             if (e.isDir) {
                 mtimes[e.path] = e.mtime
@@ -109,6 +116,7 @@ private fun diffScan(
     snapshot: Map<String, FolderSizeInfo>,
     accessor: FileAccessor,
     db: FolderSizeDb,
+    onScanned: (Int, String) -> Unit,
     onProgress: (Int, Int, String) -> Unit,
     isCancelled: () -> Boolean
 ): SizeCalcResult {
@@ -121,11 +129,14 @@ private fun diffScan(
     queue.add(rootPath to 0)
     depth[rootPath] = 0
 
+    var scanned = 0
     while (queue.isNotEmpty()) {
         if (isCancelled()) return SizeCalcResult.Cancelled
         val (dir, d) = queue.removeFirst()
         val list = accessor.listChildren(dir) ?: return SizeCalcResult.PermissionDenied(dir)
         currentChildren[dir] = list
+        scanned++
+        onScanned(scanned, dir)
         for (e in list) {
             if (e.isDir) {
                 currentMtimes[e.path] = e.mtime

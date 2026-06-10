@@ -540,7 +540,10 @@ fun MainAppContainer() {
 
     // ── 大小统计进度条（底部悬浮，工具栏上方，全局显示） ──
     val calcProgress = SizeCalcManager.progress
-    if (calcProgress > 0f && calcProgress < 1f) {
+    val calcScanned = SizeCalcManager.scannedCount
+    val calcProcessed = SizeCalcManager.processedCount
+    val calcTotal = SizeCalcManager.totalCount
+    if (SizeCalcManager.isCalculating) {
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -552,7 +555,7 @@ fun MainAppContainer() {
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             Column {
-                // 第一行：进度条 + 百分比
+                // 第一行：进度条 + 百分比（仅累加阶段有值）
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -569,8 +572,15 @@ fun MainAppContainer() {
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
-                Spacer(Modifier.height(6.dp))
-                // 第二行：取消 + 保存
+                Spacer(Modifier.height(4.dp))
+                // 第二行：已扫描 / 已统计
+                Text(
+                    text = "已扫描 $calcScanned 个目录  已统计 $calcProcessed / $calcTotal",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                // 第三行：取消 + 保存
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -581,6 +591,37 @@ fun MainAppContainer() {
                     TextButton(onClick = { SizeCalcManager.save() }) {
                         Text("保存", style = MaterialTheme.typography.labelMedium)
                     }
+                }
+            }
+        }
+    }
+
+    // ── 权限不足提醒（进度条下方） ──
+    val deniedPath = SizeCalcManager.permissionDeniedPath
+    if (deniedPath != null) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(0.95f)
+                .padding(bottom = 68.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f))
+                .clickable(interactionSource = null, indication = null) {}
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "权限不足: $deniedPath",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { SizeCalcManager.clearPermissionDenied() }) {
+                    Text("知道了", style = MaterialTheme.typography.labelMedium)
                 }
             }
         }

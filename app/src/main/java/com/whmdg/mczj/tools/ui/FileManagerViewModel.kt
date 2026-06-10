@@ -556,7 +556,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     rootPath = rootPath,
                     accessor = accessor,
                     db = folderSizeDb,
-                    onProgress = { p, t, f -> SizeCalcManager.update(p, t, f) },
+                    onScanned = { count, folder -> SizeCalcManager.onScanned(count, folder) },
+                    onProgress = { p, t, f -> SizeCalcManager.onProgress(p, t, f) },
                     isCancelled = { SizeCalcManager.cancelRequested }
                 )
             } catch (e: Throwable) {
@@ -567,15 +568,17 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 when (result) {
                     is SizeCalcResult.Success -> {
                         folderSizeDb.save(saveDir)
-                        // 替换引用触发 Compose 重组（原地修改 mutableMap 不会触发）
                         folderSizeDb = FolderSizeDb.load(saveDir)
                         refreshCurrent()
                     }
                     is SizeCalcResult.PermissionDenied -> {
-                        Toast.makeText(context, "Permission Denied: ${result.path}", Toast.LENGTH_LONG).show()
+                        // 底部一次性提醒，不中断已统计的部分结果
+                        SizeCalcManager.permissionDeniedPath = result.path
+                        folderSizeDb.save(saveDir)
+                        folderSizeDb = FolderSizeDb.load(saveDir)
+                        refreshCurrent()
                     }
                     is SizeCalcResult.Cancelled -> {
-                        // 将内存中的部分结果落盘并刷新 UI
                         folderSizeDb.save(saveDir)
                         folderSizeDb = FolderSizeDb.load(saveDir)
                         refreshCurrent()
