@@ -1515,15 +1515,40 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return total
     }
 
-    /** 通过 shell 命令计算受保护目录（如 Android/data）的大小，遵循底层冒泡排序 */
+    /** 通过 shell 命令计算受保护目录（如 Android/data）的大小，遵循底层冒泡排序。带进度追踪。 */
     private fun calcDirSizeWithShell(db: FolderSizeDb, dirPath: String) {
-        // 1. shell 列出当前目录子项
+        // 1. 统计总目录数（单次 shell 调用）
+        val escapedPath = dirPath.replace("'", "'\\''")
+        val countCmd = "find '$escapedPath' -type d | wc -l"
+        val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+        val (countOut, _, countExit) = try {
+            when {
+                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(countCmd)
+                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(countCmd)
+                else -> return
+            }
+        } catch (_: Exception) { return }
+        val totalDirs = if (countExit == 0) countOut.trim().toIntOrNull()?.coerceAtLeast(1) ?: 1 else 1
+
+        SizeCalcManager.begin(db, AppDataPaths.fileManager(context))
+        SizeCalcManager.update(0, totalDirs, dirPath.substringAfterLast('/'))
+
+        // 2. 递归计算
+        calcDirSizeWithShellRecursive(db, dirPath)
+
+        // 3. 完成
+        SizeCalcManager.finish()
+    }
+
+    /** calcDirSizeWithShell 的递归核心，每处理一个目录更新进度，支持取消 */
+    private fun calcDirSizeWithShellRecursive(db: FolderSizeDb, dirPath: String) {
+        if (SizeCalcManager.cancelRequested) return
+
         val children = listDirChildrenViaShell(dirPath) ?: return
 
         var totalSize = 0L
         val subdirs = mutableListOf<String>()
 
-        // 2. 累加文件大小，收集子目录
         for (child in children) {
             if (child.isDirectory) {
                 subdirs.add(child.path)
@@ -1532,18 +1557,20 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        // 3. 子目录底层冒泡排序
         subdirs.sortByDescending { it.count { c -> c == '/' } }
 
         for (subPath in subdirs) {
+            if (SizeCalcManager.cancelRequested) return
+
             val cached = db.get(subPath)
-            // 缓存有效则直接用
             if (cached != null && cached.size > 0) {
                 totalSize += cached.size
+                SizeCalcManager.processed++
+                SizeCalcManager.update(SizeCalcManager.processed, SizeCalcManager.total, subPath.substringAfterLast('/'))
                 continue
             }
-            // 递归计算子目录大小（同样的 shell 冒泡方式）
-            calcDirSizeWithShell(db, subPath)
+
+            calcDirSizeWithShellRecursive(db, subPath)
             val info = db.get(subPath)
             if (info != null) totalSize += info.size
         }

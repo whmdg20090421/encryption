@@ -375,6 +375,7 @@ fun MainAppContainer() {
         }
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     when (currentScreen) {
         is Screen.Dashboard -> {
             HomeScreen(
@@ -536,6 +537,54 @@ fun MainAppContainer() {
             )
         }
     }
+
+    // ── 大小统计进度条（底部悬浮，半透明，全局显示） ──
+    val calcProgress = SizeCalcManager.progress
+    if (calcProgress > 0f && calcProgress < 1f) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(0.95f)
+                .padding(bottom = 12.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.5f))
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+        ) {
+            Column {
+                // 第一行：进度条 + 百分比
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    LinearProgressIndicator(
+                        progress = { calcProgress },
+                        modifier = Modifier.weight(1f).height(6.dp),
+                        trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "${(calcProgress * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                // 第二行：取消 + 保存
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    TextButton(onClick = { SizeCalcManager.requestCancel() }) {
+                        Text("取消", style = MaterialTheme.typography.labelMedium)
+                    }
+                    TextButton(onClick = { SizeCalcManager.save() }) {
+                        Text("保存", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+        }
+    }
+    } // Box
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
