@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.ui
 
 import android.content.Context
 import android.os.Environment
+import android.os.StatFs
 import android.provider.Settings
 import android.widget.Toast
 import com.whmdg.mczj.tools.util.DiagnosticLog
@@ -92,6 +93,12 @@ data class FileEntry(
     val size: Long = 0,
     val lastModified: Long = 0,
     val createdAt: Long = 0
+)
+
+@kotlinx.serialization.Serializable
+data class QuickAccessEntry(
+    val name: String,
+    val path: String
 )
 
 @kotlinx.serialization.Serializable
@@ -216,6 +223,24 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var archivePendingEntry by remember { mutableStateOf<FileEntry?>(null) }
     var showArchiveOpening by remember { mutableStateOf(false) }
     var archiveOpenError by remember { mutableStateOf<String?>(null) }
+
+    // ── 快捷访问 ──
+    val quickAccessPrefs = context.getSharedPreferences("quick_access_prefs", Context.MODE_PRIVATE)
+    val qaJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+    var quickAccessList by remember {
+        val saved = quickAccessPrefs.getString("entries", null)
+        val list = if (saved != null) {
+            try { qaJson.decodeFromString<List<QuickAccessEntry>>(saved) } catch (_: Exception) { emptyList() }
+        } else emptyList()
+        mutableStateOf(list)
+    }
+    var showAddQaDialog by remember { mutableStateOf(false) }
+    var qaNameInput by remember { mutableStateOf("") }
+    var qaPathInput by remember { mutableStateOf("") }
+
+    fun saveQuickAccess() {
+        quickAccessPrefs.edit().putString("entries", qaJson.encodeToString(quickAccessList)).apply()
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -1114,18 +1139,152 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             ) {
                                 // ── 本地 ──
                                 DrawerSectionHeader(title = "本地")
-                                // 本地内容（待填充）
-                                Box(
+                                DrawerMenuItem(
+                                    icon = Icons.Default.Storage,
+                                    label = "内部储存",
+                                    onClick = {
+                                        vm.navigateTo("/storage/emulated/0/")
+                                        showDrawer = false
+                                    }
+                                )
+                                // 内部储存空间卡片（手机总存储）
+                                run {
+                                    val stat = try { StatFs(Environment.getDataDirectory().path) } catch (_: Exception) { null }
+                                    if (stat != null) {
+                                        val total = stat.totalBytes
+                                        val available = stat.availableBytes
+                                        val used = total - available
+                                        val progress = if (total > 0) used.toFloat() / total.toFloat() else 0f
+                                        val barColor = if (isSystemInDarkTheme()) Color(0xFF00838F) else Color(0xFF00BCD4)
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Card(
+                                                modifier = Modifier
+                                                    .fillMaxWidth(0.85f)
+                                                    .padding(vertical = 6.dp),
+                                                colors = CardDefaults.cardColors(
+                                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                                )
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                                                ) {
+                                                    Text(
+                                                        "内部储存",
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = FontWeight.Medium
+                                                    )
+                                                    Spacer(Modifier.height(6.dp))
+                                                    LinearProgressIndicator(
+                                                        progress = { progress },
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .height(6.dp)
+                                                            .clip(RoundedCornerShape(3.dp)),
+                                                        color = barColor,
+                                                        trackColor = barColor.copy(alpha = 0.2f),
+                                                    )
+                                                    Spacer(Modifier.height(4.dp))
+                                                    Text(
+                                                        "${compactSize(used)} / ${compactSize(total)}",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                DrawerMenuItem(
+                                    icon = Icons.Default.Folder,
+                                    label = "根目录",
+                                    onClick = {
+                                        vm.navigateTo("/")
+                                        showDrawer = false
+                                    }
+                                )
+                                // 根目录空间卡片
+                                run {
+                                    val stat = try { StatFs("/") } catch (_: Exception) { null }
+                                    if (stat != null) {
+                                        val total = stat.totalBytes
+                                        val available = stat.availableBytes
+                                        val used = total - available
+                                        val progress = if (total > 0) used.toFloat() / total.toFloat() else 0f
+                                        val barColor = if (isSystemInDarkTheme()) Color(0xFF00838F) else Color(0xFF00BCD4)
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Card(
+                                                modifier = Modifier
+                                                    .fillMaxWidth(0.85f)
+                                                    .padding(vertical = 6.dp),
+                                                colors = CardDefaults.cardColors(
+                                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                                )
+                                            ) {
+                                                Column(
+                                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                                                ) {
+                                                    Text(
+                                                        "根目录",
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = FontWeight.Medium
+                                                    )
+                                                    Spacer(Modifier.height(6.dp))
+                                                    LinearProgressIndicator(
+                                                        progress = { progress },
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .height(6.dp)
+                                                            .clip(RoundedCornerShape(3.dp)),
+                                                        color = barColor,
+                                                        trackColor = barColor.copy(alpha = 0.2f),
+                                                    )
+                                                    Spacer(Modifier.height(4.dp))
+                                                    Text(
+                                                        "${compactSize(used)} / ${compactSize(total)}",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // 自定义快捷访问
+                                quickAccessList.forEach { entry ->
+                                    DrawerMenuItem(
+                                        icon = Icons.Default.SubdirectoryArrowRight,
+                                        label = entry.name,
+                                        onClick = {
+                                            vm.navigateTo(entry.path)
+                                            showDrawer = false
+                                        }
+                                    )
+                                }
+                                // 添加快捷访问按钮
+                                Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(48.dp)
-                                        .padding(horizontal = 16.dp),
-                                    contentAlignment = Alignment.CenterStart
+                                        .clickable { showAddQaDialog = true }
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    Icon(
+                                        Icons.Default.Add,
+                                        contentDescription = "添加快捷访问",
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(Modifier.width(8.dp))
                                     Text(
-                                        "暂无内容",
+                                        "添加快捷访问",
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = MaterialTheme.colorScheme.primary
                                     )
                                 }
                                 HorizontalDivider()
@@ -1587,10 +1746,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 }
                             }
                             // ── 第四行：关于 / 分享 ──
-                            HorizontalDivider(
-                                thickness = 0.5.dp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-                            )
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
@@ -2014,6 +2169,109 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             },
             dismissButton = {
                 TextButton(onClick = { showPermanentDeleteDialog = false; permanentDeleteTarget = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── 添加快捷访问对话框 ──
+    if (showAddQaDialog) {
+        // 路径规范化：支持完整绝对路径和相对内部储存的路径
+        // /storage/emulated/0/DCIM → 绝对路径，原样使用
+        // /DCIM → 相对内部储存，补全为 /storage/emulated/0/DCIM
+        // DCIM → 同上
+        fun normalizeQaPath(raw: String): String {
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return ""
+            val full = when {
+                trimmed.startsWith("/storage/emulated/") ||
+                trimmed.startsWith("/data/") ||
+                trimmed.startsWith("/sdcard/") -> trimmed
+                trimmed.startsWith("/") -> "/storage/emulated/0$trimmed"
+                else -> "/storage/emulated/0/${trimmed.trimStart('/')}"
+            }
+            return if (full.endsWith("/") || full.endsWith("\\")) full.dropLast(1) else full
+        }
+
+        val name = qaNameInput.trim()
+        val isDuplicate = name.isNotEmpty() && quickAccessList.any { it.name == name }
+        val normalizedPath = normalizeQaPath(qaPathInput)
+        val pathInvalid = qaPathInput.trim().isNotEmpty() &&
+            normalizedPath.isNotEmpty() &&
+            !java.io.File(normalizedPath).isDirectory
+
+        AlertDialog(
+            onDismissRequest = {
+                showAddQaDialog = false
+                qaNameInput = ""; qaPathInput = ""
+            },
+            title = { Text("添加快捷访问") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = qaNameInput,
+                        onValueChange = {
+                            qaNameInput = it
+                        },
+                        label = { Text("命名") },
+                        singleLine = true,
+                        isError = isDuplicate,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (isDuplicate) {
+                        Text(
+                            "该名称已存在",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = 16.dp, top = 4.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = qaPathInput,
+                        onValueChange = {
+                            qaPathInput = it
+                        },
+                        label = { Text("绝对路径") },
+                        singleLine = true,
+                        isError = pathInvalid,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (pathInvalid) {
+                        Text(
+                            "当前文件夹路径似乎无效",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = 16.dp, top = 4.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val finalPath = normalizeQaPath(qaPathInput)
+                        if (name.isNotEmpty() && finalPath.isNotEmpty() && !isDuplicate && !pathInvalid) {
+                            quickAccessList = quickAccessList + QuickAccessEntry(name, finalPath)
+                            saveQuickAccess()
+                            showAddQaDialog = false
+                            qaNameInput = ""; qaPathInput = ""
+                        } else if (name.isEmpty() || finalPath.isEmpty()) {
+                            Toast.makeText(context, "请填写完整", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    enabled = name.isNotEmpty() && qaPathInput.trim().isNotEmpty() && !isDuplicate && !pathInvalid
+                ) {
+                    Text("添加")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showAddQaDialog = false
+                    qaNameInput = ""; qaPathInput = ""
+                }) {
                     Text("取消")
                 }
             }
