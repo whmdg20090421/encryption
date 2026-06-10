@@ -226,8 +226,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val useShizuku = SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (_, _, exit) = try {
             when {
-                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("cd '$escaped' 2>/dev/null")
-                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand("cd '$escaped' 2>/dev/null")
+                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -e '$escaped'")
+                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand("test -e '$escaped'")
                 else -> return File(path).exists()
             }
         } catch (_: Exception) { return false }
@@ -243,8 +243,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val useShizuku = SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (_, _, exit) = try {
             when {
-                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("cd '$escaped' 2>/dev/null && test -d .")
-                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand("cd '$escaped' 2>/dev/null && test -d .")
+                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -d '$escaped'")
+                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand("test -d '$escaped'")
                 else -> return File(path).isDirectory
             }
         } catch (_: Exception) { return false }
@@ -310,8 +310,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (showHidden) append("a")
             append("p")
         }
-        // 用 cd + ls 避免路径中括号等特殊字符被 shell 解析
-        val command = "cd '$escapedPath' && ls $flags"
+        val command = "ls $flags '$escapedPath'"
 
         val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (stdout, stderr, exitCode) = try {
@@ -1514,7 +1513,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 通过 shell 列出目录直接子项（含文件大小），用于受保护目录 */
     private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? {
         val escapedPath = dirPath.replace("'", "'\\''")
-        val cmd = "cd '$escapedPath' && ls -lap"
+        val cmd = "ls -lap '$escapedPath'"
         val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (stdout, _, exitCode) = try {
             when {
@@ -1626,7 +1625,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             if (showHidden) "-1Ap" else "-1p"
         }
-        val command = "cd '$escapedPath' && ls $lsFlags"
+        val command = "ls $lsFlags '$escapedPath'"
         val tag = when {
             useRoot -> "LsRoot"
             useShizuku -> "LsShizuku"
