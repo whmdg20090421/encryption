@@ -411,7 +411,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 Thread {
                     val db = FolderSizeDb.load(AppDataPaths.fileManager(context))
                     calcDirSizeWithShell(db, entry.path)
-                    db.save(AppDataPaths.fileManager(context))
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         folderSizeDb = db
                     }
@@ -1455,7 +1454,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (isRootEngine || useShizuku) {
                 if (shellPathExists(dirPath)) {
                     calcDirSizeWithShell(db, dirPath)
-                    db.save(AppDataPaths.fileManager(context))
                 }
             }
             return db
@@ -1515,67 +1513,62 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return total
     }
 
-    /** 通过 shell 命令计算受保护目录（如 Android/data）的大小，遵循底层冒泡排序。带进度追踪。 */
+    /** 通过 shell 命令计算受保护目录（如 Android/data）的大小，底层冒泡 + du -sb。带进度追踪。 */
     private fun calcDirSizeWithShell(db: FolderSizeDb, dirPath: String) {
-        // 1. 统计总目录数（单次 shell 调用）
-        val escapedPath = dirPath.replace("'", "'\\''")
-        val countCmd = "find '$escapedPath' -type d | wc -l"
         val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
-        val (countOut, _, countExit) = try {
-            when {
-                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(countCmd)
-                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(countCmd)
-                else -> return
-            }
-        } catch (_: Exception) { return }
+        fun exec(cmd: String): Triple<String, String, Int> {
+            val escaped = cmd.replace("'", "'\\''")
+            return try {
+                when {
+                    isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(escaped)
+                    useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(escaped)
+                    else -> Triple("", "no engine", 1)
+                }
+            } catch (e: Exception) { Triple("", e.message ?: "exception", 1) }
+        }
+
+        // 1. 统计总目录数（用于进度显示）
+        val escapedPath = dirPath.replace("'", "'\\''")
+        val (countOut, _, countExit) = exec("find '$escapedPath' -type d | wc -l")
         val totalDirs = if (countExit == 0) countOut.trim().toIntOrNull()?.coerceAtLeast(1) ?: 1 else 1
 
         SizeCalcManager.begin(db, AppDataPaths.fileManager(context))
         SizeCalcManager.update(0, totalDirs, dirPath.substringAfterLast('/'))
 
-        // 2. 递归计算
-        calcDirSizeWithShellRecursive(db, dirPath)
+        // 2. 底层冒泡：收集所有子目录，按深度降序排列
+        val (findOut, _, findExit) = exec("find '$escapedPath' -type d")
+        if (findExit != 0) { SizeCalcManager.finish(); return }
 
-        // 3. 完成
-        SizeCalcManager.finish()
-    }
+        val allDirs = findOut.lines().filter { it.isNotBlank() }
+            .sortedByDescending { it.count { c -> c == '/' } }
 
-    /** calcDirSizeWithShell 的递归核心，每处理一个目录更新进度，支持取消 */
-    private fun calcDirSizeWithShellRecursive(db: FolderSizeDb, dirPath: String) {
-        if (SizeCalcManager.cancelRequested) return
+        var processed = 0
 
-        val children = listDirChildrenViaShell(dirPath) ?: return
+        // 3. 从最深层开始，逐个用 du -sb 计算大小
+        for (dir in allDirs) {
+            if (SizeCalcManager.cancelRequested) break
 
-        var totalSize = 0L
-        val subdirs = mutableListOf<String>()
-
-        for (child in children) {
-            if (child.isDirectory) {
-                subdirs.add(child.path)
-            } else {
-                totalSize += child.size
-            }
-        }
-
-        subdirs.sortByDescending { it.count { c -> c == '/' } }
-
-        for (subPath in subdirs) {
-            if (SizeCalcManager.cancelRequested) return
-
-            val cached = db.get(subPath)
+            val cached = db.get(dir)
             if (cached != null && cached.size > 0) {
-                totalSize += cached.size
-                SizeCalcManager.processed++
-                SizeCalcManager.update(SizeCalcManager.processed, SizeCalcManager.total, subPath.substringAfterLast('/'))
+                processed++
+                SizeCalcManager.update(processed, totalDirs, dir.substringAfterLast('/'))
                 continue
             }
 
-            calcDirSizeWithShellRecursive(db, subPath)
-            val info = db.get(subPath)
-            if (info != null) totalSize += info.size
+            val dirEscaped = dir.replace("'", "'\\''")
+            val (duOut, _, duExit) = exec("du -sb '$dirEscaped'")
+            if (duExit == 0) {
+                val size = duOut.trim().split("\t").firstOrNull()?.toLongOrNull() ?: 0L
+                db.put(dir, FolderSizeInfo(size, System.currentTimeMillis()))
+            }
+
+            processed++
+            SizeCalcManager.update(processed, totalDirs, dir.substringAfterLast('/'))
         }
 
-        db.put(dirPath, FolderSizeInfo(totalSize, File(dirPath).lastModified()))
+        // 4. 保存结果
+        db.save(AppDataPaths.fileManager(context))
+        SizeCalcManager.finish()
     }
 
     /** 通过 shell 列出目录直接子项（含文件大小），用于受保护目录 */

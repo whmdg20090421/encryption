@@ -40,27 +40,21 @@ object SizeCalcManager {
     fun requestCancel() { cancelRequested = true }
 
     /** 用户点击"保存"：将当前已计算的结果持久化 */
-    fun save() {
-        val db = currentDb ?: return
-        val dir = saveDir ?: return
-        db.save(dir)
-    }
+    fun save() { currentDb?.save(saveDir ?: return) }
 
     internal fun begin(db: FolderSizeDb, saveDir: File) {
-        this.currentDb = db
-        this.saveDir = saveDir
+        currentDb = db; this.saveDir = saveDir
         progress = 0f; currentFolder = ""; processed = 0; total = 0; cancelRequested = false
     }
 
-    internal fun update(processed: Int, total: Int, folderName: String) {
-        this.processed = processed
-        this.total = total
-        this.currentFolder = folderName
-        this.progress = if (total > 0) processed.toFloat() / total else 0f
+    internal fun update(processed: Int, total: Int, folder: String) {
+        this.processed = processed; this.total = total
+        currentFolder = folder
+        progress = if (total > 0) processed.toFloat() / total else 0f
     }
 
     internal fun finish() {
-        progress = 1f; currentFolder = ""; processed = 0; total = 0; cancelRequested = false
-        currentDb = null; saveDir = null
+        progress = 1f; currentFolder = ""; processed = 0; total = 0
+        cancelRequested = false; currentDb = null; saveDir = null
     }
 }
