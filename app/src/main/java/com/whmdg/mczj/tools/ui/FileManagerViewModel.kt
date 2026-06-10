@@ -298,6 +298,17 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 从 ls -lap 输出行中精确提取原始文件名（保留多空格）。
+     * ls -lap 格式: perms links owner group size date time filename
+     * 前 7 个空白分隔字段之后，剩余全部为原始文件名。
+     */
+    private fun parseLsFilename(line: String): String? {
+        val regex = Regex("""^\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s""")
+        val match = regex.find(line) ?: return null
+        return line.substring(match.range.last + 1)
+    }
+
+    /**
      * 通过 shell 命令列出目录内容（Shizuku / Root / 普通 shell）。
      * 用于访问 Android/data 等受 Scoped Storage 保护的目录。
      * @return 条目列表，失败返回空列表并设置 lastShellStderr
@@ -350,7 +361,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val perms = parts[0]
             if (perms.length < 10) continue
 
-            val nameWithSlash = parts.drop(7).joinToString(" ")
+            val nameWithSlash = parseLsFilename(line) ?: continue
             val isDir = nameWithSlash.endsWith("/")
             val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
             if (name == "." || name == "..") continue
@@ -1532,7 +1543,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (parts.size < 8) continue
             val perms = parts[0]
             if (perms.length < 10) continue
-            val nameWithSlash = parts.drop(7).joinToString(" ")
+            val nameWithSlash = parseLsFilename(line) ?: continue
             val isDir = nameWithSlash.endsWith("/")
             val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
             if (name == "." || name == "..") continue
@@ -1674,7 +1685,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (parts.size < 8) continue
                 val perms = parts[0]
                 if (perms.length < 10) continue
-                val nameWithSlash = parts.drop(7).joinToString(" ")
+                val nameWithSlash = parseLsFilename(raw) ?: continue
                 val isDir = nameWithSlash.endsWith("/")
                 val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
                 if (name == "." || name == "..") continue
