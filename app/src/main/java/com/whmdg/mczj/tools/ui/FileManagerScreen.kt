@@ -403,7 +403,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     if (dirs.isEmpty()) {
                                         Toast.makeText(context, "当前列表没有文件夹", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        Toast.makeText(context, "大小统计功能待重构", Toast.LENGTH_SHORT).show()
+                                        val parentPath = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPath else vm.rightPath
+                                        vm.calculateFolderSizeAsync(parentPath)
                                     }
                                 }
                             )
@@ -1672,8 +1673,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         modifier = Modifier
                                             .weight(1f)
                                             .clickable {
+                                                val target = selectedEntry?.path
                                                 selectedEntry = null
-                                                Toast.makeText(context, "大小统计功能待重构", Toast.LENGTH_SHORT).show()
+                                                if (target != null) vm.calculateFolderSizeAsync(target)
                                             }
                                             .padding(vertical = 16.dp),
                                         contentAlignment = Alignment.Center
@@ -3422,7 +3424,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             confirmButton = {
                 TextButton(onClick = {
                     showSortSizeRefreshDialog = false
-                    Toast.makeText(context, "大小统计功能待重构", Toast.LENGTH_SHORT).show()
+                    val parentPath = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPath else vm.rightPath
+                    vm.calculateFolderSizeAsync(parentPath)
+                    // 统计完成后由 refreshCurrent 触发列表刷新，但排序字段需在此立即应用
+                    vm.updateSortField(tempSortField)
+                    vm.updateSortOrder(tempSortOrder)
                 }) {
                     Text("是")
                 }

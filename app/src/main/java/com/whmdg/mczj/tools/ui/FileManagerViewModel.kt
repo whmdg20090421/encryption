@@ -8,12 +8,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.CompressService
+import com.whmdg.mczj.tools.util.FileAccessLevel
+import com.whmdg.mczj.tools.util.FileAccessor
+import com.whmdg.mczj.tools.util.SizeCalcResult
+import com.whmdg.mczj.tools.util.calculateFolderSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -518,6 +523,66 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshBoth() {
         leftEntries = listDirectory(leftPath)
         rightEntries = listDirectory(rightPath)
+    }
+
+    // ── 文件夹大小统计 ──
+
+    /** 选用当前可用的最高权限通道（ROOT > SHIZUKU > NORMAL）。 */
+    private fun detectMaxAvailablePermission(): FileAccessLevel = when {
+        SpecialPermissionVerifier.isRootAvailable() -> FileAccessLevel.ROOT
+        SpecialPermissionVerifier.isShizukuAuthorized(context) -> FileAccessLevel.SHIZUKU
+        else -> FileAccessLevel.NORMAL
+    }
+
+    /**
+     * 异步统计指定目录大小（含整棵子树）。
+     * - 长按入口：传入文件夹自身路径
+     * - 批量入口（菜单/排序）：传入当前面板路径作为父目录
+     *
+     * 完成后将 FolderSizeDb 持久化并刷新当前面板列表。
+     */
+    fun calculateFolderSizeAsync(rootPath: String) {
+        if (SizeCalcManager.isCalculating) {
+            Toast.makeText(context, "已有统计任务在进行中", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val permission = detectMaxAvailablePermission()
+        val accessor = FileAccessor.create(permission, context)
+        val saveDir = AppDataPaths.fileManager(context)
+        SizeCalcManager.begin(folderSizeDb, saveDir)
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = try {
+                calculateFolderSize(
+                    rootPath = rootPath,
+                    accessor = accessor,
+                    db = folderSizeDb,
+                    onProgress = { p, t, f -> SizeCalcManager.update(p, t, f) },
+                    isCancelled = { SizeCalcManager.cancelRequested }
+                )
+            } catch (e: Throwable) {
+                SizeCalcResult.Failed(e.message ?: "未知错误")
+            }
+            withContext(Dispatchers.Main) {
+                SizeCalcManager.finish()
+                when (result) {
+                    is SizeCalcResult.Success -> {
+                        folderSizeDb.save(saveDir)
+                        // 触发 Compose 重组：folderSizeDb 引用变化才会触发，复用同一个实例需要手动 bump
+                        refreshVersion += 1
+                        refreshCurrent()
+                    }
+                    is SizeCalcResult.PermissionDenied -> {
+                        Toast.makeText(context, "Permission Denied: ${result.path}", Toast.LENGTH_LONG).show()
+                    }
+                    is SizeCalcResult.Cancelled -> {
+                        // 部分结果保留在内存 db；用户已通过"保存"按钮按需落盘
+                    }
+                    is SizeCalcResult.Failed -> {
+                        Toast.makeText(context, "统计失败：${result.reason}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
     }
 
     // ── 回收站操作 ──
