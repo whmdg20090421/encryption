@@ -567,15 +567,18 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 when (result) {
                     is SizeCalcResult.Success -> {
                         folderSizeDb.save(saveDir)
-                        // 触发 Compose 重组：folderSizeDb 引用变化才会触发，复用同一个实例需要手动 bump
-                        refreshVersion += 1
+                        // 替换引用触发 Compose 重组（原地修改 mutableMap 不会触发）
+                        folderSizeDb = FolderSizeDb.load(saveDir)
                         refreshCurrent()
                     }
                     is SizeCalcResult.PermissionDenied -> {
                         Toast.makeText(context, "Permission Denied: ${result.path}", Toast.LENGTH_LONG).show()
                     }
                     is SizeCalcResult.Cancelled -> {
-                        // 部分结果保留在内存 db；用户已通过"保存"按钮按需落盘
+                        // 将内存中的部分结果落盘并刷新 UI
+                        folderSizeDb.save(saveDir)
+                        folderSizeDb = FolderSizeDb.load(saveDir)
+                        refreshCurrent()
                     }
                     is SizeCalcResult.Failed -> {
                         Toast.makeText(context, "统计失败：${result.reason}", Toast.LENGTH_LONG).show()

@@ -15,7 +15,7 @@ import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
  *   - POSIX 保证：目录直接 children 增删改时其 mtime 变化（但子目录内部变化不会传播）
  *     → "mtime 未变"意味着自身直接文件层未变，但子树内部可能变了，仍要应用子目录 delta
  *
- * 进度回调每 8 个目录触发一次；取消检查同样频率。
+ * 进度回调在累加阶段逐目录触发；BFS 阶段不报告进度。
  */
 fun calculateFolderSize(
     rootPath: String,
@@ -57,14 +57,11 @@ private fun fullScan(
     queue.add(rootPath to 0)
     depth[rootPath] = 0
 
-    var bfsCount = 0
     while (queue.isNotEmpty()) {
         if (isCancelled()) return SizeCalcResult.Cancelled
         val (dir, d) = queue.removeFirst()
         val list = accessor.listChildren(dir) ?: return SizeCalcResult.PermissionDenied(dir)
         children[dir] = list
-        bfsCount++
-        if (bfsCount % 8 == 0) onProgress(bfsCount, bfsCount * 2, dir)
         for (e in list) {
             if (e.isDir) {
                 mtimes[e.path] = e.mtime
@@ -90,10 +87,9 @@ private fun fullScan(
         sizes[dir] = s
         updates[dir] = FolderSizeInfo(s, mtimes[dir] ?: 0L)
         processed++
-        if (processed % 8 == 0) onProgress(processed, total, dir)
+        onProgress(processed, total, dir)
     }
     db.bulkPut(updates)
-    onProgress(total, total, rootPath)
     return SizeCalcResult.Success(sizes[rootPath] ?: 0L)
 }
 
@@ -125,14 +121,11 @@ private fun diffScan(
     queue.add(rootPath to 0)
     depth[rootPath] = 0
 
-    var bfsCount = 0
     while (queue.isNotEmpty()) {
         if (isCancelled()) return SizeCalcResult.Cancelled
         val (dir, d) = queue.removeFirst()
         val list = accessor.listChildren(dir) ?: return SizeCalcResult.PermissionDenied(dir)
         currentChildren[dir] = list
-        bfsCount++
-        if (bfsCount % 8 == 0) onProgress(bfsCount, bfsCount + snapshot.size, dir)
         for (e in list) {
             if (e.isDir) {
                 currentMtimes[e.path] = e.mtime
@@ -205,10 +198,9 @@ private fun diffScan(
             deltas.merge(parent, delta) { a, b -> a + b }
         }
         processed++
-        if (processed % 8 == 0) onProgress(processed, total, dir)
+        onProgress(processed, total, dir)
     }
 
     db.bulkPut(updates)
-    onProgress(total, total, rootPath)
     return SizeCalcResult.Success(newSizes[rootPath] ?: 0L)
 }
