@@ -88,10 +88,15 @@ private class ShellAccessor(
             if (parts.size < 8) continue
             if (parts[0].length < 10) continue
 
-            // 精确提取原始文件名（保留多空格），避免 split + join 合并空格
-            val nameRegex = Regex("""^\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s""")
-            val nameWithSlash = nameRegex.find(line)?.let { line.substring(it.range.last + 1) }
-                ?: continue
+            // 精确提取原始文件名（保留多空格），逐字符跳过前 7 个字段
+            var namePos = 0
+            repeat(7) {
+                while (namePos < line.length && line[namePos].isWhitespace()) namePos++
+                if (namePos >= line.length) return@repeat
+                while (namePos < line.length && !line[namePos].isWhitespace()) namePos++
+            }
+            while (namePos < line.length && line[namePos].isWhitespace()) namePos++
+            val nameWithSlash = if (namePos < line.length) line.substring(namePos) else continue
             val isDir = nameWithSlash.endsWith("/")
             val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
             if (name == "." || name == "..") continue

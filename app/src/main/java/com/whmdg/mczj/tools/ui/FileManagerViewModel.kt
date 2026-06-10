@@ -299,13 +299,17 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 从 ls -lap 输出行中精确提取原始文件名（保留多空格）。
-     * ls -lap 格式: perms links owner group size date time filename
-     * 前 7 个空白分隔字段之后，剩余全部为原始文件名。
+     * 跳过前 7 个空白分隔字段后，剩余全部为原始文件名。
      */
     private fun parseLsFilename(line: String): String? {
-        val regex = Regex("""^\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s""")
-        val match = regex.find(line) ?: return null
-        return line.substring(match.range.last + 1)
+        var pos = 0
+        repeat(7) {
+            while (pos < line.length && line[pos].isWhitespace()) pos++
+            if (pos >= line.length) return null
+            while (pos < line.length && !line[pos].isWhitespace()) pos++
+        }
+        while (pos < line.length && line[pos].isWhitespace()) pos++
+        return if (pos < line.length) line.substring(pos) else null
     }
 
     /**
