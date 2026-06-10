@@ -17,6 +17,8 @@ import java.util.Locale
 interface FileAccessor {
     fun listChildren(path: String): List<DirEntry>?
     fun statMtime(path: String): Long?
+    /** 执行 shell 命令，返回 (stdout, stderr, exitCode)。NormalAccessor 返回失败。 */
+    fun exec(command: String): Triple<String, String, Int>
 
     companion object {
         fun create(level: FileAccessLevel, context: Context): FileAccessor = when (level) {
@@ -28,6 +30,8 @@ interface FileAccessor {
 }
 
 private class NormalAccessor : FileAccessor {
+    override fun exec(command: String): Triple<String, String, Int> = Triple("", "无 shell 权限", 1)
+
     override fun listChildren(path: String): List<DirEntry>? {
         val dir = File(path)
         if (!dir.isDirectory || !dir.canRead()) return null
@@ -56,7 +60,7 @@ private class ShellAccessor(
     private val useRoot: Boolean
 ) : FileAccessor {
 
-    private fun exec(command: String): Triple<String, String, Int> {
+    override fun exec(command: String): Triple<String, String, Int> {
         return if (useRoot) {
             SpecialPermissionVerifier.executeRootCommandFull(command)
         } else {

@@ -577,6 +577,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     rootPath = rootPath,
                     accessor = accessor,
                     db = folderSizeDb,
+                    onTotal = { total -> SizeCalcManager.onTotal(total) },
                     onScanned = { count, folder -> SizeCalcManager.onScanned(count, folder) },
                     onProgress = { p, t, f -> SizeCalcManager.onProgress(p, t, f) },
                     isCancelled = { SizeCalcManager.cancelRequested }

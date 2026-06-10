@@ -23,10 +23,16 @@ fun calculateFolderSize(
     rootPath: String,
     accessor: FileAccessor,
     db: FolderSizeDb,
+    onTotal: (total: Int) -> Unit,
     onScanned: (count: Int, currentFolder: String) -> Unit,
     onProgress: (processed: Int, total: Int, currentFolder: String) -> Unit,
     isCancelled: () -> Boolean
 ): SizeCalcResult {
+    val escaped = rootPath.replace("'", "'\\''")
+    val (countOut, _, countExit) = accessor.exec("find '$escaped' -type d | wc -l")
+    val totalDirs = countOut.trim().toIntOrNull()?.coerceAtLeast(0) ?: 0
+    onTotal(totalDirs)
+
     val snapshot = db.getDescendants(rootPath)
     return if (snapshot.isEmpty()) {
         fullScan(rootPath, accessor, db, onScanned, onProgress, isCancelled)

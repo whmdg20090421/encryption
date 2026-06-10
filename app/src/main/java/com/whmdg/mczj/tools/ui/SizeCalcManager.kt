@@ -59,16 +59,22 @@ object SizeCalcManager {
         cancelRequested = false; permissionDeniedPath = null
     }
 
+    /** BFS 前：统计总目录数 */
+    internal fun onTotal(total: Int) {
+        if (total > 0) totalCount = total
+    }
+
     /** BFS 阶段：每扫描一个目录调用 */
     internal fun onScanned(count: Int, folder: String) {
         scannedCount = count
+        processedCount = count
         currentFolder = folder
+        progress = if (totalCount > 0) count.toFloat() / totalCount else 0f
     }
 
     /** 累加阶段：设置总数并更新进度 */
     internal fun onProgress(processed: Int, total: Int, folder: String) {
         processedCount = processed
-        if (totalCount == 0) totalCount = total
         currentFolder = folder
         progress = if (total > 0) processed.toFloat() / total else 0f
     }

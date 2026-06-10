@@ -573,9 +573,9 @@ fun MainAppContainer() {
                     )
                 }
                 Spacer(Modifier.height(4.dp))
-                // 第二行：已扫描 / 已统计
+                // 第二行：已扫描 / 总目录（百分比）
                 Text(
-                    text = "已扫描 $calcScanned 个目录  已统计 $calcProcessed / $calcTotal",
+                    text = "已扫描 $calcScanned / $calcTotal 个目录  ${(calcProgress * 100).toInt()}%",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
