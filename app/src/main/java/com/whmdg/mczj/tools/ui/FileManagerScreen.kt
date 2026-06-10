@@ -526,7 +526,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             vm.currentPath != effectiveRoot
                                 && vm.currentPath.contains('/')
                                 && parentPath != vm.currentPath
-                                && try { File(parentPath).canRead() } catch (_: Exception) { false }
+                                && vm.canAccessPath(parentPath)
                         }
 
                         IconButton(
@@ -603,7 +603,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                     } else if (vm.leftPath != leftEffectiveRoot && vm.leftPath.contains('/')) {
                         vm.leftPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-                            if (p != vm.leftPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
+                            if (p != vm.leftPath && vm.canAccessPath(p)) p else null
                         }
                     } else null
 
@@ -617,7 +617,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                     } else if (vm.rightPath != rightEffectiveRoot && vm.rightPath.contains('/')) {
                         vm.rightPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-                            if (p != vm.rightPath && try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
+                            if (p != vm.rightPath && vm.canAccessPath(p)) p else null
                         }
                     } else null
 
@@ -2220,7 +2220,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         val normalizedPath = normalizeQaPath(qaPathInput)
         val pathInvalid = qaPathInput.trim().isNotEmpty() &&
             normalizedPath.isNotEmpty() &&
-            !java.io.File(normalizedPath).isDirectory
+            !vm.isDirectoryShell(normalizedPath)
 
         AlertDialog(
             onDismissRequest = {
@@ -3399,9 +3399,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 if (!entry.isDirectory) return@filter false
                                 val cached = vm.folderSizeDb.get(entry.path)
                                 if (cached != null) return@filter false // 已统计
-                                // 检查是否空文件夹或权限不足
-                                val dir = File(entry.path)
-                                val children = try { dir.listFiles() } catch (_: Exception) { null }
+                                // 检查是否空文件夹或权限不足（受保护路径走 shell）
+                                val children = vm.listChildrenOrNull(entry.path)
                                 if (children == null || children.isEmpty()) return@filter false
                                 true
                             }
@@ -3542,17 +3541,14 @@ private fun FileBrowserPanel(
                             val cached = folderSizeDb.get(entry.path)
                             if (cached != null) {
                                 if (cached.size == 0L) {
-                                    val dir = File(entry.path)
-                                    val children = try { dir.listFiles() } catch (_: Exception) { null }
-                                    if (children == null) {
-                                        if (SpecialPermissionVerifier.isShizukuAuthorized(context)) "--" else "✕"
-                                    } else "0MB"
+                                    // shell 已统计，信任结果
+                                    "0MB"
                                 } else {
                                     compactSize(cached.size)
                                 }
                             } else {
-                                val dir = File(entry.path)
-                                val children = try { dir.listFiles() } catch (_: Exception) { null }
+                                // 未统计：检查是否可访问（受保护路径走 shell）
+                                val children = vm.listChildrenOrNull(entry.path)
                                 if (children == null) {
                                     if (SpecialPermissionVerifier.isShizukuAuthorized(context)) "--" else "✕"
                                 } else ""

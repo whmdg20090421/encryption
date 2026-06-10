@@ -244,6 +244,29 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 检查路径是否可读（受保护路径走 shell，普通路径走 Java API）。
+     */
+    fun canAccessPath(path: String): Boolean = shellPathExists(path)
+
+    /**
+     * 检查路径是否为目录（受保护路径走 shell，普通路径走 Java API）。
+     */
+    fun isDirectoryShell(path: String): Boolean = shellIsDirectory(path)
+
+    /**
+     * 通过 shell 列出目录直接子项，返回列表（空目录返回空列表，失败返回 null）。
+     * 用于替代 Java File.listFiles()，受保护路径走 shell。
+     */
+    fun listChildrenOrNull(path: String): List<FileEntry>? {
+        if (!isProtectedPath(path)) {
+            return try { File(path).listFiles()?.map { f ->
+                FileEntry(f.absolutePath, f.name, f.isDirectory, "", if (f.isDirectory) 0L else f.length(), f.lastModified())
+            } } catch (_: Exception) { null }
+        }
+        return listDirChildrenViaShell(path)
+    }
+
+    /**
      * 根据当前引擎执行 shell 命令（Root 优先，回退 Shizuku）。
      * 用于受保护路径的文件操作。
      */
