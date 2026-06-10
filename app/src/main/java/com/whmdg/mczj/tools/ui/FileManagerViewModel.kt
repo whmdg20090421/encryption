@@ -1446,8 +1446,22 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 文件夹大小 ──
     fun refreshFolderSize(dirPath: String): FolderSizeDb {
-        val baseDir = File(dirPath)
         val db = FolderSizeDb.load(AppDataPaths.fileManager(context))
+        val isProtected = isProtectedPath(dirPath)
+
+        // 受保护路径（Android/data、Android/obb）：Java File API 不可用，直接走 shell
+        if (isProtected) {
+            val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+            if (isRootEngine || useShizuku) {
+                if (shellPathExists(dirPath)) {
+                    calcDirSizeWithShell(db, dirPath)
+                    db.save(AppDataPaths.fileManager(context))
+                }
+            }
+            return db
+        }
+
+        val baseDir = File(dirPath)
         if (!baseDir.exists() || !baseDir.isDirectory) return db
 
         val subdirs = mutableListOf<String>()
@@ -1461,17 +1475,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         collectSubdirs(baseDir)
-
-        // File.listFiles() 对 Android/data 等受保护目录返回 null → 用 shell 底层冒泡计算
-        val isProtected = dirPath.contains("/Android/data") || dirPath.contains("/Android/obb")
-        if (subdirs.isEmpty() && isProtected) {
-            val useShizuku = SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
-            if (isRootEngine || useShizuku) {
-                calcDirSizeWithShell(db, dirPath)
-                db.save(AppDataPaths.fileManager(context))
-                return db
-            }
-        }
 
         subdirs.sortByDescending { it.count { c -> c == '/' } }
 
