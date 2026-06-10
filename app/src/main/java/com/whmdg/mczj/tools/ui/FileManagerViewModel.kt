@@ -1513,38 +1513,41 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return total
     }
 
-    /** 通过 shell 命令计算受保护目录（如 Android/data）的大小，底层冒泡 + du -sb。带进度追踪。 */
+    /** 通过 shell 命令计算受保护目录（如 Android/data）的大小，底层冒泡 + du/ls。带进度追踪。 */
     private fun calcDirSizeWithShell(db: FolderSizeDb, dirPath: String) {
         val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
-        fun exec(cmd: String): Triple<String, String, Int> {
-            val escaped = cmd.replace("'", "'\\''")
-            return try {
-                when {
-                    isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(escaped)
-                    useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(escaped)
-                    else -> Triple("", "no engine", 1)
-                }
-            } catch (e: Exception) { Triple("", e.message ?: "exception", 1) }
-        }
+
+        // 路径转义 + shell 执行：路径单独处理，不破坏命令结构
+        fun q(path: String) = "'" + path.replace("'", "'\\''") + "'"
+        fun exec(cmd: String): Triple<String, String, Int> = try {
+            when {
+                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(cmd)
+                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(cmd)
+                else -> Triple("", "no engine", 1)
+            }
+        } catch (e: Exception) { Triple("", e.message ?: "exception", 1) }
 
         // 1. 统计总目录数（用于进度显示）
-        val escapedPath = dirPath.replace("'", "'\\''")
-        val (countOut, _, countExit) = exec("find '$escapedPath' -type d | wc -l")
+        val (countOut, _, countExit) = exec("find ${q(dirPath)} -type d | wc -l")
         val totalDirs = if (countExit == 0) countOut.trim().toIntOrNull()?.coerceAtLeast(1) ?: 1 else 1
 
         SizeCalcManager.begin(db, AppDataPaths.fileManager(context))
         SizeCalcManager.update(0, totalDirs, dirPath.substringAfterLast('/'))
 
         // 2. 底层冒泡：收集所有子目录，按深度降序排列
-        val (findOut, _, findExit) = exec("find '$escapedPath' -type d")
+        val (findOut, _, findExit) = exec("find ${q(dirPath)} -type d")
         if (findExit != 0) { SizeCalcManager.finish(); return }
 
         val allDirs = findOut.lines().filter { it.isNotBlank() }
             .sortedByDescending { it.count { c -> c == '/' } }
 
+        // 3. 检测 du -sb 是否可用
+        val (duTestOut, _, duTestExit) = exec("du -sb ${q(dirPath)}")
+        val duAvailable = duTestExit == 0 && duTestOut.trim().split("\t").firstOrNull()?.toLongOrNull() != null
+
         var processed = 0
 
-        // 3. 从最深层开始，逐个用 du -sb 计算大小
+        // 4. 从最深层开始，逐个目录计算大小
         for (dir in allDirs) {
             if (SizeCalcManager.cancelRequested) break
 
@@ -1555,18 +1558,35 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 continue
             }
 
-            val dirEscaped = dir.replace("'", "'\\''")
-            val (duOut, _, duExit) = exec("du -sb '$dirEscaped'")
-            if (duExit == 0) {
-                val size = duOut.trim().split("\t").firstOrNull()?.toLongOrNull() ?: 0L
-                db.put(dir, FolderSizeInfo(size, System.currentTimeMillis()))
+            var size = 0L
+            if (duAvailable) {
+                // du -sb 直接返回字节数
+                val (duOut, _, duExit) = exec("du -sb ${q(dir)}")
+                if (duExit == 0) {
+                    size = duOut.trim().split("\t").firstOrNull()?.toLongOrNull() ?: 0L
+                }
+            } else {
+                // 回退：ls -lap 累加文件大小
+                val (lsOut, _, lsExit) = exec("ls -lap ${q(dir)}")
+                if (lsExit == 0) {
+                    for (line in lsOut.lines()) {
+                        if (line.startsWith("d") || line.startsWith("total") || line.isBlank()) continue
+                        val parts = line.split("\\s+".toRegex())
+                        if (parts.size >= 6) {
+                            size += parts[4].toLongOrNull() ?: 0L
+                        }
+                    }
+                }
             }
 
+            if (size > 0) {
+                db.put(dir, FolderSizeInfo(size, System.currentTimeMillis()))
+            }
             processed++
             SizeCalcManager.update(processed, totalDirs, dir.substringAfterLast('/'))
         }
 
-        // 4. 保存结果
+        // 5. 保存结果
         db.save(AppDataPaths.fileManager(context))
         SizeCalcManager.finish()
     }
