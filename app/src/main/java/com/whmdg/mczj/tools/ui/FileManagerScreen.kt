@@ -5,6 +5,7 @@ import android.os.Environment
 import android.os.StatFs
 import android.provider.Settings
 import android.widget.Toast
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
@@ -1100,7 +1101,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             )
                     )
                     // 左侧菜单面板 70%
-                    var toolsExpanded by remember { mutableStateOf(false) }
+                    val drawerPrefs = context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE)
+                    var localExpanded by remember {
+                        mutableStateOf(drawerPrefs.getBoolean("drawer_local_expanded", true))
+                    }
+                    var toolsExpanded by remember {
+                        mutableStateOf(drawerPrefs.getBoolean("drawer_tools_expanded", false))
+                    }
                     Surface(
                         modifier = Modifier
                             .fillMaxHeight()
@@ -1138,15 +1145,17 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     .verticalScroll(rememberScrollState())
                             ) {
                                 // ── 本地 ──
-                                DrawerSectionHeader(title = "本地")
-                                DrawerMenuItem(
-                                    icon = Icons.Default.Storage,
-                                    label = "内部储存",
+                                DrawerSectionHeader(
+                                    title = "本地",
+                                    expandable = true,
+                                    expanded = localExpanded,
                                     onClick = {
-                                        vm.navigateTo("/storage/emulated/0/")
-                                        showDrawer = false
+                                        localExpanded = !localExpanded
+                                        drawerPrefs.edit().putBoolean("drawer_local_expanded", localExpanded).apply()
                                     }
                                 )
+                                AnimatedVisibility(visible = localExpanded) {
+                                Column {
                                 // 内部储存空间卡片（手机总存储）
                                 run {
                                     val stat = try { StatFs(Environment.getDataDirectory().path) } catch (_: Exception) { null }
@@ -1163,7 +1172,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             Card(
                                                 modifier = Modifier
                                                     .fillMaxWidth(0.85f)
-                                                    .padding(vertical = 6.dp),
+                                                    .padding(vertical = 6.dp)
+                                                    .clickable {
+                                                        vm.navigateTo("/storage/emulated/0/")
+                                                        showDrawer = false
+                                                    },
                                                 colors = CardDefaults.cardColors(
                                                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                                                 )
@@ -1187,24 +1200,26 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                         trackColor = barColor.copy(alpha = 0.2f),
                                                     )
                                                     Spacer(Modifier.height(4.dp))
-                                                    Text(
-                                                        "${compactSize(used)} / ${compactSize(total)}",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.SpaceBetween
+                                                    ) {
+                                                        Text(
+                                                            "${compactSize(used)} / ${compactSize(total)}",
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                        Text(
+                                                            "%.1f%%".format(progress * 100),
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                                DrawerMenuItem(
-                                    icon = Icons.Default.Folder,
-                                    label = "根目录",
-                                    onClick = {
-                                        vm.navigateTo("/")
-                                        showDrawer = false
-                                    }
-                                )
                                 // 根目录空间卡片
                                 run {
                                     val stat = try { StatFs("/") } catch (_: Exception) { null }
@@ -1221,7 +1236,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             Card(
                                                 modifier = Modifier
                                                     .fillMaxWidth(0.85f)
-                                                    .padding(vertical = 6.dp),
+                                                    .padding(vertical = 6.dp)
+                                                    .clickable {
+                                                        vm.navigateTo("/")
+                                                        showDrawer = false
+                                                    },
                                                 colors = CardDefaults.cardColors(
                                                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                                                 )
@@ -1245,11 +1264,21 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                         trackColor = barColor.copy(alpha = 0.2f),
                                                     )
                                                     Spacer(Modifier.height(4.dp))
-                                                    Text(
-                                                        "${compactSize(used)} / ${compactSize(total)}",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.SpaceBetween
+                                                    ) {
+                                                        Text(
+                                                            "${compactSize(used)} / ${compactSize(total)}",
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                        Text(
+                                                            "%.1f%%".format(progress * 100),
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -1257,14 +1286,40 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 }
                                 // 自定义快捷访问
                                 quickAccessList.forEach { entry ->
-                                    DrawerMenuItem(
-                                        icon = Icons.Default.SubdirectoryArrowRight,
-                                        label = entry.name,
-                                        onClick = {
-                                            vm.navigateTo(entry.path)
-                                            showDrawer = false
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Card(
+                                            modifier = Modifier
+                                                .fillMaxWidth(0.85f)
+                                                .padding(vertical = 6.dp)
+                                                .clickable {
+                                                    vm.navigateTo(entry.path)
+                                                    showDrawer = false
+                                                },
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                            )
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.SubdirectoryArrowRight,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(20.dp),
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(
+                                                    entry.name,
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                            }
                                         }
-                                    )
+                                    }
                                 }
                                 // 添加快捷访问按钮
                                 Row(
@@ -1287,13 +1342,18 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         color = MaterialTheme.colorScheme.primary
                                     )
                                 }
+                                } // AnimatedVisibility
+                                } // Column
                                 HorizontalDivider()
                                 // ── 工具 ──
                                 DrawerSectionHeader(
                                     title = "工具",
                                     expandable = true,
                                     expanded = toolsExpanded,
-                                    onClick = { toolsExpanded = !toolsExpanded }
+                                    onClick = {
+                                        toolsExpanded = !toolsExpanded
+                                        drawerPrefs.edit().putBoolean("drawer_tools_expanded", toolsExpanded).apply()
+                                    }
                                 )
                                 AnimatedVisibility(visible = toolsExpanded) {
                                     Column {
