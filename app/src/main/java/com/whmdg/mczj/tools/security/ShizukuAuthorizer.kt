@@ -261,21 +261,32 @@ object ShizukuAuthorizer {
     /** 断连后重连并重试（200ms 超时 × 3 次） */
     private fun reconnectAndRetry(command: String): Triple<String, String, Int> {
         for (attempt in 1..3) {
-            // 用 latch 等待绑定完成，200ms 超时
-            val latch = java.util.concurrent.CountDownLatch(1)
-            ensureBound { latch.countDown() }
-            latch.await(200, java.util.concurrent.TimeUnit.MILLISECONDS)
-
-            val retryService = shellService
-            if (retryService != null) {
-                try {
-                    return parseResult(retryService.execute(command))
-                } catch (_: Exception) {
-                    synchronized(bindLock) { shellService = null }
+            if (rebindSync(200)) {
+                val retryService = shellService
+                if (retryService != null) {
+                    try {
+                        return parseResult(retryService.execute(command))
+                    } catch (_: Exception) {
+                        synchronized(bindLock) { shellService = null }
+                    }
                 }
             }
         }
         return Triple("", "Shizuku UserService 不可用，请检查 Shizuku 是否正常运行", -1)
+    }
+
+    /**
+     * 同步等待 UserService 重绑，最多等待 [timeoutMs] 毫秒。
+     * @return true 表示重绑成功
+     */
+    private fun rebindSync(timeoutMs: Long): Boolean {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var success = false
+        ensureBound { result ->
+            success = result
+            latch.countDown()
+        }
+        return latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) && success
     }
 
     /**
