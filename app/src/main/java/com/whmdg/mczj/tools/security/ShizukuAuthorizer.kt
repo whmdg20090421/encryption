@@ -235,8 +235,8 @@ object ShizukuAuthorizer {
     }
 
     /**
-     * 通过 Shizuku 执行 shell 命令（仅 UserService 模式，不使用已废弃的 newProcess）。
-     * UserService 断开时尝试同步重连，重连失败返回错误。
+     * 通过 Shizuku 执行 shell 命令（仅 UserService 模式）。
+     * 首次调用异步绑定 UserService；断连后自动短超时重连（200ms × 3 次）。
      * @return Triple(stdout, stderr, exitCode)
      */
     fun executeCommand(command: String): Triple<String, String, Int> {
@@ -248,43 +248,34 @@ object ShizukuAuthorizer {
                 return parseResult(rawResult)
             } catch (e: Exception) {
                 synchronized(bindLock) { shellService = null }
-                Log.w(TAG, "UserService 调用失败: ${e.message}，尝试同步重连")
-                return rebindAndRetry(command)
+                Log.w(TAG, "UserService 调用失败: ${e.message}，尝试重连")
+                return reconnectAndRetry(command)
             }
         }
 
-        // shellService 为 null：首次调用或之前已断开
-        return rebindAndRetry(command)
+        // 首次调用：异步绑定 UserService
+        ensureBound { /* 后续调用自动走快速路径 */ }
+        return Triple("", "Shizuku UserService 正在连接中，请稍后重试", -1)
     }
 
-    /** 同步重连 UserService 并重试命令，失败返回错误 */
-    private fun rebindAndRetry(command: String): Triple<String, String, Int> {
-        if (rebindSync(3000)) {
+    /** 断连后重连并重试（200ms 超时 × 3 次） */
+    private fun reconnectAndRetry(command: String): Triple<String, String, Int> {
+        for (attempt in 1..3) {
+            // 用 latch 等待绑定完成，200ms 超时
+            val latch = java.util.concurrent.CountDownLatch(1)
+            ensureBound { latch.countDown() }
+            latch.await(200, java.util.concurrent.TimeUnit.MILLISECONDS)
+
             val retryService = shellService
             if (retryService != null) {
                 try {
                     return parseResult(retryService.execute(command))
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     synchronized(bindLock) { shellService = null }
-                    Log.w(TAG, "重连后 UserService 调用仍失败: ${e.message}")
                 }
             }
         }
         return Triple("", "Shizuku UserService 不可用，请检查 Shizuku 是否正常运行", -1)
-    }
-
-    /**
-     * 同步等待 UserService 重绑，最多等待 [timeoutMs] 毫秒。
-     * @return true 表示重绑成功
-     */
-    private fun rebindSync(timeoutMs: Long): Boolean {
-        val latch = java.util.concurrent.CountDownLatch(1)
-        var success = false
-        ensureBound { result ->
-            success = result
-            latch.countDown()
-        }
-        return latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) && success
     }
 
     /**
