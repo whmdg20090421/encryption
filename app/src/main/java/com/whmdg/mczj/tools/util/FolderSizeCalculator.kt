@@ -61,17 +61,20 @@ private fun fullScan(
     val children = LinkedHashMap<String, List<DirEntry>>()
     val depth = HashMap<String, Int>()
     val mtimes = HashMap<String, Long>()
+    var result: SizeCalcResult? = null
 
     mtimes[rootPath] = accessor.statMtime(rootPath) ?: 0L
     val queue = ArrayDeque<Pair<String, Int>>()
     queue.add(rootPath to 0)
     depth[rootPath] = 0
 
+    // BFS 阶段：收集目录树
     var scanned = 0
     while (queue.isNotEmpty()) {
-        if (isCancelled()) return SizeCalcResult.Cancelled
+        if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
         val (dir, d) = queue.removeFirst()
-        val list = accessor.listChildren(dir) ?: return SizeCalcResult.PermissionDenied(dir)
+        val list = accessor.listChildren(dir)
+        if (list == null) { result = SizeCalcResult.PermissionDenied(dir); break }
         children[dir] = list
         scanned++
         onScanned(scanned, dir)
@@ -84,26 +87,32 @@ private fun fullScan(
         }
     }
 
+    // 累加阶段：对已收集的目录自底向上计算大小
     val total = children.size
     val sizes = HashMap<String, Long>(total)
     val updates = HashMap<String, FolderSizeInfo>(total)
     val ordered = children.keys.sortedByDescending { depth[it] ?: 0 }
 
-    var processed = 0
-    for (dir in ordered) {
-        if (isCancelled()) return SizeCalcResult.Cancelled
-        val list = children[dir]!!
-        var s = 0L
-        for (e in list) {
-            s += if (e.isDir) (sizes[e.path] ?: 0L) else e.size
+    try {
+        var processed = 0
+        for (dir in ordered) {
+            if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
+            val list = children[dir]!!
+            var s = 0L
+            for (e in list) {
+                s += if (e.isDir) (sizes[e.path] ?: 0L) else e.size
+            }
+            sizes[dir] = s
+            updates[dir] = FolderSizeInfo(s, mtimes[dir] ?: 0L)
+            processed++
+            onProgress(processed, total, dir)
         }
-        sizes[dir] = s
-        updates[dir] = FolderSizeInfo(s, mtimes[dir] ?: 0L)
-        processed++
-        onProgress(processed, total, dir)
+    } finally {
+        // 无论正常完成、Cancelled、PermissionDenied 还是异常，都保存已计算的部分结果
+        db.bulkPut(updates)
     }
-    db.bulkPut(updates)
-    return SizeCalcResult.Success(sizes[rootPath] ?: 0L)
+
+    return result ?: SizeCalcResult.Success(sizes[rootPath] ?: 0L)
 }
 
 /**
@@ -129,17 +138,20 @@ private fun diffScan(
     val currentChildren = LinkedHashMap<String, List<DirEntry>>()
     val currentMtimes = HashMap<String, Long>()
     val depth = HashMap<String, Int>()
+    var result: SizeCalcResult? = null
 
     currentMtimes[rootPath] = accessor.statMtime(rootPath) ?: 0L
     val queue = ArrayDeque<Pair<String, Int>>()
     queue.add(rootPath to 0)
     depth[rootPath] = 0
 
+    // BFS 阶段：收集目录树（mtime 剪枝）
     var scanned = 0
     while (queue.isNotEmpty()) {
-        if (isCancelled()) return SizeCalcResult.Cancelled
+        if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
         val (dir, d) = queue.removeFirst()
-        val list = accessor.listChildren(dir) ?: return SizeCalcResult.PermissionDenied(dir)
+        val list = accessor.listChildren(dir)
+        if (list == null) { result = SizeCalcResult.PermissionDenied(dir); break }
         currentChildren[dir] = list
         scanned++
         onScanned(scanned, dir)
@@ -160,67 +172,72 @@ private fun diffScan(
         db.remove(p)
     }
 
+    // 累加阶段：对已收集的目录自底向上计算大小
     val newSizes = HashMap<String, Long>()
     val deltas = HashMap<String, Long>()
     val updates = HashMap<String, FolderSizeInfo>()
     val ordered = currentChildren.keys.sortedByDescending { depth[it] ?: 0 }
     val total = ordered.size
 
-    var processed = 0
-    for (dir in ordered) {
-        if (isCancelled()) return SizeCalcResult.Cancelled
-        val old = snapshot[dir]
-        val list = currentChildren[dir]!!
-        val currentMtime = currentMtimes[dir] ?: 0L
-        val childDelta = deltas[dir] ?: 0L
+    try {
+        var processed = 0
+        for (dir in ordered) {
+            if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
+            val old = snapshot[dir]
+            val list = currentChildren[dir]!!
+            val currentMtime = currentMtimes[dir] ?: 0L
+            val childDelta = deltas[dir] ?: 0L
 
-        val newSize: Long
-        val mtimeForDb: Long
-        val shouldWrite: Boolean
+            val newSize: Long
+            val mtimeForDb: Long
+            val shouldWrite: Boolean
 
-        when {
-            old == null -> {
-                // 新增：等价于局部 fullScan 在此节点的一步
-                var s = 0L
-                for (e in list) {
-                    s += if (e.isDir) (newSizes[e.path] ?: 0L) else e.size
+            when {
+                old == null -> {
+                    // 新增：等价于局部 fullScan 在此节点的一步
+                    var s = 0L
+                    for (e in list) {
+                        s += if (e.isDir) (newSizes[e.path] ?: 0L) else e.size
+                    }
+                    newSize = s
+                    mtimeForDb = currentMtime
+                    shouldWrite = true
                 }
-                newSize = s
-                mtimeForDb = currentMtime
-                shouldWrite = true
-            }
-            currentMtime == old.lastModified -> {
-                // mtime 未变：自身直接文件层未变，size 仅受子目录 delta 影响
-                newSize = old.size + childDelta
-                mtimeForDb = old.lastModified
-                shouldWrite = childDelta != 0L
-            }
-            else -> {
-                // mtime 变化：重扫直接子项
-                var s = 0L
-                for (e in list) {
-                    s += if (e.isDir) {
-                        newSizes[e.path] ?: snapshot[e.path]?.size ?: 0L
-                    } else e.size
+                currentMtime == old.lastModified -> {
+                    // mtime 未变：自身直接文件层未变，size 仅受子目录 delta 影响
+                    newSize = old.size + childDelta
+                    mtimeForDb = old.lastModified
+                    shouldWrite = childDelta != 0L
                 }
-                newSize = s
-                mtimeForDb = currentMtime
-                shouldWrite = true
+                else -> {
+                    // mtime 变化：重扫直接子项
+                    var s = 0L
+                    for (e in list) {
+                        s += if (e.isDir) {
+                            newSizes[e.path] ?: snapshot[e.path]?.size ?: 0L
+                        } else e.size
+                    }
+                    newSize = s
+                    mtimeForDb = currentMtime
+                    shouldWrite = true
+                }
             }
-        }
 
-        newSizes[dir] = newSize
-        if (shouldWrite) updates[dir] = FolderSizeInfo(newSize, mtimeForDb)
+            newSizes[dir] = newSize
+            if (shouldWrite) updates[dir] = FolderSizeInfo(newSize, mtimeForDb)
 
-        val delta = newSize - (old?.size ?: 0L)
-        if (dir != rootPath && delta != 0L) {
-            val parent = dir.substringBeforeLast('/').ifEmpty { "/" }
-            deltas.merge(parent, delta) { a, b -> a + b }
+            val delta = newSize - (old?.size ?: 0L)
+            if (dir != rootPath && delta != 0L) {
+                val parent = dir.substringBeforeLast('/').ifEmpty { "/" }
+                deltas.merge(parent, delta) { a, b -> a + b }
+            }
+            processed++
+            onProgress(processed, total, dir)
         }
-        processed++
-        onProgress(processed, total, dir)
+    } finally {
+        // 无论正常完成、Cancelled、PermissionDenied 还是异常，都保存已计算的部分结果
+        db.bulkPut(updates)
     }
 
-    db.bulkPut(updates)
-    return SizeCalcResult.Success(newSizes[rootPath] ?: 0L)
+    return result ?: SizeCalcResult.Success(newSizes[rootPath] ?: 0L)
 }

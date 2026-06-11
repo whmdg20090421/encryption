@@ -15,8 +15,8 @@ import rikka.shizuku.Shizuku
 
 /**
  * Shizuku 授权工具类
- * 使用 UserService 模式执行特权 shell 命令（替代已废弃的 newProcess）。
- * 异步绑定不阻塞主线程，首次调用自动回退到 newProcess。
+ * 使用 UserService 模式执行特权 shell 命令（已移除已废弃的 newProcess）。
+ * UserService 断开时自动同步重连，重连失败返回错误。
  */
 object ShizukuAuthorizer {
     private const val TAG = "ShizukuAuthorizer"
@@ -235,72 +235,56 @@ object ShizukuAuthorizer {
     }
 
     /**
-     * 通过 Shizuku 执行 shell 命令。
-     * 优先使用 UserService（Binder IPC ~1ms），回退到 newProcess（fork+exec ~50ms）。
+     * 通过 Shizuku 执行 shell 命令（仅 UserService 模式，不使用已废弃的 newProcess）。
+     * UserService 断开时尝试同步重连，重连失败返回错误。
      * @return Triple(stdout, stderr, exitCode)
      */
     fun executeCommand(command: String): Triple<String, String, Int> {
         // 快速路径：UserService 已就绪
         val service = shellService
         if (service != null) {
-            return try {
+            try {
                 val rawResult = service.execute(command)
-                parseResult(rawResult)
+                return parseResult(rawResult)
             } catch (e: Exception) {
-                // binder 死亡等，清除缓存并回退
-                synchronized(bindLock) {
-                    shellService = null
-                }
-                Log.w(TAG, "UserService 调用失败，回退到 newProcess: ${e.message}")
-                executeCommandViaNewProcess(command)
+                synchronized(bindLock) { shellService = null }
+                Log.w(TAG, "UserService 调用失败: ${e.message}，尝试同步重连")
+                return rebindAndRetry(command)
             }
         }
 
-        // 慢路径：触发异步绑定，当前调用先用 newProcess 兜底
-        ensureBound { /* 后续调用自动走快速路径 */ }
-        return executeCommandViaNewProcess(command)
+        // shellService 为 null：首次调用或之前已断开
+        return rebindAndRetry(command)
+    }
+
+    /** 同步重连 UserService 并重试命令，失败返回错误 */
+    private fun rebindAndRetry(command: String): Triple<String, String, Int> {
+        if (rebindSync(3000)) {
+            val retryService = shellService
+            if (retryService != null) {
+                try {
+                    return parseResult(retryService.execute(command))
+                } catch (e: Exception) {
+                    synchronized(bindLock) { shellService = null }
+                    Log.w(TAG, "重连后 UserService 调用仍失败: ${e.message}")
+                }
+            }
+        }
+        return Triple("", "Shizuku UserService 不可用，请检查 Shizuku 是否正常运行", -1)
     }
 
     /**
-     * 通过已废弃的 newProcess 执行命令（回退方案）。
-     * 反射调用 IShizukuService.newProcess。
+     * 同步等待 UserService 重绑，最多等待 [timeoutMs] 毫秒。
+     * @return true 表示重绑成功
      */
-    private fun executeCommandViaNewProcess(command: String): Triple<String, String, Int> {
-        try {
-            if (!hasShizukuPermission()) {
-                return Triple("", "Shizuku 未授权", -1)
-            }
-
-            val binder = Shizuku.getBinder()
-            val iShizukuService = Class.forName("moe.shizuku.server.IShizukuService\$Stub")
-                .getMethod("asInterface", android.os.IBinder::class.java)
-                .invoke(null, binder)
-
-            val process = iShizukuService.javaClass
-                .getMethod("newProcess", Array<String>::class.java, String::class.java, Array<String>::class.java)
-                .invoke(iShizukuService, arrayOf("sh", "-c", command), null, null)
-
-            val processClass = process.javaClass
-            val inputStream = processClass.getMethod("getInputStream").invoke(process) as? android.os.ParcelFileDescriptor
-            val errorStream = processClass.getMethod("getErrorStream").invoke(process) as? android.os.ParcelFileDescriptor
-
-            val stdout = inputStream?.let {
-                java.io.BufferedReader(java.io.InputStreamReader(java.io.FileInputStream(it.fileDescriptor))).use { r -> r.readText() }
-            } ?: ""
-
-            val stderr = errorStream?.let {
-                java.io.BufferedReader(java.io.InputStreamReader(java.io.FileInputStream(it.fileDescriptor))).use { r -> r.readText() }
-            } ?: ""
-
-            val exitCode = processClass.getMethod("waitFor").invoke(process) as Int
-
-            inputStream?.close()
-            errorStream?.close()
-
-            return Triple(stdout.trimEnd(), stderr.trimEnd(), exitCode)
-        } catch (e: Exception) {
-            return Triple("", "Shizuku 执行异常: ${e.message}", -1)
+    private fun rebindSync(timeoutMs: Long): Boolean {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var success = false
+        ensureBound { result ->
+            success = result
+            latch.countDown()
         }
+        return latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) && success
     }
 
     /**
