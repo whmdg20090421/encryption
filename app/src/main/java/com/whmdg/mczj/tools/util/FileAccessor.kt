@@ -150,74 +150,70 @@ private class ShellAccessor(
     }
 
     override fun listChildrenRecursive(path: String): List<DirEntry>? {
-        val escaped = path.replace("'", "'\\''")
-        // stat -c 格式: %F=文件类型 %s=大小 %Y=mtime(epoch秒) %n=完整路径
-        // 用 find + stat 一次性获取整个子树，避免逐目录 fork
-        val (stdout, stderr, exitCode) = try {
-            exec("find '$escaped' -mindepth 1 \\( -type f -o -type d \\) -exec stat -c '%F\\t%s\\t%Y\\t%n' {} +")
+        val normalized = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
+        val escaped = normalized.replace("'", "'\\''")
+        // 1) find -type d 只获取目录路径（纯文本，无 stat/printf 依赖）
+        val (dirOutput, _, dirExit) = try {
+            exec("find '$escaped' -type d")
         } catch (_: Throwable) { return null }
-        if (exitCode != 0) {
-            // stat 不可用时回退到 find -printf（部分 toybox 支持）
-            val (out2, _, exit2) = try {
-                exec("find '$escaped' -mindepth 1 \\( -type f -o -type d \\) -printf '%y\\t%s\\tT@\\t%p\\n'")
-            } catch (_: Throwable) { return null }
-            if (exit2 != 0) return null
-            return parseFindPrintfOutput(out2, path)
+        if (dirExit != 0) return null
+
+        val dirs = dirOutput.lines().filter { it.isNotBlank() }
+        if (dirs.isEmpty()) return emptyList()
+
+        // 2) 对所有目录批量执行 ls -lap，用唯一分隔符拼接，单次 shell 调用
+        val delimiter = "###DIR:"
+        val script = buildString {
+            for (d in dirs) {
+                val de = d.replace("'", "'\\''")
+                append("echo '$delimiter$de'; ls -lap '$de' 2>/dev/null; ")
+            }
         }
-        return parseStatOutput(stdout, path)
-    }
+        val (lsOutput, _, lsExit) = try {
+            exec(script)
+        } catch (_: Throwable) { return null }
+        if (lsExit != 0 && lsOutput.isBlank()) return null
 
-    /** 解析 stat -c '%F\t%s\t%Y\t%n' 输出 */
-    private fun parseStatOutput(output: String, rootPath: String): List<DirEntry>? {
+        // 3) 解析输出：按分隔符分组，每组用 listChildren 相同的逻辑解析
         val entries = mutableListOf<DirEntry>()
-        val rootNorm = rootPath.trimEnd('/').ifEmpty { "/" }
-        for (line in output.lines()) {
-            if (line.isBlank()) continue
-            // 用 tab 分割前 3 个字段，第 4 个是路径（可能含空格）
-            val t1 = line.indexOf('\t')
-            if (t1 < 0) continue
-            val t2 = line.indexOf('\t', t1 + 1)
-            if (t2 < 0) continue
-            val t3 = line.indexOf('\t', t2 + 1)
-            if (t3 < 0) continue
-
-            val typeStr = line.substring(0, t1)
-            val sizeStr = line.substring(t1 + 1, t2)
-            val mtimeStr = line.substring(t2 + 1, t3)
-            val fullPath = line.substring(t3 + 1)
-
-            val isDir = typeStr == "directory"
-            val size = sizeStr.toLongOrNull() ?: 0L
-            val mtime = (mtimeStr.toDoubleOrNull() ?: 0.0).toLong() * 1000L // 秒→毫秒
-            val name = fullPath.substringAfterLast('/').ifEmpty { fullPath }
-            entries.add(DirEntry(name, fullPath, isDir, if (isDir) 0L else size, mtime))
+        var currentParent = ""
+        for (raw in lsOutput.lines()) {
+            val line = raw.trimEnd('\r')
+            if (line.startsWith(delimiter)) {
+                currentParent = line.removePrefix(delimiter)
+                continue
+            }
+            if (line.isBlank() || line.startsWith("total ")) continue
+            val parsed = parseLsLine(line, currentParent) ?: continue
+            entries.add(parsed)
         }
         return entries
     }
 
-    /** 解析 find -printf '%y\t%s\tT@\t%p\n' 输出（备用） */
-    private fun parseFindPrintfOutput(output: String, rootPath: String): List<DirEntry>? {
-        val entries = mutableListOf<DirEntry>()
-        for (line in output.lines()) {
-            if (line.isBlank()) continue
-            val t1 = line.indexOf('\t')
-            if (t1 < 0) continue
-            val t2 = line.indexOf('\t', t1 + 1)
-            if (t2 < 0) continue
-            val t3 = line.indexOf('\t', t2 + 1)
-            if (t3 < 0) continue
+    /** 解析 ls -lap 单行输出，返回 DirEntry（复用 listChildren 的解析逻辑） */
+    private fun parseLsLine(line: String, parentPath: String): DirEntry? {
+        val parts = line.split("\\s+".toRegex())
+        if (parts.size < 8) return null
+        if (parts[0].length < 10) return null
 
-            val typeChar = line.substring(0, t1)
-            val sizeStr = line.substring(t1 + 1, t2)
-            val mtimeStr = line.substring(t2 + 1, t3)
-            val fullPath = line.substring(t3 + 1)
-
-            val isDir = typeChar == "d"
-            val size = sizeStr.toLongOrNull() ?: 0L
-            val mtime = (mtimeStr.toDoubleOrNull() ?: 0.0).toLong() * 1000L
-            val name = fullPath.substringAfterLast('/').ifEmpty { fullPath }
-            entries.add(DirEntry(name, fullPath, isDir, if (isDir) 0L else size, mtime))
+        // 精确提取原始文件名（保留多空格），逐字符跳过前 7 个字段
+        var namePos = 0
+        repeat(7) {
+            while (namePos < line.length && line[namePos].isWhitespace()) namePos++
+            if (namePos >= line.length) return null
+            while (namePos < line.length && !line[namePos].isWhitespace()) namePos++
         }
-        return entries
+        while (namePos < line.length && line[namePos].isWhitespace()) namePos++
+        val nameWithSlash = if (namePos < line.length) line.substring(namePos) else return null
+        val isDir = nameWithSlash.endsWith("/")
+        val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+        if (name == "." || name == "..") return null
+
+        val size = parts[4].toLongOrNull() ?: 0L
+        val childPath = if (parentPath == "/") "/$name" else "$parentPath/$name"
+        val mtime = try {
+            makeDateFmt().parse("${parts[5]} ${parts[6]}")?.time ?: 0L
+        } catch (_: Exception) { 0L }
+        return DirEntry(name, childPath, isDir, if (isDir) 0L else size, mtime)
     }
 }
