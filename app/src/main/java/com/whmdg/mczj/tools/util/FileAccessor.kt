@@ -19,6 +19,8 @@ interface FileAccessor {
     fun statMtime(path: String): Long?
     /** 执行 shell 命令，返回 (stdout, stderr, exitCode)。NormalAccessor 返回失败。 */
     fun exec(command: String): Triple<String, String, Int>
+    /** 递归获取子树中所有文件/子目录条目（单次 shell 调用）。返回 null 表示无法访问。 */
+    fun listChildrenRecursive(path: String): List<DirEntry>?
 
     companion object {
         fun create(level: FileAccessLevel, context: Context): FileAccessor = when (level) {
@@ -52,6 +54,22 @@ private class NormalAccessor : FileAccessor {
         val f = File(path)
         if (!f.exists()) return null
         return f.lastModified()
+    }
+
+    override fun listChildrenRecursive(path: String): List<DirEntry>? {
+        val root = File(path)
+        if (!root.isDirectory || !root.canRead()) return null
+        val entries = mutableListOf<DirEntry>()
+        fun scan(dir: File) {
+            val children = dir.listFiles() ?: return
+            for (f in children) {
+                val isDir = f.isDirectory
+                entries.add(DirEntry(f.name, f.absolutePath, isDir, if (isDir) 0L else f.length(), f.lastModified()))
+                if (isDir) scan(f)
+            }
+        }
+        scan(root)
+        return entries
     }
 }
 
@@ -129,5 +147,77 @@ private class ShellAccessor(
         return try {
             makeDateFmt().parse("${parts[5]} ${parts[6]}")?.time ?: 0L
         } catch (_: Exception) { 0L }
+    }
+
+    override fun listChildrenRecursive(path: String): List<DirEntry>? {
+        val escaped = path.replace("'", "'\\''")
+        // stat -c 格式: %F=文件类型 %s=大小 %Y=mtime(epoch秒) %n=完整路径
+        // 用 find + stat 一次性获取整个子树，避免逐目录 fork
+        val (stdout, stderr, exitCode) = try {
+            exec("find '$escaped' -mindepth 1 \\( -type f -o -type d \\) -exec stat -c '%F\\t%s\\t%Y\\t%n' {} +")
+        } catch (_: Throwable) { return null }
+        if (exitCode != 0) {
+            // stat 不可用时回退到 find -printf（部分 toybox 支持）
+            val (out2, _, exit2) = try {
+                exec("find '$escaped' -mindepth 1 \\( -type f -o -type d \\) -printf '%y\\t%s\\tT@\\t%p\\n'")
+            } catch (_: Throwable) { return null }
+            if (exit2 != 0) return null
+            return parseFindPrintfOutput(out2, path)
+        }
+        return parseStatOutput(stdout, path)
+    }
+
+    /** 解析 stat -c '%F\t%s\t%Y\t%n' 输出 */
+    private fun parseStatOutput(output: String, rootPath: String): List<DirEntry>? {
+        val entries = mutableListOf<DirEntry>()
+        val rootNorm = rootPath.trimEnd('/').ifEmpty { "/" }
+        for (line in output.lines()) {
+            if (line.isBlank()) continue
+            // 用 tab 分割前 3 个字段，第 4 个是路径（可能含空格）
+            val t1 = line.indexOf('\t')
+            if (t1 < 0) continue
+            val t2 = line.indexOf('\t', t1 + 1)
+            if (t2 < 0) continue
+            val t3 = line.indexOf('\t', t2 + 1)
+            if (t3 < 0) continue
+
+            val typeStr = line.substring(0, t1)
+            val sizeStr = line.substring(t1 + 1, t2)
+            val mtimeStr = line.substring(t2 + 1, t3)
+            val fullPath = line.substring(t3 + 1)
+
+            val isDir = typeStr == "directory"
+            val size = sizeStr.toLongOrNull() ?: 0L
+            val mtime = (mtimeStr.toDoubleOrNull() ?: 0.0).toLong() * 1000L // 秒→毫秒
+            val name = fullPath.substringAfterLast('/').ifEmpty { fullPath }
+            entries.add(DirEntry(name, fullPath, isDir, if (isDir) 0L else size, mtime))
+        }
+        return entries
+    }
+
+    /** 解析 find -printf '%y\t%s\tT@\t%p\n' 输出（备用） */
+    private fun parseFindPrintfOutput(output: String, rootPath: String): List<DirEntry>? {
+        val entries = mutableListOf<DirEntry>()
+        for (line in output.lines()) {
+            if (line.isBlank()) continue
+            val t1 = line.indexOf('\t')
+            if (t1 < 0) continue
+            val t2 = line.indexOf('\t', t1 + 1)
+            if (t2 < 0) continue
+            val t3 = line.indexOf('\t', t2 + 1)
+            if (t3 < 0) continue
+
+            val typeChar = line.substring(0, t1)
+            val sizeStr = line.substring(t1 + 1, t2)
+            val mtimeStr = line.substring(t2 + 1, t3)
+            val fullPath = line.substring(t3 + 1)
+
+            val isDir = typeChar == "d"
+            val size = sizeStr.toLongOrNull() ?: 0L
+            val mtime = (mtimeStr.toDoubleOrNull() ?: 0.0).toLong() * 1000L
+            val name = fullPath.substringAfterLast('/').ifEmpty { fullPath }
+            entries.add(DirEntry(name, fullPath, isDir, if (isDir) 0L else size, mtime))
+        }
+        return entries
     }
 }
