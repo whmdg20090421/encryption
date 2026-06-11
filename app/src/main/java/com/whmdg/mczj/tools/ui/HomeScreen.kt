@@ -538,58 +538,88 @@ fun MainAppContainer() {
         }
     }
 
-    // ── 大小统计进度条（底部悬浮，工具栏上方，全局显示） ──
-    val calcProgress = SizeCalcManager.progress
-    val calcScanned = SizeCalcManager.scannedCount
-    val calcProcessed = SizeCalcManager.processedCount
-    val calcTotal = SizeCalcManager.totalCount
-    if (SizeCalcManager.isCalculating) {
+    // ── 大小统计状态面板（底部悬浮，工具栏上方，全局显示） ──
+    val calcStatus = SizeCalcManager.statusMessage
+    val calcIsCalculating = SizeCalcManager.isCalculating
+    if (calcIsCalculating || calcStatus != null) {
+        val bgColor = if (calcIsCalculating)
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+        else
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f)
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth(0.95f)
                 .padding(bottom = 68.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                .background(bgColor)
                 .clickable(interactionSource = null, indication = null) {}
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             Column {
-                // 第一行：进度条 + 百分比（仅累加阶段有值）
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    LinearProgressIndicator(
-                        progress = { calcProgress },
-                        modifier = Modifier.weight(1f).height(6.dp),
-                        trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                    )
-                    Spacer(Modifier.width(10.dp))
+                if (calcIsCalculating && calcStatus != null) {
+                    // 阶段一：正在统计文件夹数量（find 执行中）
                     Text(
-                        "${(calcProgress * 100).toInt()}%",
-                        style = MaterialTheme.typography.labelMedium,
+                        text = calcStatus!!,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                }
-                Spacer(Modifier.height(4.dp))
-                // 第二行：已扫描 / 总目录（百分比）
-                Text(
-                    text = "已扫描 $calcScanned / $calcTotal 个目录  ${(calcProgress * 100).toInt()}%",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(4.dp))
-                // 第三行：取消 + 保存
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    TextButton(onClick = { SizeCalcManager.requestCancel() }) {
-                        Text("取消", style = MaterialTheme.typography.labelMedium)
+                } else if (calcIsCalculating) {
+                    // 阶段二：进度条显示
+                    val calcProgress = SizeCalcManager.progress
+                    val calcScanned = SizeCalcManager.scannedCount
+                    val calcTotal = SizeCalcManager.totalCount
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { calcProgress },
+                            modifier = Modifier.weight(1f).height(6.dp),
+                            trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            "${(calcProgress * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
-                    TextButton(onClick = { SizeCalcManager.save() }) {
-                        Text("保存", style = MaterialTheme.typography.labelMedium)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "已扫描 $calcScanned / $calcTotal 个目录  ${(calcProgress * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    // 阶段三：已统计完成
+                    Text(
+                        text = calcStatus!!,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+                // 取消/保存按钮（仅计算中显示）
+                if (calcIsCalculating) {
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        TextButton(onClick = { SizeCalcManager.requestCancel() }) {
+                            Text("取消", style = MaterialTheme.typography.labelMedium)
+                        }
+                        TextButton(onClick = { SizeCalcManager.save() }) {
+                            Text("保存", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                } else {
+                    // 完成状态：关闭按钮
+                    Spacer(Modifier.height(4.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { SizeCalcManager.dismissStatus() }) {
+                            Text("关闭", style = MaterialTheme.typography.labelMedium)
+                        }
                     }
                 }
             }

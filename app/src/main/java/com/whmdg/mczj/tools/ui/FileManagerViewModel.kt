@@ -590,17 +590,23 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 folderSizeDb.save(saveDir)
                 folderSizeDb = FolderSizeDb.load(saveDir)
                 refreshCurrent()
-                SizeCalcManager.finish()
                 when (result) {
+                    is SizeCalcResult.Success -> {
+                        SizeCalcManager.finish(result.rootSize)
+                    }
                     is SizeCalcResult.PermissionDenied -> {
+                        SizeCalcManager.finish()
                         SizeCalcManager.loadError = RuntimeException(
                             "权限不足，部分目录无法访问\n路径: ${result.path}"
                         )
                     }
                     is SizeCalcResult.Failed -> {
+                        SizeCalcManager.finish()
                         SizeCalcManager.loadError = RuntimeException("统计失败: ${result.reason}")
                     }
-                    else -> {}
+                    is SizeCalcResult.Cancelled -> {
+                        SizeCalcManager.finish()
+                    }
                 }
             }
         }
