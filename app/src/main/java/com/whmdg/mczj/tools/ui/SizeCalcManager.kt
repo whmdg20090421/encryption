@@ -31,8 +31,8 @@ object SizeCalcManager {
     /** 是否正在计算 */
     val isCalculating: Boolean get() = scannedCount > 0 || (progress > 0f && progress < 1f)
 
-    /** 权限不足提醒（一次性） */
-    var permissionDeniedPath by mutableStateOf<String?>(null)
+    /** 报错弹窗 */
+    var loadError by mutableStateOf<Throwable?>(null)
         internal set
 
     /** 用户请求取消 */
@@ -49,14 +49,11 @@ object SizeCalcManager {
     /** 用户点击"保存"：将当前已计算的结果持久化 */
     fun save() { currentDb?.save(saveDir ?: return) }
 
-    /** 清除权限提醒 */
-    fun clearPermissionDenied() { permissionDeniedPath = null }
-
     internal fun begin(db: FolderSizeDb, saveDir: File) {
         currentDb = db; this.saveDir = saveDir
         progress = 0f; currentFolder = ""
         scannedCount = 0; processedCount = 0; totalCount = 0
-        cancelRequested = false; permissionDeniedPath = null
+        cancelRequested = false; loadError = null
     }
 
     /** BFS 前：统计总目录数 */

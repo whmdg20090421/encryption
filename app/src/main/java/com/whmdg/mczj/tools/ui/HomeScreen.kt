@@ -596,35 +596,13 @@ fun MainAppContainer() {
         }
     }
 
-    // ── 权限不足提醒（进度条下方） ──
-    val deniedPath = SizeCalcManager.permissionDeniedPath
-    if (deniedPath != null) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth(0.95f)
-                .padding(bottom = 68.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f))
-                .clickable(interactionSource = null, indication = null) {}
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "权限不足: $deniedPath",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    modifier = Modifier.weight(1f)
-                )
-                TextButton(onClick = { SizeCalcManager.clearPermissionDenied() }) {
-                    Text("知道了", style = MaterialTheme.typography.labelMedium)
-                }
-            }
-        }
+    // ── 大小统计报错弹窗 ──
+    val calcError = SizeCalcManager.loadError
+    if (calcError != null) {
+        ErrorDialog(
+            error = calcError,
+            onDismiss = { SizeCalcManager.loadError = null }
+        )
     }
     } // Box
 }

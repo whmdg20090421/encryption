@@ -8,7 +8,6 @@ import android.widget.Toast
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.CompressService
-import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -681,7 +680,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 },
                                 modifier = Modifier,
                                 folderSizeDb = vm.folderSizeDb,
-                                listChildren = { path -> vm.listChildrenOrNull(path) },
                                 parentPath = leftParentPath,
                                 lazyListState = leftListState,
                                 onNavigateUp = {
@@ -763,7 +761,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 },
                                 modifier = Modifier,
                                 folderSizeDb = vm.folderSizeDb,
-                                listChildren = { path -> vm.listChildrenOrNull(path) },
                                 parentPath = rightParentPath,
                                 lazyListState = rightListState,
                                 onNavigateUp = {
@@ -3457,7 +3454,6 @@ private fun FileBrowserPanel(
     onLongClick: (FileEntry) -> Unit,
     modifier: Modifier = Modifier,
     folderSizeDb: FolderSizeDb = FolderSizeDb(),
-    listChildren: ((String) -> List<FileEntry>?)? = null,
     parentPath: String? = null,
     onNavigateUp: () -> Unit = {},
     lazyListState: LazyListState = rememberLazyListState(),
@@ -3514,19 +3510,9 @@ private fun FileBrowserPanel(
                         else {
                             val cached = folderSizeDb.get(entry.path)
                             if (cached != null) {
-                                if (cached.size == 0L) {
-                                    // shell 已统计，信任结果
-                                    "0MB"
-                                } else {
-                                    compactSize(cached.size)
-                                }
-                            } else {
-                                // 未统计：检查是否可访问（受保护路径走 shell）
-                                val children = listChildren?.invoke(entry.path)
-                                if (children == null) {
-                                    if (SpecialPermissionVerifier.isShizukuAuthorized(context)) "--" else "✕"
-                                } else ""
-                            }
+                                if (cached.size == 0L) "0MB"
+                                else compactSize(cached.size)
+                            } else ""
                         }
                     } else if (archiveSizeProvider != null) {
                         archiveSizeProvider(entry)

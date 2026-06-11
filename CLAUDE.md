@@ -43,11 +43,17 @@ KEYSTORE_PASSWORD=xxx KEY_ALIAS=xxx KEY_PASSWORD=xxx ./gradlew assembleRelease
 ```
 app/src/main/java/com/whmdg/mczj/tools/
 ├── AppDataPaths.kt                    # 应用数据路径解析
+├── ToolsApp.kt                        # Application 类（初始化）
 ├── MainActivity.kt                    # 入口，启用 Edge-to-Edge
 ├── CrashActivity.kt                   # Native 崩溃显示界面（从 pipe 接收崩溃信息）
+├── ErrorReportActivity.kt             # 错误报告界面
 ├── util/
 │   ├── DiagnosticLog.kt               # 诊断日志工具
-│   └── FormatUtils.kt                 # 格式化工具（文件大小等）
+│   ├── FormatUtils.kt                 # 格式化工具（文件大小等）
+│   ├── CompressService.kt             # 压缩/解压服务
+│   ├── FileAccessLevel.kt             # 文件访问通道枚举（NORMAL / SHIZUKU / ROOT）
+│   ├── FileAccessor.kt                # 文件访问抽象层（屏蔽普通/Shizuku/Root 差异）
+│   └── FolderSizeCalculator.kt        # 文件夹大小统计（全量+差异自底向上算法）
 ├── auth/                              # 认证/授权模块（密钥→功能特性门控）
 │   ├── Feature.kt                     # 功能枚举（ENCRYPTION_VAULT, FILE_MANAGER, BATCH_DOWNLOADER 等）
 │   ├── NativeAuth.kt                  # JNI 接口，调用 authcore 验证密码（返回派生密钥）
@@ -92,6 +98,7 @@ app/src/main/java/com/whmdg/mczj/tools/
 │   ├── TeeManager.kt                  # Android Keystore RSA TEE + 生物识别快速解锁
 │   ├── SpecialPermissionVerifier.kt   # 检测 & 提权运行（无障碍/ADB/管理员/Root）
 │   ├── ShizukuAuthorizer.kt           # Shizuku 授权（privileged shell 命令执行）
+│   ├── ShellService.kt                # Shizuku UserService（Binder IPC 执行 shell）
 │   ├── AndroidPermissionLevel.kt      # 权限级别枚举（STANDARD → ROOT 六级）
 │   ├── MyAccessibilityService.kt      # 无障碍服务声明
 │   └── MyDeviceAdminReceiver.kt       # 设备管理器接收器
@@ -102,6 +109,10 @@ app/src/main/java/com/whmdg/mczj/tools/
     ├── VaultChangePasswordScreen.kt   # 修改保险箱密码
     ├── EncryptionSettings.kt          # 加密模块偏好（SharedPreferences 响应式）
     ├── FileManagerScreen.kt           # 文件管理器
+    ├── FileManagerViewModel.kt        # 文件管理器 ViewModel（shell 路由 + 大小统计）
+    ├── RpHubScreen.kt                 # RP Hub WebView 界面
+    ├── RpHubServer.kt                 # RP Hub 本地 NanoHTTPD 服务器
+    ├── SizeCalcManager.kt             # 大小统计进度管理（全局单例）
     ├── AuthManagementScreen.kt        # 认证管理（切换密钥、清除授权）
     ├── SecurityScreen.kt              # 安全设置入口菜单
     ├── SpecialPermissionsScreen.kt    # 特殊权限管理 + 能力矩阵对比
@@ -240,6 +251,28 @@ UI 门控：LocalPermissionGate (CompositionLocal<Boolean>)
 1. 生成 RSA 密钥对存入 Android Keystore（私钥需生物认证，绑定指纹列表变更）
 2. 首次解锁成功后，用**公钥**静默加密密码，Hex 存入 `SharedPreferences("tee_passwords")`
 3. 再次打开时用**私钥**（需指纹验证）解密 → 自动开箱
+
+### 文件管理器 Shell 路由
+
+文件管理器采用**最高权限优先**策略：有 Shell 引擎（Root/Shizuku）时所有操作优先走 Shell，失败才回退 Java File API。
+
+```
+FileManagerViewModel
+    ├── hasShellEngine = isRootEngine || isShizukuAuthorized
+    ├── listChildrenOrNull() → 有 shell 时 listDirChildrenViaShell()，否则 Java File API
+    ├── navigateToFolder() → shell 优先，失败回退 Java API
+    ├── shellPathExists() → test -e（不用 cd，在 Shizuku shell 中 cd 对特殊字符路径失败）
+    └── getPropertyData() → stat 失败时回退 shell
+
+FileAccessor（FolderSizeCalculator 使用）
+    ├── NormalAccessor → Java File API
+    └── ShellAccessor → executeShizukuCommand / executeRootCommandFull
+```
+
+**关键实现细节**：
+- Shell 命令使用 `ls -lap '$escaped'` 模式（不用 `cd`，Shizuku 的 `cd` 对含括号/特殊字符路径失败）
+- `ls -lap` 输出解析使用逐字符定位（非 `split("\\s+")`），精确保留文件名中的连续空格
+- 大小统计 BFS 前执行 `find -type d | wc -l` 获取总目录数，实现实时进度显示
 
 ---
 

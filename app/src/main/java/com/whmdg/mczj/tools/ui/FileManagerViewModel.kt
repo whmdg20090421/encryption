@@ -586,28 +586,21 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 SizeCalcResult.Failed(e.message ?: "未知错误")
             }
             withContext(Dispatchers.Main) {
+                // 先保存已统计的部分结果，再清空进度状态
+                folderSizeDb.save(saveDir)
+                folderSizeDb = FolderSizeDb.load(saveDir)
+                refreshCurrent()
                 SizeCalcManager.finish()
                 when (result) {
-                    is SizeCalcResult.Success -> {
-                        folderSizeDb.save(saveDir)
-                        folderSizeDb = FolderSizeDb.load(saveDir)
-                        refreshCurrent()
-                    }
                     is SizeCalcResult.PermissionDenied -> {
-                        // 底部一次性提醒，不中断已统计的部分结果
-                        SizeCalcManager.permissionDeniedPath = result.path
-                        folderSizeDb.save(saveDir)
-                        folderSizeDb = FolderSizeDb.load(saveDir)
-                        refreshCurrent()
-                    }
-                    is SizeCalcResult.Cancelled -> {
-                        folderSizeDb.save(saveDir)
-                        folderSizeDb = FolderSizeDb.load(saveDir)
-                        refreshCurrent()
+                        SizeCalcManager.loadError = RuntimeException(
+                            "权限不足，部分目录无法访问\n路径: ${result.path}"
+                        )
                     }
                     is SizeCalcResult.Failed -> {
-                        Toast.makeText(context, "统计失败：${result.reason}", Toast.LENGTH_LONG).show()
+                        SizeCalcManager.loadError = RuntimeException("统计失败: ${result.reason}")
                     }
+                    else -> {}
                 }
             }
         }
