@@ -143,6 +143,9 @@ private fun diffScan(
         currentChildren[dir] = list
         scanned++
         onScanned(scanned, dir)
+        val old = snapshot[dir]
+        val curMtime = currentMtimes[dir] ?: 0L
+        if (old != null && curMtime == old.lastModified) continue
         for (e in list) {
             if (e.isDir) {
                 currentMtimes[e.path] = e.mtime
