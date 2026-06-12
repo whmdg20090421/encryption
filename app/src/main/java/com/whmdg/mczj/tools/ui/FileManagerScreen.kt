@@ -161,19 +161,22 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     val rightListState = rememberLazyListState(vm.rightFirstVisibleIndex, vm.rightFirstVisibleOffset)
 
     // 返回上级目录时恢复滚动位置
+    // 用 snapshotFlow 等待 entries 非空 + awaitFrame 确保 LazyColumn 布局完成后再滚动
     LaunchedEffect(vm.leftPath) {
-        vm.getSavedScrollPosition(vm.leftPath)?.let { (index, offset) ->
-            if (index > 0 || offset > 0) {
-                leftListState.scrollToItem(index, offset)
-            }
-        }
+        val saved = vm.getSavedScrollPosition(vm.leftPath) ?: return@LaunchedEffect
+        val (index, offset) = saved
+        if (index <= 0 && offset <= 0) return@LaunchedEffect
+        snapshotFlow { vm.leftEntries }.first { it.isNotEmpty() }
+        awaitFrame()
+        leftListState.scrollToItem(index, offset)
     }
     LaunchedEffect(vm.rightPath) {
-        vm.getSavedScrollPosition(vm.rightPath)?.let { (index, offset) ->
-            if (index > 0 || offset > 0) {
-                rightListState.scrollToItem(index, offset)
-            }
-        }
+        val saved = vm.getSavedScrollPosition(vm.rightPath) ?: return@LaunchedEffect
+        val (index, offset) = saved
+        if (index <= 0 && offset <= 0) return@LaunchedEffect
+        snapshotFlow { vm.rightEntries }.first { it.isNotEmpty() }
+        awaitFrame()
+        rightListState.scrollToItem(index, offset)
     }
 
     // ── UI 本地状态 ──
