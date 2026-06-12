@@ -9,12 +9,13 @@ import kotlinx.coroutines.delay
  *
  * 入口：[calculateFolderSize]
  *   - 若 DB 中无该子树缓存 → 全量统计 [fullScan]（自底向上）
- *   - 若有 → 差异统计 [diffScan]（mtime 对比 + delta 冒泡）
+ *   - 若有 → 差异统计 [diffScan]（BFS 全量收集 + 从叶子向上 mtime 对比 + delta 冒泡）
  *
  * 算法关键不变量：
- *   - 同一权限通道下 mtime 单位一致（NORMAL 毫秒、SHELL 分钟级），跨通道切换会触发全量重扫
- *   - POSIX 保证：目录直接 children 增删改时其 mtime 变化（但子目录内部变化不会传播）
- *     → "mtime 未变"意味着自身直接文件层未变，但子树内部可能变了，仍要应用子目录 delta
+ *   - diffScan 的 BFS 不做 mtime 剪枝，无条件遍历所有目录，确保叶子变化不被遗漏
+ *   - POSIX 保证：目录内文件增删时其 mtime 变化（但子目录内部变化不会传播到父目录）
+ *   - 累加阶段从叶子向根逐级检查 mtime，mtime 未变则复用旧 size + 子目录 delta，
+ *     mtime 变化则重扫该目录并将 delta 向上冒泡
  *
  * 进度回调：
  *   - BFS 阶段：每扫描一个目录调用 onScanned
@@ -128,15 +129,17 @@ private suspend fun fullScan(
 }
 
 /**
- * 差异统计：基于 mtime 对比的 delta 冒泡。
+ * 差异统计：BFS 收集全部目录 → 从叶子向上逐级 mtime 对比 + delta 冒泡。
  *
- * 处理三类节点（按深度降序处理，确保子结果先就绪）：
+ * 与旧版的关键区别：BFS 不做 mtime 剪枝，无条件遍历所有目录，
+ * 确保叶子的变化一定能被检测到并向上传递。
+ *
+ * 累加阶段（按深度降序，叶子先处理）：
  *   - 旧节点存在且 mtime 不变：newSize = oldSize + childDelta（仅当 childDelta != 0 才更新 DB）
  *   - 旧节点存在但 mtime 变化：重扫直接子文件 + 直接子目录的最新 size → 重算 newSize
  *   - 新节点（旧快照里没有）：等价局部 fullScan
  *
- * 删除节点（旧快照里有、当前没有）只需要从 DB 移除即可：
- *   POSIX 保证其 parent 的 mtime 已变，parent 走"重扫"分支会自然反映新状态。
+ * 删除节点：仅当父目录已确认当前子列表中不含该节点时才从 DB 移除。
  */
 private suspend fun diffScan(
     rootPath: String,
@@ -158,7 +161,7 @@ private suspend fun diffScan(
     queue.add(rootPath to 0)
     depth[rootPath] = 0
 
-    // BFS 阶段：收集目录树（mtime 剪枝）
+    // BFS 阶段：无条件收集全部目录树（不做 mtime 剪枝，确保叶子变化不被遗漏）
     var scanned = 0
     while (queue.isNotEmpty()) {
         if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
@@ -177,9 +180,6 @@ private suspend fun diffScan(
         currentChildren[dir] = list
         scanned++
         onScanned(scanned, dir)
-        val old = snapshot[dir]
-        val curMtime = currentMtimes[dir] ?: 0L
-        if (old != null && curMtime == old.lastModified) continue
         for (e in list) {
             if (e.isDir) {
                 currentMtimes[e.path] = e.mtime
@@ -189,12 +189,19 @@ private suspend fun diffScan(
         }
     }
 
-    // 清理快照里存在但当前已消失的节点（其 parent mtime 必变，重扫时会自然剔除）
-    for (p in snapshot.keys - currentChildren.keys) {
-        db.remove(p)
+    // 清理：父目录已访问且子目录确认不存在时才删除
+    for (p in snapshot.keys) {
+        if (p == rootPath) continue
+        val parent = p.substringBeforeLast('/').ifEmpty { "/" }
+        if (parent in currentChildren) {
+            val siblings = currentChildren[parent] ?: continue
+            if (siblings.none { it.path == p }) {
+                db.remove(p)
+            }
+        }
     }
 
-    // 累加阶段：对已收集的目录自底向上计算大小
+    // 累加阶段：从叶子向根逐级 mtime 对比，delta 冒泡
     val newSizes = HashMap<String, Long>()
     val deltas = HashMap<String, Long>()
     val updates = HashMap<String, FolderSizeInfo>()
