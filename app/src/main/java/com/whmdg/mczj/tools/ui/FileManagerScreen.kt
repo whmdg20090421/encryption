@@ -160,19 +160,40 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     val leftListState = rememberLazyListState(vm.leftFirstVisibleIndex, vm.leftFirstVisibleOffset)
     val rightListState = rememberLazyListState(vm.rightFirstVisibleIndex, vm.rightFirstVisibleOffset)
 
-    // 返回上级目录时恢复滚动位置（scrollPositions 按绝对路径存储，进入子目录时保存，返回时恢复）
+    // 返回上级目录时，将之前进入的文件夹滚动到列表中间
+    // goBack/goForward 时，恢复之前保存的滚动位置
     LaunchedEffect(vm.leftPath) {
-        val saved = vm.getSavedScrollPosition(vm.leftPath) ?: return@LaunchedEffect
-        val (index, offset) = saved
-        if (index > 0 || offset > 0) {
-            leftListState.scrollToItem(index, offset)
+        val targetName = vm.pendingScrollToFolder
+        if (targetName != null) {
+            vm.pendingScrollToFolder = null
+            val index = vm.leftEntries.indexOfFirst { it.name == targetName }
+            if (index >= 0) {
+                val visibleCount = leftListState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+                leftListState.scrollToItem(maxOf(0, index - visibleCount / 2))
+            }
+        } else {
+            val saved = vm.getSavedScrollPosition(vm.leftPath) ?: return@LaunchedEffect
+            val (index, offset) = saved
+            if (index > 0 || offset > 0) {
+                leftListState.scrollToItem(index, offset)
+            }
         }
     }
     LaunchedEffect(vm.rightPath) {
-        val saved = vm.getSavedScrollPosition(vm.rightPath) ?: return@LaunchedEffect
-        val (index, offset) = saved
-        if (index > 0 || offset > 0) {
-            rightListState.scrollToItem(index, offset)
+        val targetName = vm.pendingScrollToFolder
+        if (targetName != null) {
+            vm.pendingScrollToFolder = null
+            val index = vm.rightEntries.indexOfFirst { it.name == targetName }
+            if (index >= 0) {
+                val visibleCount = rightListState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+                rightListState.scrollToItem(maxOf(0, index - visibleCount / 2))
+            }
+        } else {
+            val saved = vm.getSavedScrollPosition(vm.rightPath) ?: return@LaunchedEffect
+            val (index, offset) = saved
+            if (index > 0 || offset > 0) {
+                rightListState.scrollToItem(index, offset)
+            }
         }
     }
 
@@ -298,12 +319,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // 保存当前滚动位置并返回上一级
     val saveScrollAndGoUp: () -> Boolean = {
-        vm.saveCurrentScrollPosition(
-            leftListState.firstVisibleItemIndex,
-            leftListState.firstVisibleItemScrollOffset,
-            rightListState.firstVisibleItemIndex,
-            rightListState.firstVisibleItemScrollOffset
-        )
         vm.goUp()
     }
 
