@@ -622,6 +622,21 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 删除指定目录的大小缓存（含子树），保存并刷新当前列表。 */
+    fun deleteSizeCacheAndRefresh(path: String) {
+        folderSizeDb.removeDescendants(path)
+        val saveDir = AppDataPaths.fileManager(context)
+        folderSizeDb.save(saveDir)
+        folderSizeDb = FolderSizeDb.load(saveDir)
+        refreshCurrent()
+    }
+
+    /** 忽略缓存，强制全量重新统计指定目录大小。 */
+    fun recalculateFolderSizeForce(path: String) {
+        folderSizeDb.removeDescendants(path)
+        calculateFolderSizeAsync(path)
+    }
+
     // ── 回收站操作 ──
 
     private fun loadRecycleBinMeta() {

@@ -197,6 +197,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var panelTab by remember { mutableStateOf(0) } // 0=历史, 1=书签
     var bookmarkDeleteVisible by remember { mutableStateOf(setOf<String>()) }
     var showPropertyDialog by remember { mutableStateOf(false) }
+    var showSizeCalcOptionsMenu by remember { mutableStateOf(false) }
     var propertyData by remember { mutableStateOf<FilePropertyData?>(null) }
     var propertyEntry by remember { mutableStateOf<FileEntry?>(null) }
     var showPermissionEditor by remember { mutableStateOf(false) }
@@ -1669,11 +1670,16 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     Box(
                                         modifier = Modifier
                                             .weight(1f)
-                                            .clickable {
-                                                val target = selectedEntry?.path
-                                                selectedEntry = null
-                                                if (target != null) vm.calculateFolderSizeAsync(target)
-                                            }
+                                            .combinedClickable(
+                                                onClick = {
+                                                    val target = selectedEntry?.path
+                                                    selectedEntry = null
+                                                    if (target != null) vm.calculateFolderSizeAsync(target)
+                                                },
+                                                onLongClick = {
+                                                    showSizeCalcOptionsMenu = true
+                                                }
+                                            )
                                             .padding(vertical = 16.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
@@ -2276,6 +2282,40 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 }) {
                     Text("取消")
                 }
+            }
+        )
+    }
+
+    // ── 大小统计长按选项 ──
+    if (showSizeCalcOptionsMenu && selectedEntry?.isDirectory == true) {
+        val targetPath = selectedEntry!!.path
+        val targetName = selectedEntry!!.name
+        AlertDialog(
+            onDismissRequest = { showSizeCalcOptionsMenu = false },
+            title = { Text("大小统计选项") },
+            text = {
+                Column {
+                    Text("对「$targetName」的大小统计操作")
+                    Spacer(Modifier.height(16.dp))
+                    TextButton(onClick = {
+                        showSizeCalcOptionsMenu = false
+                        selectedEntry = null
+                        vm.deleteSizeCacheAndRefresh(targetPath)
+                    }) {
+                        Text("删除缓存并刷新", modifier = Modifier.fillMaxWidth())
+                    }
+                    TextButton(onClick = {
+                        showSizeCalcOptionsMenu = false
+                        selectedEntry = null
+                        vm.recalculateFolderSizeForce(targetPath)
+                    }) {
+                        Text("忽略缓存重新统计", modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showSizeCalcOptionsMenu = false }) { Text("取消") }
             }
         )
     }
