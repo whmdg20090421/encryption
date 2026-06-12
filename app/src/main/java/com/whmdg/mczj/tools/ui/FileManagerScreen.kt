@@ -10,7 +10,9 @@ import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.awaitFrame
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.activity.compose.BackHandler
