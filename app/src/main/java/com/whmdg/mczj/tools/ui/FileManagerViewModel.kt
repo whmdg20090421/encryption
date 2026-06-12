@@ -1562,7 +1562,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val isDir = nameWithSlash.endsWith("/")
             val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
             if (name == "." || name == "..") continue
-            if (name.startsWith(".")) continue  // 跳过隐藏文件
             val size = parts[4].toLongOrNull() ?: 0L
             val childPath = "$dirPath/$name"
             val modified = try {
