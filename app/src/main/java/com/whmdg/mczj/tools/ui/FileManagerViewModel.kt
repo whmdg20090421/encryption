@@ -598,10 +598,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         SizeCalcManager.finish(result.rootSize)
                     }
                     is SizeCalcResult.PermissionDenied -> {
-                        folderSizeDb.save(saveDir)
-                        folderSizeDb = FolderSizeDb.load(saveDir)
-                        refreshCurrent()
+                        // 弹窗询问用户是否保存已统计的部分结果
                         SizeCalcManager.finish()
+                        SizeCalcManager.pendingSaveDialog = true
                         SizeCalcManager.loadError = RuntimeException(
                             "权限不足，部分目录无法访问\n路径: ${result.path}"
                         )

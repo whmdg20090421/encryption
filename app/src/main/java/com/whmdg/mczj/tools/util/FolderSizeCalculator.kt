@@ -189,14 +189,17 @@ private suspend fun diffScan(
         }
     }
 
-    // 清理：父目录已访问且子目录确认不存在时才删除
-    for (p in snapshot.keys) {
-        if (p == rootPath) continue
-        val parent = p.substringBeforeLast('/').ifEmpty { "/" }
-        if (parent in currentChildren) {
-            val siblings = currentChildren[parent] ?: continue
-            if (siblings.none { it.path == p }) {
-                db.remove(p)
+    // 清理：仅当 BFS 正常完成（result == null）时才执行，
+    // 因为 BFS 中断时 currentChildren 不完整，误删未访问的目录
+    if (result == null) {
+        for (p in snapshot.keys) {
+            if (p == rootPath) continue
+            val parent = p.substringBeforeLast('/').ifEmpty { "/" }
+            if (parent in currentChildren) {
+                val siblings = currentChildren[parent] ?: continue
+                if (siblings.none { it.path == p }) {
+                    db.remove(p)
+                }
             }
         }
     }
