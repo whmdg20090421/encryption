@@ -8,14 +8,14 @@ object FormatUtils {
      * 格式化字节数为人类可读格式
      */
     fun formatBytes(bytes: Long): String {
-        if (bytes < 1000) return "$bytes B"
+        if (bytes < 1024) return "$bytes B"
 
         val suffixes = arrayOf("KB", "MB", "GB", "TB")
-        var size = bytes / 1000.0
+        var size = bytes / 1024.0
         var i = 0
 
-        while (size >= 1000 && i < suffixes.size - 1) {
-            size /= 1000.0
+        while (size >= 1024 && i < suffixes.size - 1) {
+            size /= 1024.0
             i++
         }
 

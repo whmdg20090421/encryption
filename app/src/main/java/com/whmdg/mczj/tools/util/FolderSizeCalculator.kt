@@ -79,7 +79,7 @@ private suspend fun fullScan(
         val listChildrenStart = System.currentTimeMillis()
         val list = accessor.listChildren(dir)
         val listChildrenElapsed = System.currentTimeMillis() - listChildrenStart
-        if (listChildrenElapsed > 100 && onBinderCooldown != null) {
+        if (listChildrenElapsed > 300 && onBinderCooldown != null) {
             for (sec in 5 downTo 1) {
                 onBinderCooldown(sec)
                 delay(1000)
@@ -166,7 +166,7 @@ private suspend fun diffScan(
         val listChildrenStart = System.currentTimeMillis()
         val list = accessor.listChildren(dir)
         val listChildrenElapsed = System.currentTimeMillis() - listChildrenStart
-        if (listChildrenElapsed > 100 && onBinderCooldown != null) {
+        if (listChildrenElapsed > 300 && onBinderCooldown != null) {
             for (sec in 5 downTo 1) {
                 onBinderCooldown(sec)
                 delay(1000)
