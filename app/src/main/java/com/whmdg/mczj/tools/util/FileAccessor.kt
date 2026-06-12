@@ -19,8 +19,6 @@ interface FileAccessor {
     fun statMtime(path: String): Long?
     /** 执行 shell 命令，返回 (stdout, stderr, exitCode)。NormalAccessor 返回失败。 */
     fun exec(command: String): Triple<String, String, Int>
-    /** 递归获取子树中所有文件/子目录条目（单次 shell 调用）。返回 null 表示无法访问。 */
-    fun listChildrenRecursive(path: String): List<DirEntry>?
 
     companion object {
         fun create(level: FileAccessLevel, context: Context): FileAccessor = when (level) {
@@ -54,22 +52,6 @@ private class NormalAccessor : FileAccessor {
         val f = File(path)
         if (!f.exists()) return null
         return f.lastModified()
-    }
-
-    override fun listChildrenRecursive(path: String): List<DirEntry>? {
-        val root = File(path)
-        if (!root.isDirectory || !root.canRead()) return null
-        val entries = mutableListOf<DirEntry>()
-        fun scan(dir: File) {
-            val children = dir.listFiles() ?: return
-            for (f in children) {
-                val isDir = f.isDirectory
-                entries.add(DirEntry(f.name, f.absolutePath, isDir, if (isDir) 0L else f.length(), f.lastModified()))
-                if (isDir) scan(f)
-            }
-        }
-        scan(root)
-        return entries
     }
 }
 
@@ -147,73 +129,5 @@ private class ShellAccessor(
         return try {
             makeDateFmt().parse("${parts[5]} ${parts[6]}")?.time ?: 0L
         } catch (_: Exception) { 0L }
-    }
-
-    override fun listChildrenRecursive(path: String): List<DirEntry>? {
-        val normalized = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-        val escaped = normalized.replace("'", "'\\''")
-        // 1) find -type d 只获取目录路径（纯文本，无 stat/printf 依赖）
-        val (dirOutput, _, dirExit) = try {
-            exec("find '$escaped' -type d")
-        } catch (_: Throwable) { return null }
-        if (dirExit != 0) return null
-
-        val dirs = dirOutput.lines().filter { it.isNotBlank() }
-        if (dirs.isEmpty()) return emptyList()
-
-        // 2) 对所有目录批量执行 ls -lap，用唯一分隔符拼接，单次 shell 调用
-        val delimiter = "###DIR:"
-        val script = buildString {
-            for (d in dirs) {
-                val de = d.replace("'", "'\\''")
-                append("echo '$delimiter$de'; ls -lap '$de' 2>/dev/null; ")
-            }
-        }
-        val (lsOutput, _, lsExit) = try {
-            exec(script)
-        } catch (_: Throwable) { return null }
-        if (lsExit != 0 && lsOutput.isBlank()) return null
-
-        // 3) 解析输出：按分隔符分组，每组用 listChildren 相同的逻辑解析
-        val entries = mutableListOf<DirEntry>()
-        var currentParent = ""
-        for (raw in lsOutput.lines()) {
-            val line = raw.trimEnd('\r')
-            if (line.startsWith(delimiter)) {
-                currentParent = line.removePrefix(delimiter)
-                continue
-            }
-            if (line.isBlank() || line.startsWith("total ")) continue
-            val parsed = parseLsLine(line, currentParent) ?: continue
-            entries.add(parsed)
-        }
-        return entries
-    }
-
-    /** 解析 ls -lap 单行输出，返回 DirEntry（复用 listChildren 的解析逻辑） */
-    private fun parseLsLine(line: String, parentPath: String): DirEntry? {
-        val parts = line.split("\\s+".toRegex())
-        if (parts.size < 8) return null
-        if (parts[0].length < 10) return null
-
-        // 精确提取原始文件名（保留多空格），逐字符跳过前 7 个字段
-        var namePos = 0
-        repeat(7) {
-            while (namePos < line.length && line[namePos].isWhitespace()) namePos++
-            if (namePos >= line.length) return null
-            while (namePos < line.length && !line[namePos].isWhitespace()) namePos++
-        }
-        while (namePos < line.length && line[namePos].isWhitespace()) namePos++
-        val nameWithSlash = if (namePos < line.length) line.substring(namePos) else return null
-        val isDir = nameWithSlash.endsWith("/")
-        val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
-        if (name == "." || name == "..") return null
-
-        val size = parts[4].toLongOrNull() ?: 0L
-        val childPath = if (parentPath == "/") "/$name" else "$parentPath/$name"
-        val mtime = try {
-            makeDateFmt().parse("${parts[5]} ${parts[6]}")?.time ?: 0L
-        } catch (_: Exception) { 0L }
-        return DirEntry(name, childPath, isDir, if (isDir) 0L else size, mtime)
     }
 }

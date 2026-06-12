@@ -570,7 +570,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val permission = detectMaxAvailablePermission()
         val accessor = FileAccessor.create(permission, context)
         val saveDir = AppDataPaths.fileManager(context)
-        SizeCalcManager.begin(folderSizeDb, saveDir)
+        SizeCalcManager.begin(folderSizeDb, saveDir, onDiscard = {
+            folderSizeDb = FolderSizeDb.load(saveDir)
+            refreshCurrent()
+        })
         viewModelScope.launch(Dispatchers.IO) {
             val result = try {
                 calculateFolderSize(
@@ -580,31 +583,39 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     onTotal = { total -> SizeCalcManager.onTotal(total) },
                     onScanned = { count, folder -> SizeCalcManager.onScanned(count, folder) },
                     onProgress = { p, t, f -> SizeCalcManager.onProgress(p, t, f) },
-                    isCancelled = { SizeCalcManager.cancelRequested }
+                    isCancelled = { SizeCalcManager.cancelRequested },
+                    onBinderCooldown = { sec -> SizeCalcManager.onBinderCooldown(sec) }
                 )
             } catch (e: Throwable) {
                 SizeCalcResult.Failed(e.message ?: "未知错误")
             }
             withContext(Dispatchers.Main) {
-                // 先保存已统计的部分结果，再清空进度状态
-                folderSizeDb.save(saveDir)
-                folderSizeDb = FolderSizeDb.load(saveDir)
-                refreshCurrent()
                 when (result) {
                     is SizeCalcResult.Success -> {
+                        folderSizeDb.save(saveDir)
+                        folderSizeDb = FolderSizeDb.load(saveDir)
+                        refreshCurrent()
                         SizeCalcManager.finish(result.rootSize)
                     }
                     is SizeCalcResult.PermissionDenied -> {
+                        folderSizeDb.save(saveDir)
+                        folderSizeDb = FolderSizeDb.load(saveDir)
+                        refreshCurrent()
                         SizeCalcManager.finish()
                         SizeCalcManager.loadError = RuntimeException(
                             "权限不足，部分目录无法访问\n路径: ${result.path}"
                         )
                     }
                     is SizeCalcResult.Failed -> {
+                        // 弹窗询问用户是否保存已统计的部分结果
                         SizeCalcManager.finish()
+                        SizeCalcManager.pendingSaveDialog = true
                         SizeCalcManager.loadError = RuntimeException("统计失败: ${result.reason}")
                     }
                     is SizeCalcResult.Cancelled -> {
+                        // 用户取消，丢弃本次数据
+                        folderSizeDb = FolderSizeDb.load(saveDir)
+                        refreshCurrent()
                         SizeCalcManager.finish()
                     }
                 }

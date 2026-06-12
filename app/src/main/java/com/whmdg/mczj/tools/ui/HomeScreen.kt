@@ -569,6 +569,7 @@ fun MainAppContainer() {
                     val calcProgress = SizeCalcManager.progress
                     val calcScanned = SizeCalcManager.scannedCount
                     val calcTotal = SizeCalcManager.totalCount
+                    val cooldownSec = SizeCalcManager.binderCooldownSeconds
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -586,11 +587,19 @@ fun MainAppContainer() {
                         )
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "已扫描 $calcScanned / $calcTotal 个目录  ${(calcProgress * 100).toInt()}%",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (cooldownSec > 0) {
+                        Text(
+                            text = "Binder 队列过长，等待 ${cooldownSec} 秒...",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    } else {
+                        Text(
+                            text = "已扫描 $calcScanned / $calcTotal 个目录  ${(calcProgress * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 } else {
                     // 阶段三：已统计完成
                     Text(
@@ -632,6 +641,25 @@ fun MainAppContainer() {
         ErrorDialog(
             error = calcError,
             onDismiss = { SizeCalcManager.loadError = null }
+        )
+    }
+
+    // ── 保存进度？对话框 ──
+    if (SizeCalcManager.pendingSaveDialog) {
+        AlertDialog(
+            onDismissRequest = { SizeCalcManager.discardPartial() },
+            title = { Text("统计中断") },
+            text = { Text("统计过程中发生错误，是否保存已统计的部分结果？") },
+            confirmButton = {
+                TextButton(onClick = { SizeCalcManager.confirmSavePartial() }) {
+                    Text("保存")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { SizeCalcManager.discardPartial() }) {
+                    Text("丢弃")
+                }
+            }
         )
     }
     } // Box

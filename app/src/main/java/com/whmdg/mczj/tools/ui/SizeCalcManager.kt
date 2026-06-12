@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.util.FormatUtils.formatBytes
+import kotlinx.coroutines.delay
 import java.io.File
 
 /**
@@ -48,6 +49,14 @@ object SizeCalcManager {
     var loadError by mutableStateOf<Throwable?>(null)
         internal set
 
+    /** Binder 冷却倒计时（秒），0 = 未在冷却 */
+    var binderCooldownSeconds by mutableIntStateOf(0)
+        internal set
+
+    /** 是否弹出"保存进度？"对话框 */
+    var pendingSaveDialog by mutableStateOf(false)
+        internal set
+
     /** 用户请求取消 */
     @Volatile
     var cancelRequested = false
@@ -56,21 +65,43 @@ object SizeCalcManager {
     /** 当前正在计算的 db 引用，用于手动保存 */
     private var currentDb: FolderSizeDb? = null
     private var saveDir: File? = null
+    /** 丢弃回调（由 FileManagerViewModel 注册，用于重载 DB） */
+    private var onDiscard: (() -> Unit)? = null
 
     fun requestCancel() { cancelRequested = true }
 
     /** 用户点击"保存"：将当前已计算的结果持久化 */
     fun save() { currentDb?.save(saveDir ?: return) }
 
+    /** 错误弹窗：用户选择保存已统计的部分结果 */
+    fun confirmSavePartial() {
+        currentDb?.save(saveDir ?: return)
+        pendingSaveDialog = false
+    }
+
+    /** 错误弹窗：用户选择丢弃本次数据 */
+    fun discardPartial() {
+        pendingSaveDialog = false
+        onDiscard?.invoke()
+    }
+
     /** 关闭状态提示 */
     fun dismissStatus() { statusMessage = null; completedSize = -1L }
 
-    internal fun begin(db: FolderSizeDb, saveDir: File) {
+    /** Binder 冷却倒计时（由 FolderSizeCalculator 回调） */
+    internal suspend fun onBinderCooldown(secondsLeft: Int) {
+        binderCooldownSeconds = secondsLeft
+    }
+
+    internal fun begin(db: FolderSizeDb, saveDir: File, onDiscard: (() -> Unit)? = null) {
         currentDb = db; this.saveDir = saveDir
+        this.onDiscard = onDiscard
         progress = 0f; currentFolder = ""
         scannedCount = 0; totalCount = 0
         cancelRequested = false; loadError = null
         completedSize = -1L
+        binderCooldownSeconds = 0
+        pendingSaveDialog = false
         isCalculating = true
         statusMessage = "正在统计文件夹数量..."
     }
@@ -99,7 +130,8 @@ object SizeCalcManager {
         isCalculating = false
         progress = 0f; currentFolder = ""
         scannedCount = 0; totalCount = 0
-        cancelRequested = false; currentDb = null; saveDir = null
+        cancelRequested = false; currentDb = null; saveDir = null; onDiscard = null
+        binderCooldownSeconds = 0
         completedSize = size
         statusMessage = if (size >= 0) {
             "已统计完成，大小: ${formatBytes(size)}"
