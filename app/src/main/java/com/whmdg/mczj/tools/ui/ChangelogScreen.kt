@@ -29,6 +29,19 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V2.6",
+        date = "2026-06-12",
+        items = listOf(
+            "文件管理器 Shell 路由重构：受保护路径统一走 Shell（Root/Shizuku/普通三路路由），ls -lap 解析改用逐字符定位精确保留多空格",
+            "文件夹大小统计全面重写：全量+差异自底向上算法，BFS 无条件遍历所有目录后从叶子逐级 mtime 对比 + delta 冒泡，确保深层变化不被遗漏",
+            "大小统计持久 Shell 优化：单次 find 递归扫描替代逐目录 listChildren，Binder IPC 延迟 >300ms 时 5 秒冷却倒计时保护",
+            "大小统计全程状态提示：正在统计→进度条→完成三个阶段，支持取消和部分结果保存",
+            "大小统计中断保护：BFS 中断时跳过清理阶段避免误删缓存，PermissionDenied 弹出保存对话框",
+            "大小统计长按选项：长按「大小刷新」弹出三选项——删除缓存并刷新/忽略缓存重新统计/取消",
+            "formatBytes 统一 1024 进制 + 返回上级目录恢复滚动位置"
+        )
+    ),
+    ChangelogVersion(
         version = "V2.5",
         date = "2026-06-09",
         items = listOf(
