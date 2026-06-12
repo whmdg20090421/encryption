@@ -10,9 +10,7 @@ import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.activity.compose.BackHandler
@@ -162,23 +160,20 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     val leftListState = rememberLazyListState(vm.leftFirstVisibleIndex, vm.leftFirstVisibleOffset)
     val rightListState = rememberLazyListState(vm.rightFirstVisibleIndex, vm.rightFirstVisibleOffset)
 
-    // 返回上级目录时恢复滚动位置
-    // 用 snapshotFlow 等待 entries 非空 + awaitFrame 确保 LazyColumn 布局完成后再滚动
+    // 返回上级目录时恢复滚动位置（scrollPositions 按绝对路径存储，进入子目录时保存，返回时恢复）
     LaunchedEffect(vm.leftPath) {
         val saved = vm.getSavedScrollPosition(vm.leftPath) ?: return@LaunchedEffect
         val (index, offset) = saved
-        if (index <= 0 && offset <= 0) return@LaunchedEffect
-        snapshotFlow { vm.leftEntries }.first { it.isNotEmpty() }
-        withFrameNanos { }
-        leftListState.scrollToItem(index, offset)
+        if (index > 0 || offset > 0) {
+            leftListState.scrollToItem(index, offset)
+        }
     }
     LaunchedEffect(vm.rightPath) {
         val saved = vm.getSavedScrollPosition(vm.rightPath) ?: return@LaunchedEffect
         val (index, offset) = saved
-        if (index <= 0 && offset <= 0) return@LaunchedEffect
-        snapshotFlow { vm.rightEntries }.first { it.isNotEmpty() }
-        withFrameNanos { }
-        rightListState.scrollToItem(index, offset)
+        if (index > 0 || offset > 0) {
+            rightListState.scrollToItem(index, offset)
+        }
     }
 
     // ── UI 本地状态 ──
