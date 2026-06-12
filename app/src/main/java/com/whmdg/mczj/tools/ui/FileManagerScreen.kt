@@ -161,14 +161,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     val rightListState = rememberLazyListState(vm.rightFirstVisibleIndex, vm.rightFirstVisibleOffset)
 
     // 返回上级目录时恢复滚动位置（scrollPositions 按绝对路径存储，进入子目录时保存，返回时恢复）
-    LaunchedEffect(vm.leftPath) {
+    // 同时监听 path 和 entries，确保列表加载完成后再恢复滚动位置
+    LaunchedEffect(vm.leftPath, vm.leftEntries) {
         val saved = vm.getSavedScrollPosition(vm.leftPath) ?: return@LaunchedEffect
         val (index, offset) = saved
         if (index > 0 || offset > 0) {
             leftListState.scrollToItem(index, offset)
         }
     }
-    LaunchedEffect(vm.rightPath) {
+    LaunchedEffect(vm.rightPath, vm.rightEntries) {
         val saved = vm.getSavedScrollPosition(vm.rightPath) ?: return@LaunchedEffect
         val (index, offset) = saved
         if (index > 0 || offset > 0) {
