@@ -160,6 +160,22 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     val leftListState = rememberLazyListState(vm.leftFirstVisibleIndex, vm.leftFirstVisibleOffset)
     val rightListState = rememberLazyListState(vm.rightFirstVisibleIndex, vm.rightFirstVisibleOffset)
 
+    // 返回上级目录时恢复滚动位置
+    LaunchedEffect(vm.leftPath) {
+        vm.getSavedScrollPosition(vm.leftPath)?.let { (index, offset) ->
+            if (index > 0 || offset > 0) {
+                leftListState.scrollToItem(index, offset)
+            }
+        }
+    }
+    LaunchedEffect(vm.rightPath) {
+        vm.getSavedScrollPosition(vm.rightPath)?.let { (index, offset) ->
+            if (index > 0 || offset > 0) {
+                rightListState.scrollToItem(index, offset)
+            }
+        }
+    }
+
     // ── UI 本地状态 ──
     var showDrawer by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
@@ -280,6 +296,17 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
+    // 保存当前滚动位置并返回上一级
+    val saveScrollAndGoUp: () -> Boolean = {
+        vm.saveCurrentScrollPosition(
+            leftListState.firstVisibleItemIndex,
+            leftListState.firstVisibleItemScrollOffset,
+            rightListState.firstVisibleItemIndex,
+            rightListState.firstVisibleItemScrollOffset
+        )
+        vm.goUp()
+    }
+
     // 返回手势：压缩包内 → 回上一级或退出压缩包，回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
     BackHandler {
         if (vm.isInArchive) {
@@ -290,7 +317,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             if (!vm.goUpInRecycleBin()) {
                 vm.exitRecycleBin()
             }
-        } else if (!vm.goUp()) {
+        } else if (!saveScrollAndGoUp()) {
             onBack()
         }
     }
@@ -457,7 +484,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(
-                            onClick = { vm.goBack() },
+                            onClick = {
+                                vm.saveCurrentScrollPosition(
+                                    leftListState.firstVisibleItemIndex,
+                                    leftListState.firstVisibleItemScrollOffset,
+                                    rightListState.firstVisibleItemIndex,
+                                    rightListState.firstVisibleItemScrollOffset
+                                )
+                                vm.goBack()
+                            },
                             enabled = vm.currentNavState.canGoBack
                         ) {
                             Icon(Icons.Default.ArrowBack, contentDescription = "后退")
@@ -469,7 +504,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(
-                            onClick = { vm.goForward() },
+                            onClick = {
+                                vm.saveCurrentScrollPosition(
+                                    leftListState.firstVisibleItemIndex,
+                                    leftListState.firstVisibleItemScrollOffset,
+                                    rightListState.firstVisibleItemIndex,
+                                    rightListState.firstVisibleItemScrollOffset
+                                )
+                                vm.goForward()
+                            },
                             enabled = vm.currentNavState.canGoForward
                         ) {
                             Icon(Icons.Default.ArrowForward, contentDescription = "前进")
@@ -524,7 +567,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             onClick = {
                                 if (vm.isInArchive) vm.goUpInArchive()
                                 else if (vm.isInRecycleBin) vm.goUpInRecycleBin()
-                                else vm.goUp()
+                                else saveScrollAndGoUp()
                             },
                             enabled = canGoUp
                         ) {
@@ -629,6 +672,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     } else {
                                         DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
                                         DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.leftPath}")
+                                        vm.saveCurrentScrollPosition(
+                                            leftListState.firstVisibleItemIndex,
+                                            leftListState.firstVisibleItemScrollOffset,
+                                            rightListState.firstVisibleItemIndex,
+                                            rightListState.firstVisibleItemScrollOffset
+                                        )
                                         vm.navigateToFolder(entry)
                                     }
                                 },
@@ -692,6 +741,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         vm.goUpInRecycleBin()
                                     } else if (leftParentPath != null) {
                                         vm.focusedPanel = FocusedPanel.LEFT
+                                        vm.saveCurrentScrollPosition(
+                                            leftListState.firstVisibleItemIndex,
+                                            leftListState.firstVisibleItemScrollOffset,
+                                            rightListState.firstVisibleItemIndex,
+                                            rightListState.firstVisibleItemScrollOffset
+                                        )
                                         vm.navigateTo(leftParentPath)
                                     }
                                 },
@@ -710,6 +765,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     } else {
                                         DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
                                         DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.rightPath}")
+                                        vm.saveCurrentScrollPosition(
+                                            leftListState.firstVisibleItemIndex,
+                                            leftListState.firstVisibleItemScrollOffset,
+                                            rightListState.firstVisibleItemIndex,
+                                            rightListState.firstVisibleItemScrollOffset
+                                        )
                                         vm.navigateToFolder(entry)
                                     }
                                 },
@@ -773,6 +834,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         vm.goUpInRecycleBin()
                                     } else if (rightParentPath != null) {
                                         vm.focusedPanel = FocusedPanel.RIGHT
+                                        vm.saveCurrentScrollPosition(
+                                            leftListState.firstVisibleItemIndex,
+                                            leftListState.firstVisibleItemScrollOffset,
+                                            rightListState.firstVisibleItemIndex,
+                                            rightListState.firstVisibleItemScrollOffset
+                                        )
                                         vm.navigateTo(rightParentPath)
                                     }
                                 },

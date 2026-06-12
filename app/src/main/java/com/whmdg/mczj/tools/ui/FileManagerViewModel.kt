@@ -385,7 +385,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     val currentPath: String get() = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
     val currentNavState: PanelNavState get() = if (focusedPanel == FocusedPanel.LEFT) leftNavState else rightNavState
 
-    // ── 滚动位置保存（导航离开前调用） ──
+    // ── 滚动位置保存（按路径记忆，导航离开前调用） ──
     var leftFirstVisibleIndex by mutableStateOf(0)
         private set
     var leftFirstVisibleOffset by mutableStateOf(0)
@@ -395,12 +395,24 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var rightFirstVisibleOffset by mutableStateOf(0)
         private set
 
+    /** 路径 → (index, offset)，用于返回时恢复滚动位置 */
+    private val scrollPositions = HashMap<String, Pair<Int, Int>>()
+
     fun saveScrollPosition(leftIndex: Int, leftOffset: Int, rightIndex: Int, rightOffset: Int) {
         leftFirstVisibleIndex = leftIndex
         leftFirstVisibleOffset = leftOffset
         rightFirstVisibleIndex = rightIndex
         rightFirstVisibleOffset = rightOffset
     }
+
+    /** 保存当前面板的滚动位置（按路径） */
+    fun saveCurrentScrollPosition(leftIndex: Int, leftOffset: Int, rightIndex: Int, rightOffset: Int) {
+        scrollPositions[leftPath] = leftIndex to leftOffset
+        scrollPositions[rightPath] = rightIndex to rightOffset
+    }
+
+    /** 获取指定路径的保存滚动位置，用于返回时恢复 */
+    fun getSavedScrollPosition(path: String): Pair<Int, Int>? = scrollPositions[path]
 
     // ── 核心导航：切换路径 + 刷新列表 ──
     fun navigateTo(path: String) {
