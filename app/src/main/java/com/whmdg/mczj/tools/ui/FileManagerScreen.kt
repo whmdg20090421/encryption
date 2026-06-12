@@ -156,26 +156,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     }
     val coroutineScope = rememberCoroutineScope()
 
-    // ── 滚动状态（从 ViewModel 恢复） ──
-    val leftListState = rememberLazyListState(vm.leftFirstVisibleIndex, vm.leftFirstVisibleOffset)
-    val rightListState = rememberLazyListState(vm.rightFirstVisibleIndex, vm.rightFirstVisibleOffset)
-
-    // 返回上级目录时恢复滚动位置（scrollPositions 按绝对路径存储，进入子目录时保存，返回时恢复）
-    // 同时监听 path 和 entries，确保列表加载完成后再恢复滚动位置
-    LaunchedEffect(vm.leftPath, vm.leftEntries) {
-        val saved = vm.getSavedScrollPosition(vm.leftPath) ?: return@LaunchedEffect
-        val (index, offset) = saved
-        if (index > 0 || offset > 0) {
-            leftListState.scrollToItem(index, offset)
-        }
-    }
-    LaunchedEffect(vm.rightPath, vm.rightEntries) {
-        val saved = vm.getSavedScrollPosition(vm.rightPath) ?: return@LaunchedEffect
-        val (index, offset) = saved
-        if (index > 0 || offset > 0) {
-            rightListState.scrollToItem(index, offset)
-        }
-    }
+    // ── 滚动状态 ──
+    val leftListState = rememberLazyListState()
+    val rightListState = rememberLazyListState()
 
     // ── UI 本地状态 ──
     var showDrawer by remember { mutableStateOf(false) }
@@ -297,15 +280,28 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // 保存当前滚动位置并返回上一级
+    // 保存当前滚动位置并返回上一级（串行：保存 → 返回 → 恢复滚动）
     val saveScrollAndGoUp: () -> Boolean = {
-        vm.saveCurrentScrollPosition(
+        vm.saveScrollPosition(
             leftListState.firstVisibleItemIndex,
             leftListState.firstVisibleItemScrollOffset,
             rightListState.firstVisibleItemIndex,
             rightListState.firstVisibleItemScrollOffset
         )
-        vm.goUp()
+        val targetPath = vm.goUp()
+        if (targetPath != null) {
+            val saved = vm.getScrollPosition(targetPath)
+            if (saved != null) {
+                val (index, offset) = saved
+                if (index > 0 || offset > 0) {
+                    val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
+                    listState.scrollToItem(index, offset)
+                }
+            }
+            true
+        } else {
+            false
+        }
     }
 
     // 返回手势：压缩包内 → 回上一级或退出压缩包，回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
@@ -486,13 +482,23 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     ) {
                         IconButton(
                             onClick = {
-                                vm.saveCurrentScrollPosition(
+                                vm.saveScrollPosition(
                                     leftListState.firstVisibleItemIndex,
                                     leftListState.firstVisibleItemScrollOffset,
                                     rightListState.firstVisibleItemIndex,
                                     rightListState.firstVisibleItemScrollOffset
                                 )
-                                vm.goBack()
+                                val targetPath = vm.goBack()
+                                if (targetPath != null) {
+                                    val saved = vm.getScrollPosition(targetPath)
+                                    if (saved != null) {
+                                        val (index, offset) = saved
+                                        if (index > 0 || offset > 0) {
+                                            val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
+                                            listState.scrollToItem(index, offset)
+                                        }
+                                    }
+                                }
                             },
                             enabled = vm.currentNavState.canGoBack
                         ) {
@@ -506,13 +512,23 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     ) {
                         IconButton(
                             onClick = {
-                                vm.saveCurrentScrollPosition(
+                                vm.saveScrollPosition(
                                     leftListState.firstVisibleItemIndex,
                                     leftListState.firstVisibleItemScrollOffset,
                                     rightListState.firstVisibleItemIndex,
                                     rightListState.firstVisibleItemScrollOffset
                                 )
-                                vm.goForward()
+                                val targetPath = vm.goForward()
+                                if (targetPath != null) {
+                                    val saved = vm.getScrollPosition(targetPath)
+                                    if (saved != null) {
+                                        val (index, offset) = saved
+                                        if (index > 0 || offset > 0) {
+                                            val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
+                                            listState.scrollToItem(index, offset)
+                                        }
+                                    }
+                                }
                             },
                             enabled = vm.currentNavState.canGoForward
                         ) {
@@ -673,7 +689,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     } else {
                                         DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
                                         DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.leftPath}")
-                                        vm.saveCurrentScrollPosition(
+                                        vm.saveScrollPosition(
                                             leftListState.firstVisibleItemIndex,
                                             leftListState.firstVisibleItemScrollOffset,
                                             rightListState.firstVisibleItemIndex,
@@ -742,13 +758,18 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         vm.goUpInRecycleBin()
                                     } else if (leftParentPath != null) {
                                         vm.focusedPanel = FocusedPanel.LEFT
-                                        vm.saveCurrentScrollPosition(
+                                        vm.saveScrollPosition(
                                             leftListState.firstVisibleItemIndex,
                                             leftListState.firstVisibleItemScrollOffset,
                                             rightListState.firstVisibleItemIndex,
                                             rightListState.firstVisibleItemScrollOffset
                                         )
                                         vm.navigateTo(leftParentPath)
+                                        val saved = vm.getScrollPosition(leftParentPath)
+                                        if (saved != null) {
+                                            val (index, offset) = saved
+                                            if (index > 0 || offset > 0) leftListState.scrollToItem(index, offset)
+                                        }
                                     }
                                 },
                                 archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null
@@ -766,7 +787,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     } else {
                                         DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
                                         DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.rightPath}")
-                                        vm.saveCurrentScrollPosition(
+                                        vm.saveScrollPosition(
                                             leftListState.firstVisibleItemIndex,
                                             leftListState.firstVisibleItemScrollOffset,
                                             rightListState.firstVisibleItemIndex,
@@ -835,13 +856,18 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         vm.goUpInRecycleBin()
                                     } else if (rightParentPath != null) {
                                         vm.focusedPanel = FocusedPanel.RIGHT
-                                        vm.saveCurrentScrollPosition(
+                                        vm.saveScrollPosition(
                                             leftListState.firstVisibleItemIndex,
                                             leftListState.firstVisibleItemScrollOffset,
                                             rightListState.firstVisibleItemIndex,
                                             rightListState.firstVisibleItemScrollOffset
                                         )
                                         vm.navigateTo(rightParentPath)
+                                        val saved = vm.getScrollPosition(rightParentPath)
+                                        if (saved != null) {
+                                            val (index, offset) = saved
+                                            if (index > 0 || offset > 0) rightListState.scrollToItem(index, offset)
+                                        }
                                     }
                                 },
                                 archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null

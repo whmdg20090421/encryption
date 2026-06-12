@@ -385,34 +385,20 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     val currentPath: String get() = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
     val currentNavState: PanelNavState get() = if (focusedPanel == FocusedPanel.LEFT) leftNavState else rightNavState
 
-    // ── 滚动位置保存（按路径记忆，导航离开前调用） ──
-    var leftFirstVisibleIndex by mutableStateOf(0)
-        private set
-    var leftFirstVisibleOffset by mutableStateOf(0)
-        private set
-    var rightFirstVisibleIndex by mutableStateOf(0)
-        private set
-    var rightFirstVisibleOffset by mutableStateOf(0)
-        private set
-
-    /** 路径 → (index, offset)，用于返回时恢复滚动位置 */
+    // ── 滚动位置保存（按路径记忆，内存中，应用关闭自动清空） ──
     private val scrollPositions = HashMap<String, Pair<Int, Int>>()
 
+    /** 保存当前聚焦面板的滚动位置（按路径存储） */
     fun saveScrollPosition(leftIndex: Int, leftOffset: Int, rightIndex: Int, rightOffset: Int) {
-        leftFirstVisibleIndex = leftIndex
-        leftFirstVisibleOffset = leftOffset
-        rightFirstVisibleIndex = rightIndex
-        rightFirstVisibleOffset = rightOffset
+        if (focusedPanel == FocusedPanel.LEFT) {
+            scrollPositions[leftPath] = leftIndex to leftOffset
+        } else {
+            scrollPositions[rightPath] = rightIndex to rightOffset
+        }
     }
 
-    /** 保存当前面板的滚动位置（按路径） */
-    fun saveCurrentScrollPosition(leftIndex: Int, leftOffset: Int, rightIndex: Int, rightOffset: Int) {
-        scrollPositions[leftPath] = leftIndex to leftOffset
-        scrollPositions[rightPath] = rightIndex to rightOffset
-    }
-
-    /** 获取指定路径的保存滚动位置，用于返回时恢复 */
-    fun getSavedScrollPosition(path: String): Pair<Int, Int>? = scrollPositions[path]
+    /** 读取指定路径的滚动位置 */
+    fun getScrollPosition(path: String): Pair<Int, Int>? = scrollPositions[path]
 
     // ── 核心导航：切换路径 + 刷新列表 ──
     fun navigateTo(path: String) {
@@ -509,28 +495,31 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun goBack(): Boolean {
+    /** 后退，返回目标路径，null 表示无法后退 */
+    fun goBack(): String? {
         val nav = if (focusedPanel == FocusedPanel.LEFT) leftNavState else rightNavState
-        val back = nav.back() ?: return false
+        val back = nav.back() ?: return null
         navigateTo(back.current)
-        return true
+        return back.current
     }
 
-    fun goForward(): Boolean {
+    /** 前进，返回目标路径，null 表示无法前进 */
+    fun goForward(): String? {
         val nav = if (focusedPanel == FocusedPanel.LEFT) leftNavState else rightNavState
-        val fwd = nav.forward() ?: return false
+        val fwd = nav.forward() ?: return null
         navigateTo(fwd.current)
-        return true
+        return fwd.current
     }
 
-    fun goUp(): Boolean {
+    /** 返回上级目录，返回目标路径，null 表示已在根目录 */
+    fun goUp(): String? {
         val effectiveRoot = if (isRootEngine) "/" else safeDefault
         val path = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
-        if (path == effectiveRoot || !path.contains('/')) return false
+        if (path == effectiveRoot || !path.contains('/')) return null
         val parent = path.substringBeforeLast('/').ifEmpty { "/" }
-        if (parent == path) return false
+        if (parent == path) return null
         navigateTo(parent)
-        return true
+        return parent
     }
 
     fun syncPaths() {
