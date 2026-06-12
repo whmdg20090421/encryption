@@ -10,7 +10,7 @@ import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.awaitFrame
+import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -169,7 +169,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         val (index, offset) = saved
         if (index <= 0 && offset <= 0) return@LaunchedEffect
         snapshotFlow { vm.leftEntries }.first { it.isNotEmpty() }
-        awaitFrame()
+        withFrameNanos { }
         leftListState.scrollToItem(index, offset)
     }
     LaunchedEffect(vm.rightPath) {
@@ -177,7 +177,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         val (index, offset) = saved
         if (index <= 0 && offset <= 0) return@LaunchedEffect
         snapshotFlow { vm.rightEntries }.first { it.isNotEmpty() }
-        awaitFrame()
+        withFrameNanos { }
         rightListState.scrollToItem(index, offset)
     }
 
