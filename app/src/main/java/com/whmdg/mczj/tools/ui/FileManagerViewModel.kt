@@ -99,8 +99,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var refreshVersion by mutableStateOf(0L)
         private set
-    /** 返回上级目录时，需要滚动到列表中间的文件夹名称 */
-    var pendingScrollToFolder by mutableStateOf<String?>(null)
 
     // ── 回收站 ──
     var isInRecycleBin by mutableStateOf(false)
@@ -397,7 +395,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var rightFirstVisibleOffset by mutableStateOf(0)
         private set
 
-    /** 路径 → (index, offset)，用于 goBack/goForward 时恢复滚动位置 */
+    /** 路径 → (index, offset)，用于返回时恢复滚动位置 */
     private val scrollPositions = HashMap<String, Pair<Int, Int>>()
 
     fun saveScrollPosition(leftIndex: Int, leftOffset: Int, rightIndex: Int, rightOffset: Int) {
@@ -407,13 +405,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         rightFirstVisibleOffset = rightOffset
     }
 
-    /** 保存当前面板的滚动位置（按路径），用于 goBack/goForward */
+    /** 保存当前面板的滚动位置（按路径） */
     fun saveCurrentScrollPosition(leftIndex: Int, leftOffset: Int, rightIndex: Int, rightOffset: Int) {
         scrollPositions[leftPath] = leftIndex to leftOffset
         scrollPositions[rightPath] = rightIndex to rightOffset
     }
 
-    /** 获取指定路径的保存滚动位置 */
+    /** 获取指定路径的保存滚动位置，用于返回时恢复 */
     fun getSavedScrollPosition(path: String): Pair<Int, Int>? = scrollPositions[path]
 
     // ── 核心导航：切换路径 + 刷新列表 ──
@@ -439,7 +437,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             // 最高权限优先：Root(libsu) 或 Shizuku/ADB
             listDirEntriesViaShell(entry.path, showHiddenFiles)
             if (lastShellStderr.isBlank()) {
-                pendingScrollToFolder = entry.name
                 navigateTo(entry.path)
                 historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
             } else {
@@ -447,7 +444,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val testDir = File(entry.path)
                 val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
                 if (accessible != null) {
-                    pendingScrollToFolder = entry.name
                     navigateTo(entry.path)
                     historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
                 } else {
@@ -459,7 +455,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val testDir = File(entry.path)
             val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
             if (accessible != null) {
-                pendingScrollToFolder = entry.name
                 navigateTo(entry.path)
                 historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
             } else if (!testDir.exists()) {
