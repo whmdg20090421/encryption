@@ -853,6 +853,36 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) { e.message ?: "复制失败" }
     }
 
+    /** 批量复制。成功返回 null，失败返回最后一条错误信息。 */
+    fun copyEntries(entries: List<FileEntry>, destDir: String): String? {
+        var lastError: String? = null
+        for (entry in entries) {
+            val err = copyEntry(entry, destDir)
+            if (err != null) lastError = err
+        }
+        return lastError
+    }
+
+    /** 批量移动。成功返回 null，失败返回最后一条错误信息。 */
+    fun moveEntries(entries: List<FileEntry>, destDir: String): String? {
+        var lastError: String? = null
+        for (entry in entries) {
+            val err = moveEntry(entry, destDir)
+            if (err != null) lastError = err
+        }
+        return lastError
+    }
+
+    /** 批量删除。成功返回 null，失败返回最后一条错误信息。 */
+    fun deleteEntries(entries: List<FileEntry>): String? {
+        var lastError: String? = null
+        for (entry in entries) {
+            val err = deleteEntry(entry)
+            if (err != null) lastError = err
+        }
+        return lastError
+    }
+
     /**
      * 永久删除回收站中的文件。成功返回 null，失败返回错误信息。
      */

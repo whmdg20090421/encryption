@@ -57,7 +57,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import java.io.File
@@ -78,6 +81,11 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 enum class FocusedPanel { LEFT, RIGHT }
@@ -169,6 +177,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var showSortSizeRefreshDialog by remember { mutableStateOf(false) }
     var unmeasuredDirs by remember { mutableStateOf(listOf<FileEntry>()) }
     var selectedEntry by remember { mutableStateOf<FileEntry?>(null) }
+    // ── 多选状态（左右列表独立） ──
+    var leftSelectedPaths by remember { mutableStateOf(setOf<String>()) }
+    var rightSelectedPaths by remember { mutableStateOf(setOf<String>()) }
+    var leftSwipeSelectFlag by remember { mutableIntStateOf(0) }  // 1=刚滑动选中，等待范围选中
+    var rightSwipeSelectFlag by remember { mutableIntStateOf(0) }
+    var leftLastSwipeIndex by remember { mutableIntStateOf(-1) }
+    var rightLastSwipeIndex by remember { mutableIntStateOf(-1) }
     val sortAscLabels = mapOf(
         SortField.NAME to "A到Z",
         SortField.SIZE to "小到大",
@@ -299,6 +314,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         )
         val targetPath = vm.goUp()
         if (targetPath != null) {
+            // 导航时清空当前面板的多选状态
+            if (vm.focusedPanel == FocusedPanel.LEFT) {
+                leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
+            } else {
+                rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
+            }
             val saved = vm.getScrollPosition(targetPath)
             vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
             true
@@ -687,6 +708,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemScrollOffset
                                         )
                                         vm.navigateToFolder(entry)
+                                        leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
                                     }
                                 },
                                 onFileClick = { entry ->
@@ -694,11 +716,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                     vm.focusedPanel = FocusedPanel.LEFT
                                     if (vm.isInArchive) {
-                                        // 压缩包内文件点击 → 按需解压并打开
                                         val screen = vm.openFileInArchive(context, entry)
                                         if (screen != null) onNavigate(screen)
                                     } else {
-                                        // 压缩包拦截
                                         val archiveFormat = CompressService.detectFormat(entry.name)
                                         if (archiveFormat != null) {
                                             archivePendingEntry = entry
@@ -757,9 +777,43 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         )
                                         val saved = vm.getScrollPosition(leftParentPath)
                                         vm.navigateToWithScroll(leftParentPath, saved?.first ?: 0, saved?.second ?: 0)
+                                        leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
                                     }
                                 },
-                                archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null
+                                archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null,
+                                selectedPaths = leftSelectedPaths,
+                                onSwipeSelect = { entry, index ->
+                                    vm.focusedPanel = FocusedPanel.LEFT
+                                    if (leftSelectedPaths.isEmpty()) {
+                                        // 首次滑动：进入多选模式
+                                        leftSelectedPaths = setOf(entry.path)
+                                        leftSwipeSelectFlag = 1
+                                        leftLastSwipeIndex = index
+                                    } else if (leftSwipeSelectFlag == 1) {
+                                        // 范围选中：选中两次滑动之间的所有条目
+                                        val from = minOf(leftLastSwipeIndex, index)
+                                        val to = maxOf(leftLastSwipeIndex, index)
+                                        val rangePaths = vm.leftEntries.subList(from, to + 1).map { it.path }.toSet()
+                                        leftSelectedPaths = leftSelectedPaths + rangePaths
+                                        leftSwipeSelectFlag = 0
+                                    } else {
+                                        // 单个追加
+                                        leftSelectedPaths = leftSelectedPaths + entry.path
+                                        leftSwipeSelectFlag = 1
+                                        leftLastSwipeIndex = index
+                                    }
+                                },
+                                onToggleSelect = { entry ->
+                                    leftSelectedPaths = if (entry.path in leftSelectedPaths) {
+                                        leftSelectedPaths - entry.path
+                                    } else {
+                                        leftSelectedPaths + entry.path
+                                    }
+                                    if (leftSelectedPaths.isEmpty()) {
+                                        leftSwipeSelectFlag = 0
+                                        leftLastSwipeIndex = -1
+                                    }
+                                }
                             )
                             FileBrowserPanel(
                                 entries = vm.rightEntries,
@@ -781,6 +835,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemScrollOffset
                                         )
                                         vm.navigateToFolder(entry)
+                                        rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
                                     }
                                 },
                                 onFileClick = { entry ->
@@ -788,11 +843,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                     vm.focusedPanel = FocusedPanel.RIGHT
                                     if (vm.isInArchive) {
-                                        // 压缩包内文件点击 → 按需解压并打开
                                         val screen = vm.openFileInArchive(context, entry)
                                         if (screen != null) onNavigate(screen)
                                     } else {
-                                        // 压缩包拦截
                                         val archiveFormat = CompressService.detectFormat(entry.name)
                                         if (archiveFormat != null) {
                                             archivePendingEntry = entry
@@ -851,9 +904,40 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         )
                                         val saved = vm.getScrollPosition(rightParentPath)
                                         vm.navigateToWithScroll(rightParentPath, saved?.first ?: 0, saved?.second ?: 0)
+                                        rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
                                     }
                                 },
-                                archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null
+                                archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null,
+                                selectedPaths = rightSelectedPaths,
+                                onSwipeSelect = { entry, index ->
+                                    vm.focusedPanel = FocusedPanel.RIGHT
+                                    if (rightSelectedPaths.isEmpty()) {
+                                        rightSelectedPaths = setOf(entry.path)
+                                        rightSwipeSelectFlag = 1
+                                        rightLastSwipeIndex = index
+                                    } else if (rightSwipeSelectFlag == 1) {
+                                        val from = minOf(rightLastSwipeIndex, index)
+                                        val to = maxOf(rightLastSwipeIndex, index)
+                                        val rangePaths = vm.rightEntries.subList(from, to + 1).map { it.path }.toSet()
+                                        rightSelectedPaths = rightSelectedPaths + rangePaths
+                                        rightSwipeSelectFlag = 0
+                                    } else {
+                                        rightSelectedPaths = rightSelectedPaths + entry.path
+                                        rightSwipeSelectFlag = 1
+                                        rightLastSwipeIndex = index
+                                    }
+                                },
+                                onToggleSelect = { entry ->
+                                    rightSelectedPaths = if (entry.path in rightSelectedPaths) {
+                                        rightSelectedPaths - entry.path
+                                    } else {
+                                        rightSelectedPaths + entry.path
+                                    }
+                                    if (rightSelectedPaths.isEmpty()) {
+                                        rightSwipeSelectFlag = 0
+                                        rightLastSwipeIndex = -1
+                                    }
+                                }
                             )
                         }
                     ) { measurables, constraints ->
@@ -1449,6 +1533,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 exit = fadeOut()
             ) {
                 val isToRight = vm.focusedPanel == FocusedPanel.LEFT
+                val activeSelectedPaths = if (vm.focusedPanel == FocusedPanel.LEFT) leftSelectedPaths else rightSelectedPaths
+                val isMultiSelect = activeSelectedPaths.size > 1
+                val selectedEntries = if (vm.focusedPanel == FocusedPanel.LEFT)
+                    vm.leftEntries.filter { it.path in leftSelectedPaths }
+                else
+                    vm.rightEntries.filter { it.path in rightSelectedPaths }
 
                 Box(
                     modifier = Modifier
@@ -1456,7 +1546,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = { selectedEntry = null }
+                            onClick = {
+                                selectedEntry = null
+                                // 清空多选状态
+                                if (vm.focusedPanel == FocusedPanel.LEFT) {
+                                    leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
+                                } else {
+                                    rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
+                                }
+                            }
                         ),
                     contentAlignment = Alignment.Center
                 ) {
@@ -1573,6 +1671,18 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 }
                             } else {
+                            val disabledColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            val disabledIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            // 多选模式下显示选中数量
+                            if (isMultiSelect) {
+                                Text(
+                                    text = "已选中 ${activeSelectedPaths.size} 个项目",
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                HorizontalDivider()
+                            }
                             // ── 第一行：复制 / 移动 ──
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1583,16 +1693,21 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable {
-                                            val entry = selectedEntry ?: return@clickable
                                             val destDir = if (isToRight) vm.rightPath else vm.leftPath
-                                            val error = vm.copyEntry(entry, destDir)
+                                            val error = if (isMultiSelect) vm.copyEntries(selectedEntries, destDir)
+                                                        else vm.copyEntry(selectedEntry ?: return@clickable, destDir)
                                             if (error == null) {
-                                                Toast.makeText(context, "复制成功", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, if (isMultiSelect) "批量复制成功" else "复制成功", Toast.LENGTH_SHORT).show()
                                                 vm.refreshBoth()
                                             } else {
                                                 Toast.makeText(context, "复制失败: $error", Toast.LENGTH_SHORT).show()
                                             }
                                             selectedEntry = null
+                                            if (vm.focusedPanel == FocusedPanel.LEFT) {
+                                                leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
+                                            } else {
+                                                rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
+                                            }
                                         }
                                         .padding(vertical = 16.dp),
                                     contentAlignment = Alignment.Center
@@ -1600,44 +1715,36 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text("复制", style = MaterialTheme.typography.bodyLarge)
-                                            Icon(
-                                                Icons.Default.ArrowForward,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.ArrowBack,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Text("复制", style = MaterialTheme.typography.bodyLarge)
                                         }
                                     }
                                 }
-                                // 极淡的分割线
-                                VerticalDivider(
-                                    modifier = Modifier.height(24.dp),
-                                    thickness = 0.5.dp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-                                )
+                                VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
                                 // 右列：移动
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable {
-                                            val entry = selectedEntry ?: return@clickable
                                             val destDir = if (isToRight) vm.rightPath else vm.leftPath
-                                            val error = vm.moveEntry(entry, destDir)
+                                            val error = if (isMultiSelect) vm.moveEntries(selectedEntries, destDir)
+                                                        else vm.moveEntry(selectedEntry ?: return@clickable, destDir)
                                             if (error == null) {
-                                                Toast.makeText(context, "移动成功", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, if (isMultiSelect) "批量移动成功" else "移动成功", Toast.LENGTH_SHORT).show()
                                                 vm.refreshBoth()
                                             } else {
                                                 Toast.makeText(context, "移动失败: $error", Toast.LENGTH_SHORT).show()
                                             }
                                             selectedEntry = null
+                                            if (vm.focusedPanel == FocusedPanel.LEFT) {
+                                                leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
+                                            } else {
+                                                rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
+                                            }
                                         }
                                         .padding(vertical = 16.dp),
                                     contentAlignment = Alignment.Center
@@ -1645,19 +1752,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text("移动", style = MaterialTheme.typography.bodyLarge)
-                                            Icon(
-                                                Icons.Default.ArrowForward,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.ArrowBack,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Text("移动", style = MaterialTheme.typography.bodyLarge)
                                         }
                                     }
@@ -1668,11 +1767,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // 左列：重命名
+                                // 左列：重命名（多选时禁用）
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clickable {
+                                        .clickable(enabled = !isMultiSelect) {
                                             val entry = selectedEntry ?: return@clickable
                                             renameText = entry.name
                                             showRenameDialog = true
@@ -1682,36 +1781,24 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 ) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("重命名", style = MaterialTheme.typography.bodyLarge)
-                                            Icon(
-                                                Icons.Default.Edit,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            Text("重命名", style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
+                                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.Edit,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Text("重命名", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
+                                            Text("重命名", style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
                                         }
                                     }
                                 }
-                                // 极淡的分割线
-                                VerticalDivider(
-                                    modifier = Modifier.height(24.dp),
-                                    thickness = 0.5.dp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-                                )
+                                VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
                                 // 右列：删除
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable {
-                                            selectedEntry?.let { showDeleteDialog = true }
+                                            if (isMultiSelect) showDeleteDialog = true
+                                            else selectedEntry?.let { showDeleteDialog = true }
                                         }
                                         .padding(vertical = 16.dp),
                                     contentAlignment = Alignment.Center
@@ -1719,31 +1806,23 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text("删除", style = MaterialTheme.typography.bodyLarge)
-                                            Icon(
-                                                Icons.Default.Delete,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.Delete,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Text("删除", style = MaterialTheme.typography.bodyLarge)
                                         }
                                     }
                                 }
                             }
-                            // ── 第三行：大小刷新(文件夹)或属性 / 分享 ──
+                            // ── 第三行：大小刷新(文件夹)或属性 / 压缩 ──
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // 左列：大小刷新（仅文件夹）或属性
-                                if (selectedEntry?.isDirectory == true) {
+                                // 左列：大小刷新（仅文件夹）或属性（多选时禁用）
+                                if (!isMultiSelect && selectedEntry?.isDirectory == true) {
                                     Box(
                                         modifier = Modifier
                                             .weight(1f)
@@ -1753,9 +1832,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                     selectedEntry = null
                                                     if (target != null) vm.calculateFolderSizeAsync(target)
                                                 },
-                                                onLongClick = {
-                                                    showSizeCalcOptionsMenu = true
-                                                }
+                                                onLongClick = { showSizeCalcOptionsMenu = true }
                                             )
                                             .padding(vertical = 16.dp),
                                         contentAlignment = Alignment.Center
@@ -1763,19 +1840,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         if (isToRight) {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 Text("大小刷新", style = MaterialTheme.typography.bodyLarge)
-                                                Icon(
-                                                    Icons.Default.FolderSpecial,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
+                                                Icon(Icons.Default.FolderSpecial, contentDescription = null, modifier = Modifier.size(16.dp))
                                             }
                                         } else {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(
-                                                    Icons.Default.FolderSpecial,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
+                                                Icon(Icons.Default.FolderSpecial, contentDescription = null, modifier = Modifier.size(16.dp))
                                                 Text("大小刷新", style = MaterialTheme.typography.bodyLarge)
                                             }
                                         }
@@ -1784,7 +1853,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     Box(
                                         modifier = Modifier
                                             .weight(1f)
-                                            .clickable {
+                                            .clickable(enabled = !isMultiSelect) {
                                                 val entry = selectedEntry ?: return@clickable
                                                 propertyData = vm.getPropertyData(entry)
                                                 propertyEntry = entry
@@ -1794,33 +1863,21 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             .padding(vertical = 16.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
+                                        val label = if (!isMultiSelect && selectedEntry?.isDirectory == true) "大小刷新" else "属性"
                                         if (isToRight) {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Text("属性", style = MaterialTheme.typography.bodyLarge)
-                                                Icon(
-                                                    Icons.Default.Info,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
+                                                Text(label, style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
+                                                Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
                                             }
                                         } else {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(
-                                                    Icons.Default.Info,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                                Text("属性", style = MaterialTheme.typography.bodyLarge)
+                                                Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
+                                                Text(label, style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
                                             }
                                         }
                                     }
                                 }
-                                // 极淡的分割线
-                                VerticalDivider(
-                                    modifier = Modifier.height(24.dp),
-                                    thickness = 0.5.dp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-                                )
+                                VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
                                 // 右列：压缩
                                 Box(
                                     modifier = Modifier
@@ -1836,25 +1893,17 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text("压缩", style = MaterialTheme.typography.bodyLarge)
-                                            Icon(
-                                                Icons.Default.FolderZip,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp))
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.FolderZip,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Text("压缩", style = MaterialTheme.typography.bodyLarge)
                                         }
                                     }
                                 }
                             }
-                            // ── 第四行：关于 / 分享 ──
+                            // ── 第四行：关于 / 分享（多选时均禁用） ──
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
@@ -1863,7 +1912,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clickable {
+                                        .clickable(enabled = !isMultiSelect) {
                                             val entry = selectedEntry ?: return@clickable
                                             propertyData = vm.getPropertyData(entry)
                                             propertyEntry = entry
@@ -1875,34 +1924,22 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 ) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("关于", style = MaterialTheme.typography.bodyLarge)
-                                            Icon(
-                                                Icons.Default.Info,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            Text("关于", style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
+                                            Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.Info,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Text("关于", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
+                                            Text("关于", style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
                                         }
                                     }
                                 }
-                                VerticalDivider(
-                                    modifier = Modifier.height(24.dp),
-                                    thickness = 0.5.dp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-                                )
+                                VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
                                 // 右列：分享
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clickable {
+                                        .clickable(enabled = !isMultiSelect) {
                                             Toast.makeText(context, "分享", Toast.LENGTH_SHORT).show()
                                             selectedEntry = null
                                         }
@@ -1911,21 +1948,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 ) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("分享", style = MaterialTheme.typography.bodyLarge)
-                                            Icon(
-                                                Icons.Default.Share,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            Text("分享", style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
+                                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.Share,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Text("分享", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
+                                            Text("分享", style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
                                         }
                                     }
                                 }
@@ -2141,13 +2170,22 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     }
 
     // ── 删除确认对话框 ──
-    if (showDeleteDialog && selectedEntry != null) {
+    val delMultiSelect = if (vm.focusedPanel == FocusedPanel.LEFT) leftSelectedPaths.size > 1 else rightSelectedPaths.size > 1
+    val delSelectedEntries = if (vm.focusedPanel == FocusedPanel.LEFT)
+        vm.leftEntries.filter { it.path in leftSelectedPaths }
+    else
+        vm.rightEntries.filter { it.path in rightSelectedPaths }
+    if (showDeleteDialog && (selectedEntry != null || delMultiSelect)) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text("删除") },
             text = {
                 Column {
-                    Text("确定要删除「${selectedEntry!!.name}」吗？")
+                    if (delMultiSelect) {
+                        Text("确定要删除选中的 ${delSelectedEntries.size} 个项目吗？")
+                    } else {
+                        Text("确定要删除「${selectedEntry!!.name}」吗？")
+                    }
                     Spacer(Modifier.height(12.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -2165,28 +2203,56 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val entry = selectedEntry ?: return@TextButton
-                    if (recycleBinEnabled) {
-                        val error = vm.moveToRecycleBin(entry)
-                        if (error == null) {
-                            Toast.makeText(context, "已移至回收站", Toast.LENGTH_SHORT).show()
-                            vm.refreshBoth()
+                    if (delMultiSelect) {
+                        // 批量删除
+                        if (recycleBinEnabled) {
+                            var lastError: String? = null
+                            for (entry in delSelectedEntries) {
+                                val error = vm.moveToRecycleBin(entry)
+                                if (error != null) lastError = error
+                            }
+                            if (lastError == null) {
+                                Toast.makeText(context, "已将 ${delSelectedEntries.size} 个项目移至回收站", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "部分删除失败: $lastError", Toast.LENGTH_SHORT).show()
+                            }
                         } else {
-                            // 移动失败，询问是否永久删除
-                            forceDeleteEntry = entry
-                            showForceDeleteDialog = true
+                            val error = vm.deleteEntries(delSelectedEntries)
+                            if (error == null) {
+                                Toast.makeText(context, "已删除 ${delSelectedEntries.size} 个项目", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "部分删除失败: $error", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        vm.refreshBoth()
+                        if (vm.focusedPanel == FocusedPanel.LEFT) {
+                            leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
+                        } else {
+                            rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
                         }
                     } else {
-                        val error = vm.deleteEntry(entry)
-                        if (error == null) {
-                            Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
-                            vm.refreshBoth()
+                        val entry = selectedEntry ?: return@TextButton
+                        if (recycleBinEnabled) {
+                            val error = vm.moveToRecycleBin(entry)
+                            if (error == null) {
+                                Toast.makeText(context, "已移至回收站", Toast.LENGTH_SHORT).show()
+                                vm.refreshBoth()
+                            } else {
+                                forceDeleteEntry = entry
+                                showForceDeleteDialog = true
+                            }
                         } else {
-                            Toast.makeText(context, "删除失败: $error", Toast.LENGTH_SHORT).show()
+                            val error = vm.deleteEntry(entry)
+                            if (error == null) {
+                                Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
+                                vm.refreshBoth()
+                            } else {
+                                Toast.makeText(context, "删除失败: $error", Toast.LENGTH_SHORT).show()
+                            }
                         }
+                        selectedEntry = null
                     }
                     showDeleteDialog = false
-                    selectedEntry = null
                 }) {
                     Text("确定")
                 }
@@ -3574,9 +3640,12 @@ private fun FileBrowserPanel(
     parentPath: String? = null,
     onNavigateUp: () -> Unit = {},
     lazyListState: LazyListState = rememberLazyListState(),
-    archiveSizeProvider: ((FileEntry) -> String)? = null
+    archiveSizeProvider: ((FileEntry) -> String)? = null,
+    selectedPaths: Set<String> = emptySet(),
+    onSwipeSelect: (FileEntry, Int) -> Unit = { _, _ -> },
+    onToggleSelect: (FileEntry) -> Unit = {}
 ) {
-    val context = LocalContext.current
+    val isMultiSelectMode = selectedPaths.isNotEmpty()
     Surface(
         modifier = modifier
             .fillMaxHeight()
@@ -3622,6 +3691,7 @@ private fun FileBrowserPanel(
                     }
                 }
                 items(entries, key = { it.path }) { entry ->
+                    val entryIndex = entries.indexOfFirst { it.path == entry.path }
                     val dirSize = if (entry.isDirectory) {
                         if (archiveSizeProvider != null) archiveSizeProvider(entry)
                         else {
@@ -3637,11 +3707,24 @@ private fun FileBrowserPanel(
                     FileEntryRow(
                         entry = entry,
                         isFocused = isFocused,
+                        isSelected = entry.path in selectedPaths,
                         onClick = {
-                            if (entry.isDirectory) onFolderClick(entry)
-                            else onFileClick(entry)
+                            if (isMultiSelectMode) {
+                                onToggleSelect(entry)
+                            } else {
+                                if (entry.isDirectory) onFolderClick(entry)
+                                else onFileClick(entry)
+                            }
                         },
-                        onLongClick = { onLongClick(entry) },
+                        onLongClick = {
+                            if (isMultiSelectMode) {
+                                // 多选模式下：仅长按已选中项才弹工具栏
+                                if (entry.path in selectedPaths) onLongClick(entry)
+                            } else {
+                                onLongClick(entry)
+                            }
+                        },
+                        onSwipe = { onSwipeSelect(entry, entryIndex) },
                         folderSize = dirSize
                     )
                 }
@@ -3654,118 +3737,154 @@ private fun FileBrowserPanel(
 private fun FileEntryRow(
     entry: FileEntry,
     isFocused: Boolean,
+    isSelected: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onSwipe: (Float) -> Unit = {},
     folderSize: String = ""
 ) {
-    Column(
+    val coroutineScope = rememberCoroutineScope()
+    val swipeOffset = remember { Animatable(0f) }
+    var rowWidth by remember { mutableIntStateOf(0) }
+    val bgColor = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                  else Color.Transparent
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(65.dp)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 2.5.dp)
+            .onGloballyPositioned { rowWidth = it.size.width }
+            .clipToBounds()
+            .background(bgColor)
     ) {
-        // Top 7/10: icon (left 1/5) + filename (right 4/5)
-        Row(modifier = Modifier.weight(7f)) {
-            Box(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                contentAlignment = Alignment.Center
-            ) {
-                val ext = extractExtension(entry.name)
-                val category = categorizeFile(ext)
-                val isImageFile = category == FileCategory.IMAGE && !entry.isDirectory
-                    && entry.name != "返回上一级"
-
-                if (isImageFile) {
-                    val imagePlaceholder = getFileTypeDrawableRes(category)
-                    AsyncImage(
-                        model = entry.path,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(RoundedCornerShape(4.dp)),
-                        contentScale = ContentScale.Crop,
-                        placeholder = imagePlaceholder?.let { painterResource(it) },
-                        error = imagePlaceholder?.let { painterResource(it) }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(65.dp)
+                .offset { IntOffset(swipeOffset.value.roundToInt(), 0) }
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            coroutineScope.launch {
+                                val threshold = rowWidth * 0.4f
+                                if (abs(swipeOffset.value) >= threshold) {
+                                    onSwipe(swipeOffset.value)
+                                }
+                                swipeOffset.animateTo(0f, spring(stiffness = Spring.StiffnessMedium))
+                            }
+                        },
+                        onHorizontalDrag = { change, dragAmount ->
+                            change.consume()
+                            coroutineScope.launch {
+                                swipeOffset.snapTo(swipeOffset.value + dragAmount)
+                            }
+                        }
                     )
-                } else {
-                    val fileDrawableRes = if (!entry.isDirectory && entry.name != "返回上一级") {
-                        getFileTypeDrawableRes(category)
-                    } else null
+                }
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                .padding(horizontal = 16.dp, vertical = 2.5.dp)
+        ) {
+            // Top 7/10: icon (left 1/5) + filename (right 4/5)
+            Row(modifier = Modifier.weight(7f)) {
+                Box(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val ext = extractExtension(entry.name)
+                    val category = categorizeFile(ext)
+                    val isImageFile = category == FileCategory.IMAGE && !entry.isDirectory
+                        && entry.name != "返回上一级"
 
-                    if (fileDrawableRes != null) {
-                        Icon(
-                            painter = painterResource(fileDrawableRes),
+                    if (isImageFile) {
+                        val imagePlaceholder = getFileTypeDrawableRes(category)
+                        AsyncImage(
+                            model = entry.path,
                             contentDescription = null,
-                            modifier = Modifier.size(28.dp),
-                            tint = Color.Unspecified
-                        )
-                    } else if (!entry.isDirectory && entry.name != "返回上一级"
-                        && category == FileCategory.APK) {
-                        FileTypeIcon(
-                            filename = entry.name,
-                            filePath = entry.path,
-                            iconSize = 28.dp
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            contentScale = ContentScale.Crop,
+                            placeholder = imagePlaceholder?.let { painterResource(it) },
+                            error = imagePlaceholder?.let { painterResource(it) }
                         )
                     } else {
-                        Icon(
-                            imageVector = when {
-                                entry.name == "返回上一级" -> Icons.Default.ArrowUpward
-                                entry.isDirectory -> Icons.Default.Folder
-                                else -> Icons.Default.InsertDriveFile
-                            },
-                            contentDescription = null,
-                            modifier = Modifier.size(28.dp),
-                            tint = if (isFocused) MaterialTheme.colorScheme.primary
-                                   else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        val fileDrawableRes = if (!entry.isDirectory && entry.name != "返回上一级") {
+                            getFileTypeDrawableRes(category)
+                        } else null
+
+                        if (fileDrawableRes != null) {
+                            Icon(
+                                painter = painterResource(fileDrawableRes),
+                                contentDescription = null,
+                                modifier = Modifier.size(28.dp),
+                                tint = Color.Unspecified
+                            )
+                        } else if (!entry.isDirectory && entry.name != "返回上一级"
+                            && category == FileCategory.APK) {
+                            FileTypeIcon(
+                                filename = entry.name,
+                                filePath = entry.path,
+                                iconSize = 28.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = when {
+                                    entry.name == "返回上一级" -> Icons.Default.ArrowUpward
+                                    entry.isDirectory -> Icons.Default.Folder
+                                    else -> Icons.Default.InsertDriveFile
+                                },
+                                contentDescription = null,
+                                modifier = Modifier.size(28.dp),
+                                tint = if (isFocused) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
+                Box(
+                    modifier = Modifier.weight(4f).fillMaxHeight(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = entry.name,
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        softWrap = true,
+                        textAlign = TextAlign.Start,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
-            Box(
-                modifier = Modifier.weight(4f).fillMaxHeight(),
-                contentAlignment = Alignment.Center
+            // Bottom 3/10: date/permission (left, aligned to icon left) + size (right, aligned to filename right)
+            Row(
+                modifier = Modifier.weight(3f).fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
             ) {
+                val label = when {
+                    entry.isDirectory -> compactDate(entry.lastModified)
+                    entry.permission.isNotEmpty() -> entry.permission
+                    else -> ""
+                }
                 Text(
-                    text = entry.name,
-                    modifier = Modifier.fillMaxWidth(),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    softWrap = true,
-                    textAlign = TextAlign.Start,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        }
-        // Bottom 3/10: date/permission (left, aligned to icon left) + size (right, aligned to filename right)
-        Row(
-            modifier = Modifier.weight(3f).fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top
-        ) {
-            val label = when {
-                entry.isDirectory -> compactDate(entry.lastModified)
-                entry.permission.isNotEmpty() -> entry.permission
-                else -> ""
-            }
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            val rightLabel = when {
-                entry.isDirectory -> folderSize.ifEmpty { "--" }
-                !entry.isDirectory -> compactSize(entry.size)
-                else -> ""
-            }
-            if (rightLabel.isNotEmpty()) {
-                Text(
-                    text = rightLabel,
+                    text = label,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (rightLabel == "✕") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
+                val rightLabel = when {
+                    entry.isDirectory -> folderSize.ifEmpty { "--" }
+                    !entry.isDirectory -> compactSize(entry.size)
+                    else -> ""
+                }
+                if (rightLabel.isNotEmpty()) {
+                    Text(
+                        text = rightLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (rightLabel == "✕") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
