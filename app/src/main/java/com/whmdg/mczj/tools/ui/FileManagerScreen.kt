@@ -76,6 +76,10 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -476,6 +480,19 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 ) {
                 // 上方 60dp：按钮区域（排除系统手势识别 + 上滑触发历史面板）
                 val view = LocalView.current
+                val leftFocused = vm.focusedPanel == FocusedPanel.LEFT
+                val activeSelectedPaths = if (leftFocused) leftSelectedPaths else rightSelectedPaths
+                val isMultiSelectMode = activeSelectedPaths.isNotEmpty()
+                // 旋转动画：+ 旋转45°变×
+                val rotation by animateFloatAsState(
+                    targetValue = if (isMultiSelectMode) 45f else 0f,
+                    animationSpec = spring(stiffness = Spring.StiffnessMedium)
+                )
+                // 权重动画：多选时两侧按钮收缩，中间按钮扩展，图标平移到正中
+                val wOuter by animateFloatAsState(
+                    targetValue = if (isMultiSelectMode) 0.5f else 1f,
+                    animationSpec = spring(stiffness = Spring.StiffnessMedium)
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -501,9 +518,14 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 ) {
                     // 后退按钮
                     Box(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(wOuter),
                         contentAlignment = Alignment.Center
                     ) {
+                        AnimatedVisibility(
+                            visible = !isMultiSelectMode,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
                         IconButton(
                             onClick = {
                                 vm.saveScrollPosition(
@@ -522,12 +544,18 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         ) {
                             Icon(Icons.Default.ArrowBack, contentDescription = "后退")
                         }
+                        }
                     }
                     // 前进按钮
                     Box(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(wOuter),
                         contentAlignment = Alignment.Center
                     ) {
+                        AnimatedVisibility(
+                            visible = !isMultiSelectMode,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
                         IconButton(
                             onClick = {
                                 vm.saveScrollPosition(
@@ -546,39 +574,71 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         ) {
                             Icon(Icons.Default.ArrowForward, contentDescription = "前进")
                         }
+                        }
                     }
-                    // 新建按钮
+                    // 新建/取消按钮：+ 旋转45°变×，weight 保持 1f 不变 → 图标平移到正中
                     Box(
                         modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
-                        IconButton(onClick = { showCreateTypeDialog = true }) {
-                            Icon(Icons.Default.Add, contentDescription = "新建")
+                        IconButton(onClick = {
+                            if (isMultiSelectMode) {
+                                if (leftFocused) {
+                                    leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
+                                } else {
+                                    rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
+                                }
+                            } else {
+                                showCreateTypeDialog = true
+                            }
+                        }) {
+                            Icon(
+                                if (isMultiSelectMode) Icons.Default.Close else Icons.Default.Add,
+                                contentDescription = if (isMultiSelectMode) "取消多选" else "新建",
+                                modifier = Modifier.rotate(rotation)
+                            )
                         }
                     }
                     // 同步按钮
                     Box(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(wOuter),
                         contentAlignment = Alignment.Center
                     ) {
+                        AnimatedVisibility(
+                            visible = !isMultiSelectMode,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
                         IconButton(onClick = { vm.syncPaths() }) {
                             Icon(Icons.Default.SwapHoriz, contentDescription = "同步路径")
+                        }
                         }
                     }
                     // 刷新按钮
                     Box(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(wOuter),
                         contentAlignment = Alignment.Center
                     ) {
+                        AnimatedVisibility(
+                            visible = !isMultiSelectMode,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
                         IconButton(onClick = { vm.refreshCurrent() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                        }
                         }
                     }
                     // 返回上一级按钮
                     Box(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(wOuter),
                         contentAlignment = Alignment.Center
                     ) {
+                        AnimatedVisibility(
+                            visible = !isMultiSelectMode,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
                         val canGoUp = if (vm.isInArchive) {
                             !vm.isAtArchiveRoot
                         } else if (vm.isInRecycleBin) {
@@ -601,6 +661,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             enabled = canGoUp
                         ) {
                             Icon(Icons.Default.ArrowUpward, contentDescription = "返回上一级")
+                        }
                         }
                     }
                 }
