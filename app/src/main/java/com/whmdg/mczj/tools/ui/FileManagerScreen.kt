@@ -784,7 +784,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 selectedPaths = leftSelectedPaths,
                                 onSwipeSelect = { entry, index ->
                                     vm.focusedPanel = FocusedPanel.LEFT
-                                    if (leftSelectedPaths.isEmpty()) {
+                                    // 右滑已选中的唯一卡片 → 取消选中，退出多选
+                                    if (leftSelectedPaths.size == 1 && entry.path in leftSelectedPaths) {
+                                        leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
+                                    } else if (leftSelectedPaths.isEmpty()) {
                                         // 首次滑动：进入多选模式
                                         leftSelectedPaths = setOf(entry.path)
                                         leftSwipeSelectFlag = 1
@@ -911,7 +914,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 selectedPaths = rightSelectedPaths,
                                 onSwipeSelect = { entry, index ->
                                     vm.focusedPanel = FocusedPanel.RIGHT
-                                    if (rightSelectedPaths.isEmpty()) {
+                                    // 右滑已选中的唯一卡片 → 取消选中，退出多选
+                                    if (rightSelectedPaths.size == 1 && entry.path in rightSelectedPaths) {
+                                        rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
+                                    } else if (rightSelectedPaths.isEmpty()) {
                                         rightSelectedPaths = setOf(entry.path)
                                         rightSwipeSelectFlag = 1
                                         rightLastSwipeIndex = index
@@ -3775,7 +3781,8 @@ private fun FileEntryRow(
                         onHorizontalDrag = { change, dragAmount ->
                             change.consume()
                             coroutineScope.launch {
-                                swipeOffset.snapTo(swipeOffset.value + dragAmount)
+                                val maxOffset = rowWidth * 0.6f
+                                swipeOffset.snapTo((swipeOffset.value + dragAmount).coerceIn(-maxOffset, maxOffset))
                             }
                         }
                     )
