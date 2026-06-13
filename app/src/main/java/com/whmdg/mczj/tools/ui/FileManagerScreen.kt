@@ -39,6 +39,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
 import com.whmdg.mczj.tools.ui.components.categorizeFile
 import com.whmdg.mczj.tools.ui.components.extractExtension
@@ -493,6 +494,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     targetValue = if (isMultiSelectMode) 0.5f else 1f,
                     animationSpec = spring(stiffness = Spring.StiffnessMedium)
                 )
+                // 按钮内容 alpha 动画（多选时淡出）
+                val btnAlpha by animateFloatAsState(
+                    targetValue = if (isMultiSelectMode) 0f else 1f,
+                    animationSpec = spring(stiffness = Spring.StiffnessMedium)
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -521,11 +527,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         modifier = Modifier.weight(wOuter),
                         contentAlignment = Alignment.Center
                     ) {
-                        AnimatedVisibility(
-                            visible = !isMultiSelectMode,
-                            enter = fadeIn(),
-                            exit = fadeOut()
-                        ) {
                         IconButton(
                             onClick = {
                                 vm.saveScrollPosition(
@@ -540,10 +541,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
                                 }
                             },
-                            enabled = vm.currentNavState.canGoBack
+                            enabled = vm.currentNavState.canGoBack && !isMultiSelectMode,
+                            modifier = Modifier.graphicsLayer { alpha = btnAlpha }
                         ) {
                             Icon(Icons.Default.ArrowBack, contentDescription = "后退")
-                        }
                         }
                     }
                     // 前进按钮
@@ -551,11 +552,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         modifier = Modifier.weight(wOuter),
                         contentAlignment = Alignment.Center
                     ) {
-                        AnimatedVisibility(
-                            visible = !isMultiSelectMode,
-                            enter = fadeIn(),
-                            exit = fadeOut()
-                        ) {
                         IconButton(
                             onClick = {
                                 vm.saveScrollPosition(
@@ -570,10 +566,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
                                 }
                             },
-                            enabled = vm.currentNavState.canGoForward
+                            enabled = vm.currentNavState.canGoForward && !isMultiSelectMode,
+                            modifier = Modifier.graphicsLayer { alpha = btnAlpha }
                         ) {
                             Icon(Icons.Default.ArrowForward, contentDescription = "前进")
-                        }
                         }
                     }
                     // 新建/取消按钮：+ 旋转45°变×，weight 保持 1f 不变 → 图标平移到正中
@@ -604,14 +600,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         modifier = Modifier.weight(wOuter),
                         contentAlignment = Alignment.Center
                     ) {
-                        AnimatedVisibility(
-                            visible = !isMultiSelectMode,
-                            enter = fadeIn(),
-                            exit = fadeOut()
+                        IconButton(
+                            onClick = { vm.syncPaths() },
+                            enabled = !isMultiSelectMode,
+                            modifier = Modifier.graphicsLayer { alpha = btnAlpha }
                         ) {
-                        IconButton(onClick = { vm.syncPaths() }) {
                             Icon(Icons.Default.SwapHoriz, contentDescription = "同步路径")
-                        }
                         }
                     }
                     // 刷新按钮
@@ -619,14 +613,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         modifier = Modifier.weight(wOuter),
                         contentAlignment = Alignment.Center
                     ) {
-                        AnimatedVisibility(
-                            visible = !isMultiSelectMode,
-                            enter = fadeIn(),
-                            exit = fadeOut()
+                        IconButton(
+                            onClick = { vm.refreshCurrent() },
+                            enabled = !isMultiSelectMode,
+                            modifier = Modifier.graphicsLayer { alpha = btnAlpha }
                         ) {
-                        IconButton(onClick = { vm.refreshCurrent() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新")
-                        }
                         }
                     }
                     // 返回上一级按钮
@@ -634,11 +626,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         modifier = Modifier.weight(wOuter),
                         contentAlignment = Alignment.Center
                     ) {
-                        AnimatedVisibility(
-                            visible = !isMultiSelectMode,
-                            enter = fadeIn(),
-                            exit = fadeOut()
-                        ) {
                         val canGoUp = if (vm.isInArchive) {
                             !vm.isAtArchiveRoot
                         } else if (vm.isInRecycleBin) {
@@ -658,10 +645,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 else if (vm.isInRecycleBin) vm.goUpInRecycleBin()
                                 else saveScrollAndGoUp()
                             },
-                            enabled = canGoUp
+                            enabled = canGoUp && !isMultiSelectMode,
+                            modifier = Modifier.graphicsLayer { alpha = btnAlpha }
                         ) {
                             Icon(Icons.Default.ArrowUpward, contentDescription = "返回上一级")
-                        }
                         }
                     }
                 }
