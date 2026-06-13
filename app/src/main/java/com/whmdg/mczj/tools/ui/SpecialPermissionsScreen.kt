@@ -282,8 +282,7 @@ private fun PermissionGuideWizard(
                     )
                     PERMISSION_LEVEL_PAGE_INDEX -> PermissionLevelPage(
                         selectedLevel = uiState.selectedPermissionLevel,
-                        onLevelSelected = { viewModel.selectPermissionLevel(it) },
-                        onConfirm = { viewModel.savePermissionLevel(context) }
+                        onLevelSelected = { viewModel.selectPermissionLevel(it) }
                     )
                 }
             }
@@ -870,8 +869,7 @@ private fun PermissionItemRow(title: String, description: String, isGranted: Boo
 @Composable
 private fun PermissionLevelPage(
     selectedLevel: AndroidPermissionLevel?,
-    onLevelSelected: (AndroidPermissionLevel) -> Unit,
-    onConfirm: () -> Unit
+    onLevelSelected: (AndroidPermissionLevel) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -901,16 +899,6 @@ private fun PermissionLevelPage(
                 selectedLevel == AndroidPermissionLevel.ADMIN) { onLevelSelected(AndroidPermissionLevel.ADMIN) }
             PermissionLevelItem(AndroidPermissionLevel.ROOT, "Root 权限", "最高级超级用户控制权限，解除一切系统沙箱约束",
                 selectedLevel == AndroidPermissionLevel.ROOT) { onLevelSelected(AndroidPermissionLevel.ROOT) }
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Button(
-            onClick = onConfirm,
-            enabled = selectedLevel != null,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp)
-        ) {
-            Text("确认并应用", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
         }
 
         Spacer(modifier = Modifier.height(16.dp))

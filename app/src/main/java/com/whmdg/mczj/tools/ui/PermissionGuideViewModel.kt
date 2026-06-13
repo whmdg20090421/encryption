@@ -165,6 +165,24 @@ class PermissionGuideViewModel : ViewModel() {
             }
         }
 
+        /**
+         * 应用启动时检测权限是否仍然有效。
+         * 如果当前设置的权限已失效，降级到 STANDARD 并返回 true 表示发生了变更。
+         */
+        fun validateAndUpdatePermission(context: Context): Boolean {
+            val savedLevel = getSavedLevel(context) ?: return false
+            if (savedLevel == AndroidPermissionLevel.STANDARD) return false
+
+            val isValid = validatePermissionLevel(context, savedLevel)
+            if (!isValid) {
+                // 权限已失效，降级到 STANDARD
+                val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+                sp.edit().putString("target_permission_level", AndroidPermissionLevel.STANDARD.name).apply()
+                return true
+            }
+            return false
+        }
+
         /** 校验指定权限级别是否可用 */
         fun validatePermissionLevel(context: Context, level: AndroidPermissionLevel): Boolean {
             return when (level) {

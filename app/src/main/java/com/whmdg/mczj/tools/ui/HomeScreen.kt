@@ -731,6 +731,15 @@ private val HOME_MODULE_IDS = listOf(
 @Composable
 fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
     val authState by PermissionManager.state.collectAsState()
+    val context = LocalContext.current
+
+    // 应用启动时检测权限是否仍然有效
+    LaunchedEffect(Unit) {
+        val permissionDowngraded = PermissionGuideViewModel.validateAndUpdatePermission(context)
+        if (permissionDowngraded) {
+            Toast.makeText(context, "检测到权限已失效，已降级为普通权限", Toast.LENGTH_LONG).show()
+        }
+    }
 
     Column(
         modifier = Modifier
