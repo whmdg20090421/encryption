@@ -87,8 +87,8 @@ class VaultService(private val context: Context) {
         cfg.saveWithBackup(context, dir)
 
         val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
-        sdf.timeZone = TimeZone.getTimeZone("UTC")
-        
+        sdf.timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+
         val rec = VaultRecord(
             id = 0,
             name = name,
@@ -147,7 +147,7 @@ class VaultService(private val context: Context) {
 
         // 记录最后打开时间
         val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
+            timeZone = TimeZone.getTimeZone("Asia/Shanghai")
         }.format(Date())
         _db.replaceVault(rec.copy(lastOpenedAt = now))
         _db.save(context)
@@ -166,7 +166,7 @@ class VaultService(private val context: Context) {
     fun markModified(id: Int) {
         val rec = _db.vaults.find { it.id == id } ?: return
         val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
+            timeZone = TimeZone.getTimeZone("Asia/Shanghai")
         }.format(Date())
         _db.replaceVault(rec.copy(lastModifiedAt = now))
         _db.save(context)
@@ -235,7 +235,7 @@ class VaultService(private val context: Context) {
         dek.fill(0) // 清零验证后的 DEK
 
         val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
-        sdf.timeZone = TimeZone.getTimeZone("UTC")
+        sdf.timeZone = TimeZone.getTimeZone("Asia/Shanghai")
 
         val rec = VaultRecord(
             id = 0,
@@ -325,7 +325,7 @@ class VaultService(private val context: Context) {
         }
 
         val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
-        sdf.timeZone = TimeZone.getTimeZone("UTC")
+        sdf.timeZone = TimeZone.getTimeZone("Asia/Shanghai")
 
         val rec = VaultRecord(
             id = 0,

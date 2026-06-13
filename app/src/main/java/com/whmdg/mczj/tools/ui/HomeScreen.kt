@@ -1351,7 +1351,7 @@ fun VaultsListTab(
                                     if (iso == null) return null
                                     return try {
                                         val sdfIn = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
-                                            timeZone = TimeZone.getTimeZone("UTC")
+                                            timeZone = TimeZone.getTimeZone("Asia/Shanghai")
                                         }
                                         val sdfOut = SimpleDateFormat("yyyy年MM月dd日 HH:mm:ss", Locale.CHINA)
                                         sdfOut.format(sdfIn.parse(iso)!!)
