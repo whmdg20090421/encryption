@@ -3771,7 +3771,7 @@ private fun FileEntryRow(
                     detectHorizontalDragGestures(
                         onDragEnd = {
                             coroutineScope.launch {
-                                val threshold = rowWidth * 0.4f
+                                val threshold = rowWidth * 0.25f
                                 if (abs(swipeOffset.value) >= threshold) {
                                     onSwipe(swipeOffset.value)
                                 }
@@ -3781,7 +3781,7 @@ private fun FileEntryRow(
                         onHorizontalDrag = { change, dragAmount ->
                             change.consume()
                             coroutineScope.launch {
-                                val maxOffset = rowWidth * 0.6f
+                                val maxOffset = rowWidth * 0.5f
                                 swipeOffset.snapTo((swipeOffset.value + dragAmount).coerceIn(-maxOffset, maxOffset))
                             }
                         }
