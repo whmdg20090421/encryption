@@ -19,6 +19,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -489,18 +490,24 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     targetValue = if (isMultiSelectMode) 45f else 0f,
                     animationSpec = spring(stiffness = Spring.StiffnessMedium)
                 )
-                // 图标偏移动画：从 6 等分第3个中心(5W/12) 平移到 5 等分第3个中心(W/2)
-                var rowWidthPx by remember { mutableIntStateOf(0) }
-                val iconOffsetX by animateFloatAsState(
-                    targetValue = if (isMultiSelectMode && rowWidthPx > 0) rowWidthPx / 12f else 0f,
-                    animationSpec = spring(stiffness = Spring.StiffnessMedium)
-                )
-                // 按钮内容 alpha 动画（多选时淡出）
-                val btnAlpha by animateFloatAsState(
+                // 动画状态：用于控制按钮的淡入淡出
+                val animDuration = 300 // 总动画时长（毫秒）
+                val halfDuration = animDuration / 2
+                // 原按钮的淡出动画（前半段）
+                val originalButtonsAlpha by animateFloatAsState(
                     targetValue = if (isMultiSelectMode) 0f else 1f,
-                    animationSpec = spring(stiffness = Spring.StiffnessMedium)
+                    animationSpec = tween(durationMillis = halfDuration)
                 )
-                Row(
+                // 新按钮的淡入动画（后半段）
+                val newButtonsAlpha by animateFloatAsState(
+                    targetValue = if (isMultiSelectMode) 1f else 0f,
+                    animationSpec = tween(
+                        durationMillis = halfDuration,
+                        delayMillis = if (isMultiSelectMode) halfDuration else 0
+                    )
+                )
+                var rowWidthPx by remember { mutableIntStateOf(0) }
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(60.dp)
@@ -521,138 +528,261 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 (pos.y + coords.size.height).toInt()
                             )
                             view.systemGestureExclusionRects = listOf(rect)
-                        },
-                    verticalAlignment = Alignment.CenterVertically
+                        }
                 ) {
-                    // 后退按钮
-                    Box(
-                        modifier = Modifier.weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        IconButton(
-                            onClick = {
-                                vm.saveScrollPosition(
-                                    leftListState.firstVisibleItemIndex,
-                                    leftListState.firstVisibleItemScrollOffset,
-                                    rightListState.firstVisibleItemIndex,
-                                    rightListState.firstVisibleItemScrollOffset
-                                )
-                                val targetPath = vm.goBack()
-                                if (targetPath != null) {
-                                    val saved = vm.getScrollPosition(targetPath)
-                                    vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
-                                }
-                            },
-                            enabled = vm.currentNavState.canGoBack && !isMultiSelectMode,
-                            modifier = Modifier.graphicsLayer { alpha = btnAlpha }
-                        ) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "后退")
-                        }
-                    }
-                    // 前进按钮
-                    Box(
-                        modifier = Modifier.weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        IconButton(
-                            onClick = {
-                                vm.saveScrollPosition(
-                                    leftListState.firstVisibleItemIndex,
-                                    leftListState.firstVisibleItemScrollOffset,
-                                    rightListState.firstVisibleItemIndex,
-                                    rightListState.firstVisibleItemScrollOffset
-                                )
-                                val targetPath = vm.goForward()
-                                if (targetPath != null) {
-                                    val saved = vm.getScrollPosition(targetPath)
-                                    vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
-                                }
-                            },
-                            enabled = vm.currentNavState.canGoForward && !isMultiSelectMode,
-                            modifier = Modifier.graphicsLayer { alpha = btnAlpha }
-                        ) {
-                            Icon(Icons.Default.ArrowForward, contentDescription = "前进")
-                        }
-                    }
-                    // 新建/取消按钮：始终用 Add 图标 + 旋转，尺寸不变
-                    Box(
+                    // ── 原来的6个按钮（非多选模式）──
+                    Row(
                         modifier = Modifier
-                            .weight(1f)
-                            .offset { IntOffset(iconOffsetX.roundToInt(), 0) },
-                        contentAlignment = Alignment.Center
+                            .fillMaxSize()
+                            .graphicsLayer { alpha = originalButtonsAlpha },
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = {
-                            if (isMultiSelectMode) {
+                        // 后退按钮
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    vm.saveScrollPosition(
+                                        leftListState.firstVisibleItemIndex,
+                                        leftListState.firstVisibleItemScrollOffset,
+                                        rightListState.firstVisibleItemIndex,
+                                        rightListState.firstVisibleItemScrollOffset
+                                    )
+                                    val targetPath = vm.goBack()
+                                    if (targetPath != null) {
+                                        val saved = vm.getScrollPosition(targetPath)
+                                        vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+                                    }
+                                },
+                                enabled = vm.currentNavState.canGoBack
+                            ) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "后退")
+                            }
+                        }
+                        // 前进按钮
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    vm.saveScrollPosition(
+                                        leftListState.firstVisibleItemIndex,
+                                        leftListState.firstVisibleItemScrollOffset,
+                                        rightListState.firstVisibleItemIndex,
+                                        rightListState.firstVisibleItemScrollOffset
+                                    )
+                                    val targetPath = vm.goForward()
+                                    if (targetPath != null) {
+                                        val saved = vm.getScrollPosition(targetPath)
+                                        vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+                                    }
+                                },
+                                enabled = vm.currentNavState.canGoForward
+                            ) {
+                                Icon(Icons.Default.ArrowForward, contentDescription = "前进")
+                            }
+                        }
+                        // 新建按钮
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            IconButton(onClick = { showCreateTypeDialog = true }) {
+                                Icon(Icons.Default.Add, contentDescription = "新建")
+                            }
+                        }
+                        // 同步按钮
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            IconButton(onClick = { vm.syncPaths() }) {
+                                Icon(Icons.Default.SwapHoriz, contentDescription = "同步路径")
+                            }
+                        }
+                        // 刷新按钮
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            IconButton(onClick = { vm.refreshCurrent() }) {
+                                Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                            }
+                        }
+                        // 返回上一级按钮
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val canGoUp = if (vm.isInArchive) {
+                                !vm.isAtArchiveRoot
+                            } else if (vm.isInRecycleBin) {
+                                !vm.isAtRecycleBinRoot
+                            } else {
+                                val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
+                                val parentPath = vm.currentPath.substringBeforeLast('/').ifEmpty { "/" }
+                                vm.currentPath != effectiveRoot
+                                    && vm.currentPath.contains('/')
+                                    && parentPath != vm.currentPath
+                                    && vm.canAccessPath(parentPath)
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    if (vm.isInArchive) vm.goUpInArchive()
+                                    else if (vm.isInRecycleBin) vm.goUpInRecycleBin()
+                                    else saveScrollAndGoUp()
+                                },
+                                enabled = canGoUp
+                            ) {
+                                Icon(Icons.Default.ArrowUpward, contentDescription = "返回上一级")
+                            }
+                        }
+                    }
+                    // ── 新的5个按钮（多选模式）──
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { alpha = newButtonsAlpha },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 第1个：选择全部（短按全选，长按按类型全选）
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .combinedClickable(
+                                    onClick = {
+                                        // 短按：全选所有项目
+                                        val entries = if (leftFocused) vm.leftEntries else vm.rightEntries
+                                        val allPaths = entries.map { it.path }.toSet()
+                                        if (leftFocused) leftSelectedPaths = allPaths else rightSelectedPaths = allPaths
+                                    },
+                                    onLongClick = {
+                                        // 长按：按已选类型全选
+                                        val entries = if (leftFocused) vm.leftEntries else vm.rightEntries
+                                        val currentPaths = if (leftFocused) leftSelectedPaths else rightSelectedPaths
+                                        val hasFiles = entries.any { it.path in currentPaths && !it.isDirectory }
+                                        val hasFolders = entries.any { it.path in currentPaths && it.isDirectory }
+                                        val newPaths = when {
+                                            // 只选了文件夹 → 全选所有文件夹
+                                            hasFolders && !hasFiles -> entries.filter { it.isDirectory }.map { it.path }.toSet()
+                                            // 只选了文件 → 全选所有文件
+                                            hasFiles && !hasFolders -> entries.filter { !it.isDirectory }.map { it.path }.toSet()
+                                            // 都有 → 全选所有
+                                            else -> entries.map { it.path }.toSet()
+                                        }
+                                        if (leftFocused) leftSelectedPaths = newPaths else rightSelectedPaths = newPaths
+                                    }
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.SelectAll, contentDescription = "选择全部")
+                        }
+                        // 第2个：反选（短按清空，长按按类型反选）
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .combinedClickable(
+                                    onClick = {
+                                        // 短按：清空所有选中
+                                        if (leftFocused) {
+                                            leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
+                                        } else {
+                                            rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
+                                        }
+                                    },
+                                    onLongClick = {
+                                        // 长按：按已选类型反选
+                                        val entries = if (leftFocused) vm.leftEntries else vm.rightEntries
+                                        val currentPaths = if (leftFocused) leftSelectedPaths else rightSelectedPaths
+                                        val hasFiles = entries.any { it.path in currentPaths && !it.isDirectory }
+                                        val hasFolders = entries.any { it.path in currentPaths && it.isDirectory }
+                                        val newPaths = when {
+                                            // 只选了文件夹 → 反选文件夹（取消当前，选中其他文件夹）
+                                            hasFolders && !hasFiles -> {
+                                                val otherFolders = entries.filter { it.isDirectory && it.path !in currentPaths }.map { it.path }.toSet()
+                                                val selectedFiles = currentPaths.filter { path -> entries.any { it.path == path && !it.isDirectory } }.toSet()
+                                                otherFolders + selectedFiles
+                                            }
+                                            // 只选了文件 → 反选文件（取消当前，选中其他文件）
+                                            hasFiles && !hasFolders -> {
+                                                val otherFiles = entries.filter { !it.isDirectory && it.path !in currentPaths }.map { it.path }.toSet()
+                                                val selectedFolders = currentPaths.filter { path -> entries.any { it.path == path && it.isDirectory } }.toSet()
+                                                otherFiles + selectedFolders
+                                            }
+                                            // 都有 → 全选所有（等同于短按全选）
+                                            else -> entries.map { it.path }.toSet()
+                                        }
+                                        if (leftFocused) leftSelectedPaths = newPaths else rightSelectedPaths = newPaths
+                                    }
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.FlipToBack, contentDescription = "反选")
+                        }
+                        // 第3个：取消多选（×）
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            IconButton(onClick = {
                                 if (leftFocused) {
                                     leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
                                 } else {
                                     rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
                                 }
-                            } else {
-                                showCreateTypeDialog = true
+                            }) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = "取消多选",
+                                    modifier = Modifier.rotate(rotation)
+                                )
                             }
-                        }) {
-                            Icon(
-                                Icons.Default.Add,
-                                contentDescription = if (isMultiSelectMode) "取消多选" else "新建",
-                                modifier = Modifier.rotate(rotation)
-                            )
                         }
-                    }
-                    // 同步按钮
-                    Box(
-                        modifier = Modifier.weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        IconButton(
-                            onClick = { vm.syncPaths() },
-                            enabled = !isMultiSelectMode,
-                            modifier = Modifier.graphicsLayer { alpha = btnAlpha }
+                        // 第4个：选择相同后缀
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.SwapHoriz, contentDescription = "同步路径")
+                            IconButton(onClick = {
+                                val entries = if (leftFocused) vm.leftEntries else vm.rightEntries
+                                val currentPaths = if (leftFocused) leftSelectedPaths else rightSelectedPaths
+                                // 获取已选中文件的后缀（排除文件夹）
+                                val selectedFiles = entries.filter { it.path in currentPaths && !it.isDirectory }
+                                val extensions = selectedFiles
+                                    .map { it.name.substringAfterLast('.', "").lowercase() }
+                                    .filter { it.isNotEmpty() }
+                                    .toSet()
+                                if (extensions.isNotEmpty()) {
+                                    // 选中所有包含相同后缀的文件
+                                    val matchingPaths = entries
+                                        .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in extensions }
+                                        .map { it.path }
+                                        .toSet()
+                                    if (leftFocused) leftSelectedPaths = currentPaths + matchingPaths
+                                    else rightSelectedPaths = currentPaths + matchingPaths
+                                }
+                            }) {
+                                Icon(Icons.Default.FilterList, contentDescription = "选择相同后缀")
+                            }
                         }
-                    }
-                    // 刷新按钮
-                    Box(
-                        modifier = Modifier.weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        IconButton(
-                            onClick = { vm.refreshCurrent() },
-                            enabled = !isMultiSelectMode,
-                            modifier = Modifier.graphicsLayer { alpha = btnAlpha }
+                        // 第5个：唤醒工具栏
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.Refresh, contentDescription = "刷新")
-                        }
-                    }
-                    // 返回上一级按钮
-                    Box(
-                        modifier = Modifier.weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val canGoUp = if (vm.isInArchive) {
-                            !vm.isAtArchiveRoot
-                        } else if (vm.isInRecycleBin) {
-                            !vm.isAtRecycleBinRoot
-                        } else {
-                            val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                            val parentPath = vm.currentPath.substringBeforeLast('/').ifEmpty { "/" }
-                            vm.currentPath != effectiveRoot
-                                && vm.currentPath.contains('/')
-                                && parentPath != vm.currentPath
-                                && vm.canAccessPath(parentPath)
-                        }
-
-                        IconButton(
-                            onClick = {
-                                if (vm.isInArchive) vm.goUpInArchive()
-                                else if (vm.isInRecycleBin) vm.goUpInRecycleBin()
-                                else saveScrollAndGoUp()
-                            },
-                            enabled = canGoUp && !isMultiSelectMode,
-                            modifier = Modifier.graphicsLayer { alpha = btnAlpha }
-                        ) {
-                            Icon(Icons.Default.ArrowUpward, contentDescription = "返回上一级")
+                            IconButton(onClick = {
+                                // 触发与长按相同的逻辑：设置 selectedEntry
+                                val currentPaths = if (leftFocused) leftSelectedPaths else rightSelectedPaths
+                                val entries = if (leftFocused) vm.leftEntries else vm.rightEntries
+                                val firstSelected = entries.firstOrNull { it.path in currentPaths }
+                                if (firstSelected != null) selectedEntry = firstSelected
+                            }) {
+                                Icon(Icons.Default.TouchApp, contentDescription = "唤醒工具栏")
+                            }
                         }
                     }
                 }
