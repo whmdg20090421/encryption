@@ -156,9 +156,21 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     }
     val coroutineScope = rememberCoroutineScope()
 
-    // ── 滚动状态 ──
-    val leftListState = rememberLazyListState()
-    val rightListState = rememberLazyListState()
+    // ── 滚动状态（路径变化时用保存的位置重建，避免闪第一帧） ──
+    val leftListState = key(vm.leftPath) {
+        val saved = vm.getScrollPosition(vm.leftPath)
+        rememberLazyListState(
+            initialFirstVisibleItemIndex = saved?.first ?: 0,
+            initialFirstVisibleItemScrollOffset = saved?.second ?: 0
+        )
+    }
+    val rightListState = key(vm.rightPath) {
+        val saved = vm.getScrollPosition(vm.rightPath)
+        rememberLazyListState(
+            initialFirstVisibleItemIndex = saved?.first ?: 0,
+            initialFirstVisibleItemScrollOffset = saved?.second ?: 0
+        )
+    }
 
     // ── UI 本地状态 ──
     var showDrawer by remember { mutableStateOf(false) }
@@ -260,8 +272,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     LaunchedEffect(vm.bookmarkList) {
         vm.saveBookmarks()
     }
-    // 历史记录点击文件后滚动到目标文件
-    LaunchedEffect(vm.pendingScrollToFile, vm.leftEntries, vm.rightEntries) {
+    // 历史记录点击文件后滚动到目标文件（依赖路径变化以捕获 key() 重建后的新 listState）
+    LaunchedEffect(vm.pendingScrollToFile, vm.leftEntries, vm.rightEntries, vm.leftPath, vm.rightPath) {
         val targetName = vm.pendingScrollToFile ?: return@LaunchedEffect
         val entries = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftEntries else vm.rightEntries
         val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
@@ -270,19 +282,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             listState.scrollToItem(index)
             vm.pendingScrollToFile = null
         }
-    }
-    // 导航后恢复滚动位置（saveScrollAndGoUp / goBack / goForward / onNavigateUp 设置 pendingScrollRestore）
-    LaunchedEffect(vm.pendingScrollRestore) {
-        val targetPath = vm.pendingScrollRestore ?: return@LaunchedEffect
-        val saved = vm.getScrollPosition(targetPath)
-        if (saved != null) {
-            val (index, offset) = saved
-            if (index > 0 || offset > 0) {
-                val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
-                listState.scrollToItem(index, offset)
-            }
-        }
-        vm.pendingScrollRestore = null
     }
 
     LaunchedEffect(Unit) {
@@ -293,7 +292,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // 保存当前滚动位置并返回上一级（串行：保存 → 返回 → 设置恢复目标）
+    // 保存当前滚动位置并返回上一级（key() 会在路径变化时自动用保存的位置重建 listState）
     val saveScrollAndGoUp: () -> Boolean = {
         vm.saveScrollPosition(
             leftListState.firstVisibleItemIndex,
@@ -301,13 +300,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             rightListState.firstVisibleItemIndex,
             rightListState.firstVisibleItemScrollOffset
         )
-        val targetPath = vm.goUp()
-        if (targetPath != null) {
-            vm.pendingScrollRestore = targetPath
-            true
-        } else {
-            false
-        }
+        vm.goUp() != null
     }
 
     // 返回手势：压缩包内 → 回上一级或退出压缩包，回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
@@ -494,8 +487,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     rightListState.firstVisibleItemIndex,
                                     rightListState.firstVisibleItemScrollOffset
                                 )
-                                val targetPath = vm.goBack()
-                                if (targetPath != null) vm.pendingScrollRestore = targetPath
+                                vm.goBack()
                             },
                             enabled = vm.currentNavState.canGoBack
                         ) {
@@ -515,8 +507,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     rightListState.firstVisibleItemIndex,
                                     rightListState.firstVisibleItemScrollOffset
                                 )
-                                val targetPath = vm.goForward()
-                                if (targetPath != null) vm.pendingScrollRestore = targetPath
+                                vm.goForward()
                             },
                             enabled = vm.currentNavState.canGoForward
                         ) {
@@ -753,7 +744,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemScrollOffset
                                         )
                                         vm.navigateTo(leftParentPath)
-                                        vm.pendingScrollRestore = leftParentPath
                                     }
                                 },
                                 archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null
@@ -847,7 +837,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemScrollOffset
                                         )
                                         vm.navigateTo(rightParentPath)
-                                        vm.pendingScrollRestore = rightParentPath
                                     }
                                 },
                                 archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null
