@@ -400,6 +400,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 读取指定路径的滚动位置 */
     fun getScrollPosition(path: String): Pair<Int, Int>? = scrollPositions[path]
 
+    /** 待恢复滚动的目标路径（非 null 时触发 LaunchedEffect 恢复滚动） */
+    var pendingScrollRestore by mutableStateOf<String?>(null)
+
     // ── 核心导航：切换路径 + 刷新列表 ──
     fun navigateTo(path: String) {
         if (isInRecycleBin) isInRecycleBin = false

@@ -271,6 +271,19 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             vm.pendingScrollToFile = null
         }
     }
+    // 导航后恢复滚动位置（saveScrollAndGoUp / goBack / goForward / onNavigateUp 设置 pendingScrollRestore）
+    LaunchedEffect(vm.pendingScrollRestore) {
+        val targetPath = vm.pendingScrollRestore ?: return@LaunchedEffect
+        val saved = vm.getScrollPosition(targetPath)
+        if (saved != null) {
+            val (index, offset) = saved
+            if (index > 0 || offset > 0) {
+                val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
+                listState.scrollToItem(index, offset)
+            }
+        }
+        vm.pendingScrollRestore = null
+    }
 
     LaunchedEffect(Unit) {
         DiagnosticLog.beginSession("进入 FileManagerScreen")
@@ -280,7 +293,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // 保存当前滚动位置并返回上一级（串行：保存 → 返回 → 恢复滚动）
+    // 保存当前滚动位置并返回上一级（串行：保存 → 返回 → 设置恢复目标）
     val saveScrollAndGoUp: () -> Boolean = {
         vm.saveScrollPosition(
             leftListState.firstVisibleItemIndex,
@@ -290,14 +303,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         )
         val targetPath = vm.goUp()
         if (targetPath != null) {
-            val saved = vm.getScrollPosition(targetPath)
-            if (saved != null) {
-                val (index, offset) = saved
-                if (index > 0 || offset > 0) {
-                    val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
-                    listState.scrollToItem(index, offset)
-                }
-            }
+            vm.pendingScrollRestore = targetPath
             true
         } else {
             false
@@ -489,16 +495,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     rightListState.firstVisibleItemScrollOffset
                                 )
                                 val targetPath = vm.goBack()
-                                if (targetPath != null) {
-                                    val saved = vm.getScrollPosition(targetPath)
-                                    if (saved != null) {
-                                        val (index, offset) = saved
-                                        if (index > 0 || offset > 0) {
-                                            val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
-                                            listState.scrollToItem(index, offset)
-                                        }
-                                    }
-                                }
+                                if (targetPath != null) vm.pendingScrollRestore = targetPath
                             },
                             enabled = vm.currentNavState.canGoBack
                         ) {
@@ -519,16 +516,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     rightListState.firstVisibleItemScrollOffset
                                 )
                                 val targetPath = vm.goForward()
-                                if (targetPath != null) {
-                                    val saved = vm.getScrollPosition(targetPath)
-                                    if (saved != null) {
-                                        val (index, offset) = saved
-                                        if (index > 0 || offset > 0) {
-                                            val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
-                                            listState.scrollToItem(index, offset)
-                                        }
-                                    }
-                                }
+                                if (targetPath != null) vm.pendingScrollRestore = targetPath
                             },
                             enabled = vm.currentNavState.canGoForward
                         ) {
@@ -765,11 +753,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemScrollOffset
                                         )
                                         vm.navigateTo(leftParentPath)
-                                        val saved = vm.getScrollPosition(leftParentPath)
-                                        if (saved != null) {
-                                            val (index, offset) = saved
-                                            if (index > 0 || offset > 0) leftListState.scrollToItem(index, offset)
-                                        }
+                                        vm.pendingScrollRestore = leftParentPath
                                     }
                                 },
                                 archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null
@@ -863,11 +847,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemScrollOffset
                                         )
                                         vm.navigateTo(rightParentPath)
-                                        val saved = vm.getScrollPosition(rightParentPath)
-                                        if (saved != null) {
-                                            val (index, offset) = saved
-                                            if (index > 0 || offset > 0) rightListState.scrollToItem(index, offset)
-                                        }
+                                        vm.pendingScrollRestore = rightParentPath
                                     }
                                 },
                                 archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null
