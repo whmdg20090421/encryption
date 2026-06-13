@@ -489,9 +489,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     targetValue = if (isMultiSelectMode) 45f else 0f,
                     animationSpec = spring(stiffness = Spring.StiffnessMedium)
                 )
-                // 权重动画：多选时两侧按钮收缩，中间按钮扩展，图标平移到正中
-                val wOuter by animateFloatAsState(
-                    targetValue = if (isMultiSelectMode) 0.5f else 1f,
+                // 图标偏移动画：从 6 等分第3个中心(5W/12) 平移到 5 等分第3个中心(W/2)
+                var rowWidthPx by remember { mutableIntStateOf(0) }
+                val iconOffsetX by animateFloatAsState(
+                    targetValue = if (isMultiSelectMode && rowWidthPx > 0) rowWidthPx / 12f else 0f,
                     animationSpec = spring(stiffness = Spring.StiffnessMedium)
                 )
                 // 按钮内容 alpha 动画（多选时淡出）
@@ -511,6 +512,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             }
                         }
                         .onGloballyPositioned { coords ->
+                            rowWidthPx = coords.size.width
                             val pos = coords.localToWindow(androidx.compose.ui.geometry.Offset.Zero)
                             val rect = AndroidRect(
                                 pos.x.toInt(),
@@ -524,7 +526,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 ) {
                     // 后退按钮
                     Box(
-                        modifier = Modifier.weight(wOuter),
+                        modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(
@@ -549,7 +551,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     }
                     // 前进按钮
                     Box(
-                        modifier = Modifier.weight(wOuter),
+                        modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(
@@ -572,9 +574,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             Icon(Icons.Default.ArrowForward, contentDescription = "前进")
                         }
                     }
-                    // 新建/取消按钮：+ 旋转45°变×，weight 保持 1f 不变 → 图标平移到正中
+                    // 新建/取消按钮：始终用 Add 图标 + 旋转，尺寸不变
                     Box(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .offset { IntOffset(iconOffsetX.roundToInt(), 0) },
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(onClick = {
@@ -589,7 +593,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             }
                         }) {
                             Icon(
-                                if (isMultiSelectMode) Icons.Default.Close else Icons.Default.Add,
+                                Icons.Default.Add,
                                 contentDescription = if (isMultiSelectMode) "取消多选" else "新建",
                                 modifier = Modifier.rotate(rotation)
                             )
@@ -597,7 +601,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     }
                     // 同步按钮
                     Box(
-                        modifier = Modifier.weight(wOuter),
+                        modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(
@@ -610,7 +614,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     }
                     // 刷新按钮
                     Box(
-                        modifier = Modifier.weight(wOuter),
+                        modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
                         IconButton(
@@ -623,7 +627,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     }
                     // 返回上一级按钮
                     Box(
-                        modifier = Modifier.weight(wOuter),
+                        modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
                         val canGoUp = if (vm.isInArchive) {
