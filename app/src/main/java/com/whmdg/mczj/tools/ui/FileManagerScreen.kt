@@ -674,6 +674,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemIndex,
                                             rightListState.firstVisibleItemScrollOffset
                                         )
+                                        vm.clearScrollPosition(entry.path)
                                         vm.navigateToFolder(entry)
                                     }
                                 },
@@ -767,6 +768,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemIndex,
                                             rightListState.firstVisibleItemScrollOffset
                                         )
+                                        vm.clearScrollPosition(entry.path)
                                         vm.navigateToFolder(entry)
                                     }
                                 },
