@@ -133,6 +133,7 @@ private fun PermissionGuideWizard(
 
     // 校验失败弹窗
     if (uiState.validationError != null) {
+        val isRootLevel = uiState.selectedPermissionLevel == AndroidPermissionLevel.ROOT
         AlertDialog(
             onDismissRequest = { viewModel.clearValidationError() },
             icon = {
@@ -141,8 +142,20 @@ private fun PermissionGuideWizard(
             title = { Text("权限不足") },
             text = { Text(uiState.validationError!!) },
             confirmButton = {
-                Button(onClick = { viewModel.clearValidationError() }) { Text("确定") }
-            }
+                Button(onClick = { viewModel.clearValidationError() }) { Text("取消") }
+            },
+            dismissButton = if (isRootLevel) {
+                {
+                    TextButton(onClick = {
+                        val granted = viewModel.reapplyRootPermission()
+                        if (granted) {
+                            viewModel.clearValidationError()
+                            // 重新尝试保存
+                            viewModel.savePermissionLevel(context)
+                        }
+                    }) { Text("重新申请") }
+                }
+            } else null
         )
     }
 
@@ -408,6 +421,7 @@ private fun PermissionStatusPage(
 
     // 校验失败弹窗
     if (showErrorDialog != null) {
+        val isRootLevel = viewingLevel == AndroidPermissionLevel.ROOT
         AlertDialog(
             onDismissRequest = { showErrorDialog = null },
             icon = {
@@ -416,8 +430,22 @@ private fun PermissionStatusPage(
             title = { Text("权限不足") },
             text = { Text(showErrorDialog!!) },
             confirmButton = {
-                Button(onClick = { showErrorDialog = null }) { Text("确定") }
-            }
+                Button(onClick = { showErrorDialog = null }) { Text("取消") }
+            },
+            dismissButton = if (isRootLevel) {
+                {
+                    TextButton(onClick = {
+                        val granted = PermissionGuideViewModel.validatePermissionLevel(context, viewingLevel)
+                        if (granted) {
+                            showErrorDialog = null
+                            // 重新尝试保存
+                            val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+                            sp.edit().putString("target_permission_level", viewingLevel.name).apply()
+                            permissionStatuses = PermissionGuideViewModel.getPermissionStatusForLevel(context, viewingLevel)
+                        }
+                    }) { Text("重新申请") }
+                }
+            } else null
         )
     }
 

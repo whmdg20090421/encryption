@@ -89,10 +89,14 @@ object SpecialPermissionVerifier {
 
     /**
      * 检测 Root 权限是否可用（通过 libsu）
+     * 执行实际命令触发 Magisk 授权弹窗
      */
     fun isRootAvailable(): Boolean {
         return try {
-            Shell.isAppGrantedRoot() == true
+            // 先检查是否已明确拒绝
+            if (Shell.isAppGrantedRoot() == false) return false
+            // 执行简单命令触发授权请求（首次会弹出 Magisk 授权弹窗）
+            Shell.cmd("id").exec().isSuccess
         } catch (_: Exception) {
             false
         }

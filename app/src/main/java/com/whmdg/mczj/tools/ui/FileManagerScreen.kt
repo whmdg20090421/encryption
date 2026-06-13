@@ -734,6 +734,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 } else {
                                     rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
                                 }
+                                selectedEntry = null // 同时隐藏工具栏
                             }) {
                                 Icon(
                                     Icons.Default.Add,

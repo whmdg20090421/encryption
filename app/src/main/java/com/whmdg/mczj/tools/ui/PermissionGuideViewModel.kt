@@ -117,6 +117,11 @@ class PermissionGuideViewModel : ViewModel() {
         _uiState.update { it.copy(validationError = null) }
     }
 
+    /** 重新申请 Root 权限（触发 Magisk 授权弹窗） */
+    fun reapplyRootPermission(): Boolean {
+        return SpecialPermissionVerifier.isRootAvailable()
+    }
+
     fun enterStatusPage() {
         _uiState.update { it.copy(showStatusPage = true) }
     }
