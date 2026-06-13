@@ -156,21 +156,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     }
     val coroutineScope = rememberCoroutineScope()
 
-    // ── 滚动状态（路径变化时用保存的位置重建，避免闪第一帧） ──
-    val leftListState = key(vm.leftPath) {
-        val saved = vm.getScrollPosition(vm.leftPath)
-        rememberLazyListState(
-            initialFirstVisibleItemIndex = saved?.first ?: 0,
-            initialFirstVisibleItemScrollOffset = saved?.second ?: 0
-        )
-    }
-    val rightListState = key(vm.rightPath) {
-        val saved = vm.getScrollPosition(vm.rightPath)
-        rememberLazyListState(
-            initialFirstVisibleItemIndex = saved?.first ?: 0,
-            initialFirstVisibleItemScrollOffset = saved?.second ?: 0
-        )
-    }
+    // ── 滚动状态 ──
+    val leftListState = rememberLazyListState()
+    val rightListState = rememberLazyListState()
 
     // ── UI 本地状态 ──
     var showDrawer by remember { mutableStateOf(false) }
@@ -272,7 +260,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     LaunchedEffect(vm.bookmarkList) {
         vm.saveBookmarks()
     }
-    // 历史记录点击文件后滚动到目标文件（依赖路径变化以捕获 key() 重建后的新 listState）
+    // 历史记录点击文件后滚动到目标文件
     LaunchedEffect(vm.pendingScrollToFile, vm.leftEntries, vm.rightEntries, vm.leftPath, vm.rightPath) {
         val targetName = vm.pendingScrollToFile ?: return@LaunchedEffect
         val entries = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftEntries else vm.rightEntries
@@ -292,7 +280,16 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // 保存当前滚动位置并返回上一级（key() 会在路径变化时自动用保存的位置重建 listState）
+    // ── 处理滚动位置恢复（绑定跳转+渲染） ──
+    LaunchedEffect(vm.pendingScrollTo) {
+        val pending = vm.pendingScrollTo ?: return@LaunchedEffect
+        val (path, index, offset) = pending
+        val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
+        listState.scrollToItem(index, offset)
+        vm.pendingScrollTo = null
+    }
+
+    // 保存当前滚动位置并返回上一级
     val saveScrollAndGoUp: () -> Boolean = {
         vm.saveScrollPosition(
             leftListState.firstVisibleItemIndex,
@@ -300,7 +297,14 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             rightListState.firstVisibleItemIndex,
             rightListState.firstVisibleItemScrollOffset
         )
-        vm.goUp() != null
+        val targetPath = vm.goUp()
+        if (targetPath != null) {
+            val saved = vm.getScrollPosition(targetPath)
+            vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+            true
+        } else {
+            false
+        }
     }
 
     // 返回手势：压缩包内 → 回上一级或退出压缩包，回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
@@ -487,7 +491,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     rightListState.firstVisibleItemIndex,
                                     rightListState.firstVisibleItemScrollOffset
                                 )
-                                vm.goBack()
+                                val targetPath = vm.goBack()
+                                if (targetPath != null) {
+                                    val saved = vm.getScrollPosition(targetPath)
+                                    vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+                                }
                             },
                             enabled = vm.currentNavState.canGoBack
                         ) {
@@ -507,7 +515,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     rightListState.firstVisibleItemIndex,
                                     rightListState.firstVisibleItemScrollOffset
                                 )
-                                vm.goForward()
+                                val targetPath = vm.goForward()
+                                if (targetPath != null) {
+                                    val saved = vm.getScrollPosition(targetPath)
+                                    vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+                                }
                             },
                             enabled = vm.currentNavState.canGoForward
                         ) {
@@ -674,7 +686,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemIndex,
                                             rightListState.firstVisibleItemScrollOffset
                                         )
-                                        vm.clearScrollPosition(entry.path)
                                         vm.navigateToFolder(entry)
                                     }
                                 },
@@ -744,7 +755,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemIndex,
                                             rightListState.firstVisibleItemScrollOffset
                                         )
-                                        vm.navigateTo(leftParentPath)
+                                        val saved = vm.getScrollPosition(leftParentPath)
+                                        vm.navigateToWithScroll(leftParentPath, saved?.first ?: 0, saved?.second ?: 0)
                                     }
                                 },
                                 archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null
@@ -768,7 +780,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemIndex,
                                             rightListState.firstVisibleItemScrollOffset
                                         )
-                                        vm.clearScrollPosition(entry.path)
                                         vm.navigateToFolder(entry)
                                     }
                                 },
@@ -838,7 +849,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemIndex,
                                             rightListState.firstVisibleItemScrollOffset
                                         )
-                                        vm.navigateTo(rightParentPath)
+                                        val saved = vm.getScrollPosition(rightParentPath)
+                                        vm.navigateToWithScroll(rightParentPath, saved?.first ?: 0, saved?.second ?: 0)
                                     }
                                 },
                                 archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null
@@ -1230,7 +1242,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                     .fillMaxWidth(0.85f)
                                                     .padding(vertical = 6.dp)
                                                     .clickable {
-                                                        vm.navigateTo("/storage/emulated/0/")
+                                                        vm.navigateToWithScroll("/storage/emulated/0/")
                                                         showDrawer = false
                                                     },
                                                 colors = CardDefaults.cardColors(
@@ -1294,7 +1306,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                     .fillMaxWidth(0.85f)
                                                     .padding(vertical = 6.dp)
                                                     .clickable {
-                                                        vm.navigateTo("/")
+                                                        vm.navigateToWithScroll("/")
                                                         showDrawer = false
                                                     },
                                                 colors = CardDefaults.cardColors(
@@ -1351,7 +1363,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                 .fillMaxWidth(0.85f)
                                                 .padding(vertical = 6.dp)
                                                 .clickable {
-                                                    vm.navigateTo(entry.path)
+                                                    vm.navigateToWithScroll(entry.path)
                                                     showDrawer = false
                                                 },
                                             colors = CardDefaults.cardColors(

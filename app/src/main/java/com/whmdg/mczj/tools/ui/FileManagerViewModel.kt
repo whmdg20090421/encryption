@@ -403,6 +403,22 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 清空指定路径的滚动位置（前进导航时使用，确保目标从第一行开始） */
     fun clearScrollPosition(path: String) { scrollPositions.remove(path) }
 
+    // ── 待滚动状态（绑定跳转+渲染） ──
+    var pendingScrollTo by mutableStateOf<Triple<String, Int, Int>?>(null)
+
+    /**
+     * 统一的导航函数：跳转路径 + 设置滚动位置
+     * @param path 目标路径
+     * @param scrollToIndex 滚动到第几个卡片（默认 0，即第一行）
+     * @param scrollToOffset 滚动偏移量（默认 0）
+     */
+    fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
+        // 1. 执行路径跳转
+        navigateTo(path)
+        // 2. 记录滚动位置（供 Compose 侧使用）
+        pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
+    }
+
     // ── 核心导航：切换路径 + 刷新列表 ──
     fun navigateTo(path: String) {
         if (isInRecycleBin) isInRecycleBin = false
@@ -421,19 +437,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── 导航操作 ──
-    fun navigateToFolder(entry: FileEntry) {
+    fun navigateToFolder(entry: FileEntry, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
         if (hasShellEngine) {
             // 最高权限优先：Root(libsu) 或 Shizuku/ADB
             listDirEntriesViaShell(entry.path, showHiddenFiles)
             if (lastShellStderr.isBlank()) {
-                navigateTo(entry.path)
+                navigateToWithScroll(entry.path, scrollToIndex, scrollToOffset)
                 historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
             } else {
                 // shell 失败，回退 Java API
                 val testDir = File(entry.path)
                 val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
                 if (accessible != null) {
-                    navigateTo(entry.path)
+                    navigateToWithScroll(entry.path, scrollToIndex, scrollToOffset)
                     historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
                 } else {
                     loadError = RuntimeException("${formatShellError(entry.name, lastShellStderr)}\n路径: ${entry.path}")
@@ -444,7 +460,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val testDir = File(entry.path)
             val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
             if (accessible != null) {
-                navigateTo(entry.path)
+                navigateToWithScroll(entry.path, scrollToIndex, scrollToOffset)
                 historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
             } else if (!testDir.exists()) {
                 loadError = RuntimeException("文件夹不存在: ${entry.name}\n路径: ${entry.path}")
@@ -498,30 +514,27 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 后退，返回目标路径，null 表示无法后退 */
+    /** 后退，返回目标路径，null 表示无法后退（不执行跳转，由调用方通过 navigateToWithScroll 跳转） */
     fun goBack(): String? {
         val nav = if (focusedPanel == FocusedPanel.LEFT) leftNavState else rightNavState
         val back = nav.back() ?: return null
-        navigateTo(back.current)
         return back.current
     }
 
-    /** 前进，返回目标路径，null 表示无法前进 */
+    /** 前进，返回目标路径，null 表示无法前进（不执行跳转，由调用方通过 navigateToWithScroll 跳转） */
     fun goForward(): String? {
         val nav = if (focusedPanel == FocusedPanel.LEFT) leftNavState else rightNavState
         val fwd = nav.forward() ?: return null
-        navigateTo(fwd.current)
         return fwd.current
     }
 
-    /** 返回上级目录，返回目标路径，null 表示已在根目录 */
+    /** 返回上级目录，返回目标路径，null 表示已在根目录（不执行跳转，由调用方通过 navigateToWithScroll 跳转） */
     fun goUp(): String? {
         val effectiveRoot = if (isRootEngine) "/" else safeDefault
         val path = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
         if (path == effectiveRoot || !path.contains('/')) return null
         val parent = path.substringBeforeLast('/').ifEmpty { "/" }
         if (parent == path) return null
-        navigateTo(parent)
         return parent
     }
 
