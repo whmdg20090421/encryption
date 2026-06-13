@@ -93,10 +93,13 @@ object SpecialPermissionVerifier {
      */
     fun isRootAvailable(): Boolean {
         return try {
+            // 先检查是否已明确授权
+            if (Shell.isAppGrantedRoot() == true) return true
             // 先检查是否已明确拒绝
             if (Shell.isAppGrantedRoot() == false) return false
             // 执行简单命令触发授权请求（首次会弹出 Magisk 授权弹窗）
-            Shell.cmd("id").exec().isSuccess
+            val result = Shell.cmd("id").exec()
+            result.isSuccess
         } catch (_: Exception) {
             false
         }

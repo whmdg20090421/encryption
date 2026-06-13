@@ -403,12 +403,16 @@ private fun PermissionStatusPage(
             text = { Text("确定将权限级别切换为「${getLevelDisplayName(viewingLevel)}」？") },
             confirmButton = {
                 Button(onClick = {
-                    showSetDialog = false
-                    if (PermissionGuideViewModel.validatePermissionLevel(context, viewingLevel)) {
+                    // 先验证权限，再决定是否关闭弹窗
+                    val isValid = PermissionGuideViewModel.validatePermissionLevel(context, viewingLevel)
+                    if (isValid) {
+                        showSetDialog = false
                         val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
                         sp.edit().putString("target_permission_level", viewingLevel.name).apply()
                         permissionStatuses = PermissionGuideViewModel.getPermissionStatusForLevel(context, viewingLevel)
                     } else {
+                        // 验证失败，显示错误弹窗
+                        showSetDialog = false
                         showErrorDialog = PermissionGuideViewModel.getValidationErrorMessage(viewingLevel)
                     }
                 }) { Text("确定") }
@@ -870,7 +874,10 @@ private fun PermissionLevelPage(
     onConfirm: () -> Unit
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(text = "选择权限级别", style = MaterialTheme.typography.titleLarge,
