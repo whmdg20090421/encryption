@@ -1561,7 +1561,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         val took = System.currentTimeMillis() - t0
-        DiagnosticLog.log("FileMgr", "<<< listDirectory END path=$path entries=${entries.size} took=${took}ms err=${loadError?.javaClass?.simpleName}")
+        DiagnosticLog.log("FileMgr", "<<< listDirectory END displayPath=$displayPath entries=${entries.size} took=${took}ms err=${loadError?.javaClass?.simpleName}")
         return entries
     }
 
