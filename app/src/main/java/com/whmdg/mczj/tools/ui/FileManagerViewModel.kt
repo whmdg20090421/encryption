@@ -374,7 +374,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             // Os.stat 穿透软链接，统一获取目标真实类型
             val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
             val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 } ?: rawName.endsWith("/")
-            if (isDir) dirCount++ else fileCount++
             val size = parts[4].toLongOrNull() ?: 0L
             val modified = try {
                 SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
