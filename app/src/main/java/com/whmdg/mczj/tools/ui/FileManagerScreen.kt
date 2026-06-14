@@ -299,6 +299,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         if (!hasStoragePermission) {
             Toast.makeText(context, "需要存储权限才能浏览文件", Toast.LENGTH_LONG).show()
         }
+        if (vm.isRootEngine) {
+            try {
+                val mntNs = com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+                    .executeRootCommand("readlink /proc/self/ns/mnt")
+                Toast.makeText(context, "root 已就位，当前挂载空间为：$mntNs", Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {
+                Toast.makeText(context, "挂载空间异常，请检查，有可能 root 权限不可用", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     // ── 处理滚动位置恢复（绑定跳转+渲染） ──
