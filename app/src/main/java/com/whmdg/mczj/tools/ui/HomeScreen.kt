@@ -301,6 +301,10 @@ fun MainAppContainer() {
     val vaultService = remember { VaultService(context).apply { load() } }
     val encryptionSettings = remember { EncryptionSettings(context) }
 
+    // ── 诊断状态（Debug 模式） ──
+    val isDebugMode = remember { isDebugAuth(context) }
+    var startupDiagnostic by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(Unit) {
         val sp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
         val target = sp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
@@ -315,6 +319,24 @@ fun MainAppContainer() {
             if (!isStillValid) {
                 sp.edit().putString("target_permission_level", "NORMAL").apply()
                 Toast.makeText(context, "安全环境已改变，特殊权限不可用，已自动退回普通用户模式", Toast.LENGTH_LONG).show()
+                if (isDebugMode) {
+                    startupDiagnostic = "当前 $target 不可用，回退到 Standard 模式"
+                }
+            } else {
+                if (isDebugMode) {
+                    val targetName = when (target) {
+                        "ROOT" -> "Root"
+                        "ADB" -> "ADB"
+                        "ADMIN" -> "设备管理员"
+                        "ACCESSIBILITY" -> "无障碍"
+                        else -> target
+                    }
+                    startupDiagnostic = "${targetName} 权限已激活"
+                }
+            }
+        } else {
+            if (isDebugMode) {
+                startupDiagnostic = "Standard 模式（无特殊权限）"
             }
         }
     }
@@ -2073,6 +2095,32 @@ fun SettingsTab(navigateToModule: (ModuleId) -> Unit, onNavigate: (Screen) -> Un
                 enabled = true,
                 onClick = { onNavigate(Screen.About) }
             )
+        }
+    }
+
+    // ── 启动诊断信息显示（底部 Snackbar，仅 Debug 模式） ──
+    if (isDebugMode && startupDiagnostic != null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = 16.dp),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .clickable { startupDiagnostic = null },  // 点击关闭
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.inverseSurface,
+                shadowElevation = 4.dp
+            ) {
+                Text(
+                    text = startupDiagnostic ?: "",
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.inverseOnSurface
+                )
+            }
         }
     }
 }
