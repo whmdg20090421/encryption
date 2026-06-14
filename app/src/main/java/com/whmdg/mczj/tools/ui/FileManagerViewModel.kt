@@ -371,11 +371,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (!showHidden && name.startsWith(".")) continue
 
             val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-            val isDir = when (perms[0]) {
-                'd' -> true
-                'l' -> rawName.contains(" -> ") && rawName.substringAfter(" -> ").endsWith("/")
-                else -> rawName.endsWith("/")
-            }
+            val isDir = perms[0] == 'd' || perms[0] == 'l' || rawName.endsWith("/")
             val size = parts[4].toLongOrNull() ?: 0L
             val modified = try {
                 SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
@@ -1627,11 +1623,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val name = if (rawName.contains(" -> ")) rawName.substringBefore(" -> ") else rawName.trimEnd('/')
             if (name == "." || name == "..") continue
             val childPath = "$dirPath/$name"
-            val isDir = when (perms[0]) {
-                'd' -> true
-                'l' -> rawName.contains(" -> ") && rawName.substringAfter(" -> ").endsWith("/")
-                else -> rawName.endsWith("/")
-            }
+            val isDir = perms[0] == 'd' || perms[0] == 'l' || rawName.endsWith("/")
             val size = parts[4].toLongOrNull() ?: 0L
             val modified = try {
                 SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
@@ -1774,11 +1766,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (name == "." || name == "..") continue
                 if (!showHidden && name.startsWith(".")) continue
                 val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-                val isDir = when (perms[0]) {
-                    'd' -> true
-                    'l' -> rawName.contains(" -> ") && rawName.substringAfter(" -> ").endsWith("/")
-                    else -> rawName.endsWith("/")
-                }
+                val isDir = perms[0] == 'd' || perms[0] == 'l' || rawName.endsWith("/")
                 if (isDir) dirCount++ else fileCount++
                 val sz = parts[4].toLongOrNull() ?: 0L
                 val modified = try {
