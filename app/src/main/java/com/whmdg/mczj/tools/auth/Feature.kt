@@ -7,5 +7,6 @@ enum class Feature {
     APP_PERMISSIONS,
     SECURITY_SETTINGS,
     RP_HUB,
-    DEBUG_MODE
+    DEBUG_MODE,
+    WIFI
 }

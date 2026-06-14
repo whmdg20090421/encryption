@@ -106,6 +106,7 @@ fun featureDisplayName(f: Feature): String = when (f) {
     Feature.SECURITY_SETTINGS -> "安全"
     Feature.DEBUG_MODE -> "调试模式"
     Feature.RP_HUB -> "RP-Hub"
+    Feature.WIFI -> "WiFi"
 }
 
 sealed class Screen {
@@ -130,6 +131,7 @@ sealed class Screen {
     object AuthManagement : Screen()
     object FunctionalTest : Screen()
     object RpHub : Screen()
+    object Wifi : Screen()
     object About : Screen()
     object Changelog : Screen()
     data class TextEditor(val filePath: String) : Screen()
@@ -142,7 +144,8 @@ enum class ModuleId {
     APP_PERMISSIONS,
     BATCH_DOWNLOADER,
     SECURITY,
-    RP_HUB
+    RP_HUB,
+    WIFI
 }
 
 data class ModuleEntry(
@@ -159,7 +162,8 @@ val MODULE_REGISTRY: Map<ModuleId, ModuleEntry> = mapOf(
     ModuleId.APP_PERMISSIONS to ModuleEntry("应用权限管理", "查看和管理应用权限", Icons.Default.Security, Feature.APP_PERMISSIONS, Screen.AppPermissions),
     ModuleId.BATCH_DOWNLOADER to ModuleEntry("批量下载器", "FA 图片批量下载等工具", Icons.Default.Download, Feature.BATCH_DOWNLOADER, Screen.BatchDownloader),
     ModuleId.SECURITY to ModuleEntry("安全", "权限设置与特殊权限管理", Icons.Default.Lock, Feature.SECURITY_SETTINGS, Screen.Security),
-    ModuleId.RP_HUB to ModuleEntry("RP-Hub", "本地角色扮演对话工具", Icons.Default.SmartToy, Feature.RP_HUB, Screen.RpHub)
+    ModuleId.RP_HUB to ModuleEntry("RP-Hub", "本地角色扮演对话工具", Icons.Default.SmartToy, Feature.RP_HUB, Screen.RpHub),
+    ModuleId.WIFI to ModuleEntry("WiFi", "WiFi 网络扫描与分析", Icons.Default.Wifi, Feature.WIFI, Screen.Wifi)
 )
 
 /**
@@ -520,6 +524,11 @@ fun MainAppContainer() {
                 onBack = { navigateBack() }
             )
         }
+        is Screen.Wifi -> {
+            WifiScreen(
+                onBack = { navigateBack() }
+            )
+        }
         is Screen.FunctionalTest -> {
             FunctionalTestScreen(
                 onBack = { navigateBack() }
@@ -790,6 +799,20 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
                 icon = rpHubEntry.icon,
                 enabled = PermissionManager.has(rpHubEntry.feature),
                 onClick = { navigateToModule(ModuleId.RP_HUB) }
+            )
+        }
+
+        SettingsSection(
+            title = "网络",
+            icon = Icons.Default.NetworkCheck
+        ) {
+            val wifiEntry = MODULE_REGISTRY[ModuleId.WIFI]!!
+            CompactSettingsItem(
+                title = wifiEntry.title,
+                subtitle = wifiEntry.subtitle,
+                icon = wifiEntry.icon,
+                enabled = PermissionManager.has(wifiEntry.feature),
+                onClick = { navigateToModule(ModuleId.WIFI) }
             )
         }
 
