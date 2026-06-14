@@ -364,8 +364,18 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (perms.length < 10) continue
 
             val nameWithSlash = parseLsFilename(line) ?: continue
-            val isDir = nameWithSlash.endsWith("/")
-            val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+            val isSymlink = perms.startsWith("l")
+            val isDir: Boolean
+            val name: String
+            if (isSymlink && nameWithSlash.contains(" -> ")) {
+                val linkName = nameWithSlash.substringBefore(" -> ")
+                val linkTarget = nameWithSlash.substringAfter(" -> ")
+                isDir = linkTarget.endsWith("/")
+                name = linkName
+            } else {
+                isDir = nameWithSlash.endsWith("/")
+                name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+            }
             if (name == "." || name == "..") continue
             if (!showHidden && name.startsWith(".")) continue
 
@@ -1618,8 +1628,18 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val perms = parts[0]
             if (perms.length < 10) continue
             val nameWithSlash = parseLsFilename(line) ?: continue
-            val isDir = nameWithSlash.endsWith("/")
-            val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+            val isSymlink = perms.startsWith("l")
+            val isDir: Boolean
+            val name: String
+            if (isSymlink && nameWithSlash.contains(" -> ")) {
+                val linkName = nameWithSlash.substringBefore(" -> ")
+                val linkTarget = nameWithSlash.substringAfter(" -> ")
+                isDir = linkTarget.endsWith("/")
+                name = linkName
+            } else {
+                isDir = nameWithSlash.endsWith("/")
+                name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+            }
             if (name == "." || name == "..") continue
             val size = parts[4].toLongOrNull() ?: 0L
             val childPath = "$dirPath/$name"
@@ -1759,8 +1779,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val perms = parts[0]
                 if (perms.length < 10) continue
                 val nameWithSlash = parseLsFilename(raw) ?: continue
-                val isDir = nameWithSlash.endsWith("/")
-                val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+                // 软链接: "link -> target/"，需要提取链接名并根据目标类型判断是否为目录
+                val isSymlink = perms.startsWith("l")
+                val isDir: Boolean
+                val name: String
+                if (isSymlink && nameWithSlash.contains(" -> ")) {
+                    val linkName = nameWithSlash.substringBefore(" -> ")
+                    val linkTarget = nameWithSlash.substringAfter(" -> ")
+                    isDir = linkTarget.endsWith("/")
+                    name = linkName
+                } else {
+                    isDir = nameWithSlash.endsWith("/")
+                    name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+                }
                 if (name == "." || name == "..") continue
                 if (!showHidden && name.startsWith(".")) continue
                 if (isDir) dirCount++ else fileCount++
