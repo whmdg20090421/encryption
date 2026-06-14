@@ -119,7 +119,7 @@ private fun DisclaimerDialog(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "4. 若您不同意上述条款，请点击"取消"退出本模块。",
+                    text = "4. 若您不同意上述条款，请点击\"取消\"退出本模块。",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(modifier = Modifier.height(12.dp))
