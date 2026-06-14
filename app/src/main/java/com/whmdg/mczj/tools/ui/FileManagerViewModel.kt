@@ -371,9 +371,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (!showHidden && name.startsWith(".")) continue
 
             val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-            // Os.stat 穿透软链接，统一获取目标真实类型
             val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
-            val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 } ?: rawName.endsWith("/")
+            // Os.stat 穿透软链接获取真实类型；失败时通过 ls 权限位回退判断
+            val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 }
+                ?: if (perms[0] == 'l' && rawName.contains(" -> ")) rawName.substringAfter(" -> ").endsWith("/")
+                else rawName.endsWith("/")
             val size = parts[4].toLongOrNull() ?: 0L
             val modified = try {
                 SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
@@ -1626,7 +1628,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (name == "." || name == "..") continue
             val childPath = "$dirPath/$name"
             val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
-            val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 } ?: rawName.endsWith("/")
+            val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 }
+                ?: if (perms[0] == 'l' && rawName.contains(" -> ")) rawName.substringAfter(" -> ").endsWith("/")
+                else rawName.endsWith("/")
             val size = parts[4].toLongOrNull() ?: 0L
             val modified = try {
                 SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
@@ -1769,9 +1773,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (name == "." || name == "..") continue
                 if (!showHidden && name.startsWith(".")) continue
                 val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-                // Os.stat 穿透软链接，统一获取目标真实类型
                 val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
-                val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 } ?: rawName.endsWith("/")
+                val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 }
+                    ?: if (perms[0] == 'l' && rawName.contains(" -> ")) rawName.substringAfter(" -> ").endsWith("/")
+                    else rawName.endsWith("/")
                 if (isDir) dirCount++ else fileCount++
                 val sz = parts[4].toLongOrNull() ?: 0L
                 val modified = try {
