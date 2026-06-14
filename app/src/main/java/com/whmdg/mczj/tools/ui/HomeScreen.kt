@@ -694,6 +694,32 @@ fun MainAppContainer() {
         )
     }
     } // Box
+
+    // ── 启动诊断信息显示（底部 Snackbar，仅 Debug 模式） ──
+    if (isDebugMode && startupDiagnostic != null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = 16.dp),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .clickable { startupDiagnostic = null },  // 点击关闭
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.inverseSurface,
+                shadowElevation = 4.dp
+            ) {
+                Text(
+                    text = startupDiagnostic ?: "",
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.inverseOnSurface
+                )
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2095,32 +2121,6 @@ fun SettingsTab(navigateToModule: (ModuleId) -> Unit, onNavigate: (Screen) -> Un
                 enabled = true,
                 onClick = { onNavigate(Screen.About) }
             )
-        }
-    }
-
-    // ── 启动诊断信息显示（底部 Snackbar，仅 Debug 模式） ──
-    if (isDebugMode && startupDiagnostic != null) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = 16.dp),
-            contentAlignment = Alignment.BottomCenter
-        ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .clickable { startupDiagnostic = null },  // 点击关闭
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.inverseSurface,
-                shadowElevation = 4.dp
-            ) {
-                Text(
-                    text = startupDiagnostic ?: "",
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.inverseOnSurface
-                )
-            }
         }
     }
 }
