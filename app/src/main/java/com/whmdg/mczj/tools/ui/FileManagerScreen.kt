@@ -54,7 +54,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.awaitPointerEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -539,9 +538,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             .pointerInput(isMultiSelectMode) {
                                 if (isMultiSelectMode) {
                                     // 多选模式下阻断：消费所有触摸，防止穿透到非多选按钮
-                                    while (true) {
-                                        val event = awaitPointerEvent(PointerEventPass.Main)
-                                        event.changes.forEach { it.consume() }
+                                    awaitPointerEventScope {
+                                        while (true) {
+                                            val event = awaitPointerEvent(PointerEventPass.Main)
+                                            event.changes.forEach { it.consume() }
+                                        }
                                     }
                                 }
                             },
@@ -660,9 +661,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             .pointerInput(isMultiSelectMode) {
                                 if (!isMultiSelectMode) {
                                     // 非多选模式下阻断：消费所有触摸，防止穿透到多选按钮
-                                    while (true) {
-                                        val event = awaitPointerEvent(PointerEventPass.Main)
-                                        event.changes.forEach { it.consume() }
+                                    awaitPointerEventScope {
+                                        while (true) {
+                                            val event = awaitPointerEvent(PointerEventPass.Main)
+                                            event.changes.forEach { it.consume() }
+                                        }
                                     }
                                 }
                             },
