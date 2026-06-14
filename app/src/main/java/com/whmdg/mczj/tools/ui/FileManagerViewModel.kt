@@ -371,11 +371,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (!showHidden && name.startsWith(".")) continue
 
             val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-            val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
-            // Os.stat 穿透软链接获取真实类型；失败时通过 ls 权限位回退判断
-            val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 }
-                ?: if (perms[0] == 'l' && rawName.contains(" -> ")) rawName.substringAfter(" -> ").endsWith("/")
-                else rawName.endsWith("/")
+            val isDir = when (perms[0]) {
+                'd' -> true
+                'l' -> rawName.contains(" -> ") && rawName.substringAfter(" -> ").endsWith("/")
+                else -> rawName.endsWith("/")
+            }
             val size = parts[4].toLongOrNull() ?: 0L
             val modified = try {
                 SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
@@ -1627,10 +1627,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val name = if (rawName.contains(" -> ")) rawName.substringBefore(" -> ") else rawName.trimEnd('/')
             if (name == "." || name == "..") continue
             val childPath = "$dirPath/$name"
-            val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
-            val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 }
-                ?: if (perms[0] == 'l' && rawName.contains(" -> ")) rawName.substringAfter(" -> ").endsWith("/")
-                else rawName.endsWith("/")
+            val isDir = when (perms[0]) {
+                'd' -> true
+                'l' -> rawName.contains(" -> ") && rawName.substringAfter(" -> ").endsWith("/")
+                else -> rawName.endsWith("/")
+            }
             val size = parts[4].toLongOrNull() ?: 0L
             val modified = try {
                 SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
@@ -1773,10 +1774,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (name == "." || name == "..") continue
                 if (!showHidden && name.startsWith(".")) continue
                 val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-                val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
-                val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 }
-                    ?: if (perms[0] == 'l' && rawName.contains(" -> ")) rawName.substringAfter(" -> ").endsWith("/")
-                    else rawName.endsWith("/")
+                val isDir = when (perms[0]) {
+                    'd' -> true
+                    'l' -> rawName.contains(" -> ") && rawName.substringAfter(" -> ").endsWith("/")
+                    else -> rawName.endsWith("/")
+                }
                 if (isDir) dirCount++ else fileCount++
                 val sz = parts[4].toLongOrNull() ?: 0L
                 val modified = try {
@@ -1791,10 +1793,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (name == "." || name == "..") continue
                 if (!showHidden && name.startsWith(".")) continue
                 val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-                val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
-                val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 } ?: raw.endsWith("/")
+                val isDir = raw.endsWith("/")
                 if (isDir) dirCount++ else fileCount++
-                val perm = stat?.let { formatPermission(it.st_mode) } ?: ""
+                val perm = ""
                 val sz = if (isDir) 0L else try { File(childPath).length() } catch (_: Exception) { 0L }
                 val modified = try { File(childPath).lastModified() } catch (_: Exception) { 0L }
                 entries.add(FileEntry(childPath, name, isDir, perm, sz, modified))
@@ -1853,12 +1854,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         val file = File(entry.path)
-        val stat = try { Os.stat(entry.path) } catch (_: Exception) { null }
 
-        // 通过 shell ls -lapd 获取用户名/组名（ls 已解析 /etc/passwd，比读文件更可靠）
-        var shellPermission = ""
-        var shellOwner = ""
-        var shellGroup = ""
+        // shell 路径: ls -lapd 获取权限/用户名/组名，stat 获取 UID/GID 数值
+        // 非 shell 路径: Os.stat 获取全部
+        var permission = ""
+        var owner = ""
+        var group = ""
+
         if (hasShellEngine) {
             val escaped = entry.path.replace("'", "'\\''")
             val (lsOut, _, lsExit) = try {
@@ -1869,33 +1871,38 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (line != null) {
                     val parts = line.split("\\s+".toRegex())
                     if (parts.size >= 7) {
-                        val permStr = parts[0]  // e.g. "drwxrwxrwx"
-                        shellOwner = parts[2]
-                        shellGroup = parts[3]
+                        val permStr = parts[0]
+                        val shellOwner = parts[2]
+                        val shellGroup = parts[3]
                         val modeFromShell = parseRwxToMode(permStr)
                         if (modeFromShell != 0) {
-                            shellPermission = "${permStr}(${String.format("%03o", modeFromShell and 0x1FF)})"
+                            permission = "${permStr}(${String.format("%03o", modeFromShell and 0x1FF)})"
+                        }
+                        // 通过 stat 获取 UID/GID 数值
+                        val (statOut, _, statExit) = try {
+                            executeShell("stat -c '%u %g' '$escaped'")
+                        } catch (_: Exception) { Triple("", "", -1) }
+                        if (statExit == 0 && statOut.isNotBlank()) {
+                            val statParts = statOut.trim().split("\\s+".toRegex())
+                            val uid = statParts.getOrNull(0)?.toIntOrNull()
+                            val gid = statParts.getOrNull(1)?.toIntOrNull()
+                            owner = if (uid != null) "$shellOwner ($uid)" else shellOwner
+                            group = if (gid != null) "$shellGroup ($gid)" else shellGroup
+                        } else {
+                            owner = shellOwner
+                            group = shellGroup
                         }
                     }
                 }
             }
-        }
-
-        val mode = stat?.st_mode ?: 0
-        val permission = if (stat != null) {
-            "${formatPermission(mode)}(${String.format("%03o", mode and 0x1FF)})"
-        } else shellPermission
-
-        // 优先用 shell 解析的名称，回退到 Os.stat UID/GID + /etc/passwd 查询
-        val owner = if (shellOwner.isNotBlank()) {
-            if (stat != null) "$shellOwner (${stat.st_uid})" else shellOwner
         } else {
-            stat?.st_uid?.let { resolveUserName(it) } ?: ""
-        }
-        val group = if (shellGroup.isNotBlank()) {
-            if (stat != null) "$shellGroup (${stat.st_gid})" else shellGroup
-        } else {
-            stat?.st_gid?.let { resolveGroupName(it) } ?: ""
+            val stat = try { Os.stat(entry.path) } catch (_: Exception) { null }
+            if (stat != null) {
+                val mode = stat.st_mode
+                permission = "${formatPermission(mode)}(${String.format("%03o", mode and 0x1FF)})"
+                owner = resolveUserName(stat.st_uid).let { if (it.isNotBlank()) "$it (${stat.st_uid})" else "${stat.st_uid}" }
+                group = resolveGroupName(stat.st_gid).let { if (it.isNotBlank()) "$it (${stat.st_gid})" else "${stat.st_gid}" }
+            }
         }
 
         val modifiedTime = if (entry.lastModified > 0) {
