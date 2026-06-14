@@ -223,11 +223,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun shellPathExists(path: String): Boolean {
         if (!hasShellEngine) return File(path).exists()
         val escaped = path.replace("'", "'\\''")
-        val useShizuku = SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (_, _, exit) = try {
             when {
                 isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -e '$escaped'")
-                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand("test -e '$escaped'")
+                SpecialPermissionVerifier.isShizukuAuthorized(getApplication()) -> SpecialPermissionVerifier.executeShizukuCommand("test -e '$escaped'")
                 else -> return File(path).exists()
             }
         } catch (_: Exception) { return false }
@@ -240,11 +239,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun shellIsDirectory(path: String): Boolean {
         if (!hasShellEngine) return File(path).isDirectory
         val escaped = path.replace("'", "'\\''")
-        val useShizuku = SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (_, _, exit) = try {
             when {
                 isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -d '$escaped'")
-                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand("test -d '$escaped'")
+                SpecialPermissionVerifier.isShizukuAuthorized(getApplication()) -> SpecialPermissionVerifier.executeShizukuCommand("test -d '$escaped'")
                 else -> return File(path).isDirectory
             }
         } catch (_: Exception) { return false }
@@ -567,7 +565,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 选用当前可用的最高权限通道（ROOT > SHIZUKU > NORMAL）。 */
     private fun detectMaxAvailablePermission(): FileAccessLevel = when {
-        SpecialPermissionVerifier.isRootAvailable() -> FileAccessLevel.ROOT
+        isRootEngine -> FileAccessLevel.ROOT
         SpecialPermissionVerifier.isShizukuAuthorized(context) -> FileAccessLevel.SHIZUKU
         else -> FileAccessLevel.NORMAL
     }
@@ -1701,8 +1699,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 判断是否使用 Shizuku（ADB 权限 + Shizuku 在线）
         val useShizuku = !useRoot && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
 
-        // Shizuku 使用长格式 ls -lap 以获取文件大小和时间戳
-        val lsFlags = if (useShizuku) {
+        // Root/Shizuku 使用长格式 ls -lap 以获取文件大小和时间戳
+        val lsFlags = if (useShizuku || useRoot) {
             buildString {
                 append("-l")
                 if (showHidden) append("a")
