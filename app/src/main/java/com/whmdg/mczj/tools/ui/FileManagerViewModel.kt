@@ -353,38 +353,29 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         for (raw in stdout.lines()) {
             val line = raw.trimEnd('\r')
             if (line.isBlank()) continue
-            // 跳过 "total N" 行
             if (line.startsWith("total ")) continue
 
-            // 解析 ls -lap 输出: drwxrwx--x  4 root sdcard_rw  4096 2024-01-01 00:00 dirname/
             val parts = line.split("\\s+".toRegex())
             if (parts.size < 8) continue
-
             val perms = parts[0]
             if (perms.length < 10) continue
 
-            val nameWithSlash = parseLsFilename(line) ?: continue
-            val isSymlink = perms.startsWith("l")
-            val isDir: Boolean
-            val name: String
-            if (isSymlink && nameWithSlash.contains(" -> ")) {
-                val linkName = nameWithSlash.substringBefore(" -> ")
-                val linkTarget = nameWithSlash.substringAfter(" -> ")
-                isDir = linkTarget.endsWith("/")
-                name = linkName
-            } else if (isSymlink) {
-                name = nameWithSlash.trimEnd('/')
-                val cp = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-                isDir = try { (Os.stat(cp).st_mode and 0xF000) == 0x4000 } catch (_: Exception) { false }
+            val rawName = parseLsFilename(line) ?: continue
+            // 提取文件名：软链接去掉 " -> target" 部分，目录去掉尾部 /
+            val name = if (rawName.contains(" -> ")) {
+                rawName.substringBefore(" -> ")
             } else {
-                isDir = nameWithSlash.endsWith("/")
-                name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+                rawName.trimEnd('/')
             }
             if (name == "." || name == "..") continue
             if (!showHidden && name.startsWith(".")) continue
 
-            val size = parts[4].toLongOrNull() ?: 0L
             val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+            // Os.stat 穿透软链接，统一获取目标真实类型
+            val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
+            val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 } ?: rawName.endsWith("/")
+            if (isDir) dirCount++ else fileCount++
+            val size = parts[4].toLongOrNull() ?: 0L
             val modified = try {
                 SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
             } catch (_: Exception) { 0L }
@@ -1631,25 +1622,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (parts.size < 8) continue
             val perms = parts[0]
             if (perms.length < 10) continue
-            val nameWithSlash = parseLsFilename(line) ?: continue
-            val isSymlink = perms.startsWith("l")
-            val isDir: Boolean
-            val name: String
-            if (isSymlink && nameWithSlash.contains(" -> ")) {
-                val linkName = nameWithSlash.substringBefore(" -> ")
-                val linkTarget = nameWithSlash.substringAfter(" -> ")
-                isDir = linkTarget.endsWith("/")
-                name = linkName
-            } else if (isSymlink) {
-                name = nameWithSlash.trimEnd('/')
-                isDir = try { (Os.stat("$dirPath/$name").st_mode and 0xF000) == 0x4000 } catch (_: Exception) { false }
-            } else {
-                isDir = nameWithSlash.endsWith("/")
-                name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
-            }
+            val rawName = parseLsFilename(line) ?: continue
+            val name = if (rawName.contains(" -> ")) rawName.substringBefore(" -> ") else rawName.trimEnd('/')
             if (name == "." || name == "..") continue
-            val size = parts[4].toLongOrNull() ?: 0L
             val childPath = "$dirPath/$name"
+            val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
+            val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 } ?: rawName.endsWith("/")
+            val size = parts[4].toLongOrNull() ?: 0L
             val modified = try {
                 SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
             } catch (_: Exception) { 0L }
@@ -1785,30 +1764,17 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (parts.size < 8) continue
                 val perms = parts[0]
                 if (perms.length < 10) continue
-                val nameWithSlash = parseLsFilename(raw) ?: continue
-                // 软链接: "link -> target/"，需要提取链接名并根据目标类型判断是否为目录
-                val isSymlink = perms.startsWith("l")
-                val isDir: Boolean
-                val name: String
-                if (isSymlink && nameWithSlash.contains(" -> ")) {
-                    val linkName = nameWithSlash.substringBefore(" -> ")
-                    val linkTarget = nameWithSlash.substringAfter(" -> ")
-                    isDir = linkTarget.endsWith("/")
-                    name = linkName
-                } else if (isSymlink) {
-                    // 软链接但无 " -> " 标记（异常格式），用 Os.stat 穿透判断
-                    name = nameWithSlash.trimEnd('/')
-                    val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-                    isDir = try { (Os.stat(childPath).st_mode and 0xF000) == 0x4000 } catch (_: Exception) { false }
-                } else {
-                    isDir = nameWithSlash.endsWith("/")
-                    name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
-                }
+                val rawName = parseLsFilename(raw) ?: continue
+                // 提取文件名：软链接去掉 " -> target"，目录去掉尾部 /
+                val name = if (rawName.contains(" -> ")) rawName.substringBefore(" -> ") else rawName.trimEnd('/')
                 if (name == "." || name == "..") continue
                 if (!showHidden && name.startsWith(".")) continue
+                val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+                // Os.stat 穿透软链接，统一获取目标真实类型
+                val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
+                val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 } ?: rawName.endsWith("/")
                 if (isDir) dirCount++ else fileCount++
                 val sz = parts[4].toLongOrNull() ?: 0L
-                val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
                 val modified = try {
                     SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
                 } catch (_: Exception) { 0L }
@@ -1821,7 +1787,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (name == "." || name == "..") continue
                 if (!showHidden && name.startsWith(".")) continue
                 val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-                // Os.stat 穿透软链接，用它判断目标真实类型（目录/文件）
                 val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
                 val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 } ?: raw.endsWith("/")
                 if (isDir) dirCount++ else fileCount++
