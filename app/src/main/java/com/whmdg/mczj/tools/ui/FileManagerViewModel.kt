@@ -372,6 +372,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val linkTarget = nameWithSlash.substringAfter(" -> ")
                 isDir = linkTarget.endsWith("/")
                 name = linkName
+            } else if (isSymlink) {
+                name = nameWithSlash.trimEnd('/')
+                val cp = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+                isDir = try { (Os.stat(cp).st_mode and 0xF000) == 0x4000 } catch (_: Exception) { false }
             } else {
                 isDir = nameWithSlash.endsWith("/")
                 name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
@@ -1636,6 +1640,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val linkTarget = nameWithSlash.substringAfter(" -> ")
                 isDir = linkTarget.endsWith("/")
                 name = linkName
+            } else if (isSymlink) {
+                name = nameWithSlash.trimEnd('/')
+                isDir = try { (Os.stat("$dirPath/$name").st_mode and 0xF000) == 0x4000 } catch (_: Exception) { false }
             } else {
                 isDir = nameWithSlash.endsWith("/")
                 name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
@@ -1788,6 +1795,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     val linkTarget = nameWithSlash.substringAfter(" -> ")
                     isDir = linkTarget.endsWith("/")
                     name = linkName
+                } else if (isSymlink) {
+                    // 软链接但无 " -> " 标记（异常格式），用 Os.stat 穿透判断
+                    name = nameWithSlash.trimEnd('/')
+                    val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+                    isDir = try { (Os.stat(childPath).st_mode and 0xF000) == 0x4000 } catch (_: Exception) { false }
                 } else {
                     isDir = nameWithSlash.endsWith("/")
                     name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
@@ -1805,13 +1817,15 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             // 短格式解析 ls -1p: dirname/ 或 filename
             for (raw in lines) {
-                val isDir = raw.endsWith("/")
-                val name = if (isDir) raw.dropLast(1) else raw
+                val name = if (raw.endsWith("/")) raw.dropLast(1) else raw
                 if (name == "." || name == "..") continue
                 if (!showHidden && name.startsWith(".")) continue
-                if (isDir) dirCount++ else fileCount++
                 val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-                val perm = try { formatPermission(Os.stat(childPath).st_mode) } catch (_: Exception) { "" }
+                // Os.stat 穿透软链接，用它判断目标真实类型（目录/文件）
+                val stat = try { Os.stat(childPath) } catch (_: Exception) { null }
+                val isDir = stat?.let { (it.st_mode and 0xF000) == 0x4000 } ?: raw.endsWith("/")
+                if (isDir) dirCount++ else fileCount++
+                val perm = stat?.let { formatPermission(it.st_mode) } ?: ""
                 val sz = if (isDir) 0L else try { File(childPath).length() } catch (_: Exception) { 0L }
                 val modified = try { File(childPath).lastModified() } catch (_: Exception) { 0L }
                 entries.add(FileEntry(childPath, name, isDir, perm, sz, modified))
