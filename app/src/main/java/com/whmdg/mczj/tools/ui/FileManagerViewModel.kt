@@ -438,34 +438,42 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 导航操作 ──
     fun navigateToFolder(entry: FileEntry, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
+        // 软链接先解析真实目标路径
+        val targetPath = if (entry.permission.startsWith("l") && hasShellEngine) {
+            val escaped = entry.path.replace("'", "'\\''")
+            val (out, _, exit) = try {
+                executeShell("readlink -f '$escaped'")
+            } catch (_: Exception) { Triple("", "", -1) }
+            if (exit == 0 && out.isNotBlank()) out.trim() else entry.path
+        } else {
+            entry.path
+        }
+
         if (hasShellEngine) {
-            // 最高权限优先：Root(libsu) 或 Shizuku/ADB
-            listDirEntriesViaShell(entry.path, showHiddenFiles)
+            listDirEntriesViaShell(targetPath, showHiddenFiles)
             if (lastShellStderr.isBlank()) {
-                navigateToWithScroll(entry.path, scrollToIndex, scrollToOffset)
-                historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
+                navigateToWithScroll(targetPath, scrollToIndex, scrollToOffset)
+                historyList = listOf(HistoryEntry(entry.name, targetPath, true)) + historyList
             } else {
-                // shell 失败，回退 Java API
-                val testDir = File(entry.path)
+                val testDir = File(targetPath)
                 val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
                 if (accessible != null) {
-                    navigateToWithScroll(entry.path, scrollToIndex, scrollToOffset)
-                    historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
+                    navigateToWithScroll(targetPath, scrollToIndex, scrollToOffset)
+                    historyList = listOf(HistoryEntry(entry.name, targetPath, true)) + historyList
                 } else {
-                    loadError = RuntimeException("${formatShellError(entry.name, lastShellStderr)}\n路径: ${entry.path}")
+                    loadError = RuntimeException("${formatShellError(entry.name, lastShellStderr)}\n路径: $targetPath")
                 }
             }
         } else {
-            // 无 shell 引擎，用 Java File API
-            val testDir = File(entry.path)
+            val testDir = File(targetPath)
             val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
             if (accessible != null) {
-                navigateToWithScroll(entry.path, scrollToIndex, scrollToOffset)
-                historyList = listOf(HistoryEntry(entry.name, entry.path, true)) + historyList
+                navigateToWithScroll(targetPath, scrollToIndex, scrollToOffset)
+                historyList = listOf(HistoryEntry(entry.name, targetPath, true)) + historyList
             } else if (!testDir.exists()) {
-                loadError = RuntimeException("文件夹不存在: ${entry.name}\n路径: ${entry.path}")
+                loadError = RuntimeException("文件夹不存在: ${entry.name}\n路径: $targetPath")
             } else {
-                loadError = RuntimeException("权限不足: ${entry.name}\n路径: ${entry.path}")
+                loadError = RuntimeException("权限不足: ${entry.name}\n路径: $targetPath")
             }
         }
     }
