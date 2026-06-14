@@ -9,6 +9,7 @@ import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
+import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -169,6 +170,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         mutableStateOf(Environment.isExternalStorageManager())
     }
     val coroutineScope = rememberCoroutineScope()
+
+    // ── 诊断状态（Debug 模式） ──
+    val isDebugMode = remember { isDebugAuth(context) }
+    var diagnosticMessage by remember { mutableStateOf<String?>(null) }
+    var diagnosticError by remember { mutableStateOf<Throwable?>(null) }
 
     // ── 滚动状态 ──
     val leftListState = rememberLazyListState()
@@ -2191,6 +2197,78 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         DiagnosticLog.log("FileMgr", "关闭错误对话框")
         vm.loadError = null
     })
+
+    // ── 诊断错误对话框 ──
+    ErrorDialog(error = diagnosticError, onDismiss = {
+        diagnosticError = null
+    })
+
+    // ── 诊断逻辑（仅 Debug 模式） ──
+    LaunchedEffect(isDebugMode) {
+        if (!isDebugMode) return@LaunchedEffect
+        val secPrefs = context.getSharedPreferences("security_prefs", Context.MODE_PRIVATE)
+        val legacySp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+        val permissionLevel = secPrefs.getString("target_permission_level", null)
+            ?: legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+
+        if (permissionLevel != "ROOT") {
+            diagnosticMessage = "当前权限级别: $permissionLevel（非 Root 模式）"
+            return@LaunchedEffect
+        }
+
+        // 检查 Root 权限
+        try {
+            val isRootAvailable = SpecialPermissionVerifier.isRootAvailable()
+            if (!isRootAvailable) {
+                val error = SecurityException("Root 权限异常：已设置 Root 模式但无法获取 root 权限")
+                DiagnosticLog.log("FileMgr", "Root 权限异常：isRootAvailable=false")
+                diagnosticError = error
+                return@LaunchedEffect
+            }
+
+            // 获取挂载命名空间信息
+            val mountInfo = try {
+                val selfNs = SpecialPermissionVerifier.executeRootCommand("stat -c '%i' /proc/self/ns/mnt")
+                val initNs = SpecialPermissionVerifier.executeRootCommand("stat -c '%i' /proc/1/ns/mnt")
+                val sameNs = selfNs.trim() == initNs.trim()
+                "Root 权限已就绪\n当前挂载命名空间: self=${selfNs.trim()} init=${initNs.trim()} 同一namespace=$sameNs"
+            } catch (e: Exception) {
+                "Root 权限已就绪（无法获取命名空间信息: ${e.message}）"
+            }
+
+            diagnosticMessage = mountInfo
+            DiagnosticLog.log("FileMgr", "诊断完成: $mountInfo")
+        } catch (e: Exception) {
+            DiagnosticLog.log("FileMgr", "诊断异常: ${e.message}")
+            diagnosticError = e
+        }
+    }
+
+    // ── 诊断信息显示（底部 Snackbar） ──
+    if (isDebugMode && diagnosticMessage != null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = 100.dp),  // 底部栏上方
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .clickable { diagnosticMessage = null },  // 点击关闭
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.inverseSurface,
+                shadowElevation = 4.dp
+            ) {
+                Text(
+                    text = diagnosticMessage ?: "",
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.inverseOnSurface
+                )
+            }
+        }
+    }
 
     // ── 外部打开警告对话框 ──
     vm.pendingExternalEntry?.let { entry ->
