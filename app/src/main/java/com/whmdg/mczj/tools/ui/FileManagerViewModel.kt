@@ -412,34 +412,58 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * @param scrollToIndex 滚动到第几个卡片（默认 0，即第一行）
      * @param scrollToOffset 滚动偏移量（默认 0）
      */
-    fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
+    fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0, realPath: String = path) {
         // 1. 执行路径跳转
-        navigateTo(path)
+        navigateTo(path, realPath)
         // 2. 记录滚动位置（供 Compose 侧使用）
         pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
     }
 
     // ── 核心导航：切换路径 + 刷新列表 ──
-    fun navigateTo(path: String) {
+    // path = 显示路径（软链接路径），realPath = 真实路径（用于读取文件列表）
+    fun navigateTo(path: String, realPath: String = path) {
         if (isInRecycleBin) isInRecycleBin = false
         if (isInArchive) exitArchive()
+        // 后退/前进/返回上一级传入的 realPath 默认等于 path（软链接路径）
+        // 需要解析真实路径用于 listDirectory
+        val resolvedRealPath = if (realPath == path && hasShellEngine) {
+            resolveIfSymlink(path)
+        } else {
+            realPath
+        }
         if (focusedPanel == FocusedPanel.LEFT) {
             if (leftPath == path) return
             leftNavState = leftNavState.navigate(path)
             leftPath = path
-            leftEntries = listDirectory(path)
+            leftEntries = listDirectory(resolvedRealPath)
         } else {
             if (rightPath == path) return
             rightNavState = rightNavState.navigate(path)
             rightPath = path
-            rightEntries = listDirectory(path)
+            rightEntries = listDirectory(resolvedRealPath)
         }
+    }
+
+    /** 软链接路径 → 真实路径缓存（避免后退/前进时重复执行 readlink） */
+    private val symlinkResolveCache = mutableMapOf<String, String>()
+
+    /** 如果路径是软链接，解析真实目标路径；否则原样返回 */
+    private fun resolveIfSymlink(path: String): String {
+        if (!hasShellEngine) return path
+        symlinkResolveCache[path]?.let { return it }
+        val escaped = path.replace("'", "'\\''")
+        val (out, _, exit) = try {
+            executeShell("readlink -f '$escaped'")
+        } catch (_: Exception) { Triple("", "", -1) }
+        val resolved = if (exit == 0 && out.isNotBlank() && out.trim() != path) out.trim() else path
+        symlinkResolveCache[path] = resolved
+        return resolved
     }
 
     // ── 导航操作 ──
     fun navigateToFolder(entry: FileEntry, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
-        // 软链接先解析真实目标路径
-        val targetPath = if (entry.permission.startsWith("l") && hasShellEngine) {
+        // 软链接先解析真实目标路径（仅用于读取文件列表）
+        val realPath = if (entry.permission.startsWith("l") && hasShellEngine) {
             val escaped = entry.path.replace("'", "'\\''")
             val (out, _, exit) = try {
                 executeShell("readlink -f '$escaped'")
@@ -449,31 +473,38 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             entry.path
         }
 
+        // 显示路径始终使用软链接本身的路径
+        val displayPath = entry.path
+        // 填充缓存：后退/前进时 resolveIfSymlink 可直接命中
+        if (realPath != displayPath) {
+            symlinkResolveCache[displayPath] = realPath
+        }
+
         if (hasShellEngine) {
-            listDirEntriesViaShell(targetPath, showHiddenFiles)
+            listDirEntriesViaShell(realPath, showHiddenFiles)
             if (lastShellStderr.isBlank()) {
-                navigateToWithScroll(targetPath, scrollToIndex, scrollToOffset)
-                historyList = listOf(HistoryEntry(entry.name, targetPath, true)) + historyList
+                navigateToWithScroll(displayPath, scrollToIndex, scrollToOffset, realPath)
+                historyList = listOf(HistoryEntry(entry.name, displayPath, true)) + historyList
             } else {
-                val testDir = File(targetPath)
+                val testDir = File(realPath)
                 val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
                 if (accessible != null) {
-                    navigateToWithScroll(targetPath, scrollToIndex, scrollToOffset)
-                    historyList = listOf(HistoryEntry(entry.name, targetPath, true)) + historyList
+                    navigateToWithScroll(displayPath, scrollToIndex, scrollToOffset, realPath)
+                    historyList = listOf(HistoryEntry(entry.name, displayPath, true)) + historyList
                 } else {
-                    loadError = RuntimeException("${formatShellError(entry.name, lastShellStderr)}\n路径: $targetPath")
+                    loadError = RuntimeException("${formatShellError(entry.name, lastShellStderr)}\n路径: $realPath")
                 }
             }
         } else {
-            val testDir = File(targetPath)
+            val testDir = File(realPath)
             val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
             if (accessible != null) {
-                navigateToWithScroll(targetPath, scrollToIndex, scrollToOffset)
-                historyList = listOf(HistoryEntry(entry.name, targetPath, true)) + historyList
+                navigateToWithScroll(displayPath, scrollToIndex, scrollToOffset, realPath)
+                historyList = listOf(HistoryEntry(entry.name, displayPath, true)) + historyList
             } else if (!testDir.exists()) {
-                loadError = RuntimeException("文件夹不存在: ${entry.name}\n路径: $targetPath")
+                loadError = RuntimeException("文件夹不存在: ${entry.name}\n路径: $realPath")
             } else {
-                loadError = RuntimeException("权限不足: ${entry.name}\n路径: $targetPath")
+                loadError = RuntimeException("权限不足: ${entry.name}\n路径: $realPath")
             }
         }
     }

@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.awaitPointerEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -534,7 +535,16 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     Row(
                         modifier = Modifier
                             .fillMaxSize()
-                            .graphicsLayer { alpha = originalButtonsAlpha },
+                            .graphicsLayer { alpha = originalButtonsAlpha }
+                            .pointerInput(isMultiSelectMode) {
+                                if (isMultiSelectMode) {
+                                    // 多选模式下阻断：消费所有触摸，防止穿透到非多选按钮
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Main)
+                                        event.changes.forEach { it.consume() }
+                                    }
+                                }
+                            },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // 后退按钮
@@ -646,7 +656,16 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     Row(
                         modifier = Modifier
                             .fillMaxSize()
-                            .graphicsLayer { alpha = newButtonsAlpha },
+                            .graphicsLayer { alpha = newButtonsAlpha }
+                            .pointerInput(isMultiSelectMode) {
+                                if (!isMultiSelectMode) {
+                                    // 非多选模式下阻断：消费所有触摸，防止穿透到多选按钮
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Main)
+                                        event.changes.forEach { it.consume() }
+                                    }
+                                }
+                            },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // 第1个：选择全部（短按全选，长按按类型全选）

@@ -2,6 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 工具使用规范
+
+- 禁止使用 Explore 工具。需要探索代码库时，直接启动 Agent 子任务完成，例如：Agent(查找 FileManagerScreen 中的 toolbar 代码)
+- 不要将 Explore 作为 Agent 的前置步骤单独调用
+
+## 工具使用限制
+
+当前 API 环境不支持 Explore 工具，调用它会静默失败（返回 0 tools）。
+
+- 严禁使用 Explore 工具
+- 所有需要探索/查找代码的任务，必须直接使用 Agent(任务描述) 完成
+- 例如：Agent(在 FileManagerScreen 中查找 toolbar 相关代码)
+
 # 艨艟战舰工具箱 Android 项目
 
 ## 项目概览
