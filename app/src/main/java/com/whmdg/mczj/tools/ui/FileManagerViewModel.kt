@@ -1872,11 +1872,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val file = File(entry.path)
         val stat = try { Os.stat(entry.path) } catch (_: Exception) { null }
 
-        // Os.stat 失败时回退到 shell ls -lapd（如路径含括号等特殊字符）
+        // 通过 shell ls -lapd 获取用户名/组名（ls 已解析 /etc/passwd，比读文件更可靠）
         var shellPermission = ""
         var shellOwner = ""
         var shellGroup = ""
-        if (stat == null && hasShellEngine) {
+        if (hasShellEngine) {
             val escaped = entry.path.replace("'", "'\\''")
             val (lsOut, _, lsExit) = try {
                 executeShell("ls -lapd '$escaped'")
@@ -1903,8 +1903,17 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             "${formatPermission(mode)}(${String.format("%03o", mode and 0x1FF)})"
         } else shellPermission
 
-        val owner = stat?.st_uid?.let { resolveUserName(it) } ?: shellOwner
-        val group = stat?.st_gid?.let { resolveGroupName(it) } ?: shellGroup
+        // 优先用 shell 解析的名称，回退到 Os.stat UID/GID + /etc/passwd 查询
+        val owner = if (shellOwner.isNotBlank()) {
+            if (stat != null) "$shellOwner (${stat.st_uid})" else shellOwner
+        } else {
+            stat?.st_uid?.let { resolveUserName(it) } ?: ""
+        }
+        val group = if (shellGroup.isNotBlank()) {
+            if (stat != null) "$shellGroup (${stat.st_gid})" else shellGroup
+        } else {
+            stat?.st_gid?.let { resolveGroupName(it) } ?: ""
+        }
 
         val modifiedTime = if (entry.lastModified > 0) {
             SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(entry.lastModified))
