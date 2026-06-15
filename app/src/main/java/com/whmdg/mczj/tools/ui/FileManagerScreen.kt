@@ -505,22 +505,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     targetValue = if (isMultiSelectMode) 45f else 0f,
                     animationSpec = spring(stiffness = Spring.StiffnessMedium)
                 )
-                // 动画状态：用于控制按钮的淡入淡出
-                val animDuration = 300 // 总动画时长（毫秒）
-                val halfDuration = animDuration / 2
-                // 原按钮的淡出动画（前半段）
-                val originalButtonsAlpha by animateFloatAsState(
-                    targetValue = if (isMultiSelectMode) 0f else 1f,
-                    animationSpec = tween(durationMillis = halfDuration)
-                )
-                // 新按钮的淡入动画（后半段）
-                val newButtonsAlpha by animateFloatAsState(
-                    targetValue = if (isMultiSelectMode) 1f else 0f,
-                    animationSpec = tween(
-                        durationMillis = halfDuration,
-                        delayMillis = if (isMultiSelectMode) halfDuration else 0
-                    )
-                )
                 var rowWidthPx by remember { mutableIntStateOf(0) }
                 Box(
                     modifier = Modifier
@@ -545,22 +529,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             view.systemGestureExclusionRects = listOf(rect)
                         }
                 ) {
-                    // ── 原来的6个按钮（非多选模式）──
+                    Crossfade(
+                        targetState = isMultiSelectMode,
+                        animationSpec = tween(durationMillis = 300),
+                        label = "toolbar_switch"
+                    ) { isMulti ->
+                    if (!isMulti) {
+                    // ── 普通模式 6 个按钮 ──
                     Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer { alpha = originalButtonsAlpha }
-                            .pointerInput(isMultiSelectMode) {
-                                if (isMultiSelectMode) {
-                                    // 多选模式下阻断：消费所有触摸，防止穿透到非多选按钮
-                                    awaitPointerEventScope {
-                                        while (true) {
-                                            val event = awaitPointerEvent(PointerEventPass.Main)
-                                            event.changes.forEach { it.consume() }
-                                        }
-                                    }
-                                }
-                            },
+                        modifier = Modifier.fillMaxSize(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // 后退按钮
@@ -668,22 +645,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             }
                         }
                     }
-                    // ── 新的5个按钮（多选模式）──
+                    } else {
+                    // ── 多选模式 5 个按钮 ──
                     Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer { alpha = newButtonsAlpha }
-                            .pointerInput(isMultiSelectMode) {
-                                if (!isMultiSelectMode) {
-                                    // 非多选模式下阻断：消费所有触摸，防止穿透到多选按钮
-                                    awaitPointerEventScope {
-                                        while (true) {
-                                            val event = awaitPointerEvent(PointerEventPass.Main)
-                                            event.changes.forEach { it.consume() }
-                                        }
-                                    }
-                                }
-                            },
+                        modifier = Modifier.fillMaxSize(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // 第1个：选择全部（短按全选，长按按类型全选）
@@ -823,7 +788,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             }
                         }
                     }
-                }
+                    }
+                    }
                 // 下方 20dp：系统手势区域（随主题颜色）
                 val surfaceColor = MaterialTheme.colorScheme.surface
                 Box(
