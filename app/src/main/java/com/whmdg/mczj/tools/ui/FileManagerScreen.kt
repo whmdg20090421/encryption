@@ -3051,33 +3051,45 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             onClick = {
                                 applying = true
                                 errorMsg = null
-                                val result = vm.applyPermissions(
-                                    path = entry.path,
-                                    mode = currentMode,
-                                    uid = selectedUid,
-                                    gid = selectedGid,
-                                    originalMode = originalMode,
-                                    originalUid = originalUid,
-                                    originalGid = originalGid
-                                )
-                                if (result != null) {
-                                    applying = false
-                                    errorMsg = result
-                                } else {
-                                    // 应用扩展属性
-                                    val desiredFlags = buildSet {
-                                        if (extImmutable) add('i')
-                                        if (extAppend) add('a')
-                                    }
+
+                                // 第一步：处理扩展属性（chattr），优先于基本权限
+                                val desiredFlags = buildSet {
+                                    if (extImmutable) add('i')
+                                    if (extAppend) add('a')
+                                }
+                                val originalFlagSet = originalExtFlags.filter { it == 'i' || it == 'a' }.toSet()
+                                if (desiredFlags != originalFlagSet) {
                                     val extResult = vm.applyExtFlags(entry.path, desiredFlags, originalExtFlags)
-                                    applying = false
                                     if (extResult != null) {
+                                        applying = false
                                         errorMsg = extResult
-                                    } else {
-                                        showPermissionEditor = false
-                                        vm.refreshCurrent()
+                                        return@TextButton
                                     }
                                 }
+
+                                // 第二步：仅当基本权限（rwx/uid/gid）发生变化时才执行 chmod/chown
+                                val permChanged = currentMode != originalMode || selectedUid != originalUid || selectedGid != originalGid
+                                if (permChanged) {
+                                    val result = vm.applyPermissions(
+                                        path = entry.path,
+                                        mode = currentMode,
+                                        uid = selectedUid,
+                                        gid = selectedGid,
+                                        originalMode = originalMode,
+                                        originalUid = originalUid,
+                                        originalGid = originalGid
+                                    )
+                                    applying = false
+                                    if (result != null) {
+                                        errorMsg = result
+                                        return@TextButton
+                                    }
+                                } else {
+                                    applying = false
+                                }
+
+                                showPermissionEditor = false
+                                vm.refreshCurrent()
                             },
                             enabled = !applying
                         ) {
