@@ -2135,71 +2135,181 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     data class SystemUser(val uid: Int, val username: String)
     data class SystemGroup(val gid: Int, val groupname: String)
 
-    /** 读取全部系统用户：/etc/passwd + packages.list（应用 UID） */
+    /**
+     * android_filesystem_config.h 完整 AID 映射（AOSP 源码）。
+     * 来源: vvb2060/Magica/app/src/main/jni/android_filesystem_config.h
+     */
+    private val SYSTEM_UID_MAP = mapOf(
+        0 to "root",
+        1 to "daemon",
+        2 to "bin",
+        3 to "sys",
+        1000 to "system",
+        1001 to "radio",
+        1002 to "bluetooth",
+        1003 to "graphics",
+        1004 to "input",
+        1005 to "audio",
+        1006 to "camera",
+        1007 to "log",
+        1008 to "compass",
+        1009 to "mount",
+        1010 to "wifi",
+        1011 to "adb",
+        1012 to "install",
+        1013 to "media",
+        1014 to "dhcp",
+        1015 to "sdcard_rw",
+        1016 to "vpn",
+        1017 to "keystore",
+        1018 to "usb",
+        1019 to "drm",
+        1020 to "mdnsr",
+        1021 to "gps",
+        1023 to "media_rw",
+        1024 to "mtp",
+        1026 to "drmrpc",
+        1027 to "nfc",
+        1028 to "sdcard_r",
+        1029 to "clat",
+        1030 to "loop_radio",
+        1031 to "media_drm",
+        1032 to "package_info",
+        1033 to "sdcard_pics",
+        1034 to "sdcard_av",
+        1035 to "sdcard_all",
+        1036 to "logd",
+        1037 to "shared_relro",
+        1038 to "dbus",
+        1039 to "tlsdate",
+        1040 to "media_ex",
+        1041 to "audioserver",
+        1042 to "metrics_coll",
+        1043 to "metricsd",
+        1044 to "webserv",
+        1045 to "debuggerd",
+        1046 to "media_codec",
+        1047 to "cameraserver",
+        1048 to "firewall",
+        1049 to "trunks",
+        1050 to "nvram",
+        1051 to "dns",
+        1052 to "dns_tether",
+        1053 to "webview_zygote",
+        1054 to "vehicle_network",
+        1055 to "media_audio",
+        1056 to "media_video",
+        1057 to "media_image",
+        1058 to "tombstoned",
+        1059 to "media_obb",
+        1060 to "ese",
+        1061 to "ota_update",
+        1062 to "automotive_evs",
+        1063 to "lowpan",
+        1064 to "hsm",
+        1065 to "reserved_disk",
+        1066 to "statd",
+        1067 to "incidentd",
+        1068 to "secure_element",
+        1069 to "lmkd",
+        1070 to "llkd",
+        1071 to "iorapd",
+        1072 to "gpu_service",
+        1073 to "network_stack",
+        1074 to "gsid",
+        1075 to "fsverity_cert",
+        1076 to "credstore",
+        1077 to "external_storage",
+        1078 to "ext_data_rw",
+        1079 to "ext_obb_rw",
+        1080 to "context_hub",
+        1081 to "virtualizationservice",
+        1082 to "artd",
+        1083 to "uwb",
+        1084 to "thread_network",
+        1085 to "diced",
+        1086 to "dmesgd",
+        1087 to "jc_weaver",
+        1088 to "jc_strongbox",
+        1089 to "jc_identitycred",
+        1090 to "sdk_sandbox",
+        1091 to "security_log_writer",
+        1092 to "prng_seeder",
+        1093 to "uprobestats",
+        1094 to "cros_ec",
+        1095 to "mmd",
+        2000 to "shell",
+        2001 to "cache",
+        2002 to "diag",
+        3001 to "net_bt_admin",
+        3002 to "net_bt",
+        3003 to "inet",
+        3004 to "net_raw",
+        3005 to "net_admin",
+        3006 to "net_bw_stats",
+        3007 to "net_bw_acct",
+        3009 to "readproc",
+        3010 to "wakelock",
+        3011 to "uhid",
+        3012 to "readtracefs",
+        3013 to "virtualmachine",
+        9997 to "everybody",
+        9998 to "misc",
+        9999 to "nobody",
+    )
+
+    /** 读取全部系统用户：系统 UID 映射 + pm list packages -U（应用 UID） */
     fun getSystemUsers(): List<SystemUser> {
-        val result = mutableMapOf<Int, String>()  // uid → username
+        val result = mutableMapOf<Int, String>()
 
-        // 1. 读取 /etc/passwd（多路径回退）
-        for (path in listOf("/etc/passwd", "/system/etc/passwd", "/vendor/etc/passwd")) {
-            try {
-                File(path).readLines().forEach { line ->
-                    val parts = line.split(":")
-                    if (parts.size >= 3) {
-                        val uid = parts[2].toIntOrNull()
-                        if (uid != null && uid !in result) result[uid] = parts[0]
-                    }
-                }
-            } catch (_: Exception) {}
-            if (result.isNotEmpty()) break
-        }
+        // 1. 系统 UID（android_filesystem_config.h）
+        result.putAll(SYSTEM_UID_MAP)
 
-        // 2. 读取 packages.list（应用 UID ≥ 10000）
+        // 2. 应用 UID（≥10000）：通过 pm list packages -U 获取包名+UID
         if (isRootEngine) {
-            for (path in listOf("/data/system/packages.list", "/system/packages.list")) {
-                val (stdout, _, exit) = try {
-                    SpecialPermissionVerifier.executeRootCommandFull("cat '$path'")
-                } catch (_: Exception) { Triple("", "", -1) }
-                if (exit == 0 && stdout.isNotBlank()) {
-                    stdout.lines().forEach { line ->
-                        val parts = line.split("\\s+".toRegex())
-                        if (parts.size >= 2) {
-                            val pkgName = parts[0]
-                            val uid = parts[1].toIntOrNull()
-                            if (uid != null && uid !in result) result[uid] = pkgName
-                        }
+            val (stdout, _, exit) = try {
+                SpecialPermissionVerifier.executeRootCommandFull("pm list packages -U")
+            } catch (_: Exception) { Triple("", "", -1) }
+            if (exit == 0 && stdout.isNotBlank()) {
+                stdout.lines().forEach { line ->
+                    // 格式: "package:com.example.app uid:10123"
+                    val pkg = line.removePrefix("package:").substringBefore(" ").trim()
+                    val uidStr = line.substringAfter("uid:", "").trim()
+                    val uid = uidStr.toIntOrNull()
+                    if (uid != null && uid >= 10000 && uid !in result) {
+                        result[uid] = pkg
                     }
-                    break
                 }
             }
         }
 
-        // 3. 确保关键系统用户存在
-        if (0 !in result) result[0] = "root"
-        if (2000 !in result) result[2000] = "shell"
-        if (1000 !in result) result[1000] = "system"
-
         return result.map { (uid, name) -> SystemUser(uid, name) }.sortedBy { it.uid }
     }
 
-    /** 读取全部系统用户组：/etc/group */
+    /** 读取全部系统用户组：系统 GID 映射 + pm list packages -G（应用 GID） */
     fun getSystemGroups(): List<SystemGroup> {
-        val result = mutableMapOf<Int, String>()  // gid → groupname
-        for (path in listOf("/etc/group", "/system/etc/group", "/vendor/etc/group")) {
-            try {
-                File(path).readLines().forEach { line ->
-                    val parts = line.split(":")
-                    if (parts.size >= 3) {
-                        val gid = parts[2].toIntOrNull()
-                        if (gid != null && gid !in result) result[gid] = parts[0]
+        val result = mutableMapOf<Int, String>()
+
+        // 系统 GID（与 UID 共享同一套映射）
+        SYSTEM_UID_MAP.forEach { (id, name) -> result[id] = name }
+
+        // 应用 GID：pm list packages -G
+        if (isRootEngine) {
+            val (stdout, _, exit) = try {
+                SpecialPermissionVerifier.executeRootCommandFull("pm list packages -G")
+            } catch (_: Exception) { Triple("", "", -1) }
+            if (exit == 0 && stdout.isNotBlank()) {
+                stdout.lines().forEach { line ->
+                    val pkg = line.removePrefix("package:").substringBefore(" ").trim()
+                    val gidStr = line.substringAfter("gid:", "").trim()
+                    val gid = gidStr.toIntOrNull()
+                    if (gid != null && gid >= 10000 && gid !in result) {
+                        result[gid] = pkg
                     }
                 }
-            } catch (_: Exception) {}
-            if (result.isNotEmpty()) break
+            }
         }
-        // 确保关键系统组存在
-        if (0 !in result) result[0] = "root"
-        if (2000 !in result) result[2000] = "shell"
-        if (1000 !in result) result[1000] = "system"
+
         return result.map { (gid, name) -> SystemGroup(gid, name) }.sortedBy { it.gid }
     }
 
