@@ -790,6 +790,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     }
                     }
                     }
+                }
                 // 下方 20dp：系统手势区域（随主题颜色）
                 val surfaceColor = MaterialTheme.colorScheme.surface
                 Box(
