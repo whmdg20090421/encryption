@@ -3864,7 +3864,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     }
                     vm.extractArchive(
                         outputDir = outputDir,
-                        onProgress = { _, _, _, _ },
+                        onProgress = { _, _, _, _ -> },
                         onComplete = { success, _, error ->
                             if (success) {
                                 Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
