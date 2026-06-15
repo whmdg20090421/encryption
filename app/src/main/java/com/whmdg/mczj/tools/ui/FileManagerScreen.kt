@@ -8,6 +8,9 @@ import android.widget.Toast
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.CompressService
+import com.whmdg.mczj.tools.util.AppIconHelper
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import androidx.compose.runtime.rememberCoroutineScope
@@ -62,6 +65,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import androidx.compose.ui.window.Dialog
@@ -1997,69 +2001,79 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 }
                             }
-                            // ── 第三行：大小刷新(文件夹)或属性 / 压缩 ──
+                            // ── 第三行：大小刷新(仅文件夹) / 属性 ──
+                            val isFolder = !isMultiSelect && selectedEntry?.isDirectory == true
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // 左列：大小刷新（仅文件夹）或属性（多选时禁用）
-                                if (!isMultiSelect && selectedEntry?.isDirectory == true) {
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .combinedClickable(
-                                                onClick = {
-                                                    val target = selectedEntry?.path
-                                                    selectedEntry = null
-                                                    if (target != null) vm.calculateFolderSizeAsync(target)
-                                                },
-                                                onLongClick = { showSizeCalcOptionsMenu = true }
-                                            )
-                                            .padding(vertical = 16.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        if (isToRight) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Text("大小刷新", style = MaterialTheme.typography.bodyLarge)
-                                                Icon(Icons.Default.FolderSpecial, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            }
-                                        } else {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(Icons.Default.FolderSpecial, contentDescription = null, modifier = Modifier.size(16.dp))
-                                                Text("大小刷新", style = MaterialTheme.typography.bodyLarge)
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable(enabled = !isMultiSelect) {
-                                                val entry = selectedEntry ?: return@clickable
-                                                propertyData = vm.getPropertyData(entry)
-                                                propertyEntry = entry
-                                                showPropertyDialog = true
+                                // 左列：大小刷新（仅文件夹可用）
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .combinedClickable(
+                                            enabled = isFolder,
+                                            onClick = {
+                                                val target = selectedEntry?.path
                                                 selectedEntry = null
-                                            }
-                                            .padding(vertical = 16.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        val label = if (!isMultiSelect && selectedEntry?.isDirectory == true) "大小刷新" else "属性"
-                                        if (isToRight) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Text(label, style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
-                                                Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
-                                            }
-                                        } else {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
-                                                Text(label, style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
-                                            }
+                                                if (target != null) vm.calculateFolderSizeAsync(target)
+                                            },
+                                            onLongClick = { if (isFolder) showSizeCalcOptionsMenu = true }
+                                        )
+                                        .padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isToRight) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("大小刷新", style = MaterialTheme.typography.bodyLarge, color = if (isFolder) Color.Unspecified else disabledColor)
+                                            Icon(Icons.Default.FolderSpecial, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isFolder) MaterialTheme.colorScheme.onSurface else disabledIconColor)
+                                        }
+                                    } else {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.FolderSpecial, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isFolder) MaterialTheme.colorScheme.onSurface else disabledIconColor)
+                                            Text("大小刷新", style = MaterialTheme.typography.bodyLarge, color = if (isFolder) Color.Unspecified else disabledColor)
                                         }
                                     }
                                 }
                                 VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
-                                // 右列：压缩
+                                // 右列：属性（文件和文件夹均可用，多选时禁用）
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable(enabled = !isMultiSelect) {
+                                            val entry = selectedEntry ?: return@clickable
+                                            propertyData = vm.getPropertyData(entry)
+                                            propertyEntry = entry
+                                            showPropertyDialog = true
+                                            selectedEntry = null
+                                        }
+                                        .padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isToRight) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("属性", style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
+                                            Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
+                                        }
+                                    } else {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
+                                            Text("属性", style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
+                                        }
+                                    }
+                                }
+                            }
+                            // ── 第四行：压缩 / 解压 ──
+                            val allArchives = if (isMultiSelect) {
+                                selectedEntries.all { CompressService.detectFormat(it.name) != null }
+                            } else {
+                                CompressService.detectFormat(selectedEntry?.name ?: "") != null
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // 左列：压缩
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
@@ -2083,45 +2097,20 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         }
                                     }
                                 }
-                            }
-                            // ── 第四行：关于 / 分享（多选时均禁用） ──
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // 左列：关于
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clickable(enabled = !isMultiSelect) {
-                                            val entry = selectedEntry ?: return@clickable
-                                            propertyData = vm.getPropertyData(entry)
-                                            propertyEntry = entry
-                                            showPropertyDialog = true
-                                            selectedEntry = null
-                                        }
-                                        .padding(vertical = 16.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (isToRight) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("关于", style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
-                                            Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
-                                        }
-                                    } else {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
-                                            Text("关于", style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
-                                        }
-                                    }
-                                }
                                 VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
-                                // 右列：分享
+                                // 右列：解压（仅当选中项全部为压缩包时可用）
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clickable(enabled = !isMultiSelect) {
-                                            Toast.makeText(context, "分享", Toast.LENGTH_SHORT).show()
+                                        .clickable(enabled = allArchives) {
+                                            val entry = selectedEntry ?: return@clickable
+                                            archivePendingEntry = entry
+                                            val format = CompressService.detectFormat(entry.name)
+                                            if (format != null && CompressService.isEncrypted(entry.path, format)) {
+                                                showArchivePasswordDialog = true
+                                            } else {
+                                                vm.openArchive(entry, "")
+                                            }
                                             selectedEntry = null
                                         }
                                         .padding(vertical = 16.dp),
@@ -2129,13 +2118,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 ) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("分享", style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
-                                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
+                                            Text("解压", style = MaterialTheme.typography.bodyLarge, color = if (allArchives) Color.Unspecified else disabledColor)
+                                            Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (allArchives) MaterialTheme.colorScheme.onSurface else disabledIconColor)
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (isMultiSelect) disabledIconColor else MaterialTheme.colorScheme.onSurface)
-                                            Text("分享", style = MaterialTheme.typography.bodyLarge, color = if (isMultiSelect) disabledColor else Color.Unspecified)
+                                            Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (allArchives) MaterialTheme.colorScheme.onSurface else disabledIconColor)
+                                            Text("解压", style = MaterialTheme.typography.bodyLarge, color = if (allArchives) Color.Unspecified else disabledColor)
                                         }
                                     }
                                 }
@@ -2828,6 +2817,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         var showUserPicker by remember { mutableStateOf(false) }
         var showGroupPicker by remember { mutableStateOf(false) }
 
+        // 扩展文件属性（chattr，仅 i/a 在 f2fs 上可用）
+        val originalExtFlags = remember { vm.readExtFlags(entry.path) }
+        var extImmutable by remember { mutableStateOf(originalExtFlags.contains('i')) }
+        var extAppend by remember { mutableStateOf(originalExtFlags.contains('a')) }
+        var showExtHelp by remember { mutableStateOf(false) }
+
         // 应用状态
         var applying by remember { mutableStateOf(false) }
         var errorMsg by remember { mutableStateOf<String?>(null) }
@@ -2932,6 +2927,57 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 }
                             }
+                            // ── 第4行：特殊扩展属性 ──
+                            HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(vertical = 4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "特殊",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.width(80.dp)
+                                )
+                                data class ExtFlag(val label: String, val key: Char, val get: () -> Boolean, val set: (Boolean) -> Unit)
+                                val extFlags = listOf(
+                                    ExtFlag("i", 'i', { extImmutable }, { extImmutable = it }),
+                                    ExtFlag("a", 'a', { extAppend }, { extAppend = it }),
+                                )
+                                extFlags.forEach { flag ->
+                                    Box(
+                                        modifier = Modifier.weight(1f),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            Checkbox(
+                                                checked = flag.get(),
+                                                onCheckedChange = { flag.set(it) },
+                                                enabled = vm.isRootEngine
+                                            )
+                                            Text(
+                                                text = flag.label,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (vm.isRootEngine) MaterialTheme.colorScheme.onSurfaceVariant
+                                                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                            )
+                                        }
+                                    }
+                                }
+                                // 问号帮助按钮
+                                Box(
+                                    modifier = Modifier.width(40.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    IconButton(onClick = { showExtHelp = true }, modifier = Modifier.size(24.dp)) {
+                                        Icon(
+                                            Icons.Default.Help,
+                                            contentDescription = "帮助",
+                                            modifier = Modifier.size(18.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -3014,13 +3060,23 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     originalUid = originalUid,
                                     originalGid = originalGid
                                 )
-                                applying = false
                                 if (result != null) {
+                                    applying = false
                                     errorMsg = result
                                 } else {
-                                    showPermissionEditor = false
-                                    // 刷新文件列表
-                                    vm.refreshCurrent()
+                                    // 应用扩展属性
+                                    val desiredFlags = buildSet {
+                                        if (extImmutable) add('i')
+                                        if (extAppend) add('a')
+                                    }
+                                    val extResult = vm.applyExtFlags(entry.path, desiredFlags, originalExtFlags)
+                                    applying = false
+                                    if (extResult != null) {
+                                        errorMsg = extResult
+                                    } else {
+                                        showPermissionEditor = false
+                                        vm.refreshCurrent()
+                                    }
                                 }
                             },
                             enabled = !applying
@@ -3120,6 +3176,38 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                             TextButton(onClick = { showGroupPicker = false }) { Text("取消") }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── 扩展属性帮助弹窗 ──
+        if (showExtHelp) {
+            Dialog(onDismissRequest = { showExtHelp = false }) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.85f),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("特殊属性说明", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                        // i - 不可变
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("i — 不可变 (Immutable)", style = MaterialTheme.typography.bodyMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+                            Text("设置后文件/目录无法被修改、删除、重命名或创建硬链接。即使 Root 用户也必须先移除此标志才能操作。常用于保护关键系统文件不被意外篡改。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        HorizontalDivider(thickness = 0.3.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                        // a - 仅追加
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("a — 仅追加 (Append Only)", style = MaterialTheme.typography.bodyMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+                            Text("文件只能以追加模式打开写入，不能覆盖已有内容，也不能删除。适用于日志文件等只需持续追加数据的场景。对目录设置时，目录内只能创建或修改文件，不能删除。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        HorizontalDivider(thickness = 0.3.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                        Text("以上属性均需 Root 权限才能修改，读取状态无需 Root。属性存储在文件系统的 inode 标志中，与基本 rwx 权限独立。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { showExtHelp = false }) { Text("知道了") }
                         }
                     }
                 }
@@ -4000,6 +4088,7 @@ private fun FileEntryRow(
     onSwipe: (Float) -> Unit = {},
     folderSize: String = ""
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val swipeOffset = remember { Animatable(0f) }
     var rowWidth by remember { mutableIntStateOf(0) }
@@ -4016,7 +4105,7 @@ private fun FileEntryRow(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(65.dp)
+                .height(60.dp)
                 .offset { IntOffset(swipeOffset.value.roundToInt(), 0) }
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures(
@@ -4084,17 +4173,32 @@ private fun FileEntryRow(
                                 iconSize = 28.dp
                             )
                         } else {
-                            Icon(
-                                imageVector = when {
-                                    entry.name == "返回上一级" -> Icons.Default.ArrowUpward
-                                    entry.isDirectory -> Icons.Default.Folder
-                                    else -> Icons.Default.InsertDriveFile
-                                },
-                                contentDescription = null,
-                                modifier = Modifier.size(28.dp),
-                                tint = if (isFocused) MaterialTheme.colorScheme.primary
-                                       else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            val appIconBitmap = if (entry.isDirectory && entry.name != "返回上一级") {
+                                val parentPath = File(entry.path).parent
+                                if (parentPath != null && AppIconHelper.isAppPackageDir(parentPath, entry.name)) {
+                                    AppIconHelper.getAppIconBitmap(context, entry.name)
+                                } else null
+                            } else null
+
+                            if (appIconBitmap != null) {
+                                Image(
+                                    painter = BitmapPainter(appIconBitmap),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(28.dp),
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = when {
+                                        entry.name == "返回上一级" -> Icons.Default.ArrowUpward
+                                        entry.isDirectory -> Icons.Default.Folder
+                                        else -> Icons.Default.InsertDriveFile
+                                    },
+                                    contentDescription = null,
+                                    modifier = Modifier.size(28.dp),
+                                    tint = if (isFocused) MaterialTheme.colorScheme.primary
+                                           else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
@@ -4109,7 +4213,7 @@ private fun FileEntryRow(
                         overflow = TextOverflow.Ellipsis,
                         softWrap = true,
                         textAlign = TextAlign.Start,
-                        style = MaterialTheme.typography.bodyMedium
+                        fontSize = 13.sp,
                     )
                 }
             }
@@ -4126,7 +4230,7 @@ private fun FileEntryRow(
                 }
                 Text(
                     text = label,
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -4139,7 +4243,7 @@ private fun FileEntryRow(
                 if (rightLabel.isNotEmpty()) {
                     Text(
                         text = rightLabel,
-                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 11.sp,
                         color = if (rightLabel == "✕") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }

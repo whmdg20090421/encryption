@@ -10,6 +10,7 @@ import coil3.disk.DiskCache
 import okio.Path.Companion.toPath
 import com.topjohnwu.superuser.Shell
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import com.whmdg.mczj.tools.util.AppIconHelper
 import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
 
@@ -23,6 +24,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
         installGlobalCrashHandler()
         migrateWebViewData()
         AppDataPaths.cleanArchiveCache(this)
+        AppIconHelper.init(this)
         WebView.setDataDirectorySuffix("app")
     }
 

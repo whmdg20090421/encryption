@@ -1942,8 +1942,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val prefix = entry.path + "/"
                 for ((path, child) in archiveMemFs!!.entries) {
                     if (!path.startsWith(prefix)) continue
-                    val remainder = path.removePrefix(prefix)
-                    if (remainder.contains('/')) continue
                     if (child is CompressService.ArchiveMemDir) folderCount++ else fileCount++
                 }
             }
@@ -2071,17 +2069,28 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         var fileCount = 0
         var folderCount = 0
         if (entry.isDirectory) {
-            val children = try { file.listFiles() } catch (_: Exception) { null }
-            if (children != null) {
-                for (child in children) {
-                    if (child.isDirectory) folderCount++ else fileCount++
+            if (hasShellEngine) {
+                // shell 模式：一条 find 命令递归统计文件和文件夹数量
+                val escaped = entry.path.replace("'", "'\\''")
+                val cmd = "d=\$(find '$escaped' -mindepth 1 -type d | wc -l); f=\$(find '$escaped' -type f | wc -l); echo \"\$d \$f\""
+                val (out, _, exit) = try { executeShell(cmd) } catch (_: Exception) { Triple("", "", -1) }
+                if (exit == 0 && out.isNotBlank()) {
+                    val parts = out.trim().split("\\s+".toRegex())
+                    if (parts.size >= 2) {
+                        folderCount = parts[0].toIntOrNull() ?: 0
+                        fileCount = parts[1].toIntOrNull() ?: 0
+                    }
                 }
-            } else if (hasShellEngine) {
-                // Java API 失败，通过 shell 统计子项数量
-                val shellEntries = listDirEntriesViaShell(entry.path, showHiddenFiles)
-                for (se in shellEntries) {
-                    if (se.isDirectory) folderCount++ else fileCount++
+            } else {
+                // 无 shell 引擎：Java API 递归统计
+                fun countRecursive(dir: File) {
+                    val children = try { dir.listFiles() } catch (_: Exception) { null } ?: return
+                    for (child in children) {
+                        if (child.isDirectory) { folderCount++; countRecursive(child) }
+                        else fileCount++
+                    }
                 }
+                countRecursive(file)
             }
         }
 
@@ -2188,6 +2197,45 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return "chown 失败 (exit $chownExit): $chownErr"
         }
 
+        return null
+    }
+
+    // ── 扩展文件属性（chattr/lsattr） ──
+
+    /** 读取扩展属性标志字符串（如 "----i----------" 或 "-a-----------"）。无 shell 引擎时返回空字符串。 */
+    fun readExtFlags(path: String): String {
+        if (!hasShellEngine) return ""
+        val escaped = path.replace("'", "'\\''")
+        val (out, _, exit) = try { executeShell("lsattr '$escaped'") } catch (_: Exception) { Triple("", "", -1) }
+        if (exit != 0 || out.isBlank()) return ""
+        val line = out.lines().firstOrNull { it.isNotBlank() } ?: return ""
+        // lsattr 输出格式: "----i----------  /path/to/file" 或 "----i----------" (部分实现)
+        val flags = line.split("\\s+".toRegex()).firstOrNull() ?: return ""
+        // 过滤掉位置指示符 '-'，只保留实际设置的标志
+        return flags.filter { it != '-' }
+    }
+
+    /** 应用扩展属性修改。传入目标标志字符集（如 "ia" 表示要设置 immutable + append-only）。成功返回 null。 */
+    fun applyExtFlags(path: String, desiredFlags: Set<Char>, originalFlags: String): String? {
+        if (!isRootEngine) return "需要 Root 权限"
+        val escaped = path.replace("'", "'\\''")
+        val originalSet = originalFlags.toSet()
+        // 需要添加的标志
+        val toAdd = desiredFlags - originalSet
+        // 需要移除的标志
+        val toRemove = originalSet - desiredFlags
+        if (toAdd.isNotEmpty()) {
+            val (_, err, exit) = try {
+                SpecialPermissionVerifier.executeRootCommandFull("chattr +${toAdd.joinToString("")} '$escaped'")
+            } catch (e: Exception) { return "chattr 执行异常: ${e.message}" }
+            if (exit != 0) return "chattr +${toAdd.joinToString("")} 失败: $err"
+        }
+        if (toRemove.isNotEmpty()) {
+            val (_, err, exit) = try {
+                SpecialPermissionVerifier.executeRootCommandFull("chattr -${toRemove.joinToString("")} '$escaped'")
+            } catch (e: Exception) { return "chattr 执行异常: ${e.message}" }
+            if (exit != 0) return "chattr -${toRemove.joinToString("")} 失败: $err"
+        }
         return null
     }
 
