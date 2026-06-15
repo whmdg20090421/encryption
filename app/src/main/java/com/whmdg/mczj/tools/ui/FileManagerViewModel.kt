@@ -60,7 +60,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private val context: Context get() = getApplication()
 
     // ── 引擎 & 权限 ──
-    private val secPrefs = context.getSharedPreferences("security_prefs", Context.MODE_PRIVATE)
     private val legacySp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
     val isRootEngine: Boolean
     private val permissionLevel: String
@@ -150,9 +149,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     init {
-        // 权限级别
-        permissionLevel = secPrefs.getString("target_permission_level", null)
-            ?: legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+        // 权限级别（统一从 legacySp 读取，与 HomeScreen / 安全设置一致）
+        permissionLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
         isRootEngine = permissionLevel == "ROOT" && SpecialPermissionVerifier.isRootAvailable()
 
         // 一次性旧数据迁移
@@ -164,9 +162,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (legacySp.contains("right_home_directory") && !fmPrefs.contains("right_home_directory")) {
             fmPrefs.edit().putString("right_home_directory", legacySp.getString("right_home_directory", null)).apply()
-        }
-        if (legacySp.contains("target_permission_level") && !secPrefs.contains("target_permission_level")) {
-            secPrefs.edit().putString("target_permission_level", legacySp.getString("target_permission_level", null)).apply()
         }
 
         // 读取主目录

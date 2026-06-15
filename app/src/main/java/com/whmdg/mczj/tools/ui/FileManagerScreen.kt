@@ -2206,10 +2206,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     // ── 诊断逻辑（仅 Debug 模式） ──
     LaunchedEffect(isDebugMode) {
         if (!isDebugMode) return@LaunchedEffect
-        val secPrefs = context.getSharedPreferences("security_prefs", Context.MODE_PRIVATE)
         val legacySp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
-        val permissionLevel = secPrefs.getString("target_permission_level", null)
-            ?: legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+        val permissionLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
 
         if (permissionLevel != "ROOT") {
             diagnosticMessage = "当前权限级别: $permissionLevel（非 Root 模式）"

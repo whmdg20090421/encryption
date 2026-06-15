@@ -128,8 +128,8 @@ object AppDataPaths {
     /** 文件管理器 SharedPreferences（同一个界面的设置存在同一个 XML） */
     const val PREFS_FILE_MANAGER = "file_manager_prefs"
 
-    /** 安全设置 SharedPreferences */
-    const val PREFS_SECURITY = "security_prefs"
+    /** 安全设置 SharedPreferences（已废弃，统一使用 PREFS_LEGACY_SPECIAL_PERMISSIONS） */
+    const val PREFS_SECURITY = "special_permissions"
 
     /** 加密设置 SharedPreferences */
     const val PREFS_ENCRYPTION = "encryption_settings"
@@ -152,7 +152,7 @@ object AppDataPaths {
     /** 权限管理模式 SharedPreferences */
     const val PREFS_PERMISSION_MANAGEMENT = "permission_management_mode"
 
-    /** 旧版特殊权限 SharedPreferences（多模块共享，逐步迁移到 PREFS_SECURITY） */
+    /** 特殊权限 SharedPreferences（多模块共享的唯一权限配置源） */
     const val PREFS_LEGACY_SPECIAL_PERMISSIONS = "special_permissions"
 
     /** FA 下载缓存 SharedPreferences */
