@@ -29,6 +29,23 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V2.7",
+        date = "2026-06-15",
+        items = listOf(
+            "文件管理器多选功能：滑动选中（25% 触发 / 50% 极限）+ 范围选中 + 批量操作（复制/移动/删除/属性），底部工具栏动画（+ 旋转变 × 平移到正中），5 个功能按钮（全选/反选/取消/筛选/唤醒）",
+            "移动/复制确认弹窗：选择目标操作后弹出确认框，显示文件数量，取消/确认双按钮",
+            "扩展属性 (chattr/lsattr) 支持：批量读取目录内文件的 i/a 标志并在列表中显示，属性面板可编辑扩展属性，FUSE 路径自动转换为真实路径",
+            "UID/GID 选择器重构：内置完整 AOSP AID 映射（116 条系统 UID/GID），pm list packages 动态获取应用 UID，当前值排序到顶部并高亮",
+            "软链接全面支持：识别、导航、stat 回退、类型检测统一使用 Os.stat() 穿透，ls 权限位作为辅助判断",
+            "新增「网络」模块及 WiFi 子模块（含免责声明）",
+            "权限诊断功能：Debug 模式下文件管理器 Root 诊断，应用启动时权限有效性自动检测，Root 权限申请触发 Magisk 授权弹窗",
+            "文件管理器工具栏重组 + 属性面板递归统计（文件/文件夹数量、总大小）",
+            "后退/前进按钮逻辑重构 + 滚动位置恢复优化（key() 重建 LazyListState 消除闪帧）",
+            "权限配置统一：合并 security_prefs 与 special_permissions 为单一配置源",
+            "时间戳统一使用中国时间 (UTC+8)，诊断信息 Debug/非Debug 弹窗分离 + 5 秒自动消失"
+        )
+    ),
+    ChangelogVersion(
         version = "V2.6",
         date = "2026-06-12",
         items = listOf(

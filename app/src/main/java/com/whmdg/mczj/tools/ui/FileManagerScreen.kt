@@ -234,6 +234,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var showPermissionEditor by remember { mutableStateOf(false) }
     var permissionEditorData by remember { mutableStateOf<FilePropertyData?>(null) }
     var permissionEditorEntry by remember { mutableStateOf<FileEntry?>(null) }
+    // 移动/复制确认弹窗
+    var showMoveCopyConfirm by remember { mutableStateOf(false) }
+    var moveCopyIsCopy by remember { mutableStateOf(true) }
+    var moveCopyCount by remember { mutableIntStateOf(0) }
 
     // ── 外部打开警告 ──
     var forceOpenError by remember { mutableStateOf<String?>(null) }
@@ -1880,21 +1884,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable {
-                                            val destDir = if (isToRight) vm.rightPath else vm.leftPath
-                                            val error = if (isMultiSelect) vm.copyEntries(selectedEntries, destDir)
-                                                        else vm.copyEntry(selectedEntry ?: return@clickable, destDir)
-                                            if (error == null) {
-                                                Toast.makeText(context, if (isMultiSelect) "批量复制成功" else "复制成功", Toast.LENGTH_SHORT).show()
-                                                vm.refreshBoth()
-                                            } else {
-                                                Toast.makeText(context, "复制失败: $error", Toast.LENGTH_SHORT).show()
-                                            }
-                                            selectedEntry = null
-                                            if (vm.focusedPanel == FocusedPanel.LEFT) {
-                                                leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
-                                            } else {
-                                                rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
-                                            }
+                                            val count = if (isMultiSelect) activeSelectedPaths.size else 1
+                                            moveCopyIsCopy = true
+                                            moveCopyCount = count
+                                            showMoveCopyConfirm = true
                                         }
                                         .padding(vertical = 16.dp),
                                     contentAlignment = Alignment.Center
@@ -1917,21 +1910,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable {
-                                            val destDir = if (isToRight) vm.rightPath else vm.leftPath
-                                            val error = if (isMultiSelect) vm.moveEntries(selectedEntries, destDir)
-                                                        else vm.moveEntry(selectedEntry ?: return@clickable, destDir)
-                                            if (error == null) {
-                                                Toast.makeText(context, if (isMultiSelect) "批量移动成功" else "移动成功", Toast.LENGTH_SHORT).show()
-                                                vm.refreshBoth()
-                                            } else {
-                                                Toast.makeText(context, "移动失败: $error", Toast.LENGTH_SHORT).show()
-                                            }
-                                            selectedEntry = null
-                                            if (vm.focusedPanel == FocusedPanel.LEFT) {
-                                                leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
-                                            } else {
-                                                rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
-                                            }
+                                            val count = if (isMultiSelect) activeSelectedPaths.size else 1
+                                            moveCopyIsCopy = false
+                                            moveCopyCount = count
+                                            showMoveCopyConfirm = true
                                         }
                                         .padding(vertical = 16.dp),
                                     contentAlignment = Alignment.Center
@@ -2148,6 +2130,51 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     ErrorDialog(error = diagnosticError, onDismiss = {
         diagnosticError = null
     })
+
+    // ── 移动/复制确认弹窗 ──
+    if (showMoveCopyConfirm) {
+        val actionText = if (moveCopyIsCopy) "复制" else "移动"
+        val leftFocused = vm.focusedPanel == FocusedPanel.LEFT
+        val activePaths = if (leftFocused) leftSelectedPaths else rightSelectedPaths
+        val isMulti = activePaths.size > 1
+        val entries = if (leftFocused)
+            vm.leftEntries.filter { it.path in activePaths }
+        else
+            vm.rightEntries.filter { it.path in activePaths }
+        AlertDialog(
+            onDismissRequest = { showMoveCopyConfirm = false },
+            title = { Text("确认$actionText") },
+            text = { Text("确定要$actionText ${moveCopyCount} 个项目吗？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showMoveCopyConfirm = false
+                    val destDir = if (leftFocused) vm.rightPath else vm.leftPath
+                    val error = if (moveCopyIsCopy) {
+                        if (isMulti) vm.copyEntries(entries, destDir)
+                        else vm.copyEntry(selectedEntry ?: return@TextButton, destDir)
+                    } else {
+                        if (isMulti) vm.moveEntries(entries, destDir)
+                        else vm.moveEntry(selectedEntry ?: return@TextButton, destDir)
+                    }
+                    if (error == null) {
+                        Toast.makeText(context, if (isMulti) "批量${actionText}成功" else "${actionText}成功", Toast.LENGTH_SHORT).show()
+                        vm.refreshBoth()
+                    } else {
+                        Toast.makeText(context, "${actionText}失败: $error", Toast.LENGTH_SHORT).show()
+                    }
+                    selectedEntry = null
+                    if (leftFocused) {
+                        leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
+                    } else {
+                        rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
+                    }
+                }) { Text("确认") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMoveCopyConfirm = false }) { Text("取消") }
+            }
+        )
+    }
 
     // ── 诊断逻辑（仅 Debug 模式） ──
     LaunchedEffect(isDebugMode) {
