@@ -2202,24 +2202,38 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 扩展文件属性（chattr/lsattr） ──
 
+    /** 将 FUSE 路径转换为底层真实路径，使 chattr/lsattr 能操作 inode 标志。 */
+    private fun toRealPathForAttr(path: String): String {
+        // /storage/emulated/0/xxx → /data/media/0/xxx
+        val regex = Regex("^/storage/emulated/(\\d+)/")
+        val match = regex.find(path)
+        return if (match != null) {
+            path.replaceFirst("/storage/emulated/${match.groupValues[1]}/", "/data/media/${match.groupValues[1]}/")
+        } else {
+            path
+        }
+    }
+
     /** 读取扩展属性标志字符串（如 "----i----------" 或 "-a-----------"）。无 shell 引擎时返回空字符串。 */
     fun readExtFlags(path: String): String {
         if (!hasShellEngine) return ""
-        val escaped = path.replace("'", "'\\''")
+        val realPath = toRealPathForAttr(path)
+        val escaped = realPath.replace("'", "'\\''")
         val (out, _, exit) = try { executeShell("lsattr '$escaped'") } catch (_: Exception) { Triple("", "", -1) }
         if (exit != 0 || out.isBlank()) return ""
         val line = out.lines().firstOrNull { it.isNotBlank() } ?: return ""
         // lsattr 输出格式: "----i----------  /path/to/file" 或 "----i----------" (部分实现)
         val flags = line.split("\\s+".toRegex()).firstOrNull() ?: return ""
-        // 过滤掉位置指示符 '-'，只保留实际设置的标志
-        return flags.filter { it != '-' }
+        // 只提取我们关心的标志（i/a），忽略 e/c/s 等文件系统默认标志
+        return flags.filter { it == 'i' || it == 'a' }
     }
 
     /** 应用扩展属性修改。传入目标标志字符集（如 "ia" 表示要设置 immutable + append-only）。成功返回 null。 */
     fun applyExtFlags(path: String, desiredFlags: Set<Char>, originalFlags: String): String? {
         if (!isRootEngine) return "需要 Root 权限"
-        val escaped = path.replace("'", "'\\''")
-        val originalSet = originalFlags.toSet()
+        val realPath = toRealPathForAttr(path)
+        val escaped = realPath.replace("'", "'\\''")
+        val originalSet = originalFlags.filter { it == 'i' || it == 'a' }.toSet()
         // 需要添加的标志
         val toAdd = desiredFlags - originalSet
         // 需要移除的标志
