@@ -547,16 +547,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         ) {
                             IconButton(
                                 onClick = {
-                                    vm.saveScrollPosition(
-                                        leftListState.firstVisibleItemIndex,
-                                        leftListState.firstVisibleItemScrollOffset,
-                                        rightListState.firstVisibleItemIndex,
-                                        rightListState.firstVisibleItemScrollOffset
-                                    )
                                     val targetPath = vm.goBack()
                                     if (targetPath != null) {
                                         val saved = vm.getScrollPosition(targetPath)
-                                        vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+                                        vm.pendingScrollTo = Triple(targetPath, saved?.first ?: 0, saved?.second ?: 0)
                                     }
                                 },
                                 enabled = vm.currentNavState.canGoBack
@@ -571,16 +565,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         ) {
                             IconButton(
                                 onClick = {
-                                    vm.saveScrollPosition(
-                                        leftListState.firstVisibleItemIndex,
-                                        leftListState.firstVisibleItemScrollOffset,
-                                        rightListState.firstVisibleItemIndex,
-                                        rightListState.firstVisibleItemScrollOffset
-                                    )
                                     val targetPath = vm.goForward()
                                     if (targetPath != null) {
                                         val saved = vm.getScrollPosition(targetPath)
-                                        vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+                                        vm.pendingScrollTo = Triple(targetPath, saved?.first ?: 0, saved?.second ?: 0)
                                     }
                                 },
                                 enabled = vm.currentNavState.canGoForward

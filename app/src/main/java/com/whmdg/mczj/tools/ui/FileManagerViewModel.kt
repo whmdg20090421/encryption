@@ -574,17 +574,38 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 后退，返回目标路径，null 表示无法后退（不执行跳转，由调用方通过 navigateToWithScroll 跳转） */
+    /** 后退一步：更新 nav state index + 切换路径 + 刷新列表，返回目标路径 */
     fun goBack(): String? {
-        val nav = if (focusedPanel == FocusedPanel.LEFT) leftNavState else rightNavState
-        val back = nav.back() ?: return null
-        return back.current
+        if (focusedPanel == FocusedPanel.LEFT) {
+            val back = leftNavState.back() ?: return null
+            leftNavState = back
+            leftPath = back.current
+            leftEntries = listDirectory(leftPath)
+            return leftPath
+        } else {
+            val back = rightNavState.back() ?: return null
+            rightNavState = back
+            rightPath = back.current
+            rightEntries = listDirectory(rightPath)
+            return rightPath
+        }
     }
 
-    /** 前进，返回目标路径，null 表示无法前进（不执行跳转，由调用方通过 navigateToWithScroll 跳转） */
+    /** 前进一步：更新 nav state index + 切换路径 + 刷新列表，返回目标路径 */
     fun goForward(): String? {
-        val nav = if (focusedPanel == FocusedPanel.LEFT) leftNavState else rightNavState
-        val fwd = nav.forward() ?: return null
-        return fwd.current
+        if (focusedPanel == FocusedPanel.LEFT) {
+            val fwd = leftNavState.forward() ?: return null
+            leftNavState = fwd
+            leftPath = fwd.current
+            leftEntries = listDirectory(leftPath)
+            return leftPath
+        } else {
+            val fwd = rightNavState.forward() ?: return null
+            rightNavState = fwd
+            rightPath = fwd.current
+            rightEntries = listDirectory(rightPath)
+            return rightPath
+        }
     }
 
     /** 返回上级目录，返回目标路径，null 表示已在根目录（不执行跳转，由调用方通过 navigateToWithScroll 跳转） */
