@@ -2135,40 +2135,72 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     data class SystemUser(val uid: Int, val username: String)
     data class SystemGroup(val gid: Int, val groupname: String)
 
-    /** 从 /etc/passwd 读取全部系统用户（与 resolveUserName 同策略，直接文件读取） */
+    /** 读取全部系统用户：/etc/passwd + packages.list（应用 UID） */
     fun getSystemUsers(): List<SystemUser> {
-        val paths = listOf("/etc/passwd", "/system/etc/passwd", "/vendor/etc/passwd")
-        for (path in paths) {
-            val users = try {
-                File(path).readLines().mapNotNull { line ->
+        val result = mutableMapOf<Int, String>()  // uid → username
+
+        // 1. 读取 /etc/passwd（多路径回退）
+        for (path in listOf("/etc/passwd", "/system/etc/passwd", "/vendor/etc/passwd")) {
+            try {
+                File(path).readLines().forEach { line ->
                     val parts = line.split(":")
                     if (parts.size >= 3) {
                         val uid = parts[2].toIntOrNull()
-                        if (uid != null) SystemUser(uid, parts[0]) else null
-                    } else null
+                        if (uid != null && uid !in result) result[uid] = parts[0]
+                    }
                 }
-            } catch (_: Exception) { emptyList() }
-            if (users.isNotEmpty()) return users.sortedBy { it.uid }
+            } catch (_: Exception) {}
+            if (result.isNotEmpty()) break
         }
-        return emptyList()
+
+        // 2. 读取 packages.list（应用 UID ≥ 10000）
+        if (isRootEngine) {
+            for (path in listOf("/data/system/packages.list", "/system/packages.list")) {
+                val (stdout, _, exit) = try {
+                    SpecialPermissionVerifier.executeRootCommandFull("cat '$path'")
+                } catch (_: Exception) { Triple("", "", -1) }
+                if (exit == 0 && stdout.isNotBlank()) {
+                    stdout.lines().forEach { line ->
+                        val parts = line.split("\\s+".toRegex())
+                        if (parts.size >= 2) {
+                            val pkgName = parts[0]
+                            val uid = parts[1].toIntOrNull()
+                            if (uid != null && uid !in result) result[uid] = pkgName
+                        }
+                    }
+                    break
+                }
+            }
+        }
+
+        // 3. 确保关键系统用户存在
+        if (0 !in result) result[0] = "root"
+        if (2000 !in result) result[2000] = "shell"
+        if (1000 !in result) result[1000] = "system"
+
+        return result.map { (uid, name) -> SystemUser(uid, name) }.sortedBy { it.uid }
     }
 
-    /** 从 /etc/group 读取全部系统用户组（与 resolveGroupName 同策略，直接文件读取） */
+    /** 读取全部系统用户组：/etc/group */
     fun getSystemGroups(): List<SystemGroup> {
-        val paths = listOf("/etc/group", "/system/etc/group", "/vendor/etc/group")
-        for (path in paths) {
-            val groups = try {
-                File(path).readLines().mapNotNull { line ->
+        val result = mutableMapOf<Int, String>()  // gid → groupname
+        for (path in listOf("/etc/group", "/system/etc/group", "/vendor/etc/group")) {
+            try {
+                File(path).readLines().forEach { line ->
                     val parts = line.split(":")
                     if (parts.size >= 3) {
                         val gid = parts[2].toIntOrNull()
-                        if (gid != null) SystemGroup(gid, parts[0]) else null
-                    } else null
+                        if (gid != null && gid !in result) result[gid] = parts[0]
+                    }
                 }
-            } catch (_: Exception) { emptyList() }
-            if (groups.isNotEmpty()) return groups.sortedBy { it.gid }
+            } catch (_: Exception) {}
+            if (result.isNotEmpty()) break
         }
-        return emptyList()
+        // 确保关键系统组存在
+        if (0 !in result) result[0] = "root"
+        if (2000 !in result) result[2000] = "shell"
+        if (1000 !in result) result[1000] = "system"
+        return result.map { (gid, name) -> SystemGroup(gid, name) }.sortedBy { it.gid }
     }
 
     /** 读取 /etc/passwd 解析 UID→用户名（无需 root） */
@@ -2264,9 +2296,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val realPath = toRealPathForAttr(dirPath)
-        val escaped = realPath.replace("'", "'\\''")
+        val escaped = realPath.trimEnd('/').replace("'", "'\\''")
+        // 使用 lsattr 目录/* 展开通配符，确保列出目录内容（Android toybox 的 lsattr 可能不支持目录参数）
         val (out, _, exit) = try {
-            executeShell("lsattr '$escaped'")
+            executeShell("lsattr '$escaped/'* 2>/dev/null")
         } catch (_: Exception) {
             Triple("", "", -1)
         }
@@ -2278,12 +2311,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         for (raw in out.lines()) {
             val line = raw.trimEnd('\r')
             if (line.isBlank()) continue
-            // lsattr 输出: "----i----------  /path/to/file" 或 "----i---------- filename"
+            // lsattr 输出: "----i----------  /path/to/file"
             val parts = line.split("\\s+".toRegex(), limit = 2)
             if (parts.size < 2) continue
             val flags = parts[0].filter { it == 'i' || it == 'a' }
             if (flags.isEmpty()) continue
-            // 提取文件名（去掉路径前缀）
             val nameOrPath = parts[1].trim()
             val name = nameOrPath.substringAfterLast('/')
             if (name.isNotEmpty()) {
