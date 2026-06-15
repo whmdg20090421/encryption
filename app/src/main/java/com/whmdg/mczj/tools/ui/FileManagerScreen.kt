@@ -272,7 +272,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var extractPendingEntry by remember { mutableStateOf<FileEntry?>(null) }
     var extractToSubfolder by remember { mutableStateOf(true) } // true=解压到同名文件夹, false=解压到当前目录
     var extractPath by remember { mutableStateOf("") }
-    var extractAfterPassword by remember { mutableStateOf(false) } // 密码验证后显示解压对话框
+    var extractUseOtherPanel by remember { mutableStateOf(false) } // 基于另一窗口路径
+    var extractAfterPasswordOutputDir by remember { mutableStateOf("") } // 加密解压时暂存输出目录
 
     // ── 快捷访问 ──
     val quickAccessPrefs = context.getSharedPreferences("quick_access_prefs", Context.MODE_PRIVATE)
@@ -2103,15 +2104,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         .clickable(enabled = allArchives) {
                                             val entry = selectedEntry ?: return@clickable
                                             extractPendingEntry = entry
-                                            val format = CompressService.detectFormat(entry.name)
-                                            if (format != null && CompressService.isEncrypted(entry.path, format)) {
-                                                archivePendingEntry = entry
-                                                extractAfterPassword = true
-                                                showArchivePasswordDialog = true
-                                            } else {
-                                                extractPath = entry.path.substringBeforeLast('/')
-                                                showExtractDialog = true
-                                            }
+                                            extractPath = entry.path.substringBeforeLast('/')
+                                            extractToSubfolder = true
+                                            extractUseOtherPanel = false
+                                            showExtractDialog = true
                                             selectedEntry = null
                                         }
                                         .padding(vertical = 16.dp),
@@ -3817,76 +3813,146 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     // ── 解压对话框 ──
     if (showExtractDialog && extractPendingEntry != null) {
         val entry = extractPendingEntry!!
-        AlertDialog(
-            onDismissRequest = {
-                showExtractDialog = false
-                extractPendingEntry = null
-            },
-            title = { Text("解压") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        text = "「${entry.name}」",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    // 解压方式选择
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = !extractToSubfolder,
-                            onClick = { extractToSubfolder = false }
+        val isDark = isSystemInDarkTheme()
+
+        Dialog(onDismissRequest = {
+            showExtractDialog = false
+            extractPendingEntry = null
+        }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.85f),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        // 标题
+                        Text(
+                            text = "解压",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
-                        Text("解压到当前目录", modifier = Modifier.clickable { extractToSubfolder = false })
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = extractToSubfolder,
-                            onClick = { extractToSubfolder = true }
+
+                        // 单选：解压到当前目录 / 解压到文件夹
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = !extractToSubfolder,
+                                onClick = { extractToSubfolder = false }
+                            )
+                            Text("解压到当前目录", modifier = Modifier.clickable { extractToSubfolder = false })
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = extractToSubfolder,
+                                onClick = { extractToSubfolder = true }
+                            )
+                            Text("解压到文件夹...", modifier = Modifier.clickable { extractToSubfolder = true })
+                        }
+
+                        // 路径输入框
+                        OutlinedTextField(
+                            value = extractPath,
+                            onValueChange = { extractPath = it },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = MaterialTheme.typography.bodyMedium
                         )
-                        Text("解压到同名文件夹", modifier = Modifier.clickable { extractToSubfolder = true })
-                    }
-                    // 路径显示
-                    Text(
-                        text = "输出路径: $extractPath",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showExtractDialog = false
-                    val entryName = entry.name.substringBeforeLast('.')
-                    val outputDir = if (extractToSubfolder) {
-                        "$extractPath/$entryName"
-                    } else {
-                        extractPath
-                    }
-                    vm.extractArchive(
-                        outputDir = outputDir,
-                        onProgress = { _, _, _, _ -> },
-                        onComplete = { success, _, error ->
-                            if (success) {
-                                Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
-                            } else if (error != "已取消") {
-                                Toast.makeText(context, "解压失败: $error", Toast.LENGTH_SHORT).show()
+
+                        // 基于另一窗口路径
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clickable { extractUseOtherPanel = !extractUseOtherPanel }
+                                .padding(vertical = 2.dp)
+                        ) {
+                            Checkbox(
+                                checked = extractUseOtherPanel,
+                                onCheckedChange = { extractUseOtherPanel = it }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "基于另一窗口路径",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+
+                        // 底部按钮
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = {
+                                showExtractDialog = false
+                                extractPendingEntry = null
+                            }) {
+                                Text("关闭", color = MaterialTheme.colorScheme.primary)
+                            }
+                            TextButton(onClick = {
+                                showExtractDialog = false
+                                val basePath = if (extractUseOtherPanel) {
+                                    if (vm.focusedPanel == FocusedPanel.LEFT) vm.rightPath else vm.leftPath
+                                } else {
+                                    extractPath
+                                }
+                                val entryName = entry.name.substringBeforeLast('.')
+                                val outputDir = if (extractToSubfolder) "$basePath/$entryName" else basePath
+                                val extractEntry = entry
+
+                                // 检测是否加密
+                                val format = CompressService.detectFormat(extractEntry.name)
+                                val encrypted = format != null && CompressService.isEncrypted(extractEntry.path, format)
+
+                                fun doExtract() {
+                                    vm.extractArchive(
+                                        outputDir = outputDir,
+                                        onProgress = { _, _, _, _ -> },
+                                        onComplete = { success, _, error ->
+                                            if (success) Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
+                                            else if (error != "已取消") Toast.makeText(context, "解压失败: $error", Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
+                                }
+
+                                if (encrypted) {
+                                    // 弹密码框
+                                    archivePendingEntry = extractEntry
+                                    archivePasswordInput = ""
+                                    extractAfterPasswordOutputDir = outputDir
+                                    showArchivePasswordDialog = true
+                                } else {
+                                    // 无密码：先加载索引再解压
+                                    coroutineScope.launch(Dispatchers.IO) {
+                                        val error = vm.loadArchiveIndex(extractEntry, "")
+                                        withContext(Dispatchers.Main) {
+                                            if (error != null) {
+                                                Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                doExtract()
+                                            }
+                                        }
+                                    }
+                                }
+                                extractPendingEntry = null
+                            }) {
+                                Text("确定", color = MaterialTheme.colorScheme.primary)
                             }
                         }
-                    )
-                    extractPendingEntry = null
-                }) {
-                    Text("确认")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showExtractDialog = false
-                    extractPendingEntry = null
-                }) {
-                    Text("取消")
+                    }
                 }
             }
-        )
+        }
     }
 
     // ── 压缩包密码输入对话框 ──
@@ -3901,7 +3967,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 archivePendingEntry = null
                 archivePasswordInput = ""
                 errorMsg = null
-                extractAfterPassword = false
             },
             title = { Text("请输入密码") },
             text = {
@@ -3951,8 +4016,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         errorMsg = null
                         val entry = archivePendingEntry!!
                         val password = archivePasswordInput
+                        val outputDir = extractAfterPasswordOutputDir
                         coroutineScope.launch(Dispatchers.IO) {
-                            val error = vm.openArchive(entry, password)
+                            val error = vm.loadArchiveIndex(entry, password)
                             withContext(Dispatchers.Main) {
                                 verifying = false
                                 if (error != null) {
@@ -3961,11 +4027,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     showArchivePasswordDialog = false
                                     archivePendingEntry = null
                                     archivePasswordInput = ""
-                                    if (extractAfterPassword) {
-                                        extractAfterPassword = false
-                                        extractPath = entry.path.substringBeforeLast('/')
-                                        showExtractDialog = true
-                                    }
+                                    // 密码验证通过，直接解压
+                                    vm.extractArchive(
+                                        outputDir = outputDir,
+                                        onProgress = { _, _, _, _ -> },
+                                        onComplete = { success, _, err ->
+                                            if (success) Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
+                                            else if (err != "已取消") Toast.makeText(context, "解压失败: $err", Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -3981,7 +4051,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     archivePendingEntry = null
                     archivePasswordInput = ""
                     errorMsg = null
-                    extractAfterPassword = false
                 }) {
                     Text("取消")
                 }

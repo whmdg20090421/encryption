@@ -1492,6 +1492,48 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 仅加载压缩包索引，不切换 UI 到浏览模式（供解压使用）。
+     * @param entry 压缩包文件的 FileEntry
+     * @param password 密码（空=无密码）
+     * @return 错误信息，null 表示成功
+     */
+    fun loadArchiveIndex(entry: FileEntry, password: String): String? {
+        try {
+            val format = CompressService.detectFormat(entry.name)
+                ?: CompressService.detectFormatByMagic(File(entry.path))
+                ?: return "不支持的压缩格式"
+
+            // RAR5 检测
+            if (format == "rar") {
+                try {
+                    val fis = File(entry.path).inputStream()
+                    val header = ByteArray(7)
+                    fis.read(header)
+                    fis.close()
+                    if (header.size >= 7 && header[6].toInt() and 0xFF >= 2) {
+                        return "不支持 RAR5+ 格式"
+                    }
+                } catch (_: Exception) {}
+            }
+
+            if (password.isNotEmpty()) {
+                if (!CompressService.verifyPassword(entry.path, format, password)) {
+                    return "密码错误"
+                }
+            }
+
+            val memFs = CompressService.openArchiveIndex(entry.path, format, password)
+            archiveMemFs = memFs
+            archiveFormat = format
+            archivePassword = password
+            return null
+        } catch (e: Exception) {
+            Log.e("FileMgr", "加载压缩包索引失败", e)
+            return "加载失败: ${e.message}"
+        }
+    }
+
     /** 在压缩包内进入子文件夹 */
     fun navigateInArchive(entry: FileEntry) {
         if (!entry.isDirectory) return
