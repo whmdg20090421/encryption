@@ -12,8 +12,9 @@ import kotlinx.coroutines.delay
  *   - 若有 → 差异统计 [diffScan]（BFS 全量收集 + 从叶子向上 mtime 对比 + delta 冒泡）
  *
  * 算法关键不变量：
- *   - diffScan 的 BFS 不做 mtime 剪枝，无条件遍历所有目录，确保叶子变化不被遗漏
- *   - POSIX 保证：目录内文件增删时其 mtime 变化（但子目录内部变化不会传播到父目录）
+ *   - diffScan 的 BFS 遍历子目录时检查缓存 mtime，未变则跳过子树（POSIX 保证：
+ *     目录内文件增删时其 mtime 变化，mtime 不变 = 子树结构未变，可安全复用缓存）
+ *   - 跳过的目录不进入 currentChildren，累加阶段不会处理，缓存值自然被使用
  *   - 累加阶段从叶子向根逐级检查 mtime，mtime 未变则复用旧 size + 子目录 delta，
  *     mtime 变化则重扫该目录并将 delta 向上冒泡
  *
@@ -129,10 +130,11 @@ private suspend fun fullScan(
 }
 
 /**
- * 差异统计：BFS 收集全部目录 → 从叶子向上逐级 mtime 对比 + delta 冒泡。
+ * 差异统计：BFS 收集目录（mtime 未变的子树跳过）→ 从叶子向上逐级 mtime 对比 + delta 冒泡。
  *
- * 与旧版的关键区别：BFS 不做 mtime 剪枝，无条件遍历所有目录，
- * 确保叶子的变化一定能被检测到并向上传递。
+ * BFS 阶段优化：遍历子目录时检查 snapshot 中的缓存 mtime，
+ * 若未变则跳过该子树入队（不进入 currentChildren），
+ * 累加阶段不处理这些目录，缓存值自然被使用，delta 也不会误冒泡。
  *
  * 累加阶段（按深度降序，叶子先处理）：
  *   - 旧节点存在且 mtime 不变：newSize = oldSize + childDelta（仅当 childDelta != 0 才更新 DB）
@@ -161,7 +163,7 @@ private suspend fun diffScan(
     queue.add(rootPath to 0)
     depth[rootPath] = 0
 
-    // BFS 阶段：无条件收集全部目录树（不做 mtime 剪枝，确保叶子变化不被遗漏）
+    // BFS 阶段：收集目录树，mtime 未变的子树跳过（不入队，缓存值在累加阶段自然被使用）
     var scanned = 0
     while (queue.isNotEmpty()) {
         if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
@@ -184,6 +186,9 @@ private suspend fun diffScan(
             if (e.isDir) {
                 currentMtimes[e.path] = e.mtime
                 depth[e.path] = d + 1
+                // 缓存命中且 mtime 未变 → 跳过子树，累加阶段直接用缓存冒泡
+                val cached = snapshot[e.path]
+                if (cached != null && e.mtime == cached.lastModified) continue
                 queue.add(e.path to d + 1)
             }
         }

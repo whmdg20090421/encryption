@@ -45,8 +45,10 @@ object CompressService {
     data class ProgressInfo(
         val currentFile: Int,
         val totalFiles: Int,
-        val progress: Float,          // 0.0 - 1.0
-        val currentFileName: String = ""
+        val progress: Float,          // 0.0 - 1.0（基于字节大小）
+        val currentFileName: String = "",
+        val bytesProcessed: Long = 0,
+        val totalBytes: Long = 0
     )
 
     interface ProgressCallback {
@@ -147,6 +149,9 @@ object CompressService {
         callback: ProgressCallback
     ) {
         val baseDir = if (source.isDirectory) source.parentFile else source.parentFile
+        val totalSize = files.sumOf { if (it.isFile) it.length() else 0L }.coerceAtLeast(1L)
+        var bytesProcessed = 0L
+
         ZipOutputStream(BufferedOutputStream(FileOutputStream(options.outputPath))).use { zos ->
             zos.setLevel(options.compressionLevel.coerceIn(0, 9))
 
@@ -182,7 +187,8 @@ object CompressService {
                 zos.closeEntry()
 
                 val count = counter.incrementAndGet()
-                callback.onProgress(ProgressInfo(count, total, count.toFloat() / total, file.name))
+                if (file.isFile) bytesProcessed += file.length()
+                callback.onProgress(ProgressInfo(count, total, bytesProcessed.toFloat() / totalSize, file.name, bytesProcessed, totalSize))
             }
         }
         callback.onComplete(true, options.outputPath, null)
@@ -201,6 +207,8 @@ object CompressService {
         val total = files.size.coerceAtLeast(1)
         val counter = AtomicInteger(0)
         val baseDir = if (source.isDirectory) source.parentFile else source.parentFile
+        val totalSize = files.sumOf { if (it.isFile) it.length() else 0L }.coerceAtLeast(1L)
+        var bytesProcessed = 0L
 
         val fos = FileOutputStream(options.outputPath)
         val buffered = BufferedOutputStream(fos)
@@ -249,7 +257,8 @@ object CompressService {
                 tarOut.closeArchiveEntry()
 
                 val count = counter.incrementAndGet()
-                callback.onProgress(ProgressInfo(count, total, count.toFloat() / total, file.name))
+                if (file.isFile) bytesProcessed += file.length()
+                callback.onProgress(ProgressInfo(count, total, bytesProcessed.toFloat() / totalSize, file.name, bytesProcessed, totalSize))
             }
         } finally {
             tarOut.finish()
@@ -275,6 +284,8 @@ object CompressService {
         val total = files.size.coerceAtLeast(1)
         val counter = AtomicInteger(0)
         val baseDir = if (source.isDirectory) source.parentFile else source.parentFile
+        val totalSize = files.sumOf { if (it.isFile) it.length() else 0L }.coerceAtLeast(1L)
+        var bytesProcessed = 0L
 
         val sevenZFile = SevenZOutputFile(File(options.outputPath))
         try {
@@ -309,7 +320,8 @@ object CompressService {
                 sevenZFile.closeArchiveEntry()
 
                 val count = counter.incrementAndGet()
-                callback.onProgress(ProgressInfo(count, total, count.toFloat() / total, file.name))
+                if (file.isFile) bytesProcessed += file.length()
+                callback.onProgress(ProgressInfo(count, total, bytesProcessed.toFloat() / totalSize, file.name, bytesProcessed, totalSize))
             }
         } finally {
             sevenZFile.finish()
@@ -987,6 +999,56 @@ object CompressService {
         val targetFile = File(targetDir, entry.name)
         targetFile.writeBytes(data)
         return targetFile
+    }
+
+    /**
+     * 批量解压整个压缩包到目标目录。
+     * @param memFs 已打开的压缩包内存索引
+     * @param outputDir 输出目录
+     * @param cancelFlag 取消标志
+     * @param callback 进度回调
+     */
+    fun extractAll(
+        memFs: ArchiveMemFs,
+        outputDir: File,
+        cancelFlag: AtomicBoolean,
+        callback: ProgressCallback
+    ) {
+        val files = memFs.entries.values.filterIsInstance<ArchiveMemFile>()
+        val totalFiles = files.size.coerceAtLeast(1)
+        val totalSize = files.sumOf { it.size }.coerceAtLeast(1L)
+        var bytesProcessed = 0L
+        var fileCount = 0
+
+        if (!outputDir.exists()) outputDir.mkdirs()
+
+        // 创建所有目录
+        val dirs = memFs.entries.values.filterIsInstance<ArchiveMemDir>()
+        for (dir in dirs) {
+            File(outputDir, dir.path).mkdirs()
+        }
+
+        try {
+            for (file in files) {
+                if (cancelFlag.get()) {
+                    callback.onComplete(false, null, "已取消")
+                    return
+                }
+
+                val targetFile = File(outputDir, file.path)
+                targetFile.parentFile?.mkdirs()
+
+                val data = memFs.reader.readEntry(file)
+                targetFile.writeBytes(data)
+
+                bytesProcessed += file.size
+                fileCount++
+                callback.onProgress(ProgressInfo(fileCount, totalFiles, bytesProcessed.toFloat() / totalSize, file.name, bytesProcessed, totalSize))
+            }
+            callback.onComplete(true, outputDir.absolutePath, null)
+        } catch (e: Exception) {
+            callback.onComplete(false, null, "解压失败: ${e.message}")
+        }
     }
 
     // ── 各格式 ArchiveReader 实现 ──

@@ -8,11 +8,13 @@ import android.widget.Toast
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.CompressService
+import com.whmdg.mczj.tools.util.FormatUtils
 import com.whmdg.mczj.tools.util.AppIconHelper
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -239,6 +241,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var moveCopyIsCopy by remember { mutableStateOf(true) }
     var moveCopyCount by remember { mutableIntStateOf(0) }
 
+    // 文件操作进度（从 ViewModel StateFlow 收集）
+    val fileOpProgress by vm.fileOpProgress.collectAsState()
+
     // ── 外部打开警告 ──
     var forceOpenError by remember { mutableStateOf<String?>(null) }
 
@@ -249,6 +254,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var compressProgress by remember { mutableStateOf(0f) }
     var compressCurrentFile by remember { mutableStateOf(0) }
     var compressTotalFiles by remember { mutableStateOf(0) }
+    var compressBytesProcessed by remember { mutableStateOf(0L) }
+    var compressTotalBytes by remember { mutableStateOf(0L) }
     var compressOutputToOtherPanel by remember { mutableStateOf(false) }
     var compressUseAes by remember { mutableStateOf(true) }
     var compressOutputPath by remember { mutableStateOf("") }
@@ -259,6 +266,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var archivePendingEntry by remember { mutableStateOf<FileEntry?>(null) }
     var showArchiveOpening by remember { mutableStateOf(false) }
     var archiveOpenError by remember { mutableStateOf<String?>(null) }
+
+    // ── 解压对话框状态 ──
+    var showExtractDialog by remember { mutableStateOf(false) }
+    var extractPendingEntry by remember { mutableStateOf<FileEntry?>(null) }
+    var extractToSubfolder by remember { mutableStateOf(true) } // true=解压到同名文件夹, false=解压到当前目录
+    var extractPath by remember { mutableStateOf("") }
+    var extractAfterPassword by remember { mutableStateOf(false) } // 密码验证后显示解压对话框
 
     // ── 快捷访问 ──
     val quickAccessPrefs = context.getSharedPreferences("quick_access_prefs", Context.MODE_PRIVATE)
@@ -2088,12 +2102,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         .weight(1f)
                                         .clickable(enabled = allArchives) {
                                             val entry = selectedEntry ?: return@clickable
-                                            archivePendingEntry = entry
+                                            extractPendingEntry = entry
                                             val format = CompressService.detectFormat(entry.name)
                                             if (format != null && CompressService.isEncrypted(entry.path, format)) {
+                                                archivePendingEntry = entry
+                                                extractAfterPassword = true
                                                 showArchivePasswordDialog = true
                                             } else {
-                                                vm.openArchive(entry, "")
+                                                extractPath = entry.path.substringBeforeLast('/')
+                                                showExtractDialog = true
                                             }
                                             selectedEntry = null
                                         }
@@ -2149,24 +2166,26 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 TextButton(onClick = {
                     showMoveCopyConfirm = false
                     val destDir = if (leftFocused) vm.rightPath else vm.leftPath
-                    val error = if (moveCopyIsCopy) {
-                        if (isMulti) vm.copyEntries(entries, destDir)
-                        else vm.copyEntry(selectedEntry ?: return@TextButton, destDir)
-                    } else {
-                        if (isMulti) vm.moveEntries(entries, destDir)
-                        else vm.moveEntry(selectedEntry ?: return@TextButton, destDir)
+                    val doAfter = { error: String? ->
+                        if (error == null) {
+                            Toast.makeText(context, if (isMulti) "批量${actionText}成功" else "${actionText}成功", Toast.LENGTH_SHORT).show()
+                            vm.refreshBoth()
+                        } else {
+                            Toast.makeText(context, "${actionText}失败: $error", Toast.LENGTH_SHORT).show()
+                        }
+                        selectedEntry = null
+                        if (leftFocused) {
+                            leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
+                        } else {
+                            rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
+                        }
                     }
-                    if (error == null) {
-                        Toast.makeText(context, if (isMulti) "批量${actionText}成功" else "${actionText}成功", Toast.LENGTH_SHORT).show()
-                        vm.refreshBoth()
+                    if (moveCopyIsCopy) {
+                        if (isMulti) vm.copyEntriesWithProgress(entries, destDir, doAfter)
+                        else vm.copyEntriesWithProgress(listOf(selectedEntry ?: return@TextButton), destDir, doAfter)
                     } else {
-                        Toast.makeText(context, "${actionText}失败: $error", Toast.LENGTH_SHORT).show()
-                    }
-                    selectedEntry = null
-                    if (leftFocused) {
-                        leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
-                    } else {
-                        rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
+                        if (isMulti) vm.moveEntriesWithProgress(entries, destDir, doAfter)
+                        else vm.moveEntriesWithProgress(listOf(selectedEntry ?: return@TextButton), destDir, doAfter)
                     }
                 }) { Text("确认") }
             },
@@ -2478,26 +2497,14 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (delMultiSelect) {
-                        // 批量删除
-                        if (recycleBinEnabled) {
-                            var lastError: String? = null
-                            for (entry in delSelectedEntries) {
-                                val error = vm.moveToRecycleBin(entry)
-                                if (error != null) lastError = error
-                            }
-                            if (lastError == null) {
-                                Toast.makeText(context, "已将 ${delSelectedEntries.size} 个项目移至回收站", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "部分删除失败: $lastError", Toast.LENGTH_SHORT).show()
-                            }
+                    showDeleteDialog = false
+                    val doAfter = { error: String? ->
+                        if (error == null) {
+                            val count = if (delMultiSelect) delSelectedEntries.size else 1
+                            val msg = if (recycleBinEnabled) "已将 $count 个项目移至回收站" else "已删除 $count 个项目"
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                         } else {
-                            val error = vm.deleteEntries(delSelectedEntries)
-                            if (error == null) {
-                                Toast.makeText(context, "已删除 ${delSelectedEntries.size} 个项目", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "部分删除失败: $error", Toast.LENGTH_SHORT).show()
-                            }
+                            Toast.makeText(context, "操作失败: $error", Toast.LENGTH_SHORT).show()
                         }
                         vm.refreshBoth()
                         if (vm.focusedPanel == FocusedPanel.LEFT) {
@@ -2505,29 +2512,14 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         } else {
                             rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
                         }
-                    } else {
-                        val entry = selectedEntry ?: return@TextButton
-                        if (recycleBinEnabled) {
-                            val error = vm.moveToRecycleBin(entry)
-                            if (error == null) {
-                                Toast.makeText(context, "已移至回收站", Toast.LENGTH_SHORT).show()
-                                vm.refreshBoth()
-                            } else {
-                                forceDeleteEntry = entry
-                                showForceDeleteDialog = true
-                            }
-                        } else {
-                            val error = vm.deleteEntry(entry)
-                            if (error == null) {
-                                Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
-                                vm.refreshBoth()
-                            } else {
-                                Toast.makeText(context, "删除失败: $error", Toast.LENGTH_SHORT).show()
-                            }
-                        }
                         selectedEntry = null
                     }
-                    showDeleteDialog = false
+                    if (delMultiSelect) {
+                        vm.deleteEntriesWithProgress(delSelectedEntries, recycleBinEnabled, doAfter)
+                    } else {
+                        val entry = selectedEntry ?: return@TextButton
+                        vm.deleteEntriesWithProgress(listOf(entry), recycleBinEnabled, doAfter)
+                    }
                 }) {
                     Text("确定")
                 }
@@ -3622,10 +3614,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     useAes = compressUseAes,
                                     outputToOtherPanel = compressOutputToOtherPanel,
                                     jxlPackZip = vm.jxlPackZip,
-                                    onProgress = { current, total, progress ->
+                                    onProgress = { current, total, progress, bytesDone, bytesTotal ->
                                         compressCurrentFile = current
                                         compressTotalFiles = total
                                         compressProgress = progress
+                                        compressBytesProcessed = bytesDone
+                                        compressTotalBytes = bytesTotal
                                     },
                                     onComplete = { success, outPath, error ->
                                         compressOutputPath = outPath ?: ""
@@ -3677,7 +3671,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             color = MaterialTheme.colorScheme.onSurface
                         )
 
-                        // 第一行：压缩进度 + 文件数
+                        // 第一行：压缩进度 + 字节大小
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -3689,7 +3683,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = "$compressCurrentFile/$compressTotalFiles",
+                                text = if (compressTotalBytes > 0) "${FormatUtils.formatBytes(compressBytesProcessed)} / ${FormatUtils.formatBytes(compressTotalBytes)}"
+                                       else "$compressCurrentFile/$compressTotalFiles",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -3739,6 +3734,161 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
+    // ── 文件操作进度弹窗（复制/移动/删除/解压） ──
+    fileOpProgress?.let { progress ->
+        val isDark = isSystemInDarkTheme()
+        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.8f),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        // 标题
+                        Text(
+                            text = progress.phase,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        // 当前文件名
+                        if (progress.currentFileName.isNotEmpty()) {
+                            Text(
+                                text = progress.currentFileName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+
+                        // 大小信息
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "${FormatUtils.formatBytes(progress.currentBytes)} / ${FormatUtils.formatBytes(progress.totalBytes)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "${(progress.fraction * 100).toInt()}%",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        // 进度条
+                        LinearProgressIndicator(
+                            progress = { progress.fraction },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+
+                        // 取消按钮
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = {
+                                vm.fileOpCancelFlag.set(true)
+                            }) {
+                                Text("取消", color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 解压对话框 ──
+    if (showExtractDialog && extractPendingEntry != null) {
+        val entry = extractPendingEntry!!
+        AlertDialog(
+            onDismissRequest = {
+                showExtractDialog = false
+                extractPendingEntry = null
+            },
+            title = { Text("解压") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        text = "「${entry.name}」",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    // 解压方式选择
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(
+                            selected = !extractToSubfolder,
+                            onClick = { extractToSubfolder = false }
+                        )
+                        Text("解压到当前目录", modifier = Modifier.clickable { extractToSubfolder = false })
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(
+                            selected = extractToSubfolder,
+                            onClick = { extractToSubfolder = true }
+                        )
+                        Text("解压到同名文件夹", modifier = Modifier.clickable { extractToSubfolder = true })
+                    }
+                    // 路径显示
+                    Text(
+                        text = "输出路径: $extractPath",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showExtractDialog = false
+                    val entryName = entry.name.substringBeforeLast('.')
+                    val outputDir = if (extractToSubfolder) {
+                        "$extractPath/$entryName"
+                    } else {
+                        extractPath
+                    }
+                    vm.extractArchive(
+                        outputDir = outputDir,
+                        onProgress = { _, _, _, _ },
+                        onComplete = { success, _, error ->
+                            if (success) {
+                                Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
+                            } else if (error != "已取消") {
+                                Toast.makeText(context, "解压失败: $error", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
+                    extractPendingEntry = null
+                }) {
+                    Text("确认")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showExtractDialog = false
+                    extractPendingEntry = null
+                }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
     // ── 压缩包密码输入对话框 ──
     if (showArchivePasswordDialog && archivePendingEntry != null) {
         var passwordVisible by remember { mutableStateOf(false) }
@@ -3751,6 +3901,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 archivePendingEntry = null
                 archivePasswordInput = ""
                 errorMsg = null
+                extractAfterPassword = false
             },
             title = { Text("请输入密码") },
             text = {
@@ -3810,6 +3961,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     showArchivePasswordDialog = false
                                     archivePendingEntry = null
                                     archivePasswordInput = ""
+                                    if (extractAfterPassword) {
+                                        extractAfterPassword = false
+                                        extractPath = entry.path.substringBeforeLast('/')
+                                        showExtractDialog = true
+                                    }
                                 }
                             }
                         }
@@ -3825,6 +3981,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     archivePendingEntry = null
                     archivePasswordInput = ""
                     errorMsg = null
+                    extractAfterPassword = false
                 }) {
                     Text("取消")
                 }

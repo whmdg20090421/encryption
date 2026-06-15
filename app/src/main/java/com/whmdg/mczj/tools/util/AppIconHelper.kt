@@ -26,6 +26,8 @@ object AppIconHelper {
         "/data/app/",
         "/sdcard/Android/data/",
         "/sdcard/Android/obb/",
+        "/storage/emulated/0/Android/data/",
+        "/storage/emulated/0/Android/obb/",
     )
 
     /** 缓存：包名集合 */
@@ -43,10 +45,7 @@ object AppIconHelper {
     /** 当前路径是否属于应用专属目录（即子目录可能是包名目录） */
     fun isAppDirParent(parentPath: String): Boolean {
         val normalized = parentPath.trimEnd('/') + "/"
-        val prefix = APP_DIR_PREFIXES.firstOrNull { normalized.startsWith(it) } ?: return false
-        val afterPrefix = normalized.removePrefix(prefix)
-        // prefix 之后应恰好有一段（包名），如 "com.example.app/"
-        return afterPrefix.isNotEmpty() && afterPrefix.count { it == '/' } == 1
+        return APP_DIR_PREFIXES.any { normalized.startsWith(it) }
     }
 
     /** 指定目录是否是一个已安装应用的包名目录 */
