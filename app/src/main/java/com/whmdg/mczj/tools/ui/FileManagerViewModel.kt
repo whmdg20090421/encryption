@@ -80,6 +80,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var rightEntries by mutableStateOf(listOf<FileEntry>())
         private set
+    /** 左面板当前目录的扩展属性缓存：文件名 → 仅 i/a 标志 */
+    var leftExtFlagsMap by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
+    /** 右面板当前目录的扩展属性缓存：文件名 → 仅 i/a 标志 */
+    var rightExtFlagsMap by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
     var leftNavState by mutableStateOf(PanelNavState())
         private set
     var rightNavState by mutableStateOf(PanelNavState())
@@ -203,6 +209,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 初始加载
         leftEntries = listDirectory(lHome)
         rightEntries = listDirectory(rHome)
+        loadExtFlagsForDir(lHome, isLeft = true)
+        loadExtFlagsForDir(rHome, isLeft = false)
     }
 
     /**
@@ -454,11 +462,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             leftNavState = leftNavState.navigate(path)
             leftPath = path
             leftEntries = listDirectory(path, resolvedRealPath)
+            loadExtFlagsForDir(path, isLeft = true)
         } else {
             if (rightPath == path) return
             rightNavState = rightNavState.navigate(path)
             rightPath = path
             rightEntries = listDirectory(path, resolvedRealPath)
+            loadExtFlagsForDir(path, isLeft = false)
         }
     }
 
@@ -581,12 +591,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             leftNavState = back
             leftPath = back.current
             leftEntries = listDirectory(leftPath)
+            loadExtFlagsForDir(leftPath, isLeft = true)
             return leftPath
         } else {
             val back = rightNavState.back() ?: return null
             rightNavState = back
             rightPath = back.current
             rightEntries = listDirectory(rightPath)
+            loadExtFlagsForDir(rightPath, isLeft = false)
             return rightPath
         }
     }
@@ -598,12 +610,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             leftNavState = fwd
             leftPath = fwd.current
             leftEntries = listDirectory(leftPath)
+            loadExtFlagsForDir(leftPath, isLeft = true)
             return leftPath
         } else {
             val fwd = rightNavState.forward() ?: return null
             rightNavState = fwd
             rightPath = fwd.current
             rightEntries = listDirectory(rightPath)
+            loadExtFlagsForDir(rightPath, isLeft = false)
             return rightPath
         }
     }
@@ -623,24 +637,30 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             rightPath = leftPath
             rightNavState = rightNavState.navigate(leftPath)
             rightEntries = listDirectory(rightPath)
+            loadExtFlagsForDir(rightPath, isLeft = false)
         } else {
             leftPath = rightPath
             leftNavState = leftNavState.navigate(rightPath)
             leftEntries = listDirectory(leftPath)
+            loadExtFlagsForDir(leftPath, isLeft = true)
         }
     }
 
     fun refreshCurrent() {
         if (focusedPanel == FocusedPanel.LEFT) {
             leftEntries = listDirectory(leftPath)
+            loadExtFlagsForDir(leftPath, isLeft = true)
         } else {
             rightEntries = listDirectory(rightPath)
+            loadExtFlagsForDir(rightPath, isLeft = false)
         }
     }
 
     fun refreshBoth() {
         leftEntries = listDirectory(leftPath)
         rightEntries = listDirectory(rightPath)
+        loadExtFlagsForDir(leftPath, isLeft = true)
+        loadExtFlagsForDir(rightPath, isLeft = false)
     }
 
     // ── 文件夹大小统计 ──
@@ -2115,34 +2135,40 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     data class SystemUser(val uid: Int, val username: String)
     data class SystemGroup(val gid: Int, val groupname: String)
 
+    /** 从 /etc/passwd 读取全部系统用户（与 resolveUserName 同策略，直接文件读取） */
     fun getSystemUsers(): List<SystemUser> {
-        if (!isRootEngine) return emptyList()
-        val (stdout, _, exitCode) = try {
-            SpecialPermissionVerifier.executeRootCommandFull("cat /etc/passwd")
-        } catch (_: Exception) { return emptyList() }
-        if (exitCode != 0 || stdout.isBlank()) return emptyList()
-        return stdout.lines().mapNotNull { line ->
-            val parts = line.split(":")
-            if (parts.size >= 3) {
-                val uid = parts[2].toIntOrNull()
-                if (uid != null) SystemUser(uid, parts[0]) else null
-            } else null
-        }.sortedBy { it.uid }
+        val paths = listOf("/etc/passwd", "/system/etc/passwd", "/vendor/etc/passwd")
+        for (path in paths) {
+            val users = try {
+                File(path).readLines().mapNotNull { line ->
+                    val parts = line.split(":")
+                    if (parts.size >= 3) {
+                        val uid = parts[2].toIntOrNull()
+                        if (uid != null) SystemUser(uid, parts[0]) else null
+                    } else null
+                }
+            } catch (_: Exception) { emptyList() }
+            if (users.isNotEmpty()) return users.sortedBy { it.uid }
+        }
+        return emptyList()
     }
 
+    /** 从 /etc/group 读取全部系统用户组（与 resolveGroupName 同策略，直接文件读取） */
     fun getSystemGroups(): List<SystemGroup> {
-        if (!isRootEngine) return emptyList()
-        val (stdout, _, exitCode) = try {
-            SpecialPermissionVerifier.executeRootCommandFull("cat /etc/group")
-        } catch (_: Exception) { return emptyList() }
-        if (exitCode != 0 || stdout.isBlank()) return emptyList()
-        return stdout.lines().mapNotNull { line ->
-            val parts = line.split(":")
-            if (parts.size >= 3) {
-                val gid = parts[2].toIntOrNull()
-                if (gid != null) SystemGroup(gid, parts[0]) else null
-            } else null
-        }.sortedBy { it.gid }
+        val paths = listOf("/etc/group", "/system/etc/group", "/vendor/etc/group")
+        for (path in paths) {
+            val groups = try {
+                File(path).readLines().mapNotNull { line ->
+                    val parts = line.split(":")
+                    if (parts.size >= 3) {
+                        val gid = parts[2].toIntOrNull()
+                        if (gid != null) SystemGroup(gid, parts[0]) else null
+                    } else null
+                }
+            } catch (_: Exception) { emptyList() }
+            if (groups.isNotEmpty()) return groups.sortedBy { it.gid }
+        }
+        return emptyList()
     }
 
     /** 读取 /etc/passwd 解析 UID→用户名（无需 root） */
@@ -2226,6 +2252,45 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val flags = line.split("\\s+".toRegex()).firstOrNull() ?: return ""
         // 只提取我们关心的标志（i/a），忽略 e/c/s 等文件系统默认标志
         return flags.filter { it == 'i' || it == 'a' }
+    }
+
+    /**
+     * 批量读取目录下所有文件的扩展属性（i/a），结果存入 leftExtFlagsMap 或 rightExtFlagsMap。
+     * 仅在有 shell 引擎时执行，否则清空对应 map。
+     */
+    fun loadExtFlagsForDir(dirPath: String, isLeft: Boolean) {
+        if (!hasShellEngine) {
+            if (isLeft) leftExtFlagsMap = emptyMap() else rightExtFlagsMap = emptyMap()
+            return
+        }
+        val realPath = toRealPathForAttr(dirPath)
+        val escaped = realPath.replace("'", "'\\''")
+        val (out, _, exit) = try {
+            executeShell("lsattr '$escaped'")
+        } catch (_: Exception) {
+            Triple("", "", -1)
+        }
+        if (exit != 0 || out.isBlank()) {
+            if (isLeft) leftExtFlagsMap = emptyMap() else rightExtFlagsMap = emptyMap()
+            return
+        }
+        val map = mutableMapOf<String, String>()
+        for (raw in out.lines()) {
+            val line = raw.trimEnd('\r')
+            if (line.isBlank()) continue
+            // lsattr 输出: "----i----------  /path/to/file" 或 "----i---------- filename"
+            val parts = line.split("\\s+".toRegex(), limit = 2)
+            if (parts.size < 2) continue
+            val flags = parts[0].filter { it == 'i' || it == 'a' }
+            if (flags.isEmpty()) continue
+            // 提取文件名（去掉路径前缀）
+            val nameOrPath = parts[1].trim()
+            val name = nameOrPath.substringAfterLast('/')
+            if (name.isNotEmpty()) {
+                map[name] = flags
+            }
+        }
+        if (isLeft) leftExtFlagsMap = map else rightExtFlagsMap = map
     }
 
     /** 应用扩展属性修改。传入目标标志字符集（如 "ia" 表示要设置 immutable + append-only）。成功返回 null。 */

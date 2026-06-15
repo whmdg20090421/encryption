@@ -995,7 +995,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         leftSwipeSelectFlag = 0
                                         leftLastSwipeIndex = -1
                                     }
-                                }
+                                },
+                                extFlagsMap = vm.leftExtFlagsMap
                             )
                             FileBrowserPanel(
                                 entries = vm.rightEntries,
@@ -1122,7 +1123,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         rightSwipeSelectFlag = 0
                                         rightLastSwipeIndex = -1
                                     }
-                                }
+                                },
+                                extFlagsMap = vm.rightExtFlagsMap
                             )
                         }
                     ) { measurables, constraints ->
@@ -3102,7 +3104,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
         // ── 用户选择弹窗 ──
         if (showUserPicker) {
-            val users = remember { vm.getSystemUsers() }
+            val allUsers = remember { vm.getSystemUsers() }
+            // 当前所有者排第一，其余按 UID 排序
+            val sortedUsers = remember(allUsers, originalUid) {
+                val current = allUsers.find { it.uid == originalUid }
+                val rest = allUsers.filter { it.uid != originalUid }
+                listOfNotNull(current) + rest
+            }
             Dialog(onDismissRequest = { showUserPicker = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Card(
                     modifier = Modifier.fillMaxWidth(0.8f).fillMaxHeight(0.6f),
@@ -3113,7 +3121,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         Text("选择所有者", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                         Spacer(modifier = Modifier.height(12.dp))
                         LazyColumn(modifier = Modifier.weight(1f)) {
-                            items(users) { user ->
+                            items(sortedUsers) { user ->
+                                val isCurrent = user.uid == originalUid
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -3125,7 +3134,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         .padding(vertical = 10.dp, horizontal = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(user.username, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                    Text(
+                                        text = if (isCurrent) "${user.username} (当前)" else user.username,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f),
+                                        color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
                                     Text("(${user.uid})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Spacer(modifier = Modifier.width(12.dp))
                                     RadioButton(
@@ -3149,7 +3163,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
         // ── 组选择弹窗 ──
         if (showGroupPicker) {
-            val groups = remember { vm.getSystemGroups() }
+            val allGroups = remember { vm.getSystemGroups() }
+            // 当前用户组排第一，其余按 GID 排序
+            val sortedGroups = remember(allGroups, originalGid) {
+                val current = allGroups.find { it.gid == originalGid }
+                val rest = allGroups.filter { it.gid != originalGid }
+                listOfNotNull(current) + rest
+            }
             Dialog(onDismissRequest = { showGroupPicker = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Card(
                     modifier = Modifier.fillMaxWidth(0.8f).fillMaxHeight(0.6f),
@@ -3160,7 +3180,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         Text("选择用户组", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                         Spacer(modifier = Modifier.height(12.dp))
                         LazyColumn(modifier = Modifier.weight(1f)) {
-                            items(groups) { group ->
+                            items(sortedGroups) { group ->
+                                val isCurrent = group.gid == originalGid
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -3172,7 +3193,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         .padding(vertical = 10.dp, horizontal = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(group.groupname, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                    Text(
+                                        text = if (isCurrent) "${group.groupname} (当前)" else group.groupname,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f),
+                                        color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
                                     Text("(${group.gid})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Spacer(modifier = Modifier.width(12.dp))
                                     RadioButton(
@@ -4000,7 +4026,8 @@ private fun FileBrowserPanel(
     archiveSizeProvider: ((FileEntry) -> String)? = null,
     selectedPaths: Set<String> = emptySet(),
     onSwipeSelect: (FileEntry, Int) -> Unit = { _, _ -> },
-    onToggleSelect: (FileEntry) -> Unit = {}
+    onToggleSelect: (FileEntry) -> Unit = {},
+    extFlagsMap: Map<String, String> = emptyMap()
 ) {
     val isMultiSelectMode = selectedPaths.isNotEmpty()
     Surface(
@@ -4082,7 +4109,8 @@ private fun FileBrowserPanel(
                             }
                         },
                         onSwipe = { onSwipeSelect(entry, entryIndex) },
-                        folderSize = dirSize
+                        folderSize = dirSize,
+                        extFlags = extFlagsMap[entry.name] ?: ""
                     )
                 }
             }
@@ -4098,7 +4126,8 @@ private fun FileEntryRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onSwipe: (Float) -> Unit = {},
-    folderSize: String = ""
+    folderSize: String = "",
+    extFlags: String = ""
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -4237,7 +4266,11 @@ private fun FileEntryRow(
             ) {
                 val label = when {
                     entry.isDirectory -> compactDate(entry.lastModified)
-                    entry.permission.isNotEmpty() -> entry.permission
+                    entry.permission.isNotEmpty() -> {
+                        if (extFlags.isNotEmpty()) "${entry.permission} $extFlags"
+                        else entry.permission
+                    }
+                    extFlags.isNotEmpty() -> extFlags
                     else -> ""
                 }
                 Text(
