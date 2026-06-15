@@ -695,7 +695,13 @@ fun MainAppContainer() {
     }
     } // Box
 
-    // ── 启动诊断信息显示（底部 Snackbar，仅 Debug 模式） ──
+    // ── 启动诊断信息显示（底部 Snackbar，仅 Debug 模式，5 秒自动消失） ──
+    LaunchedEffect(startupDiagnostic) {
+        if (startupDiagnostic != null) {
+            kotlinx.coroutines.delay(5000)
+            startupDiagnostic = null
+        }
+    }
     if (isDebugMode && startupDiagnostic != null) {
         Box(
             modifier = Modifier

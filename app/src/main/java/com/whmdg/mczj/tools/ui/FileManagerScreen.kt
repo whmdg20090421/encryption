@@ -305,7 +305,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         if (!hasStoragePermission) {
             Toast.makeText(context, "需要存储权限才能浏览文件", Toast.LENGTH_LONG).show()
         }
-        if (vm.isRootEngine) {
+        if (!isDebugMode && vm.isRootEngine) {
             try {
                 val mntNs = com.whmdg.mczj.tools.security.SpecialPermissionVerifier
                     .executeRootCommand("readlink /proc/self/ns/mnt")
@@ -2242,7 +2242,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // ── 诊断信息显示（底部 Snackbar） ──
+    // ── 诊断信息显示（底部 Snackbar，5 秒自动消失） ──
+    LaunchedEffect(diagnosticMessage) {
+        if (diagnosticMessage != null) {
+            kotlinx.coroutines.delay(5000)
+            diagnosticMessage = null
+        }
+    }
     if (isDebugMode && diagnosticMessage != null) {
         Box(
             modifier = Modifier
