@@ -208,9 +208,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 加载文件夹大小数据库
         folderSizeDb = FolderSizeDb.load(AppDataPaths.fileManager(context))
 
-        // 检测 Shell 工具可用性
-        detectShellTools()
-
         // 初始加载
         leftEntries = listDirectory(lHome)
         rightEntries = listDirectory(rHome)
@@ -897,91 +894,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) { e.message ?: "创建失败" }
     }
 
-    /**
-     * 移动文件/文件夹到目标目录。成功返回 null，失败返回错误信息。
-     */
-    fun moveEntry(source: FileEntry, destDir: String): String? {
-        val dest = File(destDir, source.name)
-
-        if (hasShellEngine) {
-            val escapedSrc = source.path.replace("'", "'\\''")
-            val escapedDst = dest.absolutePath.replace("'", "'\\''")
-            val cpFlag = if (source.isDirectory) "-rf" else "-f"
-            val (_, cpErr, cpExit) = try {
-                executeShell("cp $cpFlag '$escapedSrc' '$escapedDst'")
-            } catch (e: Exception) { return e.message ?: "移动失败" }
-            if (cpExit != 0) return "移动失败: $cpErr"
-            val rmFlag = if (source.isDirectory) "-rf" else "-f"
-            val (_, rmErr, rmExit) = try {
-                executeShell("rm $rmFlag '$escapedSrc'")
-            } catch (e: Exception) { return "复制成功但删除源文件失败: ${e.message}" }
-            return if (rmExit == 0) null else "复制成功但删除源文件失败: $rmErr"
-        }
-
-        val sourceFile = File(source.path)
-        return try {
-            val moved = sourceFile.renameTo(dest)
-            if (!moved) {
-                if (source.isDirectory) {
-                    sourceFile.copyRecursively(dest, overwrite = false)
-                } else {
-                    sourceFile.copyTo(dest, overwrite = false)
-                }
-                if (!SpecialPermissionVerifier.safeDelete(sourceFile)) {
-                    return "复制成功但删除源文件失败"
-                }
-            }
-            null
-        } catch (e: Exception) { e.message ?: "移动失败" }
-    }
-
-    /**
-     * 复制文件或文件夹到目标目录。成功返回 null，失败返回错误信息。
-     */
-    fun copyEntry(source: FileEntry, destDir: String): String? {
-        val dest = File(destDir, source.name)
-
-        if (hasShellEngine) {
-            val escapedSrc = source.path.replace("'", "'\\''")
-            val escapedDst = dest.absolutePath.replace("'", "'\\''")
-            val flag = if (source.isDirectory) "-rf" else "-f"
-            val (_, err, exit) = try {
-                executeShell("cp $flag '$escapedSrc' '$escapedDst'")
-            } catch (e: Exception) { return e.message ?: "复制失败" }
-            return if (exit == 0) null else "复制失败: $err"
-        }
-
-        val sourceFile = File(source.path)
-        return try {
-            if (source.isDirectory) {
-                sourceFile.copyRecursively(dest, overwrite = false)
-            } else {
-                sourceFile.copyTo(dest, overwrite = false)
-            }
-            null
-        } catch (e: Exception) { e.message ?: "复制失败" }
-    }
-
-    /** 批量复制。成功返回 null，失败返回最后一条错误信息。 */
-    fun copyEntries(entries: List<FileEntry>, destDir: String): String? {
-        var lastError: String? = null
-        for (entry in entries) {
-            val err = copyEntry(entry, destDir)
-            if (err != null) lastError = err
-        }
-        return lastError
-    }
-
-    /** 批量移动。成功返回 null，失败返回最后一条错误信息。 */
-    fun moveEntries(entries: List<FileEntry>, destDir: String): String? {
-        var lastError: String? = null
-        for (entry in entries) {
-            val err = moveEntry(entry, destDir)
-            if (err != null) lastError = err
-        }
-        return lastError
-    }
-
     /** 批量删除。成功返回 null，失败返回最后一条错误信息。 */
     fun deleteEntries(entries: List<FileEntry>): String? {
         var lastError: String? = null
@@ -990,89 +902,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (err != null) lastError = err
         }
         return lastError
-    }
-
-    // ── 带进度的文件操作 ──
-
-    /**
-     * 批量复制（带进度，在 IO 线程执行）。
-     * 完成后回调 onDone(error)，error 为 null 表示成功。
-     */
-    fun copyEntriesWithProgress(entries: List<FileEntry>, destDir: String, onDone: (String?) -> Unit) {
-        fileOpCancelFlag.set(false)
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                // 预处理：计算总大小
-                var totalSize = 0L
-                for (entry in entries) totalSize += calculateTotalSize(entry.path)
-                var processedBytes = 0L
-
-                for (entry in entries) {
-                    if (fileOpCancelFlag.get()) break
-                    val dest = File(destDir, entry.name)
-                    val result = copyWithProgress(entry.path, dest.absolutePath, entry.name, totalSize, processedBytes) { delta ->
-                        processedBytes += delta
-                    }
-                    if (result != null) {
-                        withContext(Dispatchers.Main) { onDone(result) }
-                        return@launch
-                    }
-                }
-                _fileOpProgress.value = null
-                withContext(Dispatchers.Main) { onDone(null) }
-            } catch (e: Exception) {
-                _fileOpProgress.value = null
-                withContext(Dispatchers.Main) { onDone(e.message ?: "复制失败") }
-            }
-        }
-    }
-
-    /**
-     * 批量移动（带进度，在 IO 线程执行）。
-     * 完成后回调 onDone(error)，error 为 null 表示成功。
-     */
-    fun moveEntriesWithProgress(entries: List<FileEntry>, destDir: String, onDone: (String?) -> Unit) {
-        fileOpCancelFlag.set(false)
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                // 预处理：计算总大小
-                var totalSize = 0L
-                for (entry in entries) totalSize += calculateTotalSize(entry.path)
-                var processedBytes = 0L
-
-                for (entry in entries) {
-                    if (fileOpCancelFlag.get()) break
-                    val dest = File(destDir, entry.name)
-                    val sourceFile = File(entry.path)
-
-                    // 尝试 renameTo（同分区瞬时完成）
-                    val renamed = sourceFile.renameTo(dest)
-                    if (renamed) {
-                        processedBytes += calculateTotalSize(dest.absolutePath)
-                        continue
-                    }
-
-                    // 跨分区：先带进度复制，再删除源
-                    val copyResult = copyWithProgress(entry.path, dest.absolutePath, entry.name, totalSize, processedBytes) { delta ->
-                        processedBytes += delta
-                    }
-                    if (copyResult != null) {
-                        withContext(Dispatchers.Main) { onDone(copyResult) }
-                        return@launch
-                    }
-                    // 删除源文件
-                    if (!SpecialPermissionVerifier.safeDelete(sourceFile)) {
-                        withContext(Dispatchers.Main) { onDone("复制成功但删除源文件失败: ${entry.name}") }
-                        return@launch
-                    }
-                }
-                _fileOpProgress.value = null
-                withContext(Dispatchers.Main) { onDone(null) }
-            } catch (e: Exception) {
-                _fileOpProgress.value = null
-                withContext(Dispatchers.Main) { onDone(e.message ?: "移动失败") }
-            }
-        }
     }
 
     /**
@@ -1088,13 +917,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 for (entry in entries) totalSize += calculateTotalSize(entry.path)
                 var processedBytes = 0L
 
-                for (entry in entries) {
-                    if (fileOpCancelFlag.get()) break
+                for ((index, entry) in entries.withIndex()) {
+                    if (fileOpCancelFlag.get()) {
+                        _fileOpProgress.value = null
+                        withContext(Dispatchers.Main) { onDone("已取消") }
+                        return@launch
+                    }
                     _fileOpProgress.value = FileOpProgress(
                         phase = "正在删除",
                         currentBytes = processedBytes,
                         totalBytes = totalSize,
-                        currentFileName = entry.name
+                        currentFileName = entry.name,
+                        fileIndex = index,
+                        fileCount = entries.size
                     )
                     val error = if (toRecycleBin) moveToRecycleBin(entry) else deleteEntry(entry)
                     if (error != null) {
@@ -1109,186 +944,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 _fileOpProgress.value = null
                 withContext(Dispatchers.Main) { onDone(e.message ?: "删除失败") }
             }
-        }
-    }
-
-    /**
-     * 带进度的单文件/目录复制。
-     * 优先使用 rsync（Shell 模式），否则 Java chunk 复制。
-     * @param onBytesCopied 每复制一个 chunk 后回调，参数为本次新增字节数
-     * @return null 成功，非 null 为错误信息
-     */
-    private suspend fun copyWithProgress(
-        srcPath: String,
-        dstPath: String,
-        fileName: String,
-        totalSize: Long,
-        baseBytes: Long,
-        onBytesCopied: (Long) -> Unit
-    ): String? {
-        // Shell 模式：优先 rsync
-        if (hasShellEngine && hasRsync) {
-            return copyWithRsync(srcPath, dstPath, fileName, totalSize, baseBytes, onBytesCopied)
-        }
-        // Shell 模式：无 rsync 但有 pv 时，用 tar+pv
-        if (hasShellEngine && hasPv) {
-            return copyWithPv(srcPath, dstPath, fileName, totalSize, baseBytes, onBytesCopied)
-        }
-        // Shell 模式：无工具时用 cp -rf（无逐字节进度）
-        if (hasShellEngine) {
-            _fileOpProgress.value = FileOpProgress("正在复制", baseBytes, totalSize, fileName)
-            val escapedSrc = srcPath.replace("'", "'\\''")
-            val escapedDst = dstPath.replace("'", "'\\''")
-            val isDir = File(srcPath).isDirectory
-            val flag = if (isDir) "-rf" else "-f"
-            val (_, err, exit) = try {
-                executeShell("cp $flag '$escapedSrc' '$escapedDst'")
-            } catch (e: Exception) { return e.message ?: "复制失败" }
-            return if (exit == 0) null else "复制失败: $err"
-        }
-        // Java 模式：逐文件 chunk 复制
-        return copyWithJava(srcPath, dstPath, fileName, totalSize, baseBytes, onBytesCopied)
-    }
-
-    /** rsync 带进度复制 */
-    private suspend fun copyWithRsync(
-        srcPath: String, dstPath: String, fileName: String,
-        totalSize: Long, baseBytes: Long, onBytesCopied: (Long) -> Unit
-    ): String? {
-        val escapedSrc = srcPath.replace("'", "'\\''")
-        val escapedDst = dstPath.replace("'", "'\\''")
-        val cmd = "rsync -ah --progress '$escapedSrc' '$escapedDst'"
-        // rsync 输出格式: "file.txt  1,234,567  45%  12.34MB/s  0:00:01"
-        val proc = try {
-            Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
-        } catch (e: Exception) { return "rsync 启动失败: ${e.message}" }
-
-        val reader = proc.inputStream.bufferedReader()
-        val errReader = proc.errorStream.bufferedReader()
-        var lastBytes = baseBytes
-
-        try {
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                if (fileOpCancelFlag.get()) {
-                    proc.destroyForcibly()
-                    return "已取消"
-                }
-                val l = line ?: continue
-                // 尝试解析 rsync 进度行中的百分比
-                val percentMatch = Regex("(\\d+)%").find(l)
-                if (percentMatch != null) {
-                    val pct = percentMatch.groupValues[1].toIntOrNull() ?: 0
-                    val currentBytes = baseBytes + (totalSize - baseBytes) * pct / 100
-                    _fileOpProgress.value = FileOpProgress("正在复制", currentBytes, totalSize, fileName)
-                }
-            }
-        } finally {
-            reader.close()
-            errReader.close()
-        }
-
-        val exitCode = proc.waitFor()
-        return if (exitCode == 0) null else {
-            val errOutput = errReader.readText()
-            "rsync 失败 (exit=$exitCode): $errOutput"
-        }
-    }
-
-    /** tar+pv 管道复制 */
-    private suspend fun copyWithPv(
-        srcPath: String, dstPath: String, fileName: String,
-        totalSize: Long, baseBytes: Long, onBytesCopied: (Long) -> Unit
-    ): String? {
-        val parentDir = File(srcPath).parent ?: return "无法获取父目录"
-        val escapedParent = parentDir.replace("'", "'\\''")
-        val escapedSrc = File(srcPath).name.replace("'", "'\\''")
-        val escapedDst = dstPath.replace("'", "'\\''")
-        val cmd = "tar cf - -C '$escapedParent' '$escapedSrc' | pv -s $totalSize | tar xf - -C '$escapedDst'"
-        val proc = try {
-            Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
-        } catch (e: Exception) { return "tar+pv 启动失败: ${e.message}" }
-
-        // pv 输出进度到 stderr
-        val errReader = proc.errorStream.bufferedReader()
-        try {
-            var line: String?
-            while (errReader.readLine().also { line = it } != null) {
-                if (fileOpCancelFlag.get()) {
-                    proc.destroyForcibly()
-                    return "已取消"
-                }
-                // pv 输出类似: " 123MiB 0:00:01 [45.6MiB/s] [=========>    ] 45% ETA 0:00:02"
-                val pctMatch = Regex("(\\d+)%").find(line ?: continue)
-                if (pctMatch != null) {
-                    val pct = pctMatch.groupValues[1].toIntOrNull() ?: 0
-                    val currentBytes = totalSize * pct / 100
-                    _fileOpProgress.value = FileOpProgress("正在复制", currentBytes, totalSize, fileName)
-                }
-            }
-        } finally {
-            errReader.close()
-        }
-
-        val exitCode = proc.waitFor()
-        return if (exitCode == 0) null else "tar+pv 失败 (exit=$exitCode)"
-    }
-
-    /** Java 逐文件 chunk 复制（带进度） */
-    private suspend fun copyWithJava(
-        srcPath: String, dstPath: String, fileName: String,
-        totalSize: Long, baseBytes: Long, onBytesCopied: (Long) -> Unit
-    ): String? {
-        val src = File(srcPath)
-        if (!src.exists()) return "源文件不存在: $srcPath"
-
-        if (src.isFile) {
-            return copyFileWithProgress(src, File(dstPath), fileName, totalSize, baseBytes, onBytesCopied)
-        }
-
-        // 目录：递归复制
-        val dst = File(dstPath)
-        dst.mkdirs()
-        val children = src.listFiles() ?: return null
-        for (child in children) {
-            if (fileOpCancelFlag.get()) return "已取消"
-            val childDst = File(dst, child.name)
-            val result = if (child.isDirectory) {
-                copyWithJava(child.path, childDst.path, child.name, totalSize, baseBytes, onBytesCopied)
-            } else {
-                copyFileWithProgress(child, childDst, child.name, totalSize, baseBytes, onBytesCopied)
-            }
-            if (result != null) return result
-        }
-        return null
-    }
-
-    /** 单文件 chunk 复制（带进度） */
-    private suspend fun copyFileWithProgress(
-        src: File, dst: File, fileName: String,
-        totalSize: Long, baseBytes: Long, onBytesCopied: (Long) -> Unit
-    ): String? {
-        return try {
-            src.inputStream().use { input ->
-                dst.outputStream().use { output ->
-                    val buf = ByteArray(8192)
-                    var bytesRead: Int
-                    while (input.read(buf).also { bytesRead = it } != -1) {
-                        if (fileOpCancelFlag.get()) return "已取消"
-                        output.write(buf, 0, bytesRead)
-                        onBytesCopied(bytesRead.toLong())
-                        _fileOpProgress.value = FileOpProgress(
-                            phase = "正在复制",
-                            currentBytes = baseBytes,
-                            totalBytes = totalSize,
-                            currentFileName = fileName
-                        )
-                    }
-                }
-            }
-            null
-        } catch (e: Exception) {
-            "复制文件失败 ${src.name}: ${e.message}"
         }
     }
 
@@ -2818,9 +2473,16 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val currentBytes: Long,      // 已处理字节
         val totalBytes: Long,        // 总字节
         val currentFileName: String = "", // 当前处理的文件名
-        val isRunning: Boolean = true
+        val isRunning: Boolean = true,
+        val fileIndex: Int = 0,      // 当前处理到第几个文件（从 0 开始）
+        val fileCount: Int = 0       // 总文件数（0 表示不使用文件计数模式）
     ) {
-        val fraction: Float get() = if (totalBytes > 0) currentBytes.toFloat() / totalBytes else 0f
+        val fraction: Float get() {
+            // 文件计数模式：按文件数计算进度
+            if (fileCount > 0) return fileIndex.toFloat() / fileCount
+            // 字节模式
+            return if (totalBytes > 0) currentBytes.toFloat() / totalBytes else 0f
+        }
     }
 
     private val _fileOpProgress = MutableStateFlow<FileOpProgress?>(null)
@@ -2828,22 +2490,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 文件操作取消标志 */
     val fileOpCancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
-
-    /** Shell 工具可用性（init 时检测） */
-    var hasRsync = false; private set
-    var hasPv = false; private set
-
-    private fun detectShellTools() {
-        if (!hasShellEngine) return
-        try {
-            val (_, _, rsyncExit) = executeShell("which rsync")
-            hasRsync = rsyncExit == 0
-        } catch (_: Exception) {}
-        try {
-            val (_, _, pvExit) = executeShell("which pv")
-            hasPv = pvExit == 0
-        } catch (_: Exception) {}
-    }
 
     /** 递归计算文件/文件夹总大小（字节） */
     private fun calculateTotalSize(path: String): Long {
@@ -2963,7 +2609,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                                 phase = "正在解压",
                                 currentBytes = info.bytesProcessed,
                                 totalBytes = info.totalBytes,
-                                currentFileName = info.currentFileName
+                                currentFileName = info.currentFileName,
+                                fileIndex = info.currentFile,
+                                fileCount = info.totalFiles
                             )
                             onProgress(info.currentFile, info.totalFiles, info.progress, info.currentFileName)
                         }

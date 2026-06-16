@@ -136,6 +136,12 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!-- 文件操作 Service（复制/移动/删除任务执行） -->
+        <service
+            android:name=".fileop.FileOperationService"
+            android:label="文件操作"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

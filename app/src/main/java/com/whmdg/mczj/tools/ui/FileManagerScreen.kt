@@ -14,6 +14,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+import com.whmdg.mczj.tools.fileop.FileOperationManager
+import com.whmdg.mczj.tools.fileop.DeleteEntry
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -236,13 +238,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var showPermissionEditor by remember { mutableStateOf(false) }
     var permissionEditorData by remember { mutableStateOf<FilePropertyData?>(null) }
     var permissionEditorEntry by remember { mutableStateOf<FileEntry?>(null) }
-    // 移动/复制确认弹窗
-    var showMoveCopyConfirm by remember { mutableStateOf(false) }
-    var moveCopyIsCopy by remember { mutableStateOf(true) }
-    var moveCopyCount by remember { mutableIntStateOf(0) }
+    // 移动/复制（功能待实现，保留 UI 占位）
 
     // 文件操作进度（从 ViewModel StateFlow 收集）
     val fileOpProgress by vm.fileOpProgress.collectAsState()
+
+    // 文件操作管理器进度（新架构）
+    val fileOpManagerProgress by FileOperationManager.progress.collectAsState()
 
     // ── 外部打开警告 ──
     var forceOpenError by remember { mutableStateOf<String?>(null) }
@@ -336,6 +338,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             } catch (_: Exception) {
                 Toast.makeText(context, "挂载空间异常，请检查，有可能 root 权限不可用", Toast.LENGTH_LONG).show()
             }
+        }
+        // 注册文件操作完成后的刷新回调
+        FileOperationManager.setRefreshCallback {
+            vm.refreshBoth()
         }
     }
 
@@ -1899,10 +1905,25 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable {
-                                            val count = if (isMultiSelect) activeSelectedPaths.size else 1
-                                            moveCopyIsCopy = true
-                                            moveCopyCount = count
-                                            showMoveCopyConfirm = true
+                                            val sourcePaths = if (activeSelectedPaths.isNotEmpty()) {
+                                                activeSelectedPaths.toList()
+                                            } else {
+                                                listOfNotNull(selectedEntry?.path)
+                                            }
+                                            if (sourcePaths.isEmpty()) {
+                                                Toast.makeText(context, "请先选择文件", Toast.LENGTH_SHORT).show()
+                                                return@clickable
+                                            }
+                                            val targetDir = if (isToRight) vm.rightPath else vm.leftPath
+                                            val accessLevel = when {
+                                                vm.isRootEngine -> com.whmdg.mczj.tools.util.FileAccessLevel.ROOT
+                                                com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> com.whmdg.mczj.tools.util.FileAccessLevel.SHIZUKU
+                                                else -> com.whmdg.mczj.tools.util.FileAccessLevel.NORMAL
+                                            }
+                                            FileOperationManager.copy(sourcePaths, targetDir, accessLevel, context)
+                                            selectedEntry = null
+                                            leftSelectedPaths = emptySet()
+                                            rightSelectedPaths = emptySet()
                                         }
                                         .padding(vertical = 16.dp),
                                     contentAlignment = Alignment.Center
@@ -1925,10 +1946,25 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable {
-                                            val count = if (isMultiSelect) activeSelectedPaths.size else 1
-                                            moveCopyIsCopy = false
-                                            moveCopyCount = count
-                                            showMoveCopyConfirm = true
+                                            val sourcePaths = if (activeSelectedPaths.isNotEmpty()) {
+                                                activeSelectedPaths.toList()
+                                            } else {
+                                                listOfNotNull(selectedEntry?.path)
+                                            }
+                                            if (sourcePaths.isEmpty()) {
+                                                Toast.makeText(context, "请先选择文件", Toast.LENGTH_SHORT).show()
+                                                return@clickable
+                                            }
+                                            val targetDir = if (isToRight) vm.rightPath else vm.leftPath
+                                            val accessLevel = when {
+                                                vm.isRootEngine -> com.whmdg.mczj.tools.util.FileAccessLevel.ROOT
+                                                com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> com.whmdg.mczj.tools.util.FileAccessLevel.SHIZUKU
+                                                else -> com.whmdg.mczj.tools.util.FileAccessLevel.NORMAL
+                                            }
+                                            FileOperationManager.move(sourcePaths, targetDir, accessLevel, context)
+                                            selectedEntry = null
+                                            leftSelectedPaths = emptySet()
+                                            rightSelectedPaths = emptySet()
                                         }
                                         .padding(vertical = 16.dp),
                                     contentAlignment = Alignment.Center
@@ -2143,53 +2179,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     ErrorDialog(error = diagnosticError, onDismiss = {
         diagnosticError = null
     })
-
-    // ── 移动/复制确认弹窗 ──
-    if (showMoveCopyConfirm) {
-        val actionText = if (moveCopyIsCopy) "复制" else "移动"
-        val leftFocused = vm.focusedPanel == FocusedPanel.LEFT
-        val activePaths = if (leftFocused) leftSelectedPaths else rightSelectedPaths
-        val isMulti = activePaths.size > 1
-        val entries = if (leftFocused)
-            vm.leftEntries.filter { it.path in activePaths }
-        else
-            vm.rightEntries.filter { it.path in activePaths }
-        AlertDialog(
-            onDismissRequest = { showMoveCopyConfirm = false },
-            title = { Text("确认$actionText") },
-            text = { Text("确定要$actionText ${moveCopyCount} 个项目吗？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showMoveCopyConfirm = false
-                    val destDir = if (leftFocused) vm.rightPath else vm.leftPath
-                    val doAfter = { error: String? ->
-                        if (error == null) {
-                            Toast.makeText(context, if (isMulti) "批量${actionText}成功" else "${actionText}成功", Toast.LENGTH_SHORT).show()
-                            vm.refreshBoth()
-                        } else {
-                            Toast.makeText(context, "${actionText}失败: $error", Toast.LENGTH_SHORT).show()
-                        }
-                        selectedEntry = null
-                        if (leftFocused) {
-                            leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
-                        } else {
-                            rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
-                        }
-                    }
-                    if (moveCopyIsCopy) {
-                        if (isMulti) vm.copyEntriesWithProgress(entries, destDir, doAfter)
-                        else vm.copyEntriesWithProgress(listOf(selectedEntry ?: return@TextButton), destDir, doAfter)
-                    } else {
-                        if (isMulti) vm.moveEntriesWithProgress(entries, destDir, doAfter)
-                        else vm.moveEntriesWithProgress(listOf(selectedEntry ?: return@TextButton), destDir, doAfter)
-                    }
-                }) { Text("确认") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showMoveCopyConfirm = false }) { Text("取消") }
-            }
-        )
-    }
 
     // ── 诊断逻辑（仅 Debug 模式） ──
     LaunchedEffect(isDebugMode) {
@@ -2494,28 +2483,26 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteDialog = false
-                    val doAfter = { error: String? ->
-                        if (error == null) {
-                            val count = if (delMultiSelect) delSelectedEntries.size else 1
-                            val msg = if (recycleBinEnabled) "已将 $count 个项目移至回收站" else "已删除 $count 个项目"
-                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(context, "操作失败: $error", Toast.LENGTH_SHORT).show()
+                    val deleteEntries = if (delMultiSelect) {
+                        delSelectedEntries.map { entry ->
+                            DeleteEntry(entry.path, entry.name, entry.isDirectory, entry.size)
                         }
-                        vm.refreshBoth()
-                        if (vm.focusedPanel == FocusedPanel.LEFT) {
-                            leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
-                        } else {
-                            rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
-                        }
-                        selectedEntry = null
-                    }
-                    if (delMultiSelect) {
-                        vm.deleteEntriesWithProgress(delSelectedEntries, recycleBinEnabled, doAfter)
                     } else {
                         val entry = selectedEntry ?: return@TextButton
-                        vm.deleteEntriesWithProgress(listOf(entry), recycleBinEnabled, doAfter)
+                        listOf(DeleteEntry(entry.path, entry.name, entry.isDirectory, entry.size))
                     }
+                    val accessLevel = when {
+                        vm.isRootEngine -> com.whmdg.mczj.tools.util.FileAccessLevel.ROOT
+                        com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> com.whmdg.mczj.tools.util.FileAccessLevel.SHIZUKU
+                        else -> com.whmdg.mczj.tools.util.FileAccessLevel.NORMAL
+                    }
+                    FileOperationManager.delete(deleteEntries, recycleBinEnabled, accessLevel, context)
+                    if (vm.focusedPanel == FocusedPanel.LEFT) {
+                        leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
+                    } else {
+                        rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
+                    }
+                    selectedEntry = null
                 }) {
                     Text("确定")
                 }
@@ -3730,7 +3717,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // ── 文件操作进度弹窗（复制/移动/删除/解压） ──
+    // ── 文件操作进度弹窗（旧架构：压缩/解压） ──
     fileOpProgress?.let { progress ->
         val isDark = isSystemInDarkTheme()
         Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -3752,9 +3739,14 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             .padding(24.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        // 标题
+                        // 标题（含文件计数）
+                        val titleText = if (progress.fileCount > 0) {
+                            "${progress.phase} ${progress.fileIndex + 1} / ${progress.fileCount}"
+                        } else {
+                            progress.phase
+                        }
                         Text(
-                            text = progress.phase,
+                            text = titleText,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -3809,6 +3801,92 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             }
         }
     }
+
+    // ── 文件操作进度弹窗（新架构：复制/移动/删除） ──
+    fileOpManagerProgress?.let { progress ->
+        val isDark = isSystemInDarkTheme()
+        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.8f),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        val titleText = if (progress.fileCount > 0) {
+                            "${progress.phase} ${progress.fileIndex + 1} / ${progress.fileCount}"
+                        } else {
+                            progress.phase
+                        }
+                        Text(
+                            text = titleText,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        if (progress.currentFileName.isNotEmpty()) {
+                            Text(
+                                text = progress.currentFileName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "${FormatUtils.formatBytes(progress.currentBytes)} / ${FormatUtils.formatBytes(progress.totalBytes)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "${(progress.fraction * 100).toInt()}%",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        LinearProgressIndicator(
+                            progress = { progress.fraction },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = {
+                                FileOperationManager.cancelAll()
+                            }) {
+                                Text("取消", color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 文件冲突处理弹窗 ──
+    FileConflictDialog()
+
+    // ── 文件错误处理弹窗 ──
+    FileErrorDialog()
 
     // ── 解压对话框 ──
     if (showExtractDialog && extractPendingEntry != null) {
