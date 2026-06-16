@@ -71,8 +71,8 @@ private fun parseBand(frequency: Int): String = when {
 
 /** ScanResult → WifiNetworkInfo */
 private fun ScanResult.toNetworkInfo(): WifiNetworkInfo {
-    val level = try {
-        WifiManager.calculateSignalLevel(rssi, 5)
+    val signalLevel = try {
+        WifiManager.calculateSignalLevel(level, 5)
     } catch (_: Exception) { 0 }
 
     val cw = try {
@@ -82,8 +82,8 @@ private fun ScanResult.toNetworkInfo(): WifiNetworkInfo {
     return WifiNetworkInfo(
         ssid = if (SSID.isNullOrEmpty()) "<隐藏网络>" else SSID,
         bssid = BSSID ?: "",
-        rssi = rssi,
-        signalLevel = level,
+        rssi = level,
+        signalLevel = signalLevel,
         frequency = frequency,
         band = parseBand(frequency),
         security = parseSecurity(capabilities),
@@ -124,16 +124,9 @@ private fun locationPermissionGranted(context: Context): Boolean {
             PackageManager.PERMISSION_GRANTED
 }
 
-/** 信号强度图标 */
+/** 信号强度图标（统一用 Wifi 图标，通过颜色区分强度） */
 @Composable
-private fun signalIcon(level: Int) = when (level) {
-    0 -> Icons.Filled.SignalWifi0Bar
-    1 -> Icons.Filled.SignalWifi1Bar
-    2 -> Icons.Filled.SignalWifi2Bar
-    3 -> Icons.Filled.SignalWifi3Bar
-    4 -> Icons.Filled.SignalWifi4Bar
-    else -> Icons.Filled.SignalWifi0Bar
-}
+private fun signalIcon(level: Int) = Icons.Filled.Wifi
 
 /** 信号强度颜色 */
 @Composable
@@ -459,7 +452,7 @@ fun WifiScreen(onBack: () -> Unit) {
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(
-                                Icons.Default.WifiFind,
+                                Icons.Default.Wifi,
                                 contentDescription = null,
                                 modifier = Modifier.size(64.dp),
                                 tint = MaterialTheme.colorScheme.outline
