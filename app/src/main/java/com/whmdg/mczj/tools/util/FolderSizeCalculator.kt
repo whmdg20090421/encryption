@@ -14,18 +14,17 @@ data class SizeTreeNode(
 )
 
 /**
- * 文件夹大小统计核心算法。
+ * 文件夹大小统计核心算法（双内存 A/B 架构）。
  *
  * 入口：[calculateFolderSize]
- *   - 若 DB 中无该子树缓存 → 全量统计 [fullScan]（自底向上）
- *   - 若有 → 差异统计 [diffScan]（BFS 全量收集 + 从叶子向上 mtime 对比 + delta 冒泡）
  *
- * 算法关键不变量：
- *   - diffScan 的 BFS 遍历子目录时检查缓存 mtime，未变则跳过子树（POSIX 保证：
- *     目录内文件增删时其 mtime 变化，mtime 不变 = 子树结构未变，可安全复用缓存）
- *   - 跳过的目录不进入 currentChildren，累加阶段不会处理，缓存值自然被使用
- *   - 累加阶段从叶子向根逐级检查 mtime，mtime 未变则复用旧 size + 子目录 delta，
- *     mtime 变化则重扫该目录并将 delta 向上冒泡
+ * 算法流程：
+ *   1. BFS 阶段：无条件扫描 rootPath 下所有子目录，构建目录树（内存 A）
+ *   2. 构建内存 B：按 A 中每个路径从 DB 查缓存，有则填入 size+mtime，无则为空
+ *   3. 从叶子向根逐层处理：
+ *      - 查 B：有值且 mtime 未变 → 复用 B 的 size（缓存命中）
+ *      - B 无值或 mtime 变化 → 列出直接子项，累加文件大小 + 子文件夹 size（从 A 读取）
+ *   4. 写缓存：先 removeDescendants 清除旧子树（含已删除目录），再 bulkPut 写入 A 的数据
  *
  * 进度回调：
  *   - BFS 阶段：每扫描一个目录调用 onScanned
@@ -41,48 +40,27 @@ suspend fun calculateFolderSize(
     isCancelled: () -> Boolean,
     onBinderCooldown: (suspend (secondsLeft: Int) -> Unit)? = null
 ): SizeCalcResult {
+    // ── 0. 统计总目录数（用于进度条） ──
     val escaped = rootPath.replace("'", "'\\''")
     val (countOut, _, countExit) = accessor.exec("find '$escaped' -type d | wc -l")
     val totalDirs = countOut.trim().toIntOrNull()?.coerceAtLeast(0) ?: 0
     onTotal(totalDirs)
 
-    val snapshot = db.getDescendants(rootPath)
-    return if (snapshot.isEmpty()) {
-        fullScan(rootPath, accessor, db, onScanned, onProgress, isCancelled, onBinderCooldown)
-    } else {
-        diffScan(rootPath, snapshot, accessor, db, onScanned, onProgress, isCancelled, onBinderCooldown)
-    }
-}
-
-/**
- * 全量统计：BFS 构建目录树 → 按深度降序自底向上累加。
- *
- * 实现细节：
- *   1. 子目录的 mtime 从 parent 的 listChildren 结果复用（DirEntry.mtime），
- *      仅 rootPath 单独 statMtime 一次。
- *   2. 每个目录的 size = 直接子文件 size 之和 + 直接子目录 size 之和（来自 sizes Map）。
- *   3. 全部计算完成后通过 db.bulkPut 一次性写入。
- */
-private suspend fun fullScan(
-    rootPath: String,
-    accessor: FileAccessor,
-    db: FolderSizeDb,
-    onScanned: (Int, String) -> Unit,
-    onProgress: (Int, Int, String) -> Unit,
-    isCancelled: () -> Boolean,
-    onBinderCooldown: (suspend (secondsLeft: Int) -> Unit)? = null
-): SizeCalcResult {
+    // ── 1. BFS 阶段：扫描目录树，构建内存 A ──
+    // children: 目录路径 → 直接子项列表（含文件和子目录）
+    // dirMtimes: 目录路径 → 该目录本身的 mtime
+    // depth: 目录路径 → 深度（rootPath=0）
     val children = LinkedHashMap<String, List<DirEntry>>()
+    val dirMtimes = HashMap<String, Long>()
     val depth = HashMap<String, Int>()
-    val mtimes = HashMap<String, Long>()
     var result: SizeCalcResult? = null
 
-    mtimes[rootPath] = accessor.statMtime(rootPath) ?: 0L
+    // rootPath 自身的 mtime 需要单独 stat（BFS 只能从父目录获取子目录 mtime）
+    dirMtimes[rootPath] = accessor.statMtime(rootPath) ?: 0L
     val queue = ArrayDeque<Pair<String, Int>>()
     queue.add(rootPath to 0)
     depth[rootPath] = 0
 
-    // BFS 阶段：收集目录树
     var scanned = 0
     while (queue.isNotEmpty()) {
         if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
@@ -103,188 +81,75 @@ private suspend fun fullScan(
         onScanned(scanned, dir)
         for (e in list) {
             if (e.isDir) {
-                mtimes[e.path] = e.mtime
+                dirMtimes[e.path] = e.mtime
                 depth[e.path] = d + 1
                 queue.add(e.path to d + 1)
             }
         }
     }
 
-    // 累加阶段：对已收集的目录自底向上计算大小
-    val total = children.size
-    val sizes = HashMap<String, Long>(total)
-    val updates = HashMap<String, FolderSizeInfo>(total)
+    // ── 2. 构建内存 B：从 DB 查缓存 ──
+    // memA: 目录路径 → 最新计算的 size（初始为 0）
+    // memB: 目录路径 → 缓存的 FolderSizeInfo（无缓存则为 null）
+    val memA = HashMap<String, Long>(children.size)
+    val memB = HashMap<String, FolderSizeInfo?>(children.size)
+    for (path in children.keys) {
+        memA[path] = 0L
+        memB[path] = db.get(path)
+    }
+
+    // ── 3. 从叶子向根逐层处理 ──
     val ordered = children.keys.sortedByDescending { depth[it] ?: 0 }
-
-    try {
-        var processed = 0
-        for (dir in ordered) {
-            if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
-            val list = children[dir]!!
-            var s = 0L
-            for (e in list) {
-                s += if (e.isDir) (sizes[e.path] ?: 0L) else e.size
-            }
-            sizes[dir] = s
-            updates[dir] = FolderSizeInfo(s, mtimes[dir] ?: 0L)
-            processed++
-            onProgress(processed, total, dir)
-        }
-    } finally {
-        // 无论正常完成、Cancelled、PermissionDenied 还是异常，都保存已计算的部分结果
-        db.bulkPut(updates)
-    }
-
-    val tree = if (result == null) buildSizeTree(rootPath, children, sizes) else null
-    return result ?: SizeCalcResult.Success(sizes[rootPath] ?: 0L, tree)
-}
-
-/**
- * 差异统计：BFS 无条件收集全部目录 → 从叶子向上逐级 mtime 对比 + delta 冒泡。
- *
- * BFS 阶段：无条件遍历所有子目录（不根据 mtime 剪枝），构建完整目录树。
- *   - POSIX 目录 mtime 仅在直接子项增删时变化，子项内部变化不影响父目录 mtime，
- *     因此 mtime 未变 ≠ 子树未变，必须遍历才能发现新增的子目录/文件。
- *
- * 累加阶段（按深度降序，叶子先处理）：
- *   - 旧节点存在且 mtime 不变：newSize = oldSize + childDelta（仅当 childDelta != 0 才更新 DB）
- *   - 旧节点存在但 mtime 变化：重扫直接子文件 + 直接子目录的最新 size → 重算 newSize
- *   - 新节点（旧快照里没有）：等价局部 fullScan，snapshot 回退确保缓存值不丢失
- *
- * 删除节点：仅当父目录已确认当前子列表中不含该节点时才从 DB 移除。
- */
-private suspend fun diffScan(
-    rootPath: String,
-    snapshot: Map<String, FolderSizeInfo>,
-    accessor: FileAccessor,
-    db: FolderSizeDb,
-    onScanned: (Int, String) -> Unit,
-    onProgress: (Int, Int, String) -> Unit,
-    isCancelled: () -> Boolean,
-    onBinderCooldown: (suspend (secondsLeft: Int) -> Unit)? = null
-): SizeCalcResult {
-    val currentChildren = LinkedHashMap<String, List<DirEntry>>()
-    val currentMtimes = HashMap<String, Long>()
-    val depth = HashMap<String, Int>()
-    var result: SizeCalcResult? = null
-
-    currentMtimes[rootPath] = accessor.statMtime(rootPath) ?: 0L
-    val queue = ArrayDeque<Pair<String, Int>>()
-    queue.add(rootPath to 0)
-    depth[rootPath] = 0
-
-    // BFS 阶段：无条件收集全部目录树（mtime 检查推迟到累加阶段）
-    var scanned = 0
-    while (queue.isNotEmpty()) {
-        if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
-        val (dir, d) = queue.removeFirst()
-        val listChildrenStart = System.currentTimeMillis()
-        val list = accessor.listChildren(dir)
-        val listChildrenElapsed = System.currentTimeMillis() - listChildrenStart
-        if (listChildrenElapsed > 300 && onBinderCooldown != null) {
-            for (sec in 5 downTo 1) {
-                onBinderCooldown(sec)
-                delay(1000)
-            }
-            onBinderCooldown(0)
-        }
-        if (list == null) { result = SizeCalcResult.PermissionDenied(dir); break }
-        currentChildren[dir] = list
-        scanned++
-        onScanned(scanned, dir)
-        for (e in list) {
-            if (e.isDir) {
-                currentMtimes[e.path] = e.mtime
-                depth[e.path] = d + 1
-                queue.add(e.path to d + 1)
-            }
-        }
-    }
-
-    // 清理：仅当 BFS 正常完成（result == null）时才执行，
-    // 因为 BFS 中断时 currentChildren 不完整，误删未访问的目录
-    if (result == null) {
-        for (p in snapshot.keys) {
-            if (p == rootPath) continue
-            val parent = p.substringBeforeLast('/').ifEmpty { "/" }
-            if (parent in currentChildren) {
-                val siblings = currentChildren[parent] ?: continue
-                if (siblings.none { it.path == p }) {
-                    db.remove(p)
-                }
-            }
-        }
-    }
-
-    // 累加阶段：从叶子向根逐级 mtime 对比，delta 冒泡
-    val newSizes = HashMap<String, Long>()
-    val deltas = HashMap<String, Long>()
-    val updates = HashMap<String, FolderSizeInfo>()
-    val ordered = currentChildren.keys.sortedByDescending { depth[it] ?: 0 }
     val total = ordered.size
+    val updates = HashMap<String, FolderSizeInfo>(total)
 
     try {
         var processed = 0
         for (dir in ordered) {
             if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
-            val old = snapshot[dir]
-            val list = currentChildren[dir]!!
-            val currentMtime = currentMtimes[dir] ?: 0L
-            val childDelta = deltas[dir] ?: 0L
+            val currentMtime = dirMtimes[dir] ?: 0L
+            val cached = memB[dir]
 
-            val newSize: Long
-            val mtimeForDb: Long
-            val shouldWrite: Boolean
-
-            when {
-                old == null -> {
-                    // 新增：等价于局部 fullScan 在此节点的一步
-                    var s = 0L
-                    for (e in list) {
-                        s += if (e.isDir) (newSizes[e.path] ?: snapshot[e.path]?.size ?: 0L) else e.size
+            if (cached != null && cached.lastModified == currentMtime) {
+                // 缓存命中：mtime 未变，复用旧 size
+                memA[dir] = cached.size
+                updates[dir] = cached
+            } else {
+                // 缓存未命中：列出直接子项，累加大小
+                val list = children[dir] ?: emptyList()
+                var sum = 0L
+                for (e in list) {
+                    sum += if (e.isDir) {
+                        // 子文件夹：从 A 读取（叶子已先处理，值已就绪）
+                        memA[e.path] ?: 0L
+                    } else {
+                        // 直接子文件：累加大小
+                        e.size
                     }
-                    newSize = s
-                    mtimeForDb = currentMtime
-                    shouldWrite = true
                 }
-                currentMtime == old.lastModified -> {
-                    // mtime 未变：自身直接文件层未变，size 仅受子目录 delta 影响
-                    newSize = old.size + childDelta
-                    mtimeForDb = old.lastModified
-                    shouldWrite = childDelta != 0L
-                }
-                else -> {
-                    // mtime 变化：重扫直接子项
-                    var s = 0L
-                    for (e in list) {
-                        s += if (e.isDir) {
-                            newSizes[e.path] ?: snapshot[e.path]?.size ?: 0L
-                        } else e.size
-                    }
-                    newSize = s
-                    mtimeForDb = currentMtime
-                    shouldWrite = true
-                }
-            }
-
-            newSizes[dir] = newSize
-            if (shouldWrite) updates[dir] = FolderSizeInfo(newSize, mtimeForDb)
-
-            val delta = newSize - (old?.size ?: 0L)
-            if (dir != rootPath && delta != 0L) {
-                val parent = dir.substringBeforeLast('/').ifEmpty { "/" }
-                deltas.merge(parent, delta) { a, b -> a + b }
+                memA[dir] = sum
+                updates[dir] = FolderSizeInfo(sum, currentMtime)
             }
             processed++
             onProgress(processed, total, dir)
         }
-    } finally {
-        // 无论正常完成、Cancelled、PermissionDenied 还是异常，都保存已计算的部分结果
+    } catch (e: Throwable) {
+        // 异常：保存已计算的部分结果（不清除旧缓存，保留未处理目录的数据）
+        db.bulkPut(updates)
+        throw e
+    }
+
+    if (result == null) {
+        // 完整完成：先清除旧子树缓存（含已删除目录），再写入新数据
+        db.removeDescendants(rootPath)
+        db.bulkPut(updates)
+    } else {
+        // 部分完成（Cancelled / PermissionDenied）：只写新数据，不清除旧缓存
         db.bulkPut(updates)
     }
 
-    val tree = if (result == null) buildSizeTree(rootPath, currentChildren, newSizes) else null
-    return result ?: SizeCalcResult.Success(newSizes[rootPath] ?: 0L, tree)
+    val tree = if (result == null) buildSizeTree(rootPath, children, memA) else null
+    return result ?: SizeCalcResult.Success(memA[rootPath] ?: 0L, tree)
 }
 
 /**
