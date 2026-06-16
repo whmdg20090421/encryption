@@ -92,30 +92,37 @@ private fun ScanResult.toNetworkInfo(): WifiNetworkInfo {
     )
 }
 
-/** 构建需要申请的权限列表 */
-private fun buildRequiredPermissions(): List<String> {
-    val perms = mutableListOf(
-        Manifest.permission.ACCESS_FINE_LOCATION,
-        Manifest.permission.ACCESS_COARSE_LOCATION,
-        Manifest.permission.ACCESS_WIFI_STATE,
-        Manifest.permission.CHANGE_WIFI_STATE,
-        Manifest.permission.ACCESS_NETWORK_STATE
-    )
+/** 权限条目：权限名 + 中文描述 */
+private data class PermEntry(val permission: String, val label: String)
+
+/** 从权限常量名提取短名（如 android.permission.ACCESS_FINE_LOCATION → ACCESS_FINE_LOCATION） */
+private fun permShortName(permission: String): String {
+    return permission.substringAfterLast('.')
+}
+
+/** 构建需要申请的权限列表（按 API 版本） */
+private fun buildRequiredPermissions(): List<PermEntry> = buildList {
+    add(PermEntry(Manifest.permission.ACCESS_FINE_LOCATION, "精确位置"))
+    add(PermEntry(Manifest.permission.ACCESS_COARSE_LOCATION, "粗略位置"))
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        perms.add(Manifest.permission.BLUETOOTH_SCAN)
-        perms.add(Manifest.permission.BLUETOOTH_CONNECT)
+        add(PermEntry(Manifest.permission.BLUETOOTH_SCAN, "蓝牙扫描"))
+        add(PermEntry(Manifest.permission.BLUETOOTH_CONNECT, "蓝牙连接"))
     }
     if (Build.VERSION.SDK_INT >= 33) {
-        perms.add("android.permission.NEARBY_WIFI_DEVICES")
+        add(PermEntry("android.permission.NEARBY_WIFI_DEVICES", "附近设备"))
     }
-    return perms
+}
+
+/** 获取当前设备缺失的权限列表 */
+private fun getDeniedPermissions(context: Context): List<PermEntry> {
+    return buildRequiredPermissions().filter { entry ->
+        ContextCompat.checkSelfPermission(context, entry.permission) != PackageManager.PERMISSION_GRANTED
+    }
 }
 
 /** 检查所有必要权限是否已授予 */
 private fun allPermissionsGranted(context: Context): Boolean {
-    return buildRequiredPermissions().all { perm ->
-        ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
-    }
+    return getDeniedPermissions(context).isEmpty()
 }
 
 /** 检查位置权限是否已授予（WiFi 扫描核心前提） */
@@ -167,15 +174,15 @@ fun WifiScreen(onBack: () -> Unit) {
 
     // ── 权限状态 ──
     var permissionsGranted by remember { mutableStateOf(allPermissionsGranted(context)) }
+    var deniedList by remember { mutableStateOf(getDeniedPermissions(context)) }
     var showPermissionRationale by remember { mutableStateOf(false) }
-    var deniedPerms by remember { mutableStateOf<List<String>>(emptyList()) }
 
     val permLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
         permissionsGranted = allPermissionsGranted(context)
-        deniedPerms = results.filter { !it.value }.keys.toList()
-        if (!permissionsGranted && deniedPerms.isNotEmpty()) {
+        deniedList = getDeniedPermissions(context)
+        if (!permissionsGranted && deniedList.isNotEmpty()) {
             showPermissionRationale = true
         }
     }
@@ -312,29 +319,49 @@ fun WifiScreen(onBack: () -> Unit) {
                 .padding(paddingValues),
             contentPadding = PaddingValues(bottom = 88.dp)
         ) {
-            // ── 权限检查卡片 ──
-            if (!permissionsGranted) {
+            // ── 权限检查卡片（只显示缺失的权限） ──
+            if (!permissionsGranted && deniedList.isNotEmpty()) {
                 item {
                     GlowSection(
-                        title = "权限",
+                        title = "缺少权限",
                         icon = Icons.Default.Security
                     ) {
                         Text(
-                            text = "WiFi 扫描需要位置权限和 WiFi 相关权限才能正常工作。",
+                            text = "以下权限尚未授予，会影响 WiFi 扫描功能：",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        deniedList.forEach { entry ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "${entry.label}（${permShortName(entry.permission)}）",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
                         Spacer(modifier = Modifier.height(12.dp))
                         Button(
                             onClick = {
-                                val perms = buildRequiredPermissions().toTypedArray()
+                                val perms = deniedList.map { it.permission }.toTypedArray()
                                 permLauncher.launch(perms)
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("申请权限")
+                            Text("申请缺失权限")
                         }
                     }
                 }
@@ -470,21 +497,17 @@ fun WifiScreen(onBack: () -> Unit) {
         }
     }
 
-    // ── 权限被拒绝后的引导弹窗 ──
-    if (showPermissionRationale) {
+    // ── 权限被拒绝后的引导弹窗（只列缺失权限） ──
+    if (showPermissionRationale && deniedList.isNotEmpty()) {
         AlertDialog(
             onDismissRequest = { showPermissionRationale = false },
-            title = { Text("需要权限") },
+            title = { Text("缺少权限") },
             text = {
                 Column {
-                    Text("WiFi 扫描功能需要以下权限才能正常工作：")
+                    Text("以下权限尚未授予：")
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("- 位置权限（Android 要求扫描 WiFi 必须授权位置）")
-                    if (Build.VERSION.SDK_INT >= 33) {
-                        Text("- 附近设备权限（Android 13+ 要求）")
-                    }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        Text("- 蓝牙相关权限（Android 12+ 要求）")
+                    deniedList.forEach { entry ->
+                        Text("- ${entry.label}（${permShortName(entry.permission)}）")
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -497,8 +520,7 @@ fun WifiScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     showPermissionRationale = false
-                    // 再次尝试申请
-                    val perms = buildRequiredPermissions().toTypedArray()
+                    val perms = deniedList.map { it.permission }.toTypedArray()
                     permLauncher.launch(perms)
                 }) {
                     Text("重新申请")
