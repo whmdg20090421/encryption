@@ -14,17 +14,21 @@ data class SizeTreeNode(
 )
 
 /**
- * 文件夹大小统计核心算法（双内存 A/B 架构）。
+ * 文件夹大小统计核心算法（双内存 A/B 架构 + BFS 剪枝）。
  *
  * 入口：[calculateFolderSize]
  *
  * 算法流程：
- *   1. BFS 阶段：无条件扫描 rootPath 下所有子目录，构建目录树（内存 A）
- *   2. 构建内存 B：按 A 中每个路径从 DB 查缓存，有则填入 size+mtime，无则为空
- *   3. 从叶子向根逐层处理：
- *      - 查 B：有值且 mtime 未变 → 复用 B 的 size（缓存命中）
- *      - B 无值或 mtime 变化 → 列出直接子项，累加文件大小 + 子文件夹 size（从 A 读取）
- *   4. 写缓存：先 removeDescendants 清除旧子树（含已删除目录），再 bulkPut 写入 A 的数据
+ *   1. 根目录快速路径：若根目录缓存 mtime 未变，直接返回缓存大小
+ *   2. BFS 阶段：从根向叶子逐层展开目录树
+ *      - 每层检查当前目录 mtime 是否与缓存一致
+ *      - 一致 → 跳过 ls，作为叶子节点，直接使用缓存大小
+ *      - 不一致 → ls 展开子目录，子目录入队继续 BFS
+ *      信任链：父目录 mtime 变化才会 ls → 子目录 mtime 从 ls 获取 → 与缓存对比
+ *   3. 累加阶段：从叶子向根逐层处理（仅处理被展开的目录）
+ *      - 叶子目录（缓存命中）：BFS 阶段已设置 memA，跳过
+ *      - 展开目录：累加直接子文件大小 + 子文件夹 size（从 memA 读取）
+ *   4. 写缓存：先 removeDescendants 清除旧子树，再 bulkPut 写入新数据
  *
  * 进度回调：
  *   - BFS 阶段：每扫描一个目录调用 onScanned
@@ -46,17 +50,30 @@ suspend fun calculateFolderSize(
     val totalDirs = countOut.trim().toIntOrNull()?.coerceAtLeast(0) ?: 0
     onTotal(totalDirs)
 
-    // ── 1. BFS 阶段：扫描目录树，构建内存 A ──
-    // children: 目录路径 → 直接子项列表（含文件和子目录）
-    // dirMtimes: 目录路径 → 该目录本身的 mtime
-    // depth: 目录路径 → 深度（rootPath=0）
+    // ── 0.5 快速路径：根目录缓存 mtime 未变 → 直接返回 ──
+    val rootCurrentMtime = accessor.statMtime(rootPath) ?: 0L
+    val rootCached = db.get(rootPath)
+    if (rootCached != null && rootCached.lastModified == rootCurrentMtime) {
+        onScanned(1, rootPath)
+        onProgress(1, 1, rootPath)
+        val tree = SizeTreeNode(
+            name = rootPath.substringAfterLast('/').ifEmpty { "/" },
+            path = rootPath,
+            isDir = true,
+            size = rootCached.size,
+            children = emptyList()
+        )
+        return SizeCalcResult.Success(rootCached.size, tree)
+    }
+
+    // ── 1. BFS 阶段：从根向叶子逐层展开，mtime 未变的子树跳过 ──
     val children = LinkedHashMap<String, List<DirEntry>>()
-    val dirMtimes = HashMap<String, Long>()
     val depth = HashMap<String, Int>()
+    // 存储每个目录的当前 mtime（从父目录 listChildren 或 statMtime 获取）
+    val currentMtimes = HashMap<String, Long>()
     var result: SizeCalcResult? = null
 
-    // rootPath 自身的 mtime 需要单独 stat（BFS 只能从父目录获取子目录 mtime）
-    dirMtimes[rootPath] = accessor.statMtime(rootPath) ?: 0L
+    currentMtimes[rootPath] = rootCurrentMtime
     val queue = ArrayDeque<Pair<String, Int>>()
     queue.add(rootPath to 0)
     depth[rootPath] = 0
@@ -65,6 +82,18 @@ suspend fun calculateFolderSize(
     while (queue.isNotEmpty()) {
         if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
         val (dir, d) = queue.removeFirst()
+
+        // 检查缓存：mtime 未变 → 跳过 ls，作为叶子节点
+        val dirMtime = currentMtimes[dir] ?: 0L
+        val cached = db.get(dir)
+        if (cached != null && cached.lastModified == dirMtime) {
+            children[dir] = emptyList()  // 叶子，不展开
+            scanned++
+            onScanned(scanned, dir)
+            continue
+        }
+
+        // mtime 变化或无缓存 → ls 展开子目录
         val listChildrenStart = System.currentTimeMillis()
         val list = accessor.listChildren(dir)
         val listChildrenElapsed = System.currentTimeMillis() - listChildrenStart
@@ -81,55 +110,54 @@ suspend fun calculateFolderSize(
         onScanned(scanned, dir)
         for (e in list) {
             if (e.isDir) {
-                dirMtimes[e.path] = e.mtime
+                currentMtimes[e.path] = e.mtime
                 depth[e.path] = d + 1
                 queue.add(e.path to d + 1)
             }
         }
     }
 
-    // ── 2. 构建内存 B：从 DB 查缓存 ──
-    // memA: 目录路径 → 最新计算的 size（初始为 0）
-    // memB: 目录路径 → 缓存的 FolderSizeInfo（无缓存则为 null）
+    // ── 2. 构建内存 B：从 DB 查缓存（仅对被展开的目录） ──
+    // memA: 目录路径 → 最新计算的 size
+    // 需要累加的目录集合（被展开的、非叶子的目录）
     val memA = HashMap<String, Long>(children.size)
-    val memB = HashMap<String, FolderSizeInfo?>(children.size)
-    for (path in children.keys) {
-        memA[path] = 0L
-        memB[path] = db.get(path)
+    val needAccumulation = mutableListOf<String>()
+
+    for ((path, list) in children) {
+        if (list.isEmpty()) {
+            // 叶子目录（缓存命中）：BFS 阶段已决定跳过，从缓存取 size
+            val c = db.get(path)
+            memA[path] = c?.size ?: 0L
+        } else {
+            // 被展开的目录：需要累加计算
+            memA[path] = 0L
+            needAccumulation.add(path)
+        }
     }
 
-    // ── 3. 从叶子向根逐层处理 ──
-    val ordered = children.keys.sortedByDescending { depth[it] ?: 0 }
-    val total = ordered.size
+    // ── 3. 累加阶段：仅处理被展开的目录，从叶子向根 ──
+    needAccumulation.sortByDescending { depth[it] ?: 0 }
+    val total = needAccumulation.size
     val updates = HashMap<String, FolderSizeInfo>(total)
 
     try {
         var processed = 0
-        for (dir in ordered) {
+        for (dir in needAccumulation) {
             if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
-            val currentMtime = dirMtimes[dir] ?: 0L
-            val cached = memB[dir]
-
-            if (cached != null && cached.lastModified == currentMtime) {
-                // 缓存命中：mtime 未变，复用旧 size
-                memA[dir] = cached.size
-                updates[dir] = cached
-            } else {
-                // 缓存未命中：列出直接子项，累加大小
-                val list = children[dir] ?: emptyList()
-                var sum = 0L
-                for (e in list) {
-                    sum += if (e.isDir) {
-                        // 子文件夹：从 A 读取（叶子已先处理，值已就绪）
-                        memA[e.path] ?: 0L
-                    } else {
-                        // 直接子文件：累加大小
-                        e.size
-                    }
+            val list = children[dir] ?: emptyList()
+            var sum = 0L
+            for (e in list) {
+                sum += if (e.isDir) {
+                    // 子文件夹：从 A 读取（叶子已先处理，值已就绪）
+                    memA[e.path] ?: 0L
+                } else {
+                    // 直接子文件：累加大小
+                    e.size
                 }
-                memA[dir] = sum
-                updates[dir] = FolderSizeInfo(sum, currentMtime)
             }
+            val mtime = currentMtimes[dir] ?: 0L
+            memA[dir] = sum
+            updates[dir] = FolderSizeInfo(sum, mtime)
             processed++
             onProgress(processed, total, dir)
         }
