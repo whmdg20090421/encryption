@@ -23,7 +23,7 @@ data class DirEntry(
 
 /** 文件夹大小统计的结果。 */
 sealed class SizeCalcResult {
-    data class Success(val rootSize: Long) : SizeCalcResult()
+    data class Success(val rootSize: Long, val tree: com.whmdg.mczj.tools.util.SizeTreeNode? = null) : SizeCalcResult()
     data class PermissionDenied(val path: String) : SizeCalcResult()
     object Cancelled : SizeCalcResult()
     data class Failed(val reason: String) : SizeCalcResult()

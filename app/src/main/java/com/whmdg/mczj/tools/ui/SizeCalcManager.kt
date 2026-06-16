@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.util.FormatUtils.formatBytes
+import com.whmdg.mczj.tools.util.SizeTreeNode
 import kotlinx.coroutines.delay
 import java.io.File
 
@@ -43,6 +44,9 @@ object SizeCalcManager {
         internal set
     /** 统计完成后显示的大小 */
     var completedSize by mutableLongStateOf(-1L)
+        internal set
+    /** 统计完成后的树形数据 */
+    var completedTree by mutableStateOf<SizeTreeNode?>(null)
         internal set
 
     /** 报错弹窗 */
@@ -86,7 +90,7 @@ object SizeCalcManager {
     }
 
     /** 关闭状态提示 */
-    fun dismissStatus() { statusMessage = null; completedSize = -1L }
+    fun dismissStatus() { statusMessage = null; completedSize = -1L; completedTree = null }
 
     /** Binder 冷却倒计时（由 FolderSizeCalculator 回调） */
     internal suspend fun onBinderCooldown(secondsLeft: Int) {
@@ -100,6 +104,7 @@ object SizeCalcManager {
         scannedCount = 0; totalCount = 0
         cancelRequested = false; loadError = null
         completedSize = -1L
+        completedTree = null
         binderCooldownSeconds = 0
         pendingSaveDialog = false
         isCalculating = true
@@ -126,13 +131,14 @@ object SizeCalcManager {
         currentFolder = folder
     }
 
-    internal fun finish(size: Long = -1L) {
+    internal fun finish(size: Long = -1L, tree: SizeTreeNode? = null) {
         isCalculating = false
         progress = 0f; currentFolder = ""
         scannedCount = 0; totalCount = 0
         cancelRequested = false; currentDb = null; saveDir = null; onDiscard = null
         binderCooldownSeconds = 0
         completedSize = size
+        completedTree = tree
         statusMessage = if (size >= 0) {
             "已统计完成，大小: ${formatBytes(size)}"
         } else {

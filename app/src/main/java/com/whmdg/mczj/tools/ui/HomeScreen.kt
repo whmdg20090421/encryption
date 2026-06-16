@@ -42,8 +42,11 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.encryption.data.StorageLocation
+import com.whmdg.mczj.tools.util.FormatUtils
+import com.whmdg.mczj.tools.util.SizeTreeNode
 import com.whmdg.mczj.tools.encryption.data.VaultConfig
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.encryption.services.VaultService
@@ -659,6 +662,119 @@ fun MainAppContainer() {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = { SizeCalcManager.dismissStatus() }) {
                             Text("关闭", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 大小统计完成树形弹窗 ──
+    val calcTree = SizeCalcManager.completedTree
+    if (calcTree != null && !calcIsCalculating) {
+        val expandedPaths = remember { mutableStateSetOf<String>() }
+
+        data class FlatNode(val node: SizeTreeNode, val depth: Int)
+
+        fun flatten(node: SizeTreeNode, depth: Int): List<FlatNode> {
+            val result = mutableListOf(FlatNode(node, depth))
+            if (node.isDir && node.path in expandedPaths) {
+                for (child in node.children) {
+                    result.addAll(flatten(child, depth + 1))
+                }
+            }
+            return result
+        }
+
+        // expandedPaths 变化时 recompose（expandedPaths.size 读取 State 值触发）
+        @Suppress("UNUSED_VARIABLE")
+        val expandedVersion = expandedPaths.size
+        val flatList = flatten(calcTree, 0)
+
+        Dialog(onDismissRequest = {
+            expandedPaths.clear()
+            SizeCalcManager.completedTree = null
+        }) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier
+                    .fillMaxWidth(0.95f)
+                    .fillMaxHeight(0.75f)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // 标题
+                    Text(
+                        text = calcTree.name,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = FormatUtils.formatBytes(calcTree.size),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+
+                    // 树形列表
+                    LazyColumn(modifier = Modifier.weight(1f)) {
+                        items(flatList, key = { it.node.path }) { (node, depth) ->
+                            val isExpanded = node.path in expandedPaths
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (node.isDir) {
+                                            if (isExpanded) expandedPaths.remove(node.path)
+                                            else expandedPaths.add(node.path)
+                                        }
+                                    }
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                // 缩进
+                                Spacer(Modifier.width((depth * 16).dp))
+                                // 三角/文件图标
+                                if (node.isDir) {
+                                    Icon(
+                                        imageVector = if (isExpanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                } else {
+                                    Spacer(Modifier.width(18.dp))
+                                }
+                                Spacer(Modifier.width(4.dp))
+                                // 名称
+                                Text(
+                                    text = node.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                // 大小
+                                Text(
+                                    text = FormatUtils.formatBytes(node.size),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    // 底部按钮
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = {
+                            expandedPaths.clear()
+                            SizeCalcManager.completedTree = null
+                        }) {
+                            Text("我知道了", color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 }

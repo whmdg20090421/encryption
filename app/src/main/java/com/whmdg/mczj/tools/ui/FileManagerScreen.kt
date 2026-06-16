@@ -3917,6 +3917,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 fun doExtract() {
                                     vm.extractArchive(
                                         outputDir = outputDir,
+                                        extractToSubfolder = extractToSubfolder,
                                         onProgress = { _, _, _, _ -> },
                                         onComplete = { success, _, error ->
                                             if (success) Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
@@ -4030,6 +4031,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     // 密码验证通过，直接解压
                                     vm.extractArchive(
                                         outputDir = outputDir,
+                                        extractToSubfolder = extractToSubfolder,
                                         onProgress = { _, _, _, _ -> },
                                         onComplete = { success, _, err ->
                                             if (success) Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()

@@ -4,6 +4,15 @@ import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import kotlinx.coroutines.delay
 
+/** 大小统计树形节点（文件或目录）。 */
+data class SizeTreeNode(
+    val name: String,
+    val path: String,
+    val isDir: Boolean,
+    val size: Long,
+    val children: List<SizeTreeNode> = emptyList()
+)
+
 /**
  * 文件夹大小统计核心算法。
  *
@@ -126,20 +135,21 @@ private suspend fun fullScan(
         db.bulkPut(updates)
     }
 
-    return result ?: SizeCalcResult.Success(sizes[rootPath] ?: 0L)
+    val tree = if (result == null) buildSizeTree(rootPath, children, sizes) else null
+    return result ?: SizeCalcResult.Success(sizes[rootPath] ?: 0L, tree)
 }
 
 /**
- * 差异统计：BFS 收集目录（mtime 未变的子树跳过）→ 从叶子向上逐级 mtime 对比 + delta 冒泡。
+ * 差异统计：BFS 无条件收集全部目录 → 从叶子向上逐级 mtime 对比 + delta 冒泡。
  *
- * BFS 阶段优化：遍历子目录时检查 snapshot 中的缓存 mtime，
- * 若未变则跳过该子树入队（不进入 currentChildren），
- * 累加阶段不处理这些目录，缓存值自然被使用，delta 也不会误冒泡。
+ * BFS 阶段：无条件遍历所有子目录（不根据 mtime 剪枝），构建完整目录树。
+ *   - POSIX 目录 mtime 仅在直接子项增删时变化，子项内部变化不影响父目录 mtime，
+ *     因此 mtime 未变 ≠ 子树未变，必须遍历才能发现新增的子目录/文件。
  *
  * 累加阶段（按深度降序，叶子先处理）：
  *   - 旧节点存在且 mtime 不变：newSize = oldSize + childDelta（仅当 childDelta != 0 才更新 DB）
  *   - 旧节点存在但 mtime 变化：重扫直接子文件 + 直接子目录的最新 size → 重算 newSize
- *   - 新节点（旧快照里没有）：等价局部 fullScan
+ *   - 新节点（旧快照里没有）：等价局部 fullScan，snapshot 回退确保缓存值不丢失
  *
  * 删除节点：仅当父目录已确认当前子列表中不含该节点时才从 DB 移除。
  */
@@ -163,7 +173,7 @@ private suspend fun diffScan(
     queue.add(rootPath to 0)
     depth[rootPath] = 0
 
-    // BFS 阶段：收集目录树，mtime 未变的子树跳过（不入队，缓存值在累加阶段自然被使用）
+    // BFS 阶段：无条件收集全部目录树（mtime 检查推迟到累加阶段）
     var scanned = 0
     while (queue.isNotEmpty()) {
         if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
@@ -186,9 +196,6 @@ private suspend fun diffScan(
             if (e.isDir) {
                 currentMtimes[e.path] = e.mtime
                 depth[e.path] = d + 1
-                // 缓存命中且 mtime 未变 → 跳过子树，累加阶段直接用缓存冒泡
-                val cached = snapshot[e.path]
-                if (cached != null && e.mtime == cached.lastModified) continue
                 queue.add(e.path to d + 1)
             }
         }
@@ -234,7 +241,7 @@ private suspend fun diffScan(
                     // 新增：等价于局部 fullScan 在此节点的一步
                     var s = 0L
                     for (e in list) {
-                        s += if (e.isDir) (newSizes[e.path] ?: 0L) else e.size
+                        s += if (e.isDir) (newSizes[e.path] ?: snapshot[e.path]?.size ?: 0L) else e.size
                     }
                     newSize = s
                     mtimeForDb = currentMtime
@@ -276,5 +283,25 @@ private suspend fun diffScan(
         db.bulkPut(updates)
     }
 
-    return result ?: SizeCalcResult.Success(newSizes[rootPath] ?: 0L)
+    val tree = if (result == null) buildSizeTree(rootPath, currentChildren, newSizes) else null
+    return result ?: SizeCalcResult.Success(newSizes[rootPath] ?: 0L, tree)
+}
+
+/**
+ * 基于 BFS 收集的 children 和 sizes 构建树形结构。
+ * children 中的条目按大小降序排列。
+ */
+private fun buildSizeTree(
+    rootPath: String,
+    children: Map<String, List<DirEntry>>,
+    sizes: Map<String, Long>
+): SizeTreeNode {
+    val rootName = rootPath.substringAfterLast('/').ifEmpty { "/" }
+    val rootSize = sizes[rootPath] ?: 0L
+    val list = children[rootPath] ?: emptyList()
+    val childNodes = list.map { e ->
+        if (e.isDir) buildSizeTree(e.path, children, sizes)
+        else SizeTreeNode(e.name, e.path, false, e.size)
+    }.sortedByDescending { it.size }
+    return SizeTreeNode(rootName, rootPath, true, rootSize, childNodes)
 }

@@ -717,7 +717,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         folderSizeDb.save(saveDir)
                         folderSizeDb = FolderSizeDb.load(saveDir)
                         refreshCurrent()
-                        SizeCalcManager.finish(result.rootSize)
+                        SizeCalcManager.finish(result.rootSize, result.tree)
                     }
                     is SizeCalcResult.PermissionDenied -> {
                         // 弹窗询问用户是否保存已统计的部分结果
@@ -2941,6 +2941,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun extractArchive(
         outputDir: String,
+        extractToSubfolder: Boolean = true,
         onProgress: (Int, Int, Float, String) -> Unit,
         onComplete: (Boolean, String?, String?) -> Unit
     ) {
@@ -2972,7 +2973,35 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         CoroutineScope(Dispatchers.Main).launch {
                             _fileOpProgress.value = null
                             onComplete(success, outPath, error)
-                            refreshCurrent()
+                            if (success) {
+                                // 解压到子文件夹时，直接使用压缩包内的原始大小写入 FolderSizeDb
+                                if (extractToSubfolder) {
+                                    val totalSize = memFs.entries.values
+                                        .filterIsInstance<CompressService.ArchiveMemFile>()
+                                        .sumOf { it.size }
+                                    if (totalSize > 0) {
+                                        val saveDir = AppDataPaths.fileManager(context)
+                                        folderSizeDb.put(outputDir, FolderSizeInfo(totalSize, System.currentTimeMillis()))
+                                        folderSizeDb.save(saveDir)
+                                        folderSizeDb = FolderSizeDb.load(saveDir)
+                                    }
+                                }
+                                // 刷新包含解压输出路径的面板
+                                val needRefreshLeft = leftPath == outputDir || leftPath.startsWith("$outputDir/")
+                                val needRefreshRight = rightPath == outputDir || rightPath.startsWith("$outputDir/")
+                                when {
+                                    needRefreshLeft && needRefreshRight -> refreshBoth()
+                                    needRefreshLeft -> {
+                                        leftEntries = listDirectory(leftPath)
+                                        loadExtFlagsForDir(leftPath, isLeft = true)
+                                    }
+                                    needRefreshRight -> {
+                                        rightEntries = listDirectory(rightPath)
+                                        loadExtFlagsForDir(rightPath, isLeft = false)
+                                    }
+                                    else -> refreshCurrent()
+                                }
+                            }
                         }
                     }
                 }
