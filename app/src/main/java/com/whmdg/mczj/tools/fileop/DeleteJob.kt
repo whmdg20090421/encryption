@@ -99,8 +99,7 @@ class DeleteJob(
      */
     private fun moveToRecycleBin(entry: DeleteEntry) {
         val binDir = AppDataPaths.recycleBin(context)
-        val binDirFile = File(binDir)
-        if (!binDirFile.exists()) binDirFile.mkdirs()
+        if (!binDir.exists()) binDir.mkdirs()
 
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val binName = "${entry.name}_$timestamp"
