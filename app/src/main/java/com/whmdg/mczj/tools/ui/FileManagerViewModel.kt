@@ -3,6 +3,8 @@ package com.whmdg.mczj.tools.ui
 import android.app.Application
 import android.content.Context
 import android.util.Log
+import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
+import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
 import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -155,6 +157,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             else emptyList()
         } catch (_: Exception) { emptyList() }
     )
+
+    // ── WebDAV 浏览状态 ──
+    /** 当前 WebDAV 客户端，null 表示本地模式 */
+    var webDavClient by mutableStateOf<WebDavFileClient?>(null)
+        private set
+    /** WebDAV 服务器配置（用于显示名称等） */
+    var webDavConfig by mutableStateOf<WebDavServerConfig?>(null)
+        private set
+    /** WebDAV 当前浏览路径 */
+    var webDavCurrentPath by mutableStateOf("/")
+        private set
+    /** 是否处于 WebDAV 模式 */
+    val isWebDavMode: Boolean get() = webDavClient != null
 
     init {
         // 权限级别（统一从 legacySp 读取，与 HomeScreen / 安全设置一致）
@@ -410,7 +425,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── 便捷属性 ──
-    val currentPath: String get() = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
+    val currentPath: String get() = if (isWebDavMode && focusedPanel == FocusedPanel.LEFT) {
+        webDavConfig?.let { config ->
+            val proto = if (config.protocol == "dav") "dav" else "davs"
+            "$proto://${config.host}:${config.port}$webDavCurrentPath"
+        } ?: webDavCurrentPath
+    } else if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
     val currentNavState: PanelNavState get() = if (focusedPanel == FocusedPanel.LEFT) leftNavState else rightNavState
 
     // ── 滚动位置保存（按路径记忆，内存中，应用关闭自动清空） ──
@@ -585,6 +605,100 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ── WebDAV 浏览操作 ──
+
+    /**
+     * 进入 WebDAV 浏览模式。
+     */
+    fun navigateToWebDav(config: WebDavServerConfig) {
+        try {
+            val client = WebDavFileClient(config)
+            webDavClient = client
+            webDavConfig = config
+            webDavCurrentPath = config.relativePath.ifEmpty { "/" }
+            loadWebDavEntries()
+        } catch (e: Exception) {
+            loadError = RuntimeException("连接 WebDAV 失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 在 WebDAV 模式下进入子目录。
+     */
+    fun navigateToWebDavFolder(name: String) {
+        val client = webDavClient ?: return
+        val newPath = if (webDavCurrentPath.endsWith("/")) {
+            "$webDavCurrentPath$name"
+        } else {
+            "$webDavCurrentPath/$name"
+        }
+        webDavCurrentPath = newPath
+        loadWebDavEntries()
+    }
+
+    /**
+     * 在 WebDAV 模式下返回上一级。
+     */
+    fun webDavGoBack(): Boolean {
+        if (webDavCurrentPath == "/" || webDavCurrentPath.isEmpty()) return false
+        val parent = webDavCurrentPath.substringBeforeLast("/", "").ifEmpty { "/" }
+        webDavCurrentPath = parent
+        loadWebDavEntries()
+        return true
+    }
+
+    /**
+     * 退出 WebDAV 模式，恢复本地文件列表。
+     */
+    fun exitWebDavMode() {
+        webDavClient = null
+        webDavConfig = null
+        webDavCurrentPath = "/"
+        refreshCurrent()
+    }
+
+    /**
+     * 加载当前 WebDAV 路径的文件列表到 leftEntries。
+     */
+    private fun loadWebDavEntries() {
+        val client = webDavClient ?: return
+        try {
+            val files = client.listChildren(webDavCurrentPath)
+            if (files != null) {
+                leftEntries = files.map { info ->
+                    FileEntry(
+                        path = info.remotePath,
+                        name = info.name,
+                        isDirectory = info.isDirectory,
+                        permission = "",
+                        size = info.size,
+                        lastModified = info.lastModified,
+                        createdAt = 0
+                    )
+                }.let { entries ->
+                    when (sortField) {
+                        SortField.NAME -> when (sortOrder) {
+                            SortOrder.ASC -> entries.sortedBy { it.name.lowercase() }
+                            SortOrder.DESC -> entries.sortedByDescending { it.name.lowercase() }
+                        }
+                        SortField.SIZE -> when (sortOrder) {
+                            SortOrder.ASC -> entries.sortedBy { it.size }
+                            SortOrder.DESC -> entries.sortedByDescending { it.size }
+                        }
+                        SortField.MODIFIED -> when (sortOrder) {
+                            SortOrder.ASC -> entries.sortedBy { it.lastModified }
+                            SortOrder.DESC -> entries.sortedByDescending { it.lastModified }
+                        }
+                        SortField.CREATED -> entries
+                    }
+                }
+                loadError = null
+            }
+        } catch (e: Exception) {
+            loadError = RuntimeException("WebDAV 加载失败: ${e.message}")
+        }
+    }
+
     /** 后退，返回目标路径，null 表示无法后退（不执行跳转，由调用方通过 navigateToWithScroll 跳转） */
     /** 后退一步：更新 nav state index + 切换路径 + 刷新列表，返回目标路径 */
     fun goBack(): String? {
@@ -649,7 +763,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshCurrent() {
-        if (focusedPanel == FocusedPanel.LEFT) {
+        if (focusedPanel == FocusedPanel.LEFT && isWebDavMode) {
+            loadWebDavEntries()
+        } else if (focusedPanel == FocusedPanel.LEFT) {
             leftEntries = listDirectory(leftPath)
             loadExtFlagsForDir(leftPath, isLeft = true)
         } else {
@@ -659,9 +775,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshBoth() {
-        leftEntries = listDirectory(leftPath)
+        if (isWebDavMode) {
+            loadWebDavEntries()
+        } else {
+            leftEntries = listDirectory(leftPath)
+            loadExtFlagsForDir(leftPath, isLeft = true)
+        }
         rightEntries = listDirectory(rightPath)
-        loadExtFlagsForDir(leftPath, isLeft = true)
         loadExtFlagsForDir(rightPath, isLeft = false)
     }
 

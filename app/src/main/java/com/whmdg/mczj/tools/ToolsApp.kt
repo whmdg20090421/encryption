@@ -26,6 +26,13 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
         AppDataPaths.cleanArchiveCache(this)
         AppIconHelper.init(this)
         WebView.setDataDirectorySuffix("app")
+
+        // WebDAV: 初始化 Client 认证器
+        com.whmdg.mczj.tools.fileop.webdav.client.Client.authenticator =
+            com.whmdg.mczj.tools.fileop.webdav.WebDavAuthenticator
+        com.whmdg.mczj.tools.fileop.webdav.WebDavAuthenticator.setPersistentServers(
+            com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore.getAll(this)
+        )
     }
 
     override fun newImageLoader(context: android.content.Context): ImageLoader {

@@ -16,6 +16,8 @@ import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.fileop.FileOperationManager
 import com.whmdg.mczj.tools.fileop.DeleteEntry
+import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
+import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -291,6 +293,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var qaNameInput by remember { mutableStateOf("") }
     var qaPathInput by remember { mutableStateOf("") }
 
+    // ── WebDAV 快捷访问 ──
+    var showQaTypeSelector by remember { mutableStateOf(false) }
+    var showWebDavEditDialog by remember { mutableStateOf(false) }
+    var webDavServers by remember {
+        mutableStateOf(WebDavServerStore.getAll(context))
+    }
+
     fun saveQuickAccess() {
         quickAccessPrefs.edit().putString("entries", qaJson.encodeToString(quickAccessList)).apply()
     }
@@ -378,9 +387,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // 返回手势：压缩包内 → 回上一级或退出压缩包，回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
+    // 返回手势：WebDAV → 回上一级或退出，压缩包内 → 回上一级或退出压缩包，回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
     BackHandler {
-        if (vm.isInArchive) {
+        if (vm.isWebDavMode) {
+            if (!vm.webDavGoBack()) {
+                vm.exitWebDavMode()
+            }
+        } else if (vm.isInArchive) {
             if (!vm.goUpInArchive()) {
                 vm.exitArchive()
             }
@@ -576,13 +589,17 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         ) {
                             IconButton(
                                 onClick = {
-                                    val targetPath = vm.goBack()
-                                    if (targetPath != null) {
-                                        val saved = vm.getScrollPosition(targetPath)
-                                        vm.pendingScrollTo = Triple(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+                                    if (vm.isWebDavMode) {
+                                        vm.webDavGoBack()
+                                    } else {
+                                        val targetPath = vm.goBack()
+                                        if (targetPath != null) {
+                                            val saved = vm.getScrollPosition(targetPath)
+                                            vm.pendingScrollTo = Triple(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+                                        }
                                     }
                                 },
-                                enabled = vm.currentNavState.canGoBack
+                                enabled = if (vm.isWebDavMode) vm.webDavCurrentPath != "/" else vm.currentNavState.canGoBack
                             ) {
                                 Icon(Icons.Default.ArrowBack, contentDescription = "后退")
                             }
@@ -911,7 +928,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             rightListState.firstVisibleItemIndex,
                                             rightListState.firstVisibleItemScrollOffset
                                         )
-                                        vm.navigateToFolder(entry)
+                                        if (vm.isWebDavMode) {
+                                            vm.navigateToWebDavFolder(entry.name)
+                                        } else {
+                                            vm.navigateToFolder(entry)
+                                        }
                                         leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
                                     }
                                 },
@@ -1685,11 +1706,48 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         }
                                     }
                                 }
+                                // WebDAV 快捷访问
+                                webDavServers.forEach { server ->
+                                    Box(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Card(
+                                            modifier = Modifier
+                                                .fillMaxWidth(0.85f)
+                                                .padding(vertical = 6.dp)
+                                                .clickable {
+                                                    vm.navigateToWebDav(server)
+                                                    showDrawer = false
+                                                },
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                            )
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Cloud,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(20.dp),
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(
+                                                    server.name.ifEmpty { server.getDefaultName() },
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
                                 // 添加快捷访问按钮
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable { showAddQaDialog = true }
+                                        .clickable { showQaTypeSelector = true }
                                         .padding(horizontal = 16.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -2675,6 +2733,90 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 }) {
                     Text("取消")
                 }
+            }
+        )
+    }
+
+    // ── 添加快捷访问类型选择 ──
+    if (showQaTypeSelector) {
+        AlertDialog(
+            onDismissRequest = { showQaTypeSelector = false },
+            title = { Text("添加快捷访问") },
+            text = {
+                Column {
+                    // 本地路径选项
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showQaTypeSelector = false
+                                showAddQaDialog = true
+                            }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Folder,
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text("本地路径", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "添加本地文件夹快捷方式",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // WebDAV 服务器选项
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showQaTypeSelector = false
+                                showWebDavEditDialog = true
+                            }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Cloud,
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text("WebDAV 服务器", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "连接远程 WebDAV 文件服务器",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showQaTypeSelector = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── WebDAV 服务器编辑弹窗 ──
+    if (showWebDavEditDialog) {
+        WebDavEditDialog(
+            onDismiss = { showWebDavEditDialog = false },
+            onSaved = { config ->
+                webDavServers = WebDavServerStore.getAll(context)
+                showWebDavEditDialog = false
             }
         )
     }
