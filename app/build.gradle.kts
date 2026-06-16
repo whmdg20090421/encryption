@@ -126,7 +126,7 @@ dependencies {
     implementation(libs.jxl.coder)                              // JPEG XL 图片压缩
 
     // WebDAV
-    implementation("com.github.bitfireAT:dav4jvm:c1bc14348831bcdb00f3a6eec4859b81c7dc3728") {
+    implementation("com.github.bitfireAT:dav4jvm:2.1.4") {
         exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
     }
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
