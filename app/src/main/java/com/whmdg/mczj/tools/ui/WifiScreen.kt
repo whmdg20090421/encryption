@@ -728,17 +728,33 @@ private fun DisclaimerDialog(
 
 /** WiFi 密码记录条目（完整数据，显示 + 存储） */
 private data class WifiPasswordEntry(
-    val networkId: Int,
+    // ── 显示字段（UI 直接用）──
     val ssid: String,
-    val bssid: String,
-    val password: String,    // preSharedKey，脱敏时为空
-    val frequency: Int,
-    val signalStrength: Int,
-    val flags: String,        // 如 [WPA2-PSK-CCMP][ESS]
-    val status: String        // CURRENT / DISABLED / ""
+    val password: String,       // PreSharedKey，明文或空
+    val security: String,       // WPA3-SAE / WPA2-PSK / WPA-PSK / WEP / Open
+
+    // ── 存储字段（不显示，但保存备用）──
+    val configKey: String,      // 如 "111"WPA_PSK
+    val bssid: String,          // 固定 BSSID 或空
+    val hiddenSSID: Boolean,
+    val requirePMF: Boolean,
+    val allowedKeyMgmtHex: String,   // byte-array hex
+    val allowedProtocolsHex: String,
+    val status: Int,            // 0=CURRENT, 1=ENABLED, 2=DISABLED
+    val shared: Boolean,
+    val autoJoinEnabled: Boolean,
+    val trusted: Boolean,
+    val defaultGwMacAddress: String,
+    val randomizedMacAddress: String,
+    val creatorUid: Int,
+    val creatorName: String,
+    val hasEverConnected: Boolean,
+    val networkSelectionStatus: String,
+    val ipAssignment: String,
+    val proxySettings: String
 )
 
-/** 执行 root 命令获取已保存的 WiFi 网络（通过 dumpsys wifi） */
+/** 执行 root 命令获取已保存的 WiFi 网络（读取 WifiConfigStore.xml） */
 private fun loadSavedWifiNetworks(context: Context): List<WifiPasswordEntry> {
     if (!com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isRootAvailable()) {
         throw SecurityException("需要 Root 权限才能查看已保存的 WiFi 密码")
@@ -746,67 +762,166 @@ private fun loadSavedWifiNetworks(context: Context): List<WifiPasswordEntry> {
 
     val (stdout, stderr, exitCode) =
         com.whmdg.mczj.tools.security.SpecialPermissionVerifier.executeRootCommandFull(
-            "dumpsys wifi"
+            "cat /data/misc/apexdata/com.android.wifi/WifiConfigStore.xml"
         )
 
     if (exitCode != 0 || stdout.isEmpty()) {
         throw Exception("命令执行失败 (exit=$exitCode): $stderr")
     }
 
-    return parseDumpsysWifi(stdout)
+    return parseWifiConfigStoreXml(stdout)
 }
 
-/** 解析 dumpsys wifi 输出，提取已保存网络 + 密码 */
-private fun parseDumpsysWifi(output: String): List<WifiPasswordEntry> {
+/** 解析 WifiConfigStore.xml，提取已保存网络 + 密码 */
+private fun parseWifiConfigStoreXml(xml: String): List<WifiPasswordEntry> {
     val entries = mutableListOf<WifiPasswordEntry>()
 
-    // 按 WifiConfiguration 块分割
-    val blocks = output.split("WifiConfiguration:")
-    for (block in blocks.drop(1)) {
-        try {
-            // 提取各字段
-            val networkIdMatch = Regex("networkId[:\\s=]+(\\d+)").find(block)
-            val ssidMatch = Regex("SSID:\\s*\"([^\"]*)\"").find(block)
-            val bssidMatch = Regex("BSSID:\\s*([0-9A-Fa-f:]+)").find(block)
-            val pskMatch = Regex("preSharedKey:\\s*\"([^\"]*)\"").find(block)
-            val freqMatch = Regex("frequency[:\\s=]+(\\d+)").find(block)
-            val rssiMatch = Regex("(?:rssi|signalStrength)[:\\s=]+(-?\\d+)").find(block)
-            val statusMatch = Regex("status[:\\s=]+(\\w+)").find(block)
+    try {
+        val parser = android.util.Xml.newPullParser()
+        parser.setInput(xml.reader())
 
-            // SSID 是必须的
-            val ssid = ssidMatch?.groupValues?.get(1) ?: continue
-            if (ssid.isEmpty() || ssid == "<unknown ssid>") continue
+        var inNetwork = false
+        var inWifiConfig = false
+        var inNetworkStatus = false
+        var inIpConfig = false
 
-            val networkId = networkIdMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            val bssid = bssidMatch?.groupValues?.get(1) ?: ""
-            val frequency = freqMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            val signalStrength = rssiMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
-            val status = statusMatch?.groupValues?.get(1) ?: ""
+        // 当前 Network 内收集的字段
+        val fields = mutableMapOf<String, String>()
+        var currentTag = ""
+        var currentName = ""
+        var currentText = StringBuilder()
 
-            // 密码：preSharedKey 可能是明文或 "*" 脱敏
-            val rawPsk = pskMatch?.groupValues?.get(1) ?: ""
-            val password = if (rawPsk.isNotEmpty() && rawPsk != "*") rawPsk else ""
+        while (parser.eventType != android.util.XmlPullParser.END_DOCUMENT) {
+            when (parser.eventType) {
+                android.util.XmlPullParser.START_TAG -> {
+                    currentTag = parser.name ?: ""
+                    currentName = parser.getAttributeValue(null, "name") ?: ""
+                    currentText.clear()
 
-            // flags：从 block 中提取安全类型描述
-            val flagsMatch = Regex("allowedKeyMgmt[:\\s=]+([^\\n]+)").find(block)
-            val flags = flagsMatch?.groupValues?.get(1)?.trim() ?: ""
+                    when (currentTag) {
+                        "Network" -> {
+                            inNetwork = true
+                            fields.clear()
+                        }
+                        "WifiConfiguration" -> {
+                            inWifiConfig = true
+                        }
+                        "NetworkStatus" -> {
+                            inNetworkStatus = true
+                        }
+                        "IpConfiguration" -> {
+                            inIpConfig = true
+                        }
+                    }
+                }
 
-            entries.add(WifiPasswordEntry(
-                networkId = networkId,
-                ssid = ssid,
-                bssid = bssid,
-                password = password,
-                frequency = frequency,
-                signalStrength = signalStrength,
-                flags = flags,
-                status = status
-            ))
-        } catch (_: Exception) {
-            continue
+                android.util.XmlPullParser.TEXT -> {
+                    currentText.append(parser.text)
+                }
+
+                android.util.XmlPullParser.END_TAG -> {
+                    val tag = parser.name ?: ""
+                    val text = currentText.toString().trim()
+
+                    // 根据当前节和标签名存储字段
+                    val section = when {
+                        inWifiConfig -> "config"
+                        inNetworkStatus -> "status"
+                        inIpConfig -> "ip"
+                        else -> ""
+                    }
+
+                    if (section.isNotEmpty() && currentName.isNotEmpty()) {
+                        val key = "${section}.${currentName}"
+                        when (tag) {
+                            "string" -> fields[key] = text
+                            "int" -> fields[key] = parser.getAttributeValue(null, "value") ?: "0"
+                            "boolean" -> fields[key] = parser.getAttributeValue(null, "value") ?: "false"
+                            "byte-array" -> fields[key] = parser.getAttributeValue(null, "num")?.let { "num=$it" } ?: ""
+                            "null" -> fields[key] = "__null__"
+                            "long-array" -> fields[key] = "__long_array__"
+                        }
+                    }
+
+                    // 处理 byte-array 的文本内容
+                    if (tag == "byte-array" && currentName.isNotEmpty() && section.isNotEmpty()) {
+                        val numAttr = parser.getAttributeValue(null, "num") ?: "0"
+                        if (numAttr.toIntOrNull() ?: 0 > 0 && text.isNotEmpty()) {
+                            fields["${section}.${currentName}"] = text
+                        }
+                    }
+
+                    when (tag) {
+                        "WifiConfiguration" -> inWifiConfig = false
+                        "NetworkStatus" -> inNetworkStatus = false
+                        "IpConfiguration" -> inIpConfig = false
+                        "Network" -> {
+                            inNetwork = false
+                            // 构建 WifiPasswordEntry
+                            val ssid = fields["config.SSID"]
+                                ?.removeSurrounding("\"") ?: ""
+                            if (ssid.isNotEmpty()) {
+                                val configKey = fields["config.ConfigKey"] ?: ""
+                                val rawPsk = fields["config.PreSharedKey"]
+                                    ?.removeSurrounding("\"") ?: ""
+                                val password = if (rawPsk.isNotEmpty() && rawPsk != "*") rawPsk else ""
+                                val allowedKeyMgmtHex = fields["config.AllowedKeyMgmt"] ?: ""
+
+                                entries.add(WifiPasswordEntry(
+                                    ssid = ssid,
+                                    password = password,
+                                    security = parseSecurityFromXml(configKey, allowedKeyMgmtHex),
+                                    configKey = configKey,
+                                    bssid = if (fields["config.BSSID"] == "__null__") "" else (fields["config.BSSID"] ?: ""),
+                                    hiddenSSID = fields["config.HiddenSSID"] == "true",
+                                    requirePMF = fields["config.RequirePMF"] == "true",
+                                    allowedKeyMgmtHex = allowedKeyMgmtHex,
+                                    allowedProtocolsHex = fields["config.AllowedProtocols"] ?: "",
+                                    status = fields["config.Status"]?.toIntOrNull() ?: 2,
+                                    shared = fields["config.Shared"] == "true",
+                                    autoJoinEnabled = fields["config.AutoJoinEnabled"] == "true",
+                                    trusted = fields["config.Trusted"] == "true",
+                                    defaultGwMacAddress = fields["config.DefaultGwMacAddress"] ?: "",
+                                    randomizedMacAddress = fields["config.RandomizedMacAddress"] ?: "",
+                                    creatorUid = fields["config.CreatorUid"]?.toIntOrNull() ?: 0,
+                                    creatorName = fields["config.CreatorName"] ?: "",
+                                    hasEverConnected = fields["status.HasEverConnected"] == "true",
+                                    networkSelectionStatus = fields["status.SelectionStatus"] ?: "",
+                                    ipAssignment = fields["ip.IpAssignment"] ?: "DHCP",
+                                    proxySettings = fields["ip.ProxySettings"] ?: "NONE"
+                                ))
+                            }
+                            fields.clear()
+                        }
+                    }
+                }
+            }
+            parser.next()
         }
+    } catch (e: Exception) {
+        throw Exception("XML 解析失败: ${e.message}")
     }
 
     return entries
+}
+
+/** 从 ConfigKey 和 AllowedKeyMgmt 推断安全类型 */
+private fun parseSecurityFromXml(configKey: String, allowedKeyMgmtHex: String): String {
+    val upper = configKey.uppercase()
+    return when {
+        upper.contains("WPA3") || upper.contains("SAE") -> "WPA3-SAE"
+        upper.contains("WPA2") && upper.contains("EAP") -> "WPA2-EAP"
+        upper.contains("WPA2") -> "WPA2-PSK"
+        upper.contains("WPA") && upper.contains("EAP") -> "WPA-EAP"
+        upper.contains("WPA") -> "WPA-PSK"
+        upper.contains("WEP") -> "WEP"
+        upper.contains("NONE") -> "Open"
+        // 从 AllowedKeyMgmt 推断: 02=WPA_PSK, 04=WPA_EAP, 08=SAE, 10=OWE
+        allowedKeyMgmtHex.contains("08") -> "WPA3-SAE"
+        allowedKeyMgmtHex.contains("04") -> "WPA-EAP"
+        allowedKeyMgmtHex.contains("02") -> "WPA-PSK"
+        else -> "Open"
+    }
 }
 
 /** 存储 WiFi 密码记录到 SharedPreferences */
@@ -814,14 +929,27 @@ private fun saveWifiPasswords(context: Context, entries: List<WifiPasswordEntry>
     val jsonArray = org.json.JSONArray()
     for (e in entries) {
         val obj = org.json.JSONObject().apply {
-            put("networkId", e.networkId)
             put("ssid", e.ssid)
-            put("bssid", e.bssid)
             put("password", e.password)
-            put("frequency", e.frequency)
-            put("signalStrength", e.signalStrength)
-            put("flags", e.flags)
+            put("security", e.security)
+            put("configKey", e.configKey)
+            put("bssid", e.bssid)
+            put("hiddenSSID", e.hiddenSSID)
+            put("requirePMF", e.requirePMF)
+            put("allowedKeyMgmtHex", e.allowedKeyMgmtHex)
+            put("allowedProtocolsHex", e.allowedProtocolsHex)
             put("status", e.status)
+            put("shared", e.shared)
+            put("autoJoinEnabled", e.autoJoinEnabled)
+            put("trusted", e.trusted)
+            put("defaultGwMacAddress", e.defaultGwMacAddress)
+            put("randomizedMacAddress", e.randomizedMacAddress)
+            put("creatorUid", e.creatorUid)
+            put("creatorName", e.creatorName)
+            put("hasEverConnected", e.hasEverConnected)
+            put("networkSelectionStatus", e.networkSelectionStatus)
+            put("ipAssignment", e.ipAssignment)
+            put("proxySettings", e.proxySettings)
         }
         jsonArray.put(obj)
     }
@@ -840,14 +968,27 @@ private fun loadStoredWifiPasswords(context: Context): List<WifiPasswordEntry> {
         (0 until arr.length()).map { i ->
             val obj = arr.getJSONObject(i)
             WifiPasswordEntry(
-                networkId = obj.optInt("networkId", 0),
                 ssid = obj.optString("ssid", ""),
-                bssid = obj.optString("bssid", ""),
                 password = obj.optString("password", ""),
-                frequency = obj.optInt("frequency", 0),
-                signalStrength = obj.optInt("signalStrength", 0),
-                flags = obj.optString("flags", ""),
-                status = obj.optString("status", "")
+                security = obj.optString("security", "Open"),
+                configKey = obj.optString("configKey", ""),
+                bssid = obj.optString("bssid", ""),
+                hiddenSSID = obj.optBoolean("hiddenSSID", false),
+                requirePMF = obj.optBoolean("requirePMF", false),
+                allowedKeyMgmtHex = obj.optString("allowedKeyMgmtHex", ""),
+                allowedProtocolsHex = obj.optString("allowedProtocolsHex", ""),
+                status = obj.optInt("status", 2),
+                shared = obj.optBoolean("shared", true),
+                autoJoinEnabled = obj.optBoolean("autoJoinEnabled", true),
+                trusted = obj.optBoolean("trusted", true),
+                defaultGwMacAddress = obj.optString("defaultGwMacAddress", ""),
+                randomizedMacAddress = obj.optString("randomizedMacAddress", ""),
+                creatorUid = obj.optInt("creatorUid", 0),
+                creatorName = obj.optString("creatorName", ""),
+                hasEverConnected = obj.optBoolean("hasEverConnected", false),
+                networkSelectionStatus = obj.optString("networkSelectionStatus", ""),
+                ipAssignment = obj.optString("ipAssignment", "DHCP"),
+                proxySettings = obj.optString("proxySettings", "NONE")
             )
         }
     } catch (_: Exception) {
@@ -1021,7 +1162,7 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
             }
 
             // 数据列表
-            items(entries, key = { "${it.networkId}_${it.bssid}" }) { entry ->
+            items(entries, key = { it.configKey.ifEmpty { "${it.ssid}_${it.bssid}" } }) { entry ->
                 GlowCard {
                     Row(
                         modifier = Modifier
@@ -1029,7 +1170,7 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
                             .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 左侧：SSID（BSSID）
+                        // 左侧：SSID(BSSID)
                         Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
@@ -1039,7 +1180,7 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                if (entry.status == "CURRENT") {
+                                if (entry.status == 0) {
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         text = "当前",
@@ -1050,23 +1191,33 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
                                 }
                             }
                             Text(
-                                text = "(${entry.bssid})",
+                                text = "(${entry.bssid.ifEmpty { "未记录" }})",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1
                             )
                         }
                         Spacer(modifier = Modifier.width(16.dp))
-                        // 右侧：密码明文
-                        Text(
-                            text = entry.password.ifEmpty { "（无密码）" },
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium,
-                            color = if (entry.password.isEmpty())
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            else
-                                MaterialTheme.colorScheme.primary
-                        )
+                        // 右侧：密码(安全类型)
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = entry.password.ifEmpty { "（无密码）" },
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium,
+                                color = if (entry.password.isEmpty())
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                else
+                                    MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "(${entry.security})",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (entry.security == "Open")
+                                    MaterialTheme.colorScheme.error
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
