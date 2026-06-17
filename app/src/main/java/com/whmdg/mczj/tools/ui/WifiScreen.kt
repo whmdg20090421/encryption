@@ -31,6 +31,10 @@ import kotlinx.coroutines.withContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -204,6 +208,7 @@ fun WifiScreen(onBack: () -> Unit) {
     var showMenu by remember { mutableStateOf(false) }
     var showPasswordScreen by remember { mutableStateOf(false) }
     var showActionDialog by remember { mutableStateOf(false) }
+    var showConnectDialog by remember { mutableStateOf(false) }
     var selectedNetwork by remember { mutableStateOf<WifiNetworkInfo?>(null) }
 
     // 扫描结果广播接收器
@@ -599,44 +604,65 @@ fun WifiScreen(onBack: () -> Unit) {
                     Text("频段：${net.band}")
                 }
             },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showActionDialog = false
-                        // TODO: 连接功能
-                    },
-                    enabled = hasAdbOrAbove
+            buttons = {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = "连接",
-                        color = if (hasAdbOrAbove)
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                    )
-                }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(
-                        onClick = {
-                            showActionDialog = false
-                            // TODO: 破解功能
-                        },
-                        enabled = hasRoot
-                    ) {
-                        Text(
-                            text = "破解",
-                            color = if (hasRoot)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                        )
-                    }
+                    // 左侧：取消
                     TextButton(onClick = { showActionDialog = false }) {
                         Text("取消")
                     }
+                    // 右侧：破解 + 连接
+                    Row {
+                        TextButton(
+                            onClick = {
+                                showActionDialog = false
+                                // TODO: 破解功能
+                            },
+                            enabled = hasRoot
+                        ) {
+                            Text(
+                                text = "破解",
+                                color = if (hasRoot)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            )
+                        }
+                        TextButton(
+                            onClick = {
+                                showActionDialog = false
+                                showConnectDialog = true
+                            },
+                            enabled = hasAdbOrAbove
+                        ) {
+                            Text(
+                                text = "连接",
+                                color = if (hasAdbOrAbove)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            )
+                        }
+                    }
                 }
+            }
+        )
+    }
+
+    // ── WiFi 连接对话框 ──
+    if (showConnectDialog && selectedNetwork != null) {
+        val net = selectedNetwork!!
+        WifiConnectDialog(
+            ssid = net.ssid,
+            security = net.security,
+            onDismiss = { showConnectDialog = false },
+            onConnect = { password ->
+                showConnectDialog = false
+                // TODO: 执行连接命令
             }
         )
     }
@@ -1340,4 +1366,64 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
             }
         )
     }
+}
+
+/** WiFi 连接密码输入对话框 */
+@Composable
+private fun WifiConnectDialog(
+    ssid: String,
+    security: String,
+    onDismiss: () -> Unit,
+    onConnect: (String) -> Unit
+) {
+    var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("连接到 $ssid") },
+        text = {
+            Column {
+                Text("安全类型：$security")
+                Spacer(modifier = Modifier.height(16.dp))
+                if (security != "Open") {
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text("密码") },
+                        singleLine = true,
+                        visualTransformation = if (passwordVisible)
+                            VisualTransformation.None
+                        else
+                            PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = if (passwordVisible) "隐藏密码" else "显示密码"
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    Text("此网络为开放网络，无需密码")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConnect(password) },
+                enabled = security == "Open" || password.isNotEmpty()
+            ) {
+                Text("连接")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
 }
