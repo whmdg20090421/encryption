@@ -44,6 +44,7 @@ object HandshakeCapture {
         val descriptor: Int,            // Key Descriptor Type (2=RSN, 254=WPA)
         val keyInfo: Int,               // Key Info 字段
         val keyLen: Int,                // Key Length
+        val replayCounter: Long,        // Replay Counter (用于配对同一次握手)
         val nonce: ByteArray,           // 32 字节
         val mic: ByteArray,             // 16 字节
         val keyData: ByteArray,         // 含 RSN IE 等
@@ -72,8 +73,8 @@ object HandshakeCapture {
         onProgress("启动 tcpdump（普通模式）...")
 
         // 1. 启动 tcpdump，管道输出 base64 到 stdout，内存处理不写物理存储
-        //    -c 10: 最多抓 10 个 EAPOL 帧后自动停止
-        val tcpdumpCmd = "tcpdump -i $iface -c 10 -w - ether proto 0x888e | base64"
+        //    -c 4: 一次四次握手最多 4 帧，避免抓到重试的冗余帧
+        val tcpdumpCmd = "tcpdump -i $iface -c 4 -w - ether proto 0x888e | base64"
         val tcpdumpProcess = try {
             Runtime.getRuntime().exec(arrayOf("su", "-c", tcpdumpCmd))
         } catch (e: Exception) {
@@ -100,6 +101,9 @@ object HandshakeCapture {
         }.apply { start() }
 
         delay(500) // 等待 tcpdump 就绪
+
+        // 记录触发前已保存的网络列表，用于后续清理新增的假密码网络
+        val existingNetworks = getSavedNetworkIds()
 
         try {
             // 2. 发送假密码触发握手（自己发包自己抓）
@@ -177,7 +181,48 @@ object HandshakeCapture {
                 if (pid > 0) SpecialPermissionVerifier.executeRootCommandFull("kill -2 $pid")
             } catch (_: Exception) {}
             null
+        } finally {
+            // 清理系统保存的假密码网络，避免污染 WiFi 设置
+            cleanupFakeNetwork(targetSsid, existingNetworks)
         }
+    }
+
+    /**
+     * 获取当前已保存的网络 ID 列表（用于对比新增网络）
+     */
+    private fun getSavedNetworkIds(): Set<String> {
+        val (stdout, _, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("cmd wifi list-networks")
+        if (exitCode != 0) return emptySet()
+        // 输出格式: "NetworkId  SSID  Security" 每行一个网络
+        return stdout.lines()
+            .drop(1) // 跳过表头
+            .mapNotNull { line ->
+                val parts = line.trim().split("\\s+".toRegex(), limit = 2)
+                parts.firstOrNull()?.takeIf { it.isNotEmpty() }
+            }
+            .toSet()
+    }
+
+    /**
+     * 清理 connect-network 新增的假密码网络
+     * 对比抓包前后的网络列表，移除新增的匹配 SSID 的网络
+     */
+    private fun cleanupFakeNetwork(targetSsid: String, existingNetworks: Set<String>) {
+        try {
+            val (stdout, _, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("cmd wifi list-networks")
+            if (exitCode != 0) return
+            stdout.lines().drop(1).forEach { line ->
+                val parts = line.trim().split("\\s+".toRegex(), limit = 3)
+                if (parts.size >= 2) {
+                    val networkId = parts[0]
+                    val ssid = parts[1]
+                    // 只删除新增的（不在抓包前列表中）且 SSID 匹配的网络
+                    if (networkId !in existingNetworks && ssid == targetSsid) {
+                        SpecialPermissionVerifier.executeRootCommandFull("cmd wifi remove-network $networkId")
+                    }
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     /**
@@ -269,6 +314,12 @@ object HandshakeCapture {
         val keyLen = ((data[keyOffset + 3].toInt() and 0xFF) shl 8) or
                 (data[keyOffset + 4].toInt() and 0xFF)
 
+        // replay counter: 8 bytes at offset keyOffset+5
+        var replayCounter = 0L
+        for (i in 0 until 8) {
+            replayCounter = (replayCounter shl 8) or (data[keyOffset + 5 + i].toLong() and 0xFF)
+        }
+
         // nonce: 32 bytes at offset keyOffset+13
         val nonce = data.copyOfRange(keyOffset + 13, keyOffset + 45)
 
@@ -306,6 +357,7 @@ object HandshakeCapture {
             descriptor = descriptor,
             keyInfo = keyInfo,
             keyLen = keyLen,
+            replayCounter = replayCounter,
             nonce = nonce,
             mic = mic,
             keyData = keyData,
@@ -316,20 +368,25 @@ object HandshakeCapture {
 
     /**
      * 从 EAPOL 帧列表中提取握手数据
+     * 严格按 replay counter 配对 Msg1/Msg2，确保来自同一次握手
      */
     private fun extractHandshake(
         frames: List<EapolFrame>,
         ssid: String,
         bssid: String
     ): HandshakeData? {
-        val msg1 = frames.find { it.msgType == 1 }
-        val msg2 = frames.find { it.msgType == 2 }
-        val msg3 = frames.find { it.msgType == 3 }
+        // 找到第一对匹配的 Msg1 + Msg2（replay counter 相同）
+        val msg1 = frames.find { it.msgType == 1 } ?: return null
+        val msg2 = frames.find {
+            it.msgType == 2 && it.replayCounter == msg1.replayCounter
+        } ?: return null
 
-        // 至少需要 Msg1 + Msg2 才能构成有效握手
-        if (msg1 == null || msg2 == null) return null
+        // Msg3 也必须 replay counter 匹配，否则是另一次握手的，不用
+        val msg3 = frames.find {
+            it.msgType == 3 && it.replayCounter == msg1.replayCounter
+        }
 
-        // ANonce: 来自 Msg1 或 Msg3
+        // ANonce: 优先 Msg3（AP 确认），否则 Msg1
         val aNonce = (msg3 ?: msg1).nonce.toHex()
 
         // SNonce: 来自 Msg2
@@ -355,8 +412,21 @@ object HandshakeCapture {
         // 客户端 MAC: Msg2 的源地址
         val clientMac = msg2.srcMac
 
-        // 所有 EAPOL 帧的 hex dump
-        val eapolHexList = frames.map { it.rawEapol.toHex() }
+        // Msg2 的 MIC 区域清零（离线计算需要 MIC=0 的原始帧）
+        // rawEapol 结构: [802.1X头 4B][descriptor 1B][key_info 2B][key_len 2B][replay 8B][nonce 32B][iv 16B][rsc 8B][id 8B][MIC 16B]...
+        // MIC 偏移 = 4+1+2+2+8+32+16+8+8 = 81，长度 16
+        val handshakeFrames = listOf(msg1, msg2) + listOfNotNull(msg3)
+        val eapolHexList = handshakeFrames.map { frame ->
+            if (frame.msgType == 2) {
+                val zeroed = frame.rawEapol.copyOf()
+                if (zeroed.size >= 97) {
+                    zeroed.fill(0, 81, 97)
+                }
+                zeroed.toHex()
+            } else {
+                frame.rawEapol.toHex()
+            }
+        }
 
         return HandshakeData(
             ssid = ssid,
