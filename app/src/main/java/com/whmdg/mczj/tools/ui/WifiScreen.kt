@@ -836,10 +836,15 @@ private fun parseWifiConfigStoreXml(xml: String): List<WifiPasswordEntry> {
 
 // ── XML 字段提取工具函数 ──
 
-/** 提取 <string name="X">text</string> */
+/** 提取 <string name="X">text</string>，并解码 XML 实体 */
 private fun extractXmlString(block: String, name: String): String? {
     val regex = Regex("""<string\s+name="$name">([^<]*)</string>""")
     return regex.find(block)?.groupValues?.get(1)
+        ?.replace("&quot;", "\"")
+        ?.replace("&amp;", "&")
+        ?.replace("&lt;", "<")
+        ?.replace("&gt;", ">")
+        ?.replace("&apos;", "'")
 }
 
 /** 提取 <int name="X" value="Y" /> */
