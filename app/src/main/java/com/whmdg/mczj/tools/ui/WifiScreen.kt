@@ -24,6 +24,9 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -723,22 +726,271 @@ private fun DisclaimerDialog(
     )
 }
 
-/** WiFi 密码记录条目 */
+/** WiFi 密码记录条目（完整数据，显示 + 存储） */
 private data class WifiPasswordEntry(
+    val networkId: Int,
     val ssid: String,
     val bssid: String,
-    val password: String
+    val password: String,    // preSharedKey，脱敏时为空
+    val frequency: Int,
+    val signalStrength: Int,
+    val flags: String,        // 如 [WPA2-PSK-CCMP][ESS]
+    val status: String        // CURRENT / DISABLED / ""
 )
+
+/** 执行 root 命令获取已保存的 WiFi 网络 */
+private fun loadSavedWifiNetworks(context: Context): List<WifiPasswordEntry> {
+    if (!com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isRootAvailable()) {
+        throw SecurityException("需要 Root 权限才能查看已保存的 WiFi 密码")
+    }
+
+    val (stdout, stderr, exitCode) =
+        com.whmdg.mczj.tools.security.SpecialPermissionVerifier.executeRootCommandFull(
+            "cmd wifi list-networks"
+        )
+
+    if (exitCode != 0) {
+        throw Exception("命令执行失败 (exit=$exitCode): $stderr")
+    }
+
+    return parseNetworksOutput(stdout)
+}
+
+/** 解析 cmd wifi list-networks 输出 */
+private fun parseNetworksOutput(output: String): List<WifiPasswordEntry> {
+    val lines = output.lines().filter { it.isNotBlank() }
+    if (lines.size < 2) return emptyList()
+
+    // 跳过表头行，解析数据行
+    val entries = mutableListOf<WifiPasswordEntry>()
+    for (i in 1 until lines.size) {
+        val line = lines[i]
+        try {
+            // 按多个空格分割，但保留 [...] flags 整体
+            // 格式示例:
+            //   0  "MyWiFi"  AA:BB:CC:DD:EE:FF  2437  -55  [WPA2-PSK-CCMP][ESS]
+            //   1  "OpenNet"  11:22:33:44:55:66  5180  -70  [ESS]
+            val networkId = line.substringBefore(' ').trim().toIntOrNull() ?: continue
+
+            // 提取 SSID（引号内）
+            val ssidMatch = Regex("\"([^\"]*)\"").find(line) ?: continue
+            val ssid = ssidMatch.groupValues[1]
+            val afterSsid = line.substring(ssidMatch.range.last + 1).trim()
+
+            // 剩余部分按空格分割
+            val parts = afterSsid.split(Regex("\\s+"))
+            if (parts.size < 3) continue
+
+            val bssid = parts[0]
+            val frequency = parts[1].toIntOrNull() ?: 0
+            val signalStrength = parts[2].toIntOrNull() ?: 0
+
+            // flags 和 status 在最后面
+            val flags = parts.drop(3).joinToString(" ")
+            val status = if (flags.contains("CURRENT")) "CURRENT" else ""
+
+            // 密码：cmd wifi list-networks 不直接显示密码
+            // 需要额外命令获取（dumpsys wifi 或 wpa_cli）
+            // 先留空，后续可补充
+            val password = ""
+
+            entries.add(WifiPasswordEntry(
+                networkId = networkId,
+                ssid = ssid,
+                bssid = bssid,
+                password = password,
+                frequency = frequency,
+                signalStrength = signalStrength,
+                flags = flags,
+                status = status
+            ))
+        } catch (_: Exception) {
+            // 跳过解析失败的行
+            continue
+        }
+    }
+
+    return entries
+}
+
+/** 尝试获取指定网络的密码（通过 dumpsys wifi 解析 preSharedKey） */
+private fun tryFetchPasswords(entries: List<WifiPasswordEntry>): List<WifiPasswordEntry> {
+    return try {
+        val (stdout, _, exitCode) =
+            com.whmdg.mczj.tools.security.SpecialPermissionVerifier.executeRootCommandFull(
+                "dumpsys wifi"
+            )
+        if (exitCode != 0) return entries
+
+        // 从 dumpsys wifi 中提取 SSID → preSharedKey 映射
+        val ssidToPassword = mutableMapOf<String, String>()
+        val blocks = stdout.split("WifiConfiguration:")
+        for (block in blocks.drop(1)) {
+            val ssidMatch = Regex("SSID:\\s*\"([^\"]*)\"").find(block)
+            val pskMatch = Regex("preSharedKey:\\s*\"([^\"]*)\"").find(block)
+            if (ssidMatch != null && pskMatch != null) {
+                val ssid = ssidMatch.groupValues[1]
+                val psk = pskMatch.groupValues[1]
+                if (psk.isNotEmpty() && psk != "*") {
+                    ssidToPassword[ssid] = psk
+                }
+            }
+        }
+
+        entries.map { entry ->
+            val psk = ssidToPassword[entry.ssid]
+            if (psk != null) entry.copy(password = psk) else entry
+        }
+    } catch (_: Exception) {
+        entries
+    }
+}
+
+/** 存储 WiFi 密码记录到 SharedPreferences */
+private fun saveWifiPasswords(context: Context, entries: List<WifiPasswordEntry>) {
+    val jsonArray = org.json.JSONArray()
+    for (e in entries) {
+        val obj = org.json.JSONObject().apply {
+            put("networkId", e.networkId)
+            put("ssid", e.ssid)
+            put("bssid", e.bssid)
+            put("password", e.password)
+            put("frequency", e.frequency)
+            put("signalStrength", e.signalStrength)
+            put("flags", e.flags)
+            put("status", e.status)
+        }
+        jsonArray.put(obj)
+    }
+    context.getSharedPreferences("wifi_passwords", Context.MODE_PRIVATE)
+        .edit()
+        .putString("data", jsonArray.toString())
+        .apply()
+}
+
+/** 从 SharedPreferences 读取已存储的记录 */
+private fun loadStoredWifiPasswords(context: Context): List<WifiPasswordEntry> {
+    val json = context.getSharedPreferences("wifi_passwords", Context.MODE_PRIVATE)
+        .getString("data", null) ?: return emptyList()
+    return try {
+        val arr = org.json.JSONArray(json)
+        (0 until arr.length()).map { i ->
+            val obj = arr.getJSONObject(i)
+            WifiPasswordEntry(
+                networkId = obj.optInt("networkId", 0),
+                ssid = obj.optString("ssid", ""),
+                bssid = obj.optString("bssid", ""),
+                password = obj.optString("password", ""),
+                frequency = obj.optInt("frequency", 0),
+                signalStrength = obj.optInt("signalStrength", 0),
+                flags = obj.optString("flags", ""),
+                status = obj.optString("status", "")
+            )
+        }
+    } catch (_: Exception) {
+        emptyList()
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WifiPasswordScreen(onBack: () -> Unit) {
-    // 占位数据（实际记录功能待实现）
-    val placeholderEntries = listOf(
-        WifiPasswordEntry("MyHomeWiFi", "AA:BB:CC:DD:EE:FF", "password123"),
-        WifiPasswordEntry("Office_5G", "11:22:33:44:55:66", "work@2024"),
-        WifiPasswordEntry("CoffeeShop", "FF:EE:DD:CC:BB:AA", "")
-    )
+    val context = LocalContext.current
+    val hasRoot = remember {
+        com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isRootAvailable()
+    }
+
+    // ── 无 Root 提示 ──
+    if (!hasRoot) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("WiFi 密码") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        }
+                    }
+                )
+            }
+        ) { paddingValues ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Lock,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "需要 Root 权限",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "查看已保存的 WiFi 密码需要 Root 权限",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        return
+    }
+
+    // ── 有 Root：加载数据 ──
+    val scope = rememberCoroutineScope()
+    var entries by remember { mutableStateOf(loadStoredWifiPasswords(context)) }
+    var isLoading by remember { mutableStateOf(false) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+
+    // 首次进入时自动刷新
+    LaunchedEffect(Unit) {
+        if (entries.isEmpty()) {
+            isLoading = true
+            try {
+                val loaded = withContext(Dispatchers.IO) {
+                    val networks = loadSavedWifiNetworks(context)
+                    tryFetchPasswords(networks)
+                }
+                entries = loaded
+                saveWifiPasswords(context, loaded)
+                loadError = null
+            } catch (e: Exception) {
+                loadError = e.message
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    // 刷新函数
+    fun refresh() {
+        isLoading = true
+        loadError = null
+        scope.launch {
+            try {
+                val loaded = withContext(Dispatchers.IO) {
+                    val networks = loadSavedWifiNetworks(context)
+                    tryFetchPasswords(networks)
+                }
+                entries = loaded
+                saveWifiPasswords(context, loaded)
+                loadError = null
+            } catch (e: Exception) {
+                loadError = e.message
+            } finally {
+                isLoading = false
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -747,6 +999,18 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { refresh() }, enabled = !isLoading) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                        }
                     }
                 }
             )
@@ -758,16 +1022,61 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
                 .padding(paddingValues),
             contentPadding = PaddingValues(vertical = 12.dp)
         ) {
-            item {
-                Text(
-                    text = "已保存的 WiFi 密码（占位数据，记录功能待实现）",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                )
+            // 错误提示
+            if (loadError != null) {
+                item {
+                    GlowSection(
+                        title = "加载失败",
+                        icon = Icons.Default.Warning
+                    ) {
+                        Text(
+                            text = loadError!!,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(onClick = { refresh() }, modifier = Modifier.fillMaxWidth()) {
+                            Text("重试")
+                        }
+                    }
+                }
             }
 
-            items(placeholderEntries) { entry ->
+            // 空状态
+            if (!isLoading && entries.isEmpty() && loadError == null) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.Key,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.outline
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "暂无已保存的 WiFi 密码",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "点击右上角刷新按钮加载",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 数据列表
+            items(entries, key = { "${it.networkId}_${it.bssid}" }) { entry ->
                 GlowCard {
                     Row(
                         modifier = Modifier
@@ -777,13 +1086,24 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
                     ) {
                         // 左侧：SSID（BSSID）
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = entry.ssid,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = entry.ssid,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (entry.status == "CURRENT") {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "当前",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                             Text(
                                 text = "(${entry.bssid})",
                                 style = MaterialTheme.typography.bodySmall,
