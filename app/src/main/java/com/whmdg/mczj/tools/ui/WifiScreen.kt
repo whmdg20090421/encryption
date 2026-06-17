@@ -9,8 +9,6 @@ import android.content.pm.PackageManager
 import android.net.wifi.ScanResult
 import android.net.wifi.WifiManager
 import android.os.Build
-import android.util.Xml
-import android.util.XmlPullParser
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -778,133 +776,90 @@ private fun loadSavedWifiNetworks(context: Context): List<WifiPasswordEntry> {
 private fun parseWifiConfigStoreXml(xml: String): List<WifiPasswordEntry> {
     val entries = mutableListOf<WifiPasswordEntry>()
 
-    try {
-        val parser = Xml.newPullParser()
-        parser.setInput(xml.reader())
+    // 按 <Network> 分割，每块是一个网络配置
+    val networkBlocks = xml.split("<Network>").drop(1) // 第一段是 header，跳过
 
-        var inNetwork = false
-        var inWifiConfig = false
-        var inNetworkStatus = false
-        var inIpConfig = false
+    for (block in networkBlocks) {
+        try {
+            // ── 提取 WifiConfiguration 节内的字段 ──
+            val configBlock = block.substringBefore("</WifiConfiguration>")
 
-        // 当前 Network 内收集的字段
-        val fields = mutableMapOf<String, String>()
-        var currentTag = ""
-        var currentName = ""
-        var currentText = StringBuilder()
+            val ssid = extractXmlString(configBlock, "SSID")?.removeSurrounding("\"") ?: continue
+            if (ssid.isEmpty()) continue
 
-        while (parser.eventType != XmlPullParser.END_DOCUMENT) {
-            when (parser.eventType) {
-                XmlPullParser.START_TAG -> {
-                    currentTag = parser.name ?: ""
-                    currentName = parser.getAttributeValue(null, "name") ?: ""
-                    currentText.clear()
+            val configKey = extractXmlString(configBlock, "ConfigKey") ?: ""
+            val rawPsk = extractXmlString(configBlock, "PreSharedKey")?.removeSurrounding("\"") ?: ""
+            val password = if (rawPsk.isNotEmpty() && rawPsk != "*") rawPsk else ""
+            val allowedKeyMgmtHex = extractXmlByteArray(configBlock, "AllowedKeyMgmt")
+            val bssid = extractXmlString(configBlock, "BSSID") ?: ""
 
-                    when (currentTag) {
-                        "Network" -> {
-                            inNetwork = true
-                            fields.clear()
-                        }
-                        "WifiConfiguration" -> {
-                            inWifiConfig = true
-                        }
-                        "NetworkStatus" -> {
-                            inNetworkStatus = true
-                        }
-                        "IpConfiguration" -> {
-                            inIpConfig = true
-                        }
-                    }
-                }
+            // ── 提取 NetworkStatus 节内的字段 ──
+            val statusBlock = block.substringBefore("</NetworkStatus>").substringAfter("<NetworkStatus>", "")
+            val hasEverConnected = extractXmlBoolean(statusBlock, "HasEverConnected")
+            val selectionStatus = extractXmlString(statusBlock, "SelectionStatus") ?: ""
 
-                XmlPullParser.TEXT -> {
-                    currentText.append(parser.text)
-                }
+            // ── 提取 IpConfiguration 节内的字段 ──
+            val ipBlock = block.substringBefore("</IpConfiguration>").substringAfter("<IpConfiguration>", "")
+            val ipAssignment = extractXmlString(ipBlock, "IpAssignment") ?: "DHCP"
+            val proxySettings = extractXmlString(ipBlock, "ProxySettings") ?: "NONE"
 
-                XmlPullParser.END_TAG -> {
-                    val tag = parser.name ?: ""
-                    val text = currentText.toString().trim()
-
-                    // 根据当前节和标签名存储字段
-                    val section = when {
-                        inWifiConfig -> "config"
-                        inNetworkStatus -> "status"
-                        inIpConfig -> "ip"
-                        else -> ""
-                    }
-
-                    if (section.isNotEmpty() && currentName.isNotEmpty()) {
-                        val key = "${section}.${currentName}"
-                        when (tag) {
-                            "string" -> fields[key] = text
-                            "int" -> fields[key] = parser.getAttributeValue(null, "value") ?: "0"
-                            "boolean" -> fields[key] = parser.getAttributeValue(null, "value") ?: "false"
-                            "byte-array" -> fields[key] = parser.getAttributeValue(null, "num")?.let { "num=$it" } ?: ""
-                            "null" -> fields[key] = "__null__"
-                            "long-array" -> fields[key] = "__long_array__"
-                        }
-                    }
-
-                    // 处理 byte-array 的文本内容
-                    if (tag == "byte-array" && currentName.isNotEmpty() && section.isNotEmpty()) {
-                        val numAttr = parser.getAttributeValue(null, "num") ?: "0"
-                        if (numAttr.toIntOrNull() ?: 0 > 0 && text.isNotEmpty()) {
-                            fields["${section}.${currentName}"] = text
-                        }
-                    }
-
-                    when (tag) {
-                        "WifiConfiguration" -> inWifiConfig = false
-                        "NetworkStatus" -> inNetworkStatus = false
-                        "IpConfiguration" -> inIpConfig = false
-                        "Network" -> {
-                            inNetwork = false
-                            // 构建 WifiPasswordEntry
-                            val ssid = fields["config.SSID"]
-                                ?.removeSurrounding("\"") ?: ""
-                            if (ssid.isNotEmpty()) {
-                                val configKey = fields["config.ConfigKey"] ?: ""
-                                val rawPsk = fields["config.PreSharedKey"]
-                                    ?.removeSurrounding("\"") ?: ""
-                                val password = if (rawPsk.isNotEmpty() && rawPsk != "*") rawPsk else ""
-                                val allowedKeyMgmtHex = fields["config.AllowedKeyMgmt"] ?: ""
-
-                                entries.add(WifiPasswordEntry(
-                                    ssid = ssid,
-                                    password = password,
-                                    security = parseSecurityFromXml(configKey, allowedKeyMgmtHex),
-                                    configKey = configKey,
-                                    bssid = if (fields["config.BSSID"] == "__null__") "" else (fields["config.BSSID"] ?: ""),
-                                    hiddenSSID = fields["config.HiddenSSID"] == "true",
-                                    requirePMF = fields["config.RequirePMF"] == "true",
-                                    allowedKeyMgmtHex = allowedKeyMgmtHex,
-                                    allowedProtocolsHex = fields["config.AllowedProtocols"] ?: "",
-                                    status = fields["config.Status"]?.toIntOrNull() ?: 2,
-                                    shared = fields["config.Shared"] == "true",
-                                    autoJoinEnabled = fields["config.AutoJoinEnabled"] == "true",
-                                    trusted = fields["config.Trusted"] == "true",
-                                    defaultGwMacAddress = fields["config.DefaultGwMacAddress"] ?: "",
-                                    randomizedMacAddress = fields["config.RandomizedMacAddress"] ?: "",
-                                    creatorUid = fields["config.CreatorUid"]?.toIntOrNull() ?: 0,
-                                    creatorName = fields["config.CreatorName"] ?: "",
-                                    hasEverConnected = fields["status.HasEverConnected"] == "true",
-                                    networkSelectionStatus = fields["status.SelectionStatus"] ?: "",
-                                    ipAssignment = fields["ip.IpAssignment"] ?: "DHCP",
-                                    proxySettings = fields["ip.ProxySettings"] ?: "NONE"
-                                ))
-                            }
-                            fields.clear()
-                        }
-                    }
-                }
-            }
-            parser.next()
+            entries.add(WifiPasswordEntry(
+                ssid = ssid,
+                password = password,
+                security = parseSecurityFromXml(configKey, allowedKeyMgmtHex),
+                configKey = configKey,
+                bssid = bssid,
+                hiddenSSID = extractXmlBoolean(configBlock, "HiddenSSID"),
+                requirePMF = extractXmlBoolean(configBlock, "RequirePMF"),
+                allowedKeyMgmtHex = allowedKeyMgmtHex,
+                allowedProtocolsHex = extractXmlByteArray(configBlock, "AllowedProtocols"),
+                status = extractXmlInt(configBlock, "Status"),
+                shared = extractXmlBoolean(configBlock, "Shared"),
+                autoJoinEnabled = extractXmlBoolean(configBlock, "AutoJoinEnabled"),
+                trusted = extractXmlBoolean(configBlock, "Trusted"),
+                defaultGwMacAddress = extractXmlString(configBlock, "DefaultGwMacAddress") ?: "",
+                randomizedMacAddress = extractXmlString(configBlock, "RandomizedMacAddress") ?: "",
+                creatorUid = extractXmlInt(configBlock, "CreatorUid"),
+                creatorName = extractXmlString(configBlock, "CreatorName") ?: "",
+                hasEverConnected = hasEverConnected,
+                networkSelectionStatus = selectionStatus,
+                ipAssignment = ipAssignment,
+                proxySettings = proxySettings
+            ))
+        } catch (_: Exception) {
+            continue
         }
-    } catch (e: Exception) {
-        throw Exception("XML 解析失败: ${e.message}")
     }
 
     return entries
+}
+
+// ── XML 字段提取工具函数 ──
+
+/** 提取 <string name="X">text</string> */
+private fun extractXmlString(block: String, name: String): String? {
+    val regex = Regex("""<string\s+name="$name">([^<]*)</string>""")
+    return regex.find(block)?.groupValues?.get(1)
+}
+
+/** 提取 <int name="X" value="Y" /> */
+private fun extractXmlInt(block: String, name: String): Int {
+    val regex = Regex("""<int\s+name="$name"\s+value="(\d+)"\s*/>""")
+    return regex.find(block)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+}
+
+/** 提取 <boolean name="X" value="Y" /> */
+private fun extractXmlBoolean(block: String, name: String): Boolean {
+    val regex = Regex("""<boolean\s+name="$name"\s+value="(true|false)"\s*/>""")
+    return regex.find(block)?.groupValues?.get(1) == "true"
+}
+
+/** 提取 <byte-array name="X" num="N">hex</byte-array> */
+private fun extractXmlByteArray(block: String, name: String): String {
+    val regex = Regex("""<byte-array\s+name="$name"\s+num="(\d+)"[^>]*>([^<]*)</byte-array>""")
+    val match = regex.find(block) ?: return ""
+    val num = match.groupValues[1].toIntOrNull() ?: 0
+    return if (num > 0) match.groupValues[2].trim() else ""
 }
 
 /** 从 ConfigKey 和 AllowedKeyMgmt 推断安全类型 */
