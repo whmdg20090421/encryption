@@ -772,6 +772,39 @@ object HandshakeCapture {
     }
 
     /**
+     * 字典破解：遍历字典文件中的密码，逐个验证 MIC
+     *
+     * @param handshake 握手数据
+     * @param dictPath 字典文件路径（每行一个密码）
+     * @param onProgress 进度回调 (当前序号, 总数, 当前密码)
+     * @return 匹配的密码，未找到返回 null
+     */
+    suspend fun crackWithDictionary(
+        handshake: HandshakeData,
+        dictPath: String,
+        onProgress: (Int, Int, String) -> Unit
+    ): String? = withContext(Dispatchers.IO) {
+        val file = java.io.File(dictPath)
+        if (!file.exists()) return@withContext null
+
+        val passwords = file.readLines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        val total = passwords.size
+        if (total == 0) return@withContext null
+
+        // 预计算 PMK 需要的固定参数（PBKDF2 最慢，每个密码都要算）
+        for ((index, pwd) in passwords.withIndex()) {
+            onProgress(index + 1, total, pwd)
+            val result = verifyWpa2Mic(handshake, pwd)
+            if (result.matched) {
+                return@withContext pwd
+            }
+        }
+        null
+    }
+
+    /**
      * PRF-384: WPA2 PRF 函数
      * PRF-X(K, A, B) = HMAC-SHA1(K, A || 0x00 || B || 0x00)[0:X/8]
      * 其中 A = "Pairwise key expansion", B = min(MACs) || max(MACs) || min(nonces) || max(nonces)
