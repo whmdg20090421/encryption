@@ -41,6 +41,9 @@ import com.whmdg.mczj.tools.ui.components.GlowCard
 import com.whmdg.mczj.tools.ui.components.GlowInfoRow
 import com.whmdg.mczj.tools.ui.components.GlowSection
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+import com.whmdg.mczj.tools.capture.InterfaceSelector
+import com.whmdg.mczj.tools.capture.HandshakeCapture
+import com.whmdg.mczj.tools.capture.HandshakeResultDialog
 
 private const val PREFS_NAME = "wifi_disclaimer"
 private const val KEY_ACCEPTED = "accepted"
@@ -207,6 +210,10 @@ fun WifiScreen(onBack: () -> Unit) {
     var showPasswordScreen by remember { mutableStateOf(false) }
     var showActionDialog by remember { mutableStateOf(false) }
     var showConnectDialog by remember { mutableStateOf(false) }
+    var showCrackDialog by remember { mutableStateOf(false) }
+    var crackProgress by remember { mutableStateOf("") }
+    var crackResult by remember { mutableStateOf<HandshakeCapture.HandshakeData?>(null) }
+    var crackError by remember { mutableStateOf<String?>(null) }
     var selectedNetwork by remember { mutableStateOf<WifiNetworkInfo?>(null) }
 
     // 扫描结果广播接收器
@@ -602,42 +609,53 @@ fun WifiScreen(onBack: () -> Unit) {
                     Text("频段：${net.band}")
                 }
             },
-            dismissButton = {
-                TextButton(onClick = { showActionDialog = false }) {
-                    Text("取消")
-                }
-            },
-            confirmButton = {
-                Row {
-                    TextButton(
-                        onClick = {
-                            showActionDialog = false
-                            // TODO: 破解功能
-                        },
-                        enabled = hasRoot
-                    ) {
-                        Text(
-                            text = "破解",
-                            color = if (hasRoot)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                        )
+            buttons = {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 左侧：取消
+                    TextButton(onClick = { showActionDialog = false }) {
+                        Text("取消")
                     }
-                    TextButton(
-                        onClick = {
-                            showActionDialog = false
-                            showConnectDialog = true
-                        },
-                        enabled = hasAdbOrAbove
-                    ) {
-                        Text(
-                            text = "连接",
-                            color = if (hasAdbOrAbove)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                        )
+                    // 右侧：破解 + 连接
+                    Row {
+                        TextButton(
+                            onClick = {
+                                showActionDialog = false
+                                showCrackDialog = true
+                                crackProgress = ""
+                                crackResult = null
+                                crackError = null
+                            },
+                            enabled = hasRoot
+                        ) {
+                            Text(
+                                text = "破解",
+                                color = if (hasRoot)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            )
+                        }
+                        TextButton(
+                            onClick = {
+                                showActionDialog = false
+                                showConnectDialog = true
+                            },
+                            enabled = hasAdbOrAbove
+                        ) {
+                            Text(
+                                text = "连接",
+                                color = if (hasAdbOrAbove)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            )
+                        }
                     }
                 }
             }
@@ -685,6 +703,144 @@ fun WifiScreen(onBack: () -> Unit) {
                 }
             }
         )
+    }
+
+    // ── WiFi 破解进度对话框 ──
+    if (showCrackDialog && selectedNetwork != null) {
+        val net = selectedNetwork!!
+        val crackScope = rememberCoroutineScope()
+
+        if (crackResult != null) {
+            // 显示抓取结果
+            HandshakeResultDialog(
+                data = crackResult!!,
+                onDismiss = {
+                    showCrackDialog = false
+                    crackResult = null
+                }
+            )
+        } else {
+            // 显示进度/错误
+            AlertDialog(
+                onDismissRequest = {
+                    if (crackProgress.isEmpty() || crackError != null) {
+                        showCrackDialog = false
+                        crackError = null
+                    }
+                },
+                title = { Text("WiFi 破解 - ${net.ssid}") },
+                text = {
+                    Column {
+                        if (crackError != null) {
+                            Text(
+                                text = crackError!!,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        } else if (crackProgress.isNotEmpty()) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(crackProgress)
+                            }
+                        } else {
+                            Text("将自动选择空闲网卡，切换监听模式，\n发送认证请求触发四次握手抓包。\n\n此过程需要 Root 权限。")
+                        }
+                    }
+                },
+                buttons = {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (crackError != null || crackProgress.isEmpty()) {
+                            TextButton(onClick = {
+                                showCrackDialog = false
+                                crackError = null
+                            }) {
+                                Text("取消")
+                            }
+                        } else {
+                            Spacer(modifier = Modifier)
+                        }
+                        if (crackProgress.isEmpty() && crackError == null) {
+                            TextButton(onClick = {
+                                crackScope.launch {
+                                    crackProgress = "正在选择空闲网卡..."
+                                    crackError = null
+                                    try {
+                                        val selectedIface = InterfaceSelector.selectCaptureInterface { iface1, iface2 ->
+                                            // 情况C：双网卡均连接，需要用户选择
+                                            crackProgress = ""
+                                            crackError = "两个网卡均在使用中：\n" +
+                                                    "${iface1.name} — ${iface1.ssid ?: "未知"}\n" +
+                                                    "${iface2.name} — ${iface2.ssid ?: "未知"}\n" +
+                                                    "请先手动断开一个网卡"
+                                            return@selectCaptureInterface
+                                        }
+                                        if (selectedIface == null) {
+                                            if (crackError == null) {
+                                                crackError = "未找到可用网卡"
+                                            }
+                                            return@launch
+                                        }
+
+                                        // 切换监听模式
+                                        crackProgress = "切换 $selectedIface 到监听模式..."
+                                        val monitorOk = InterfaceSelector.enableMonitorMode(selectedIface)
+                                        if (!monitorOk) {
+                                            crackError = "切换监听模式失败"
+                                            InterfaceSelector.restoreManagedMode(selectedIface)
+                                            return@launch
+                                        }
+
+                                        // 抓取握手包
+                                        val result = HandshakeCapture.captureHandshake(
+                                            context = context,
+                                            iface = selectedIface,
+                                            targetSsid = net.ssid,
+                                            targetBssid = null,
+                                            onProgress = { crackProgress = it }
+                                        )
+
+                                        // 恢复 managed 模式
+                                        InterfaceSelector.restoreManagedMode(selectedIface)
+
+                                        if (result != null) {
+                                            crackResult = result
+                                        } else {
+                                            crackError = "未捕获到有效握手包，请重试"
+                                        }
+                                    } catch (e: Exception) {
+                                        crackError = "破解失败：${e.message}"
+                                        try {
+                                            // 尝试恢复网卡模式
+                                            InterfaceSelector.restoreManagedMode("wlan0")
+                                            InterfaceSelector.restoreManagedMode("wlan1")
+                                        } catch (_: Exception) {}
+                                    }
+                                }
+                            }) {
+                                Text("开始破解")
+                            }
+                        }
+                        if (crackError != null) {
+                            TextButton(onClick = {
+                                crackError = null
+                                crackProgress = ""
+                            }) {
+                                Text("重试")
+                            }
+                        }
+                    }
+                }
+            )
+        }
     }
 
     // ── WiFi 密码记录界面 ──
