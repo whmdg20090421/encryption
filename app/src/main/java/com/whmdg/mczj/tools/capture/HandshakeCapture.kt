@@ -378,12 +378,22 @@ object HandshakeCapture {
      * 扫描 0x888e ethertype 定位 EAPOL 帧起始位置，避免处理复杂的 802.11 头部变长
      */
     private fun parse80211Eapol(data: ByteArray, linkType: LinkType, onProgress: (String) -> Unit): EapolFrame? {
-        // 最小长度: 2(FC) + 2(Dur) + 6(Addr1) + 6(Addr2) + 6(Addr3) + 2(SeqCtrl)
-        //         + 8(LLC/SNAP) + 4(802.1x) + 95(eapol-key头) = 131
-        if (data.size < 24) return null
+        // RadioTap 头部是变长的（bytes 2-3 为长度字段），需要先跳过
+        val dot11Start = when (linkType) {
+            LinkType.RADIOTAP -> {
+                if (data.size < 4) return null
+                val rtLen = (data[2].toInt() and 0xFF) or ((data[3].toInt() and 0xFF) shl 8)
+                if (rtLen < 8 || rtLen >= data.size) return null
+                rtLen
+            }
+            else -> 0
+        }
 
-        // 提取 Frame Control 字段
-        val frameControl = ((data[0].toInt() and 0xFF)) or ((data[1].toInt() and 0xFF) shl 8)
+        if (dot11Start + 24 > data.size) return null
+
+        // 提取 802.11 Frame Control 字段
+        val frameControl = ((data[dot11Start].toInt() and 0xFF)) or
+                ((data[dot11Start + 1].toInt() and 0xFF) shl 8)
         val fcType = (frameControl shr 2) and 0x3
         val fcSubtype = (frameControl shr 4) and 0xF
 
@@ -392,39 +402,33 @@ object HandshakeCapture {
 
         // 判断是否有 QoS Control 字段（Data subtype bit 7 = 1 表示 QoS Data）
         val hasQos = (fcSubtype and 0x08) != 0
-        val baseHeaderSize = if (hasQos) 26 else 24 // 24 + 2(QoS Control)
+        val baseHeaderSize = dot11Start + if (hasQos) 26 else 24
 
-        // 扫描 0x888e ethertype 标记来定位 EAPOL 帧
-        // LLC/SNAP 头部: [DSAP 1B][SSAP 1B][Ctrl 1B][OUI 3B][Type 2B]
-        // 802.11 帧后面可能有 CCMP/TKIP 加密头 (8 字节)
+        // 全文扫描 LLC/SNAP + 0x888e 定位 EAPOL 帧
         val eapolOffset = find80211EapolOffset(data, baseHeaderSize)
         if (eapolOffset < 0) return null
 
-        // 从 802.11 头部提取 MAC 地址
+        // 从 802.11 头部提取 MAC 地址（相对 dot11Start）
         val toDs = (frameControl shr 8) and 0x1
         val fromDs = (frameControl shr 9) and 0x1
         val srcMac: String
         val dstMac: String
         when {
             toDs == 0 && fromDs == 0 -> {
-                // Addr1=DA, Addr2=SA, Addr3=BSSID
-                dstMac = formatMac(data, 4)
-                srcMac = formatMac(data, 10)
+                dstMac = formatMac(data, dot11Start + 4)
+                srcMac = formatMac(data, dot11Start + 10)
             }
             toDs == 1 && fromDs == 0 -> {
-                // Addr1=BSSID, Addr2=SA, Addr3=DA
-                srcMac = formatMac(data, 10)
-                dstMac = formatMac(data, 16)
+                srcMac = formatMac(data, dot11Start + 10)
+                dstMac = formatMac(data, dot11Start + 16)
             }
             toDs == 0 && fromDs == 1 -> {
-                // Addr1=DA, Addr2=BSSID, Addr3=SA
-                dstMac = formatMac(data, 4)
-                srcMac = formatMac(data, 16)
+                dstMac = formatMac(data, dot11Start + 4)
+                srcMac = formatMac(data, dot11Start + 16)
             }
             else -> {
-                // 4-address: Addr1=RA, Addr2=TA, Addr3=DA, Addr4=SA
-                dstMac = formatMac(data, 24)
-                srcMac = formatMac(data, 30)
+                dstMac = formatMac(data, dot11Start + 24)
+                srcMac = formatMac(data, dot11Start + 30)
             }
         }
 
