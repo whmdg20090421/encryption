@@ -31,8 +31,6 @@ import kotlinx.coroutines.withContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -604,49 +602,42 @@ fun WifiScreen(onBack: () -> Unit) {
                     Text("频段：${net.band}")
                 }
             },
-            buttons = {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    // 左侧：取消
-                    TextButton(onClick = { showActionDialog = false }) {
-                        Text("取消")
+            dismissButton = {
+                TextButton(onClick = { showActionDialog = false }) {
+                    Text("取消")
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            showActionDialog = false
+                            // TODO: 破解功能
+                        },
+                        enabled = hasRoot
+                    ) {
+                        Text(
+                            text = "破解",
+                            color = if (hasRoot)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        )
                     }
-                    // 右侧：破解 + 连接
-                    Row {
-                        TextButton(
-                            onClick = {
-                                showActionDialog = false
-                                // TODO: 破解功能
-                            },
-                            enabled = hasRoot
-                        ) {
-                            Text(
-                                text = "破解",
-                                color = if (hasRoot)
-                                    MaterialTheme.colorScheme.primary
-                                else
-                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                            )
-                        }
-                        TextButton(
-                            onClick = {
-                                showActionDialog = false
-                                showConnectDialog = true
-                            },
-                            enabled = hasAdbOrAbove
-                        ) {
-                            Text(
-                                text = "连接",
-                                color = if (hasAdbOrAbove)
-                                    MaterialTheme.colorScheme.primary
-                                else
-                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                            )
-                        }
+                    TextButton(
+                        onClick = {
+                            showActionDialog = false
+                            showConnectDialog = true
+                        },
+                        enabled = hasAdbOrAbove
+                    ) {
+                        Text(
+                            text = "连接",
+                            color = if (hasAdbOrAbove)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        )
                     }
                 }
             }
@@ -1396,7 +1387,6 @@ private fun WifiConnectDialog(
                             VisualTransformation.None
                         else
                             PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         trailingIcon = {
                             IconButton(onClick = { passwordVisible = !passwordVisible }) {
                                 Icon(
