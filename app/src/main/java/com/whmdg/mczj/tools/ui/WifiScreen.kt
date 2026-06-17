@@ -151,16 +151,6 @@ private fun securityIcon(security: String) = when (security) {
     else -> Icons.Filled.Lock
 }
 
-/** 排序方式 */
-private enum class SortMode(val label: String) {
-    SIGNAL_DESC("信号强度 ↓"),
-    SIGNAL_ASC("信号强度 ↑"),
-    NAME_ASC("名称 A→Z"),
-    NAME_DESC("名称 Z→A"),
-    FREQUENCY("频段"),
-    SECURITY("加密类型")
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WifiScreen(onBack: () -> Unit) {
@@ -205,8 +195,8 @@ fun WifiScreen(onBack: () -> Unit) {
     var scanResults by remember { mutableStateOf<List<WifiNetworkInfo>>(emptyList()) }
     var scanError by remember { mutableStateOf<String?>(null) }
     var wifiEnabled by remember { mutableStateOf(wifiManager.isWifiEnabled) }
-    var sortMode by remember { mutableStateOf(SortMode.SIGNAL_DESC) }
     var showMenu by remember { mutableStateOf(false) }
+    var showPasswordScreen by remember { mutableStateOf(false) }
 
     // 扫描结果广播接收器
     val scanReceiver = remember {
@@ -298,43 +288,24 @@ fun WifiScreen(onBack: () -> Unit) {
                             onDismissRequest = { showMenu = false },
                             modifier = Modifier.fillMaxWidth(0.55f)
                         ) {
-                            // 排序标题
                             DropdownMenuItem(
                                 text = {
-                                    Text(
-                                        "排序方式",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                },
-                                onClick = { showMenu = false },
-                                enabled = false
-                            )
-                            HorizontalDivider()
-                            SortMode.entries.forEach { mode ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            if (sortMode == mode) {
-                                                Icon(
-                                                    Icons.Filled.Check,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(18.dp),
-                                                    tint = MaterialTheme.colorScheme.primary
-                                                )
-                                            } else {
-                                                Spacer(modifier = Modifier.size(18.dp))
-                                            }
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(mode.label)
-                                        }
-                                    },
-                                    onClick = {
-                                        sortMode = mode
-                                        showMenu = false
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Filled.Key,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(20.dp),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Text("WiFi 密码")
                                     }
-                                )
-                            }
+                                },
+                                onClick = {
+                                    showMenu = false
+                                    showPasswordScreen = true
+                                }
+                            )
                         }
                     }
                 }
@@ -510,15 +481,7 @@ fun WifiScreen(onBack: () -> Unit) {
                     }
                 }
 
-                val sorted = when (sortMode) {
-                    SortMode.SIGNAL_DESC -> scanResults.sortedByDescending { it.rssi }
-                    SortMode.SIGNAL_ASC -> scanResults.sortedBy { it.rssi }
-                    SortMode.NAME_ASC -> scanResults.sortedBy { it.ssid.lowercase() }
-                    SortMode.NAME_DESC -> scanResults.sortedByDescending { it.ssid.lowercase() }
-                    SortMode.FREQUENCY -> scanResults.sortedBy { it.frequency }
-                    SortMode.SECURITY -> scanResults.sortedBy { it.security }
-                }
-                items(sorted, key = { "${it.ssid}_${it.bssid}" }) { network ->
+                items(scanResults, key = { "${it.ssid}_${it.bssid}" }) { network ->
                     WifiNetworkCard(network = network)
                 }
             }
@@ -596,6 +559,11 @@ fun WifiScreen(onBack: () -> Unit) {
                 }
             }
         )
+    }
+
+    // ── WiFi 密码记录界面 ──
+    if (showPasswordScreen) {
+        WifiPasswordScreen(onBack = { showPasswordScreen = false })
     }
 }
 
@@ -753,4 +721,90 @@ private fun DisclaimerDialog(
             }
         }
     )
+}
+
+/** WiFi 密码记录条目 */
+private data class WifiPasswordEntry(
+    val ssid: String,
+    val bssid: String,
+    val password: String
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WifiPasswordScreen(onBack: () -> Unit) {
+    // 占位数据（实际记录功能待实现）
+    val placeholderEntries = listOf(
+        WifiPasswordEntry("MyHomeWiFi", "AA:BB:CC:DD:EE:FF", "password123"),
+        WifiPasswordEntry("Office_5G", "11:22:33:44:55:66", "work@2024"),
+        WifiPasswordEntry("CoffeeShop", "FF:EE:DD:CC:BB:AA", "")
+    )
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("WiFi 密码") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues),
+            contentPadding = PaddingValues(vertical = 12.dp)
+        ) {
+            item {
+                Text(
+                    text = "已保存的 WiFi 密码（占位数据，记录功能待实现）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+
+            items(placeholderEntries) { entry ->
+                GlowCard {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 左侧：SSID（BSSID）
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = entry.ssid,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "(${entry.bssid})",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        // 右侧：密码明文
+                        Text(
+                            text = entry.password.ifEmpty { "（无密码）" },
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium,
+                            color = if (entry.password.isEmpty())
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            else
+                                MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
