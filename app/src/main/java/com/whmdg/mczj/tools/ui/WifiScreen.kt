@@ -41,7 +41,6 @@ import com.whmdg.mczj.tools.ui.components.GlowCard
 import com.whmdg.mczj.tools.ui.components.GlowInfoRow
 import com.whmdg.mczj.tools.ui.components.GlowSection
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
-import com.whmdg.mczj.tools.capture.InterfaceSelector
 import com.whmdg.mczj.tools.capture.HandshakeCapture
 import com.whmdg.mczj.tools.capture.HandshakeResultDialog
 
@@ -756,29 +755,13 @@ fun WifiScreen(onBack: () -> Unit) {
                     if (crackProgress.isEmpty() && crackError == null) {
                         TextButton(onClick = {
                             crackScope.launch {
-                                crackProgress = "正在选择空闲网卡..."
+                                crackProgress = "正在准备抓包..."
                                 crackError = null
                                 try {
-                                    val selectedIface = InterfaceSelector.selectCaptureInterface { iface1, iface2 ->
-                                        // 情况C：双网卡均连接，需要用户选择
-                                        crackProgress = ""
-                                        crackError = "两个网卡均在使用中：\n" +
-                                                "${iface1.name} — ${iface1.ssid ?: "未知"}\n" +
-                                                "${iface2.name} — ${iface2.ssid ?: "未知"}\n" +
-                                                "请先手动断开一个网卡"
-                                        return@selectCaptureInterface
-                                    }
-                                    if (selectedIface == null) {
-                                        if (crackError == null) {
-                                            crackError = "未找到可用网卡"
-                                        }
-                                        return@launch
-                                    }
-
-                                    // 抓取握手包（普通模式，不切监听）
+                                    // 使用 wlan0（系统 WiFi 框架主接口，cmd wifi connect-network 走此接口）
                                     val result = HandshakeCapture.captureHandshake(
                                         context = context,
-                                        iface = selectedIface,
+                                        iface = "wlan0",
                                         targetSsid = net.ssid,
                                         targetBssid = null,
                                         onProgress = { crackProgress = it }
