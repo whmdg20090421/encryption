@@ -647,13 +647,42 @@ fun WifiScreen(onBack: () -> Unit) {
     // ── WiFi 连接对话框 ──
     if (showConnectDialog && selectedNetwork != null) {
         val net = selectedNetwork!!
+        var isConnecting by remember { mutableStateOf(false) }
+        var connectError by remember { mutableStateOf<String?>(null) }
+        val connectScope = rememberCoroutineScope()
+
         WifiConnectDialog(
             ssid = net.ssid,
             security = net.security,
-            onDismiss = { showConnectDialog = false },
-            onConnect = { password ->
+            isConnecting = isConnecting,
+            connectError = connectError,
+            onDismiss = {
                 showConnectDialog = false
-                // TODO: 执行连接命令
+                connectError = null
+            },
+            onConnect = { password ->
+                isConnecting = true
+                connectError = null
+                connectScope.launch {
+                    try {
+                        val result = withContext(Dispatchers.IO) {
+                            connectToWifi(context, net.ssid, password, net.security)
+                        }
+                        if (result) {
+                            // 连接成功，保存密码
+                            if (password.isNotEmpty()) {
+                                saveConnectedWifiPassword(context, net.ssid, password, net.security)
+                            }
+                            showConnectDialog = false
+                        } else {
+                            connectError = "连接失败，请检查密码是否正确"
+                        }
+                    } catch (e: Exception) {
+                        connectError = "连接失败：${e.message}"
+                    } finally {
+                        isConnecting = false
+                    }
+                }
             }
         )
     }
@@ -876,6 +905,84 @@ private data class WifiPasswordEntry(
     val ipAssignment: String,
     val proxySettings: String
 )
+
+/** 连接到WiFi网络 */
+private fun connectToWifi(context: Context, ssid: String, password: String, security: String): Boolean {
+    // 根据安全类型选择命令参数
+    val securityType = when (security) {
+        "WPA3-SAE" -> "wpa3"
+        "WPA2-PSK", "WPA2" -> "wpa2"
+        "WPA-PSK", "WPA" -> "wpa"
+        "WEP" -> "wep"
+        "Open" -> "open"
+        else -> "wpa2"
+    }
+
+    // 构建连接命令
+    val connectCmd = if (security == "Open") {
+        "cmd wifi connect-network \"$ssid\" $securityType"
+    } else {
+        "cmd wifi connect-network \"$ssid\" $securityType \"$password\""
+    }
+
+    // 根据权限选择执行方式
+    val result = when {
+        SpecialPermissionVerifier.isRootAvailable() -> {
+            SpecialPermissionVerifier.executeRootCommandFull(connectCmd)
+        }
+        SpecialPermissionVerifier.isShizukuAuthorized(context) -> {
+            SpecialPermissionVerifier.executeShizukuCommand(connectCmd)
+        }
+        else -> {
+            SpecialPermissionVerifier.executeShellCommandFull(connectCmd)
+        }
+    }
+
+    val (stdout, stderr, exitCode) = result
+    return exitCode == 0
+}
+
+/** 保存已连接的WiFi密码 */
+private fun saveConnectedWifiPassword(context: Context, ssid: String, password: String, security: String) {
+    val entries = loadStoredWifiPasswords(context).toMutableList()
+
+    // 检查是否已存在
+    val existingIndex = entries.indexOfFirst { it.ssid == ssid }
+    if (existingIndex >= 0) {
+        // 更新现有记录
+        entries[existingIndex] = entries[existingIndex].copy(
+            password = password,
+            security = security
+        )
+    } else {
+        // 添加新记录
+        entries.add(WifiPasswordEntry(
+            ssid = ssid,
+            password = password,
+            security = security,
+            configKey = "",
+            bssid = "",
+            hiddenSSID = false,
+            requirePMF = false,
+            allowedKeyMgmtHex = "",
+            allowedProtocolsHex = "",
+            status = 1,
+            shared = true,
+            autoJoinEnabled = true,
+            trusted = true,
+            defaultGwMacAddress = "",
+            randomizedMacAddress = "",
+            creatorUid = 0,
+            creatorName = "",
+            hasEverConnected = true,
+            networkSelectionStatus = "",
+            ipAssignment = "DHCP",
+            proxySettings = "NONE"
+        ))
+    }
+
+    saveWifiPasswords(context, entries)
+}
 
 /** 执行 root 命令获取已保存的 WiFi 网络（读取 WifiConfigStore.xml） */
 private fun loadSavedWifiNetworks(context: Context): List<WifiPasswordEntry> {
@@ -1364,6 +1471,8 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
 private fun WifiConnectDialog(
     ssid: String,
     security: String,
+    isConnecting: Boolean = false,
+    connectError: String? = null,
     onDismiss: () -> Unit,
     onConnect: (String) -> Unit
 ) {
@@ -1371,7 +1480,7 @@ private fun WifiConnectDialog(
     var passwordVisible by remember { mutableStateOf(false) }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!isConnecting) onDismiss() },
         title = { Text("连接到 $ssid") },
         text = {
             Column {
@@ -1383,6 +1492,7 @@ private fun WifiConnectDialog(
                         onValueChange = { password = it },
                         label = { Text("密码") },
                         singleLine = true,
+                        enabled = !isConnecting,
                         visualTransformation = if (passwordVisible)
                             VisualTransformation.None
                         else
@@ -1400,18 +1510,48 @@ private fun WifiConnectDialog(
                 } else {
                     Text("此网络为开放网络，无需密码")
                 }
+
+                // 错误提示
+                if (connectError != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = connectError,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                // 连接中提示
+                if (isConnecting) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "正在连接...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(
                 onClick = { onConnect(password) },
-                enabled = security == "Open" || password.isNotEmpty()
+                enabled = !isConnecting && (security == "Open" || password.isNotEmpty())
             ) {
-                Text("连接")
+                Text(if (isConnecting) "连接中..." else "连接")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isConnecting
+            ) {
                 Text("取消")
             }
         }
