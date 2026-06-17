@@ -34,7 +34,9 @@ object HandshakeCapture {
         val keyLen: Int,                // Key Length 字段
         val keyDescriptor: Int,         // Key Descriptor Type (2=RSN, 254=WPA)
         val eapolVersion: Int,          // 802.1X 版本
-        val eapolFrames: List<String>   // 各帧完整 EAPOL 数据 hex
+        val eapolFrames: List<String>,  // 各帧完整 EAPOL 数据 hex
+        val rawPcapB64: String? = null, // 调试模式: 原始 pcap base64 数据
+        val rawPcapSize: Int = 0        // 调试模式: pcap 字节数
     )
 
     /**
@@ -169,21 +171,23 @@ object HandshakeCapture {
                 return@withContext null
             }
 
-            // debugRaw 模式：输出原始 base64 数据，跳过解析
-            if (debugRaw) {
-                onProgress("[RAW_PCAP_B64]")
-                onProgress(b64Data)
-                onProgress("[/RAW_PCAP_B64]")
-                onProgress("[RAW_PCAP_HEX]")
-                onProgress(rawData.toHex())
-                onProgress("[/RAW_PCAP_HEX]")
-                onProgress("[RAW_PCAP_SIZE] ${rawData.size} bytes")
-                onProgress("原始数据已输出，请复制上方 base64 数据用于外部验证")
-                return@withContext null
-            }
+            // debugRaw 模式：解析后把原始数据附在 HandshakeData 上
+            val debugB64 = if (debugRaw) b64Data else null
+            val debugSize = if (debugRaw) rawData.size else 0
 
             val frames = parsePcapBytes(rawData, onProgress)
             if (frames.isEmpty()) {
+                if (debugRaw) {
+                    // debug 模式下即使解析失败也返回原始数据
+                    onProgress("pcap 数据已捕获，但未解析到 EAPOL 帧")
+                    return@withContext HandshakeData(
+                        ssid = targetSsid, bssid = "", clientMac = "",
+                        aNonce = "", sNonce = "", mic = "", pmkid = null,
+                        keyVersion = 0, keyInfo = 0, keyLen = 0, keyDescriptor = 0,
+                        eapolVersion = 0, eapolFrames = emptyList(),
+                        rawPcapB64 = debugB64, rawPcapSize = debugSize
+                    )
+                }
                 onProgress("未捕获到 EAPOL 帧")
                 return@withContext null
             }
@@ -192,21 +196,7 @@ object HandshakeCapture {
             onProgress("提取握手数据...")
             val bssid = targetBssid ?: frames.firstOrNull()?.srcMac ?: ""
 
-            // 调试: 输出原始帧数据到进度回调
-            frames.forEachIndexed { i, f ->
-                onProgress("[DEBUG] Frame$i: type=${f.msgType} rc=${f.replayCounter} rawLen=${f.rawEapol.size}")
-                onProgress("[DEBUG] rawHex=${f.rawEapol.toHex()}")
-                onProgress("[DEBUG] nonce=${f.nonce.toHex()}")
-                onProgress("[DEBUG] mic=${f.mic.toHex()}")
-                // 验证 MIC 在 rawEapol 中的偏移 (应为 offset 81, 即 802.1X头(4) + 77)
-                if (f.rawEapol.size >= 97) {
-                    val micRegion = f.rawEapol.copyOfRange(81, 97)
-                    onProgress("[DEBUG] micRegion@[81:97]=${micRegion.toHex()}")
-                }
-                onProgress("[DEBUG] srcMac=${f.srcMac} dstMac=${f.dstMac} descriptor=${f.descriptor} keyVer=${f.keyInfo and 0x0007}")
-            }
-
-            extractHandshake(frames, targetSsid, bssid)
+            extractHandshake(frames, targetSsid, bssid, debugB64, debugSize)
         } catch (e: Exception) {
             onProgress("抓包异常: ${e.message}")
             try {
@@ -577,7 +567,9 @@ object HandshakeCapture {
     private fun extractHandshake(
         frames: List<EapolFrame>,
         ssid: String,
-        bssid: String
+        bssid: String,
+        rawPcapB64: String? = null,
+        rawPcapSize: Int = 0
     ): HandshakeData? {
         // 找到第一对匹配的 Msg1 + Msg2（replay counter 相同）
         val msg1 = frames.find { it.msgType == 1 } ?: return null
@@ -633,7 +625,9 @@ object HandshakeCapture {
             keyLen = keyLen,
             keyDescriptor = keyDescriptor,
             eapolVersion = eapolVersion,
-            eapolFrames = eapolHexList
+            eapolFrames = eapolHexList,
+            rawPcapB64 = rawPcapB64,
+            rawPcapSize = rawPcapSize
         )
     }
 

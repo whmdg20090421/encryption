@@ -43,6 +43,7 @@ import com.whmdg.mczj.tools.ui.components.GlowSection
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.capture.HandshakeCapture
 import com.whmdg.mczj.tools.capture.HandshakeResultDialog
+import com.whmdg.mczj.tools.capture.RawCaptureDialog
 
 private const val PREFS_NAME = "wifi_disclaimer"
 private const val KEY_ACCEPTED = "accepted"
@@ -703,14 +704,26 @@ fun WifiScreen(onBack: () -> Unit) {
         val crackScope = rememberCoroutineScope()
 
         if (crackResult != null) {
-            // 显示抓取结果
-            HandshakeResultDialog(
-                data = crackResult!!,
-                onDismiss = {
-                    showCrackDialog = false
-                    crackResult = null
-                }
-            )
+            if (crackResult!!.rawPcapB64 != null) {
+                // 调试模式：显示原始 pcap 数据
+                RawCaptureDialog(
+                    b64Data = crackResult!!.rawPcapB64!!,
+                    dataSize = crackResult!!.rawPcapSize,
+                    onDismiss = {
+                        showCrackDialog = false
+                        crackResult = null
+                    }
+                )
+            } else {
+                // 正常模式：显示解析后的握手数据
+                HandshakeResultDialog(
+                    data = crackResult!!,
+                    onDismiss = {
+                        showCrackDialog = false
+                        crackResult = null
+                    }
+                )
+            }
         } else {
             // 显示进度/错误
             AlertDialog(
@@ -783,7 +796,7 @@ fun WifiScreen(onBack: () -> Unit) {
 
                                     if (result != null) {
                                             crackResult = result
-                                        } else if (!crackDebugRaw) {
+                                        } else {
                                             crackError = "未捕获到有效握手包，请重试"
                                         }
                                     } catch (e: Exception) {
