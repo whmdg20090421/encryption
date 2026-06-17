@@ -41,9 +41,6 @@ import com.whmdg.mczj.tools.ui.components.GlowCard
 import com.whmdg.mczj.tools.ui.components.GlowInfoRow
 import com.whmdg.mczj.tools.ui.components.GlowSection
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
-import com.whmdg.mczj.tools.capture.HandshakeCapture
-import com.whmdg.mczj.tools.capture.HandshakeResultDialog
-import com.whmdg.mczj.tools.capture.RawCaptureDialog
 
 private const val PREFS_NAME = "wifi_disclaimer"
 private const val KEY_ACCEPTED = "accepted"
@@ -210,11 +207,6 @@ fun WifiScreen(onBack: () -> Unit) {
     var showPasswordScreen by remember { mutableStateOf(false) }
     var showActionDialog by remember { mutableStateOf(false) }
     var showConnectDialog by remember { mutableStateOf(false) }
-    var showCrackDialog by remember { mutableStateOf(false) }
-    var crackProgress by remember { mutableStateOf("") }
-    var crackResult by remember { mutableStateOf<HandshakeCapture.HandshakeData?>(null) }
-    var crackError by remember { mutableStateOf<String?>(null) }
-    var crackDebugRaw by remember { mutableStateOf(false) }
     var selectedNetwork by remember { mutableStateOf<WifiNetworkInfo?>(null) }
 
     // 扫描结果广播接收器
@@ -590,14 +582,10 @@ fun WifiScreen(onBack: () -> Unit) {
     // ── WiFi 操作选择弹窗（连接 / 破解 / 取消） ──
     if (showActionDialog && selectedNetwork != null) {
         val net = selectedNetwork!!
-        // 权限检查
         val hasAdbOrAbove = remember {
             SpecialPermissionVerifier.isAdbEnabled(context) ||
                     SpecialPermissionVerifier.isShizukuAuthorized(context) ||
                     SpecialPermissionVerifier.isRootAvailable()
-        }
-        val hasRoot = remember {
-            SpecialPermissionVerifier.isRootAvailable()
         }
 
         AlertDialog(
@@ -616,40 +604,20 @@ fun WifiScreen(onBack: () -> Unit) {
                 }
             },
             confirmButton = {
-                Row {
-                    TextButton(
-                        onClick = {
-                            showActionDialog = false
-                            showCrackDialog = true
-                            crackProgress = ""
-                            crackResult = null
-                            crackError = null
-                        },
-                        enabled = hasRoot
-                    ) {
-                        Text(
-                            text = "破解",
-                            color = if (hasRoot)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                        )
-                    }
-                    TextButton(
-                        onClick = {
-                            showActionDialog = false
-                            showConnectDialog = true
-                        },
-                        enabled = hasAdbOrAbove
-                    ) {
-                        Text(
-                            text = "连接",
-                            color = if (hasAdbOrAbove)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                        )
-                    }
+                TextButton(
+                    onClick = {
+                        showActionDialog = false
+                        showConnectDialog = true
+                    },
+                    enabled = hasAdbOrAbove
+                ) {
+                    Text(
+                        text = "连接",
+                        color = if (hasAdbOrAbove)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    )
                 }
             }
         )
@@ -696,128 +664,6 @@ fun WifiScreen(onBack: () -> Unit) {
                 }
             }
         )
-    }
-
-    // ── WiFi 破解进度对话框 ──
-    if (showCrackDialog && selectedNetwork != null) {
-        val net = selectedNetwork!!
-        val crackScope = rememberCoroutineScope()
-
-        if (crackResult != null) {
-            if (crackResult!!.rawPcapB64 != null) {
-                // 调试模式：显示原始 pcap 数据
-                RawCaptureDialog(
-                    b64Data = crackResult!!.rawPcapB64!!,
-                    dataSize = crackResult!!.rawPcapSize,
-                    onDismiss = {
-                        showCrackDialog = false
-                        crackResult = null
-                    }
-                )
-            } else {
-                // 正常模式：显示解析后的握手数据
-                HandshakeResultDialog(
-                    data = crackResult!!,
-                    onDismiss = {
-                        showCrackDialog = false
-                        crackResult = null
-                    }
-                )
-            }
-        } else {
-            // 显示进度/错误
-            AlertDialog(
-                onDismissRequest = {
-                    if (crackProgress.isEmpty() || crackError != null) {
-                        showCrackDialog = false
-                        crackError = null
-                    }
-                },
-                title = { Text("WiFi 破解 - ${net.ssid}") },
-                text = {
-                    Column {
-                        if (crackError != null) {
-                            Text(
-                                text = crackError!!,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        } else if (crackProgress.isNotEmpty()) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Text(crackProgress)
-                            }
-                        } else {
-                            Text("将自动选择空闲网卡，切换监听模式，\n发送认证请求触发四次握手抓包。\n\n此过程需要 Root 权限。")
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("调试模式（输出原始数据）", fontSize = 13.sp)
-                                Spacer(modifier = Modifier.weight(1f))
-                                Switch(
-                                    checked = crackDebugRaw,
-                                    onCheckedChange = { crackDebugRaw = it }
-                                )
-                            }
-                        }
-                    }
-                },
-                dismissButton = {
-                    if (crackError != null || crackProgress.isEmpty()) {
-                        TextButton(onClick = {
-                            showCrackDialog = false
-                            crackError = null
-                        }) {
-                            Text("取消")
-                        }
-                    }
-                },
-                confirmButton = {
-                    if (crackProgress.isEmpty() && crackError == null) {
-                        TextButton(onClick = {
-                            crackScope.launch {
-                                crackProgress = "正在准备抓包..."
-                                crackError = null
-                                try {
-                                    // 使用 wlan0（系统 WiFi 框架主接口，cmd wifi connect-network 走此接口）
-                                    val result = HandshakeCapture.captureHandshake(
-                                        context = context,
-                                        iface = "wlan0",
-                                        targetSsid = net.ssid,
-                                        targetBssid = null,
-                                        debugRaw = crackDebugRaw,
-                                        onProgress = { crackProgress = it }
-                                    )
-
-                                    if (result != null) {
-                                            crackResult = result
-                                        } else {
-                                            crackError = "未捕获到有效握手包，请重试"
-                                        }
-                                    } catch (e: Exception) {
-                                        crackError = "破解失败：${e.message}"
-                                    }
-                                }
-                            }) {
-                                Text("开始破解")
-                            }
-                    }
-                    if (crackError != null) {
-                        TextButton(onClick = {
-                            crackError = null
-                            crackProgress = ""
-                        }) {
-                            Text("重试")
-                        }
-                    }
-                }
-            )
-        }
     }
 
     // ── WiFi 密码记录界面 ──
