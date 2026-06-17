@@ -12,6 +12,7 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -36,6 +37,7 @@ import androidx.core.content.ContextCompat
 import com.whmdg.mczj.tools.ui.components.GlowCard
 import com.whmdg.mczj.tools.ui.components.GlowInfoRow
 import com.whmdg.mczj.tools.ui.components.GlowSection
+import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 
 private const val PREFS_NAME = "wifi_disclaimer"
 private const val KEY_ACCEPTED = "accepted"
@@ -200,6 +202,8 @@ fun WifiScreen(onBack: () -> Unit) {
     var wifiEnabled by remember { mutableStateOf(wifiManager.isWifiEnabled) }
     var showMenu by remember { mutableStateOf(false) }
     var showPasswordScreen by remember { mutableStateOf(false) }
+    var showActionDialog by remember { mutableStateOf(false) }
+    var selectedNetwork by remember { mutableStateOf<WifiNetworkInfo?>(null) }
 
     // 扫描结果广播接收器
     val scanReceiver = remember {
@@ -485,7 +489,14 @@ fun WifiScreen(onBack: () -> Unit) {
                 }
 
                 items(scanResults, key = { "${it.ssid}_${it.bssid}" }) { network ->
-                    WifiNetworkCard(network = network)
+                    WifiNetworkCard(
+                        network = network,
+                        onClick = {
+                            selectedNetwork = network
+                            showActionDialog = true
+                        },
+                        onNavigateToPasswords = { showPasswordScreen = true }
+                    )
                 }
             }
 
@@ -564,6 +575,71 @@ fun WifiScreen(onBack: () -> Unit) {
         )
     }
 
+    // ── WiFi 操作选择弹窗（连接 / 破解 / 取消） ──
+    if (showActionDialog && selectedNetwork != null) {
+        val net = selectedNetwork!!
+        // 权限检查
+        val hasAdbOrAbove = remember {
+            SpecialPermissionVerifier.isAdbEnabled(context) ||
+                    SpecialPermissionVerifier.isShizukuAuthorized(context) ||
+                    SpecialPermissionVerifier.isRootAvailable()
+        }
+        val hasRoot = remember {
+            SpecialPermissionVerifier.isRootAvailable()
+        }
+
+        AlertDialog(
+            onDismissRequest = { showActionDialog = false },
+            title = { Text(net.ssid) },
+            text = {
+                Column {
+                    Text("安全类型：${net.security}")
+                    Text("信号强度：${net.signalLevel * 25}%")
+                    Text("频段：${net.band}")
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showActionDialog = false
+                        // TODO: 连接功能
+                    },
+                    enabled = hasAdbOrAbove
+                ) {
+                    Text(
+                        text = "连接",
+                        color = if (hasAdbOrAbove)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    )
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            showActionDialog = false
+                            // TODO: 破解功能
+                        },
+                        enabled = hasRoot
+                    ) {
+                        Text(
+                            text = "破解",
+                            color = if (hasRoot)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        )
+                    }
+                    TextButton(onClick = { showActionDialog = false }) {
+                        Text("取消")
+                    }
+                }
+            }
+        )
+    }
+
     // ── WiFi 密码记录界面 ──
     if (showPasswordScreen) {
         WifiPasswordScreen(onBack = { showPasswordScreen = false })
@@ -572,12 +648,19 @@ fun WifiScreen(onBack: () -> Unit) {
 
 /** WiFi 网络卡片 */
 @Composable
-private fun WifiNetworkCard(network: WifiNetworkInfo) {
+private fun WifiNetworkCard(
+    network: WifiNetworkInfo,
+    onClick: () -> Unit = {},
+    onNavigateToPasswords: () -> Unit = {}
+) {
     val signalLevel = network.signalLevel
     val sigColor = signalColor(signalLevel)
     val sigPercent = (signalLevel * 25)  // 0-4 → 0-100%
+    var showMenu by remember { mutableStateOf(false) }
 
-    GlowCard {
+    GlowCard(
+        modifier = Modifier.clickable { onClick() }
+    ) {
         Column(modifier = Modifier.padding(16.dp)) {
             // ── 头部：信号图标 + SSID + 安全类型 ──
             Row(
@@ -633,6 +716,28 @@ private fun WifiNetworkCard(network: WifiNetworkInfo) {
                     fontWeight = FontWeight.Bold,
                     color = sigColor
                 )
+                // 功能菜单按钮
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = "功能菜单",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("已保存的密码") },
+                            onClick = {
+                                showMenu = false
+                                onNavigateToPasswords()
+                            }
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -1058,7 +1163,7 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                         }
-                        Text("导入")
+                        Text("导入密码")
                     }
                 }
             )
@@ -1123,62 +1228,77 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
                 }
             }
 
-            // 数据列表
-            items(entries, key = { it.configKey.ifEmpty { "${it.ssid}_${it.bssid}" } }) { entry ->
-                GlowCard {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 左侧：SSID(BSSID)
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = entry.ssid,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                if (entry.status == 0) {
-                                    Spacer(modifier = Modifier.width(8.dp))
+            // 数据列表 - 单个GlowCard包裹所有条目
+            if (entries.isNotEmpty()) {
+                item {
+                    GlowCard {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            entries.forEachIndexed { index, entry ->
+                                if (index > 0) {
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(vertical = 8.dp),
+                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                                    )
+                                }
+                                // 第一行：SSID + 密码
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = entry.ssid,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (entry.status == 0) {
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "当前",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
                                     Text(
-                                        text = "当前",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        fontWeight = FontWeight.Bold
+                                        text = entry.password.ifEmpty { "（无密码）" },
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                        color = if (entry.password.isEmpty())
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        else
+                                            MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                // 第二行：BSSID + 安全类型（小字体）
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = entry.bssid.ifEmpty { "未记录" },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 11.sp,
+                                        maxLines = 1
+                                    )
+                                    Text(
+                                        text = entry.security,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (entry.security == "Open")
+                                            MaterialTheme.colorScheme.error
+                                        else
+                                            MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 11.sp
                                     )
                                 }
                             }
-                            Text(
-                                text = "(${entry.bssid.ifEmpty { "未记录" }})",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(16.dp))
-                        // 右侧：密码(安全类型)
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                text = entry.password.ifEmpty { "（无密码）" },
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.Medium,
-                                color = if (entry.password.isEmpty())
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                else
-                                    MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "(${entry.security})",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (entry.security == "Open")
-                                    MaterialTheme.colorScheme.error
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                         }
                     }
                 }
@@ -1192,7 +1312,17 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
             onDismissRequest = { showImportDialog = false },
             title = { Text("导入 WiFi 密码") },
             text = {
-                Text("将使用 Root 权限从系统读取已保存的 WiFi 网络名称和密码。需要执行 root 命令，是否确认？")
+                Column {
+                    Text("该功能需要 Root 权限，将进行导入已保存的密码。")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "读取路径：/data/misc/apexdata/com.android.wifi/WifiConfigStore.xml",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("是否确认执行？")
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
