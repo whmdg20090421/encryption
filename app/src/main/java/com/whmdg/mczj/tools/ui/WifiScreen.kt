@@ -738,7 +738,7 @@ private data class WifiPasswordEntry(
     val status: String        // CURRENT / DISABLED / ""
 )
 
-/** 执行 root 命令获取已保存的 WiFi 网络 */
+/** 执行 root 命令获取已保存的 WiFi 网络（通过 dumpsys wifi） */
 private fun loadSavedWifiNetworks(context: Context): List<WifiPasswordEntry> {
     if (!com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isRootAvailable()) {
         throw SecurityException("需要 Root 权限才能查看已保存的 WiFi 密码")
@@ -746,53 +746,50 @@ private fun loadSavedWifiNetworks(context: Context): List<WifiPasswordEntry> {
 
     val (stdout, stderr, exitCode) =
         com.whmdg.mczj.tools.security.SpecialPermissionVerifier.executeRootCommandFull(
-            "cmd wifi list-networks"
+            "dumpsys wifi"
         )
 
-    if (exitCode != 0) {
+    if (exitCode != 0 || stdout.isEmpty()) {
         throw Exception("命令执行失败 (exit=$exitCode): $stderr")
     }
 
-    return parseNetworksOutput(stdout)
+    return parseDumpsysWifi(stdout)
 }
 
-/** 解析 cmd wifi list-networks 输出 */
-private fun parseNetworksOutput(output: String): List<WifiPasswordEntry> {
-    val lines = output.lines().filter { it.isNotBlank() }
-    if (lines.size < 2) return emptyList()
-
-    // 跳过表头行，解析数据行
+/** 解析 dumpsys wifi 输出，提取已保存网络 + 密码 */
+private fun parseDumpsysWifi(output: String): List<WifiPasswordEntry> {
     val entries = mutableListOf<WifiPasswordEntry>()
-    for (i in 1 until lines.size) {
-        val line = lines[i]
+
+    // 按 WifiConfiguration 块分割
+    val blocks = output.split("WifiConfiguration:")
+    for (block in blocks.drop(1)) {
         try {
-            // 按多个空格分割，但保留 [...] flags 整体
-            // 格式示例:
-            //   0  "MyWiFi"  AA:BB:CC:DD:EE:FF  2437  -55  [WPA2-PSK-CCMP][ESS]
-            //   1  "OpenNet"  11:22:33:44:55:66  5180  -70  [ESS]
-            val networkId = line.substringBefore(' ').trim().toIntOrNull() ?: continue
+            // 提取各字段
+            val networkIdMatch = Regex("networkId[:\\s=]+(\\d+)").find(block)
+            val ssidMatch = Regex("SSID:\\s*\"([^\"]*)\"").find(block)
+            val bssidMatch = Regex("BSSID:\\s*([0-9A-Fa-f:]+)").find(block)
+            val pskMatch = Regex("preSharedKey:\\s*\"([^\"]*)\"").find(block)
+            val freqMatch = Regex("frequency[:\\s=]+(\\d+)").find(block)
+            val rssiMatch = Regex("(?:rssi|signalStrength)[:\\s=]+(-?\\d+)").find(block)
+            val statusMatch = Regex("status[:\\s=]+(\\w+)").find(block)
 
-            // 提取 SSID（引号内）
-            val ssidMatch = Regex("\"([^\"]*)\"").find(line) ?: continue
-            val ssid = ssidMatch.groupValues[1]
-            val afterSsid = line.substring(ssidMatch.range.last + 1).trim()
+            // SSID 是必须的
+            val ssid = ssidMatch?.groupValues?.get(1) ?: continue
+            if (ssid.isEmpty() || ssid == "<unknown ssid>") continue
 
-            // 剩余部分按空格分割
-            val parts = afterSsid.split(Regex("\\s+"))
-            if (parts.size < 3) continue
+            val networkId = networkIdMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val bssid = bssidMatch?.groupValues?.get(1) ?: ""
+            val frequency = freqMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val signalStrength = rssiMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val status = statusMatch?.groupValues?.get(1) ?: ""
 
-            val bssid = parts[0]
-            val frequency = parts[1].toIntOrNull() ?: 0
-            val signalStrength = parts[2].toIntOrNull() ?: 0
+            // 密码：preSharedKey 可能是明文或 "*" 脱敏
+            val rawPsk = pskMatch?.groupValues?.get(1) ?: ""
+            val password = if (rawPsk.isNotEmpty() && rawPsk != "*") rawPsk else ""
 
-            // flags 和 status 在最后面
-            val flags = parts.drop(3).joinToString(" ")
-            val status = if (flags.contains("CURRENT")) "CURRENT" else ""
-
-            // 密码：cmd wifi list-networks 不直接显示密码
-            // 需要额外命令获取（dumpsys wifi 或 wpa_cli）
-            // 先留空，后续可补充
-            val password = ""
+            // flags：从 block 中提取安全类型描述
+            val flagsMatch = Regex("allowedKeyMgmt[:\\s=]+([^\\n]+)").find(block)
+            val flags = flagsMatch?.groupValues?.get(1)?.trim() ?: ""
 
             entries.add(WifiPasswordEntry(
                 networkId = networkId,
@@ -805,45 +802,11 @@ private fun parseNetworksOutput(output: String): List<WifiPasswordEntry> {
                 status = status
             ))
         } catch (_: Exception) {
-            // 跳过解析失败的行
             continue
         }
     }
 
     return entries
-}
-
-/** 尝试获取指定网络的密码（通过 dumpsys wifi 解析 preSharedKey） */
-private fun tryFetchPasswords(entries: List<WifiPasswordEntry>): List<WifiPasswordEntry> {
-    return try {
-        val (stdout, _, exitCode) =
-            com.whmdg.mczj.tools.security.SpecialPermissionVerifier.executeRootCommandFull(
-                "dumpsys wifi"
-            )
-        if (exitCode != 0) return entries
-
-        // 从 dumpsys wifi 中提取 SSID → preSharedKey 映射
-        val ssidToPassword = mutableMapOf<String, String>()
-        val blocks = stdout.split("WifiConfiguration:")
-        for (block in blocks.drop(1)) {
-            val ssidMatch = Regex("SSID:\\s*\"([^\"]*)\"").find(block)
-            val pskMatch = Regex("preSharedKey:\\s*\"([^\"]*)\"").find(block)
-            if (ssidMatch != null && pskMatch != null) {
-                val ssid = ssidMatch.groupValues[1]
-                val psk = pskMatch.groupValues[1]
-                if (psk.isNotEmpty() && psk != "*") {
-                    ssidToPassword[ssid] = psk
-                }
-            }
-        }
-
-        entries.map { entry ->
-            val psk = ssidToPassword[entry.ssid]
-            if (psk != null) entry.copy(password = psk) else entry
-        }
-    } catch (_: Exception) {
-        entries
-    }
 }
 
 /** 存储 WiFi 密码记录到 SharedPreferences */
@@ -958,8 +921,7 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
         scope.launch {
             try {
                 val loaded = withContext(Dispatchers.IO) {
-                    val networks = loadSavedWifiNetworks(context)
-                    tryFetchPasswords(networks)
+                    loadSavedWifiNetworks(context)
                 }
                 entries = loaded
                 saveWifiPasswords(context, loaded)
