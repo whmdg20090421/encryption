@@ -173,6 +173,15 @@ object HandshakeCapture {
             // 5. 提取握手数据
             onProgress("提取握手数据...")
             val bssid = targetBssid ?: frames.firstOrNull()?.srcMac ?: ""
+
+            // 调试: 输出原始帧数据到进度回调
+            frames.forEachIndexed { i, f ->
+                onProgress("[DEBUG] Frame$i: type=${f.msgType} rc=${f.replayCounter} rawLen=${f.rawEapol.size}")
+                onProgress("[DEBUG] rawHex=${f.rawEapol.toHex()}")
+                onProgress("[DEBUG] nonce=${f.nonce.toHex()}")
+                onProgress("[DEBUG] mic=${f.mic.toHex()}")
+            }
+
             extractHandshake(frames, targetSsid, bssid)
         } catch (e: Exception) {
             onProgress("抓包异常: ${e.message}")
