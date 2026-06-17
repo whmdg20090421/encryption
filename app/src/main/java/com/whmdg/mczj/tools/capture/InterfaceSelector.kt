@@ -4,7 +4,6 @@ import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * WiFi 网卡自动选择器
@@ -35,23 +34,21 @@ object InterfaceSelector {
     }
 
     /**
-     * 枚举 /sys/class/net/ 下所有 wlan 开头的接口
+     * 枚举 /sys/class/net/ 下所有 wlan 开头的接口（需 root 权限读取）
      */
     private fun enumerateInterfaces(): List<String> {
-        val netDir = File("/sys/class/net")
-        return netDir.list()?.filter { it.startsWith("wlan") }?.sorted() ?: emptyList()
+        val (stdout, _, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("ls /sys/class/net/")
+        if (exitCode != 0) return emptyList()
+        return stdout.split("\\s+".toRegex()).filter { it.startsWith("wlan") }.sorted()
     }
 
     /**
      * 查询单个接口的状态
      */
     private fun queryInterfaceState(iface: String): IfaceInfo {
-        // 1. 检查 operstate
-        val operstate = try {
-            File("/sys/class/net/$iface/operstate").readText().trim()
-        } catch (_: Exception) {
-            "down"
-        }
+        // 1. 检查 operstate (需 root)
+        val (opState, _, opExit) = SpecialPermissionVerifier.executeRootCommandFull("cat /sys/class/net/$iface/operstate")
+        val operstate = if (opExit == 0) opState.trim() else "down"
 
         // 2. 检查是否有 IP 地址
         val (stdout, _, _) = SpecialPermissionVerifier.executeRootCommandFull("ip addr show $iface")

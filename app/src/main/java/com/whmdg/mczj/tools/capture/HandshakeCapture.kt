@@ -8,7 +8,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.DataInputStream
 import java.io.File
-import java.io.FileInputStream
 
 /**
  * WiFi 四次握手抓包器
@@ -73,11 +72,9 @@ object HandshakeCapture {
         fakePassword: String = "12345678",
         onProgress: (String) -> Unit
     ): HandshakeData? = withContext(Dispatchers.IO) {
-        val pcapFile = File(
-            AppDataPaths.root(context),
-            "capture/handshake_${System.currentTimeMillis()}.pcap"
-        )
-        pcapFile.parentFile?.mkdirs()
+        val pcapDir = File(AppDataPaths.root(context), "capture")
+        val pcapFile = File(pcapDir, "handshake_${System.currentTimeMillis()}.pcap")
+        SpecialPermissionVerifier.executeRootCommandFull("mkdir -p '${pcapDir.absolutePath}'")
 
         onProgress("启动 tcpdump...")
 
@@ -151,7 +148,10 @@ object HandshakeCapture {
             }
 
             // 检查 pcap 文件大小变化（新增 EAPOL 帧）
-            val currentSize = try { pcapFile.length() } catch (_: Exception) { 0L }
+            val currentSize = try {
+                val (sz, _, szExit) = SpecialPermissionVerifier.executeRootCommandFull("stat -c %s '${pcapFile.absolutePath}'")
+                if (szExit == 0) sz.trim().toLongOrNull() ?: 0L else 0L
+            } catch (_: Exception) { 0L }
             if (currentSize > lastPcapSize) {
                 lastPcapSize = currentSize
                 lastActivityTime = System.currentTimeMillis()
@@ -181,10 +181,9 @@ object HandshakeCapture {
                 return true
             }
         }
-        // 方法2: operstate
-        val operstate = try {
-            File("/sys/class/net/$iface/operstate").readText().trim()
-        } catch (_: Exception) { "up" }
+        // 方法2: operstate (需 root)
+        val (opState, _, opExit) = SpecialPermissionVerifier.executeRootCommandFull("cat /sys/class/net/$iface/operstate")
+        val operstate = if (opExit == 0) opState.trim() else "up"
         return operstate == "down"
     }
 
@@ -237,7 +236,7 @@ object HandshakeCapture {
     }
 
     /**
-     * 解析 pcap 文件，提取 EAPOL 帧
+     * 解析 pcap 文件，提取 EAPOL 帧（通过 root 读取）
      *
      * pcap 文件格式：
      * - 全局头: 24 字节
@@ -245,11 +244,18 @@ object HandshakeCapture {
      */
     private fun parsePcap(filePath: String): List<EapolFrame> {
         val frames = mutableListOf<EapolFrame>()
-        val file = File(filePath)
-        if (!file.exists() || file.length() < 24) return frames
+
+        // 通过 root base64 读取 pcap 二进制数据
+        val (b64, _, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("base64 '$filePath'")
+        if (exitCode != 0 || b64.isEmpty()) return frames
+
+        val rawData = try {
+            android.util.Base64.decode(b64.replace("\n", ""), android.util.Base64.DEFAULT)
+        } catch (_: Exception) { return frames }
+        if (rawData.size < 24) return frames
 
         try {
-            DataInputStream(FileInputStream(file)).use { dis ->
+            DataInputStream(rawData.inputStream()).use { dis ->
                 // 读取全局头 (24 bytes)
                 val magic = dis.readInt()
                 if (magic != 0xa1b2c3d4.toInt() && magic != 0xd4c3b2a1.toInt()) {
