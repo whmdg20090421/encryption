@@ -609,53 +609,45 @@ fun WifiScreen(onBack: () -> Unit) {
                     Text("频段：${net.band}")
                 }
             },
-            buttons = {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // 左侧：取消
-                    TextButton(onClick = { showActionDialog = false }) {
-                        Text("取消")
+            dismissButton = {
+                TextButton(onClick = { showActionDialog = false }) {
+                    Text("取消")
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            showActionDialog = false
+                            showCrackDialog = true
+                            crackProgress = ""
+                            crackResult = null
+                            crackError = null
+                        },
+                        enabled = hasRoot
+                    ) {
+                        Text(
+                            text = "破解",
+                            color = if (hasRoot)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        )
                     }
-                    // 右侧：破解 + 连接
-                    Row {
-                        TextButton(
-                            onClick = {
-                                showActionDialog = false
-                                showCrackDialog = true
-                                crackProgress = ""
-                                crackResult = null
-                                crackError = null
-                            },
-                            enabled = hasRoot
-                        ) {
-                            Text(
-                                text = "破解",
-                                color = if (hasRoot)
-                                    MaterialTheme.colorScheme.primary
-                                else
-                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                            )
-                        }
-                        TextButton(
-                            onClick = {
-                                showActionDialog = false
-                                showConnectDialog = true
-                            },
-                            enabled = hasAdbOrAbove
-                        ) {
-                            Text(
-                                text = "连接",
-                                color = if (hasAdbOrAbove)
-                                    MaterialTheme.colorScheme.primary
-                                else
-                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                            )
-                        }
+                    TextButton(
+                        onClick = {
+                            showActionDialog = false
+                            showConnectDialog = true
+                        },
+                        enabled = hasAdbOrAbove
+                    ) {
+                        Text(
+                            text = "连接",
+                            color = if (hasAdbOrAbove)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        )
                     }
                 }
             }
@@ -750,41 +742,34 @@ fun WifiScreen(onBack: () -> Unit) {
                         }
                     }
                 },
-                buttons = {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (crackError != null || crackProgress.isEmpty()) {
-                            TextButton(onClick = {
-                                showCrackDialog = false
-                                crackError = null
-                            }) {
-                                Text("取消")
-                            }
-                        } else {
-                            Spacer(modifier = Modifier)
+                dismissButton = {
+                    if (crackError != null || crackProgress.isEmpty()) {
+                        TextButton(onClick = {
+                            showCrackDialog = false
+                            crackError = null
+                        }) {
+                            Text("取消")
                         }
-                        if (crackProgress.isEmpty() && crackError == null) {
-                            TextButton(onClick = {
-                                crackScope.launch {
-                                    crackProgress = "正在选择空闲网卡..."
-                                    crackError = null
-                                    try {
-                                        val selectedIface = InterfaceSelector.selectCaptureInterface { iface1, iface2 ->
-                                            // 情况C：双网卡均连接，需要用户选择
-                                            crackProgress = ""
-                                            crackError = "两个网卡均在使用中：\n" +
-                                                    "${iface1.name} — ${iface1.ssid ?: "未知"}\n" +
-                                                    "${iface2.name} — ${iface2.ssid ?: "未知"}\n" +
-                                                    "请先手动断开一个网卡"
-                                            return@selectCaptureInterface
-                                        }
-                                        if (selectedIface == null) {
-                                            if (crackError == null) {
+                    }
+                },
+                confirmButton = {
+                    if (crackProgress.isEmpty() && crackError == null) {
+                        TextButton(onClick = {
+                            crackScope.launch {
+                                crackProgress = "正在选择空闲网卡..."
+                                crackError = null
+                                try {
+                                    val selectedIface = InterfaceSelector.selectCaptureInterface { iface1, iface2 ->
+                                        // 情况C：双网卡均连接，需要用户选择
+                                        crackProgress = ""
+                                        crackError = "两个网卡均在使用中：\n" +
+                                                "${iface1.name} — ${iface1.ssid ?: "未知"}\n" +
+                                                "${iface2.name} — ${iface2.ssid ?: "未知"}\n" +
+                                                "请先手动断开一个网卡"
+                                        return@selectCaptureInterface
+                                    }
+                                    if (selectedIface == null) {
+                                        if (crackError == null) {
                                                 crackError = "未找到可用网卡"
                                             }
                                             return@launch
@@ -828,14 +813,13 @@ fun WifiScreen(onBack: () -> Unit) {
                             }) {
                                 Text("开始破解")
                             }
-                        }
-                        if (crackError != null) {
-                            TextButton(onClick = {
-                                crackError = null
-                                crackProgress = ""
-                            }) {
-                                Text("重试")
-                            }
+                    }
+                    if (crackError != null) {
+                        TextButton(onClick = {
+                            crackError = null
+                            crackProgress = ""
+                        }) {
+                            Text("重试")
                         }
                     }
                 }

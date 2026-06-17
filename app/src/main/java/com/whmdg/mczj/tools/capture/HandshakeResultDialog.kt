@@ -106,46 +106,40 @@ fun HandshakeResultDialog(
                 )
             }
         },
-        buttons = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = onDismiss) {
-                    Text("关闭")
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        },
+        confirmButton = {
+            Row {
+                TextButton(onClick = {
+                    copyToClipboard(context, formatAllData(data))
+                    Toast.makeText(context, "已复制到剪贴板", Toast.LENGTH_SHORT).show()
+                }) {
+                    Icon(
+                        Icons.Default.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("复制全部")
                 }
-                Row {
-                    TextButton(onClick = {
-                        copyToClipboard(context, formatAllData(data))
-                        Toast.makeText(context, "已复制到剪贴板", Toast.LENGTH_SHORT).show()
-                    }) {
-                        Icon(
-                            Icons.Default.ContentCopy,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("复制全部")
-                    }
-                    TextButton(onClick = {
-                        val savedPath = saveToFile(context, data)
-                        Toast.makeText(
-                            context,
-                            if (savedPath != null) "已保存到 $savedPath" else "保存失败",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }) {
-                        Icon(
-                            Icons.Default.Save,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("保存")
-                    }
+                TextButton(onClick = {
+                    val savedPath = saveToFile(context, data)
+                    Toast.makeText(
+                        context,
+                        if (savedPath != null) "已保存到 $savedPath" else "保存失败",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }) {
+                    Icon(
+                        Icons.Default.Save,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("保存")
                 }
             }
         }
