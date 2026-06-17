@@ -9,6 +9,8 @@ import android.content.pm.PackageManager
 import android.net.wifi.ScanResult
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.util.Xml
+import android.util.XmlPullParser
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -777,7 +779,7 @@ private fun parseWifiConfigStoreXml(xml: String): List<WifiPasswordEntry> {
     val entries = mutableListOf<WifiPasswordEntry>()
 
     try {
-        val parser = android.util.Xml.newPullParser()
+        val parser = Xml.newPullParser()
         parser.setInput(xml.reader())
 
         var inNetwork = false
@@ -791,9 +793,9 @@ private fun parseWifiConfigStoreXml(xml: String): List<WifiPasswordEntry> {
         var currentName = ""
         var currentText = StringBuilder()
 
-        while (parser.eventType != android.util.XmlPullParser.END_DOCUMENT) {
+        while (parser.eventType != XmlPullParser.END_DOCUMENT) {
             when (parser.eventType) {
-                android.util.XmlPullParser.START_TAG -> {
+                XmlPullParser.START_TAG -> {
                     currentTag = parser.name ?: ""
                     currentName = parser.getAttributeValue(null, "name") ?: ""
                     currentText.clear()
@@ -815,11 +817,11 @@ private fun parseWifiConfigStoreXml(xml: String): List<WifiPasswordEntry> {
                     }
                 }
 
-                android.util.XmlPullParser.TEXT -> {
+                XmlPullParser.TEXT -> {
                     currentText.append(parser.text)
                 }
 
-                android.util.XmlPullParser.END_TAG -> {
+                XmlPullParser.END_TAG -> {
                     val tag = parser.name ?: ""
                     val text = currentText.toString().trim()
 
