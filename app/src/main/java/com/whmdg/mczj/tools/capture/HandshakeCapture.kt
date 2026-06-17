@@ -412,21 +412,9 @@ object HandshakeCapture {
         // 客户端 MAC: Msg2 的源地址
         val clientMac = msg2.srcMac
 
-        // Msg2 的 MIC 区域清零（离线计算需要 MIC=0 的原始帧）
-        // rawEapol 结构: [802.1X头 4B][descriptor 1B][key_info 2B][key_len 2B][replay 8B][nonce 32B][iv 16B][rsc 8B][id 8B][MIC 16B]...
-        // MIC 偏移 = 4+1+2+2+8+32+16+8+8 = 81，长度 16
+        // eapolFrames 存储原始帧（含真实 MIC），供离线工具使用
         val handshakeFrames = listOf(msg1, msg2) + listOfNotNull(msg3)
-        val eapolHexList = handshakeFrames.map { frame ->
-            if (frame.msgType == 2) {
-                val zeroed = frame.rawEapol.copyOf()
-                if (zeroed.size >= 97) {
-                    zeroed.fill(0, 81, 97)
-                }
-                zeroed.toHex()
-            } else {
-                frame.rawEapol.toHex()
-            }
-        }
+        val eapolHexList = handshakeFrames.map { it.rawEapol.toHex() }
 
         return HandshakeData(
             ssid = ssid,
