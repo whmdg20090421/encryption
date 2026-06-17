@@ -140,35 +140,4 @@ object InterfaceSelector {
         val (_, _, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("ip link set $iface down")
         return exitCode == 0
     }
-
-    /**
-     * 切换到监听模式
-     */
-    suspend fun enableMonitorMode(iface: String): Boolean = withContext(Dispatchers.IO) {
-        // 先断开连接
-        SpecialPermissionVerifier.executeRootCommandFull("ip link set $iface down")
-        delay(200)
-        // 切监听模式
-        val (_, _, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("iw dev $iface set type monitor")
-        if (exitCode != 0) return@withContext false
-        delay(200)
-        // 启用接口
-        SpecialPermissionVerifier.executeRootCommandFull("ip link set $iface up")
-        delay(300)
-        true
-    }
-
-    /**
-     * 恢复 managed 模式
-     */
-    suspend fun restoreManagedMode(iface: String): Boolean = withContext(Dispatchers.IO) {
-        SpecialPermissionVerifier.executeRootCommandFull("ip link set $iface down")
-        delay(200)
-        val (_, _, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("iw dev $iface set type managed")
-        if (exitCode != 0) return@withContext false
-        delay(200)
-        SpecialPermissionVerifier.executeRootCommandFull("ip link set $iface up")
-        delay(300)
-        true
-    }
 }

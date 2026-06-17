@@ -770,44 +770,27 @@ fun WifiScreen(onBack: () -> Unit) {
                                     }
                                     if (selectedIface == null) {
                                         if (crackError == null) {
-                                                crackError = "未找到可用网卡"
-                                            }
-                                            return@launch
+                                            crackError = "未找到可用网卡"
                                         }
+                                        return@launch
+                                    }
 
-                                        // 切换监听模式
-                                        crackProgress = "切换 $selectedIface 到监听模式..."
-                                        val monitorOk = InterfaceSelector.enableMonitorMode(selectedIface)
-                                        if (!monitorOk) {
-                                            crackError = "切换监听模式失败"
-                                            InterfaceSelector.restoreManagedMode(selectedIface)
-                                            return@launch
-                                        }
+                                    // 抓取握手包（普通模式，不切监听）
+                                    val result = HandshakeCapture.captureHandshake(
+                                        context = context,
+                                        iface = selectedIface,
+                                        targetSsid = net.ssid,
+                                        targetBssid = null,
+                                        onProgress = { crackProgress = it }
+                                    )
 
-                                        // 抓取握手包
-                                        val result = HandshakeCapture.captureHandshake(
-                                            context = context,
-                                            iface = selectedIface,
-                                            targetSsid = net.ssid,
-                                            targetBssid = null,
-                                            onProgress = { crackProgress = it }
-                                        )
-
-                                        // 恢复 managed 模式
-                                        InterfaceSelector.restoreManagedMode(selectedIface)
-
-                                        if (result != null) {
+                                    if (result != null) {
                                             crackResult = result
                                         } else {
                                             crackError = "未捕获到有效握手包，请重试"
                                         }
                                     } catch (e: Exception) {
                                         crackError = "破解失败：${e.message}"
-                                        try {
-                                            // 尝试恢复网卡模式
-                                            InterfaceSelector.restoreManagedMode("wlan0")
-                                            InterfaceSelector.restoreManagedMode("wlan1")
-                                        } catch (_: Exception) {}
                                     }
                                 }
                             }) {
