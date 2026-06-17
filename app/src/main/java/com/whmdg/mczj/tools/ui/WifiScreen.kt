@@ -151,6 +151,16 @@ private fun securityIcon(security: String) = when (security) {
     else -> Icons.Filled.Lock
 }
 
+/** 排序方式 */
+private enum class SortMode(val label: String) {
+    SIGNAL_DESC("信号强度 ↓"),
+    SIGNAL_ASC("信号强度 ↑"),
+    NAME_ASC("名称 A→Z"),
+    NAME_DESC("名称 Z→A"),
+    FREQUENCY("频段"),
+    SECURITY("加密类型")
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WifiScreen(onBack: () -> Unit) {
@@ -195,6 +205,8 @@ fun WifiScreen(onBack: () -> Unit) {
     var scanResults by remember { mutableStateOf<List<WifiNetworkInfo>>(emptyList()) }
     var scanError by remember { mutableStateOf<String?>(null) }
     var wifiEnabled by remember { mutableStateOf(wifiManager.isWifiEnabled) }
+    var sortMode by remember { mutableStateOf(SortMode.SIGNAL_DESC) }
+    var showMenu by remember { mutableStateOf(false) }
 
     // 扫描结果广播接收器
     val scanReceiver = remember {
@@ -277,18 +289,53 @@ fun WifiScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    // WiFi 开关
-                    IconButton(onClick = {
-                        try {
-                            context.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
-                        } catch (_: Exception) {}
-                    }) {
-                        Icon(
-                            if (wifiEnabled) Icons.Filled.Wifi else Icons.Filled.WifiOff,
-                            contentDescription = "WiFi 设置",
-                            tint = if (wifiEnabled) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.error
-                        )
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "菜单")
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false },
+                            modifier = Modifier.fillMaxWidth(0.55f)
+                        ) {
+                            // 排序标题
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "排序方式",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                onClick = { showMenu = false },
+                                enabled = false
+                            )
+                            HorizontalDivider()
+                            SortMode.entries.forEach { mode ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            if (sortMode == mode) {
+                                                Icon(
+                                                    Icons.Filled.Check,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(18.dp),
+                                                    tint = MaterialTheme.colorScheme.primary
+                                                )
+                                            } else {
+                                                Spacer(modifier = Modifier.size(18.dp))
+                                            }
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(mode.label)
+                                        }
+                                    },
+                                    onClick = {
+                                        sortMode = mode
+                                        showMenu = false
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             )
@@ -463,7 +510,15 @@ fun WifiScreen(onBack: () -> Unit) {
                     }
                 }
 
-                items(scanResults, key = { "${it.ssid}_${it.bssid}" }) { network ->
+                val sorted = when (sortMode) {
+                    SortMode.SIGNAL_DESC -> scanResults.sortedByDescending { it.rssi }
+                    SortMode.SIGNAL_ASC -> scanResults.sortedBy { it.rssi }
+                    SortMode.NAME_ASC -> scanResults.sortedBy { it.ssid.lowercase() }
+                    SortMode.NAME_DESC -> scanResults.sortedByDescending { it.ssid.lowercase() }
+                    SortMode.FREQUENCY -> scanResults.sortedBy { it.frequency }
+                    SortMode.SECURITY -> scanResults.sortedBy { it.security }
+                }
+                items(sorted, key = { "${it.ssid}_${it.bssid}" }) { network ->
                     WifiNetworkCard(network = network)
                 }
             }
