@@ -945,34 +945,14 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
         return
     }
 
-    // ── 有 Root：加载数据 ──
+    // ── 有 Root ──
     val scope = rememberCoroutineScope()
     var entries by remember { mutableStateOf(loadStoredWifiPasswords(context)) }
     var isLoading by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
+    var showImportDialog by remember { mutableStateOf(false) }
 
-    // 首次进入时自动刷新
-    LaunchedEffect(Unit) {
-        if (entries.isEmpty()) {
-            isLoading = true
-            try {
-                val loaded = withContext(Dispatchers.IO) {
-                    val networks = loadSavedWifiNetworks(context)
-                    tryFetchPasswords(networks)
-                }
-                entries = loaded
-                saveWifiPasswords(context, loaded)
-                loadError = null
-            } catch (e: Exception) {
-                loadError = e.message
-            } finally {
-                isLoading = false
-            }
-        }
-    }
-
-    // 刷新函数
-    fun refresh() {
+    fun doImport() {
         isLoading = true
         loadError = null
         scope.launch {
@@ -1002,15 +982,18 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { refresh() }, enabled = !isLoading) {
+                    TextButton(
+                        onClick = { showImportDialog = true },
+                        enabled = !isLoading
+                    ) {
                         if (isLoading) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
+                                modifier = Modifier.size(18.dp),
                                 strokeWidth = 2.dp
                             )
-                        } else {
-                            Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                            Spacer(modifier = Modifier.width(6.dp))
                         }
+                        Text("导入")
                     }
                 }
             )
@@ -1026,7 +1009,7 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
             if (loadError != null) {
                 item {
                     GlowSection(
-                        title = "加载失败",
+                        title = "导入失败",
                         icon = Icons.Default.Warning
                     ) {
                         Text(
@@ -1035,7 +1018,7 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
                             color = MaterialTheme.colorScheme.error
                         )
                         Spacer(modifier = Modifier.height(8.dp))
-                        Button(onClick = { refresh() }, modifier = Modifier.fillMaxWidth()) {
+                        Button(onClick = { doImport() }, modifier = Modifier.fillMaxWidth()) {
                             Text("重试")
                         }
                     }
@@ -1066,7 +1049,7 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "点击右上角刷新按钮加载",
+                                text = "点击右上角「导入」从系统读取",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.outline
                             )
@@ -1126,5 +1109,29 @@ private fun WifiPasswordScreen(onBack: () -> Unit) {
                 }
             }
         }
+    }
+
+    // ── 导入确认弹窗 ──
+    if (showImportDialog) {
+        AlertDialog(
+            onDismissRequest = { showImportDialog = false },
+            title = { Text("导入 WiFi 密码") },
+            text = {
+                Text("将使用 Root 权限从系统读取已保存的 WiFi 网络名称和密码。需要执行 root 命令，是否确认？")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showImportDialog = false
+                    doImport()
+                }) {
+                    Text("确认导入")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showImportDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
