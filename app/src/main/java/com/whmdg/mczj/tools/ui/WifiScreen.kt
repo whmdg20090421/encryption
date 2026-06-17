@@ -213,6 +213,7 @@ fun WifiScreen(onBack: () -> Unit) {
     var crackProgress by remember { mutableStateOf("") }
     var crackResult by remember { mutableStateOf<HandshakeCapture.HandshakeData?>(null) }
     var crackError by remember { mutableStateOf<String?>(null) }
+    var crackDebugRaw by remember { mutableStateOf(false) }
     var selectedNetwork by remember { mutableStateOf<WifiNetworkInfo?>(null) }
 
     // 扫描结果广播接收器
@@ -738,6 +739,18 @@ fun WifiScreen(onBack: () -> Unit) {
                             }
                         } else {
                             Text("将自动选择空闲网卡，切换监听模式，\n发送认证请求触发四次握手抓包。\n\n此过程需要 Root 权限。")
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("调试模式（输出原始数据）", fontSize = 13.sp)
+                                Spacer(modifier = Modifier.weight(1f))
+                                Switch(
+                                    checked = crackDebugRaw,
+                                    onCheckedChange = { crackDebugRaw = it }
+                                )
+                            }
                         }
                     }
                 },
@@ -764,12 +777,13 @@ fun WifiScreen(onBack: () -> Unit) {
                                         iface = "wlan0",
                                         targetSsid = net.ssid,
                                         targetBssid = null,
+                                        debugRaw = crackDebugRaw,
                                         onProgress = { crackProgress = it }
                                     )
 
                                     if (result != null) {
                                             crackResult = result
-                                        } else {
+                                        } else if (!crackDebugRaw) {
                                             crackError = "未捕获到有效握手包，请重试"
                                         }
                                     } catch (e: Exception) {

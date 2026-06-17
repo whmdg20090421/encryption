@@ -72,6 +72,7 @@ object HandshakeCapture {
         targetSsid: String,
         targetBssid: String?,
         fakePassword: String = "12345678",
+        debugRaw: Boolean = false,
         onProgress: (String) -> Unit
     ): HandshakeData? = withContext(Dispatchers.IO) {
         onProgress("启动 tcpdump（普通模式）...")
@@ -165,6 +166,19 @@ object HandshakeCapture {
             }
             if (rawData.size < 24) {
                 onProgress("pcap 数据不完整")
+                return@withContext null
+            }
+
+            // debugRaw 模式：输出原始 base64 数据，跳过解析
+            if (debugRaw) {
+                onProgress("[RAW_PCAP_B64]")
+                onProgress(b64Data)
+                onProgress("[/RAW_PCAP_B64]")
+                onProgress("[RAW_PCAP_HEX]")
+                onProgress(rawData.toHex())
+                onProgress("[/RAW_PCAP_HEX]")
+                onProgress("[RAW_PCAP_SIZE] ${rawData.size} bytes")
+                onProgress("原始数据已输出，请复制上方 base64 数据用于外部验证")
                 return@withContext null
             }
 
