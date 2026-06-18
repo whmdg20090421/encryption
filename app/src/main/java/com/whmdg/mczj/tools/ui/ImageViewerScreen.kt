@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.core.net.toUri
 import me.saket.telephoto.zoomable.DoubleClickToZoomListener
+import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
 import java.io.File
@@ -71,6 +72,7 @@ fun ImageViewerScreen(
                 modifier = Modifier.fillMaxSize()
             ) { page ->
                 val zoomableState = rememberZoomableState()
+                val imageState = rememberZoomableImageState(zoomableState)
 
                 // 翻页后重置缩放状态
                 LaunchedEffect(pagerState.settledPage) {
@@ -83,7 +85,7 @@ fun ImageViewerScreen(
                     model = File(paths[page]).toUri(),
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    state = zoomableState,
+                    state = imageState,
                     contentScale = ContentScale.Fit,
                     // 双击在 1x ↔ 2x 之间切换
                     onDoubleClick = DoubleClickToZoomListener.cycle(maxZoomFactor = 2f)
