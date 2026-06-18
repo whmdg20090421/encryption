@@ -99,7 +99,7 @@ fun loadApkInfo(context: Context, apkPath: String): ApkInfo? {
 
         val dataDir1 = appInfo.dataDir ?: ""
         val dataDir2 = appInfo.sourceDir ?: ""
-        val uid = appInfo.uid
+        val uid = if (isInstalled) installedInfo!!.applicationInfo.uid else appInfo.uid
 
         ApkInfo(
             appIcon = appIcon,
@@ -267,8 +267,8 @@ fun ApkInfoDialog(
                         Text("功能")
                     }
                     TextButton(onClick = {
-                        onDismiss()
                         onViewAsArchive()
+                        onDismiss()
                     }) {
                         Text("查看")
                     }

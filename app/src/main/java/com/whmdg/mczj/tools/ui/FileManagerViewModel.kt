@@ -135,6 +135,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var archivePassword by mutableStateOf("")
         private set
+    var archiveUseRoot by mutableStateOf(false)   // 是否通过 7za root 通道访问
+        private set
     var archiveMemFs: CompressService.ArchiveMemFs? = null
         private set
     private val recycleBinJson = kotlinx.serialization.json.Json {
@@ -1222,36 +1224,40 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 ?: CompressService.detectFormatByMagic(File(entry.path))
                 ?: return "不支持的压缩格式"
 
-            // RAR5 检测：读取文件头 version byte，RAR5 的 header version >= 50
-            if (format == "rar") {
-                try {
-                    val fis = File(entry.path).inputStream()
-                    val header = ByteArray(7)
-                    fis.read(header)
-                    fis.close()
-                    // RAR 格式: "Rar!\x1a\x07" 后第7字节是 header version
-                    // RAR4: version byte = 0x01, RAR5: version byte >= 0x02
-                    if (header.size >= 7 && header[6].toInt() and 0xFF >= 2) {
-                        return "不支持 RAR5+ 格式"
-                    }
-                } catch (_: Exception) {}
-            }
+            // 检测是否需要通过 root/shell 通道访问（Java API 无法读取受限路径）
+            val useRoot = hasShellEngine && !File(entry.path).canRead()
 
-            // 密码验证
-            if (password.isNotEmpty()) {
-                if (!CompressService.verifyPassword(entry.path, format, password)) {
-                    return "密码错误"
+            if (!useRoot) {
+                // RAR5 检测：读取文件头 version byte，RAR5 的 header version >= 50
+                if (format == "rar") {
+                    try {
+                        val fis = File(entry.path).inputStream()
+                        val header = ByteArray(7)
+                        fis.read(header)
+                        fis.close()
+                        if (header.size >= 7 && header[6].toInt() and 0xFF >= 2) {
+                            return "不支持 RAR5+ 格式"
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                // 密码验证
+                if (password.isNotEmpty()) {
+                    if (!CompressService.verifyPassword(entry.path, format, password)) {
+                        return "密码错误"
+                    }
                 }
             }
 
             // 读取索引
-            val memFs = CompressService.openArchiveIndex(entry.path, format, password)
+            val memFs = CompressService.openArchiveIndex(entry.path, format, password, useRoot = useRoot)
 
             archiveMemFs = memFs
             archiveFilePath = entry.path
             archiveFileName = entry.name
             archiveFormat = format
             archivePassword = password
+            archiveUseRoot = useRoot
             archivePath = ""
             archiveRootPath = ""
             isInArchive = true
@@ -1282,29 +1288,34 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 ?: CompressService.detectFormatByMagic(File(entry.path))
                 ?: return "不支持的压缩格式"
 
-            // RAR5 检测
-            if (format == "rar") {
-                try {
-                    val fis = File(entry.path).inputStream()
-                    val header = ByteArray(7)
-                    fis.read(header)
-                    fis.close()
-                    if (header.size >= 7 && header[6].toInt() and 0xFF >= 2) {
-                        return "不支持 RAR5+ 格式"
-                    }
-                } catch (_: Exception) {}
-            }
+            val useRoot = hasShellEngine && !File(entry.path).canRead()
 
-            if (password.isNotEmpty()) {
-                if (!CompressService.verifyPassword(entry.path, format, password)) {
-                    return "密码错误"
+            if (!useRoot) {
+                // RAR5 检测
+                if (format == "rar") {
+                    try {
+                        val fis = File(entry.path).inputStream()
+                        val header = ByteArray(7)
+                        fis.read(header)
+                        fis.close()
+                        if (header.size >= 7 && header[6].toInt() and 0xFF >= 2) {
+                            return "不支持 RAR5+ 格式"
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                if (password.isNotEmpty()) {
+                    if (!CompressService.verifyPassword(entry.path, format, password)) {
+                        return "密码错误"
+                    }
                 }
             }
 
-            val memFs = CompressService.openArchiveIndex(entry.path, format, password)
+            val memFs = CompressService.openArchiveIndex(entry.path, format, password, useRoot = useRoot)
             archiveMemFs = memFs
             archiveFormat = format
             archivePassword = password
+            archiveUseRoot = useRoot
             return null
         } catch (e: Exception) {
             Log.e("FileMgr", "加载压缩包索引失败", e)
@@ -1365,6 +1376,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         archiveFileName = ""
         archiveFormat = ""
         archivePassword = ""
+        archiveUseRoot = false
         // 清理临时解压文件
         try {
             val tempDir = File(AppDataPaths.archiveCache(context), tempFileHash)
@@ -1483,7 +1495,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (ext in textExtensions) {
                 // 文本文件：解压到内存再写临时文件（文本编辑器需要文件路径）
                 val data = CompressService.extractSingleFile(
-                    archiveFilePath, archiveFormat, archivePassword, memEntry
+                    archiveFilePath, archiveFormat, archivePassword, memEntry, useRoot = archiveUseRoot
                 )
                 val tempDir = getArchiveTempDir(context)
                 val tempFile = File(tempDir, memEntry.name)
@@ -1495,7 +1507,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val tempFile = if (useMemory) {
                     // 小于 50MB：解压到内存再写临时文件
                     val data = CompressService.extractSingleFile(
-                        archiveFilePath, archiveFormat, archivePassword, memEntry
+                        archiveFilePath, archiveFormat, archivePassword, memEntry, useRoot = archiveUseRoot
                     )
                     val f = File(tempDir, memEntry.name)
                     f.writeBytes(data)
@@ -1503,7 +1515,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     // 大于等于 50MB：直接解压到磁盘
                     CompressService.extractSingleFileToDisk(
-                        archiveFilePath, archiveFormat, archivePassword, memEntry, tempDir
+                        archiveFilePath, archiveFormat, archivePassword, memEntry, tempDir, useRoot = archiveUseRoot
                     )
                 }
                 // 构建图片列表（压缩包内所有图片）
@@ -1514,7 +1526,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         val me = memFs.entries[e.path] as? CompressService.ArchiveMemFile ?: return@mapNotNull null
                         try {
                             val imgData = if (me.size in 1 until EXTRACT_TO_MEMORY_THRESHOLD) {
-                                CompressService.extractSingleFile(archiveFilePath, archiveFormat, archivePassword, me)
+                                CompressService.extractSingleFile(archiveFilePath, archiveFormat, archivePassword, me, useRoot = archiveUseRoot)
                             } else null
                             val tf = if (imgData != null) {
                                 val f = File(tempDir, me.name)
@@ -1522,7 +1534,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                                 f
                             } else {
                                 CompressService.extractSingleFileToDisk(
-                                    archiveFilePath, archiveFormat, archivePassword, me, tempDir
+                                    archiveFilePath, archiveFormat, archivePassword, me, tempDir, useRoot = archiveUseRoot
                                 )
                             }
                             tf.absolutePath
@@ -1535,14 +1547,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val tempDir = getArchiveTempDir(context)
                 val tempFile = if (useMemory) {
                     val data = CompressService.extractSingleFile(
-                        archiveFilePath, archiveFormat, archivePassword, memEntry
+                        archiveFilePath, archiveFormat, archivePassword, memEntry, useRoot = archiveUseRoot
                     )
                     val f = File(tempDir, memEntry.name)
                     f.writeBytes(data)
                     f
                 } else {
                     CompressService.extractSingleFileToDisk(
-                        archiveFilePath, archiveFormat, archivePassword, memEntry, tempDir
+                        archiveFilePath, archiveFormat, archivePassword, memEntry, tempDir, useRoot = archiveUseRoot
                     )
                 }
                 try {

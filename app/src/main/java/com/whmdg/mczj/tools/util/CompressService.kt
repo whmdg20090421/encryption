@@ -747,8 +747,12 @@ object CompressService {
     fun openArchiveIndex(
         archivePath: String,
         format: String,
-        password: String
+        password: String,
+        useRoot: Boolean = false
     ): ArchiveMemFs {
+        if (useRoot) {
+            return openArchiveIndexVia7za(archivePath, format, password)
+        }
         val file = File(archivePath)
         if (!file.exists()) throw IllegalArgumentException("文件不存在: $archivePath")
 
@@ -759,6 +763,28 @@ object CompressService {
             "rar" -> openRarIndex(archivePath, password)
             else -> throw IllegalArgumentException("不支持的格式: $format")
         }
+    }
+
+    /** 通过 7za 二进制读取压缩包索引（root/shell 权限） */
+    private fun openArchiveIndexVia7za(
+        archivePath: String,
+        format: String,
+        password: String
+    ): ArchiveMemFs {
+        val context = com.whmdg.mczj.tools.ToolsApp.instance
+        val entries7z = SevenZipService.listArchive(context, archivePath, format, password)
+        val entries = mutableMapOf<String, ArchiveMemEntry>()
+        var idx = 0
+        for (e in entries7z) {
+            if (e.isDir) {
+                entries[e.path] = ArchiveMemDir(e.name, e.path)
+            } else {
+                entries[e.path] = ArchiveMemFile(e.name, e.path, e.size, e.compressedSize, idx++)
+            }
+        }
+        calcDirSizes(entries)
+        val reader = SevenZipArchiveReader(archivePath, format, password)
+        return ArchiveMemFs(entries, reader, format, password)
     }
 
     private fun openZipIndex(archivePath: String, password: String): ArchiveMemFs {
@@ -967,8 +993,18 @@ object CompressService {
         archivePath: String,
         format: String,
         password: String,
-        entry: ArchiveMemFile
+        entry: ArchiveMemFile,
+        useRoot: Boolean = false
     ): ByteArray {
+        if (useRoot) {
+            val context = com.whmdg.mczj.tools.ToolsApp.instance
+            val tmpFile = SevenZipService.extractToFile(context, archivePath, entry.path, format, password)
+            try {
+                return tmpFile.readBytes()
+            } finally {
+                tmpFile.delete()
+            }
+        }
         val reader = when (format) {
             "zip" -> ZipArchiveReader(archivePath, password)
             "7z" -> SevenZArchiveReader(archivePath, password)
@@ -992,9 +1028,19 @@ object CompressService {
         format: String,
         password: String,
         entry: ArchiveMemFile,
-        targetDir: File
+        targetDir: File,
+        useRoot: Boolean = false
     ): File {
         if (!targetDir.exists()) targetDir.mkdirs()
+        if (useRoot) {
+            // root 模式：7za 直接提取到目标文件
+            val context = com.whmdg.mczj.tools.ToolsApp.instance
+            val tmpFile = SevenZipService.extractToFile(context, archivePath, entry.path, format, password)
+            val targetFile = File(targetDir, entry.name)
+            tmpFile.copyTo(targetFile, overwrite = true)
+            tmpFile.delete()
+            return targetFile
+        }
         val data = extractSingleFile(archivePath, format, password, entry)
         val targetFile = File(targetDir, entry.name)
         targetFile.writeBytes(data)
@@ -1151,6 +1197,24 @@ object CompressService {
                 throw IllegalStateException("条目未找到: ${entry.path}")
             } finally {
                 arch.close()
+            }
+        }
+        override fun close() {}
+    }
+
+    /** 通过 7za 二进制按需读取条目（root/shell 权限） */
+    private class SevenZipArchiveReader(
+        private val archivePath: String,
+        private val format: String,
+        private val password: String
+    ) : ArchiveReader {
+        override fun readEntry(entry: ArchiveMemFile): ByteArray {
+            val context = com.whmdg.mczj.tools.ToolsApp.instance
+            val tmpFile = SevenZipService.extractToFile(context, archivePath, entry.path, format, password)
+            try {
+                return tmpFile.readBytes()
+            } finally {
+                tmpFile.delete()
             }
         }
         override fun close() {}

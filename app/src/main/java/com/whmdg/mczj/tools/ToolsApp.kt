@@ -15,8 +15,15 @@ import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
 
 class ToolsApp : Application(), SingletonImageLoader.Factory {
+
+    companion object {
+        lateinit var instance: ToolsApp
+            private set
+    }
+
     override fun onCreate() {
         super.onCreate()
+        instance = this
         // libsu: 配置全局 root shell（首次 Shell.cmd() 时懒创建，后续复用）
         Shell.setDefaultBuilder(Shell.Builder.create()
             .setFlags(Shell.FLAG_MOUNT_MASTER)
@@ -25,6 +32,12 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
         migrateWebViewData()
         AppDataPaths.cleanArchiveCache(this)
         AppIconHelper.init(this)
+        // 初始化 7za 二进制（root 或 Shizuku 环境）
+        val hasShell = com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isRootAvailable() ||
+            com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(this)
+        if (hasShell) {
+            com.whmdg.mczj.tools.util.RootBinaryManager.init(this)
+        }
         WebView.setDataDirectorySuffix("app")
 
         // WebDAV: 初始化 Client 认证器
