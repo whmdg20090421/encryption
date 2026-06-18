@@ -1,5 +1,6 @@
 package com.whmdg.mczj.tools.ui
 
+import androidx.compose.animation.core.SnapSpec
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,8 +19,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.core.net.toUri
 import me.saket.telephoto.zoomable.DoubleClickToZoomListener
 import me.saket.telephoto.zoomable.rememberZoomableState
-import me.saket.telephoto.zoomable.SnapSpec
-import me.saket.telephoto.zoomable.image.coil3.ZoomableAsyncImage
+import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -72,7 +72,7 @@ fun ImageViewerScreen(
             ) { page ->
                 val zoomableState = rememberZoomableState()
 
-                // 翻页后重置缩放状态，防止离屏页面保留缩放
+                // 翻页后重置缩放状态
                 LaunchedEffect(pagerState.settledPage) {
                     if (pagerState.settledPage != page) {
                         zoomableState.resetZoom(animationSpec = SnapSpec())
@@ -83,7 +83,7 @@ fun ImageViewerScreen(
                     model = File(paths[page]).toUri(),
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
-                    zoomableState = zoomableState,
+                    state = zoomableState,
                     contentScale = ContentScale.Fit,
                     // 双击在 1x ↔ 2x 之间切换
                     onDoubleClick = DoubleClickToZoomListener.cycle(maxZoomFactor = 2f)
