@@ -138,14 +138,8 @@ private fun detectSignature(info: android.content.pm.PackageInfo): String {
     // 取前 8 字节作为简短指纹
     val shortFingerprint = sha256.take(8).joinToString(":") { "%02X".format(it) }
 
-    val version = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-        val schemes = info.signingInfo?.signatureSchemesVersion ?: 0
-        when {
-            schemes >= 3 -> "V3"
-            schemes >= 2 -> "V2"
-            else -> "V1"
-        }
-    } else "V1"
+    // API 28+ 默认支持 V2 签名
+    val version = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) "V2+" else "V1"
 
     return "已签名 ($version) $shortFingerprint"
 }

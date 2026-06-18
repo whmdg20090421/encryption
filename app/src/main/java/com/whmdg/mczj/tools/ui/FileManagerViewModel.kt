@@ -135,7 +135,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var archivePassword by mutableStateOf("")
         private set
-    private var archiveMemFs: CompressService.ArchiveMemFs? = null
+    var archiveMemFs: CompressService.ArchiveMemFs? = null
+        private set
     private val recycleBinJson = kotlinx.serialization.json.Json {
         ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true
     }
