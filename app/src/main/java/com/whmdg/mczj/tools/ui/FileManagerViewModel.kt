@@ -275,6 +275,29 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 检查文件是否可通过 Java API 读取。
+     * Android/data 和 Android/obb 是受限目录，除自己包名外均不可读。
+     */
+    private fun shellCanRead(path: String): Boolean {
+        if (!hasShellEngine) return File(path).canRead()
+        if (isRestrictedAndroidDir(path)) return false
+        return File(path).canRead()
+    }
+
+    /** 判断路径是否在受限的 Android/data 或 Android/obb 下（排除自身包名） */
+    private fun isRestrictedAndroidDir(path: String): Boolean {
+        val p = path.replace("//", "/")
+        for (prefix in RESTRICTED_ANDROID_PREFIXES) {
+            if (p.startsWith(prefix)) {
+                val rest = p.removePrefix(prefix)
+                if (rest.startsWith(OWN_PACKAGE_NAME)) return false
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
      * 检查路径是否可读（受保护路径走 shell，普通路径走 Java API）。
      */
     fun canAccessPath(path: String): Boolean = shellPathExists(path)
@@ -1225,7 +1248,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 ?: return "不支持的压缩格式"
 
             // 检测是否需要通过 root/shell 通道访问（Java API 无法读取受限路径）
-            val useRoot = hasShellEngine && !File(entry.path).canRead()
+            val useRoot = hasShellEngine && !shellCanRead(entry.path)
 
             if (!useRoot) {
                 // RAR5 检测：读取文件头 version byte，RAR5 的 header version >= 50
@@ -1288,7 +1311,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 ?: CompressService.detectFormatByMagic(File(entry.path))
                 ?: return "不支持的压缩格式"
 
-            val useRoot = hasShellEngine && !File(entry.path).canRead()
+            val useRoot = hasShellEngine && !shellCanRead(entry.path)
 
             if (!useRoot) {
                 // RAR5 检测
@@ -2798,6 +2821,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
+        private val RESTRICTED_ANDROID_PREFIXES = listOf(
+            "/storage/emulated/0/Android/data/",
+            "/storage/emulated/0/Android/obb/",
+            "/sdcard/Android/data/",
+            "/sdcard/Android/obb/"
+        )
+        private const val OWN_PACKAGE_NAME = "com.whmdg.mczj.tools"
+
         /** 按需解压阈值：小于此大小的文件解压到内存，大于等于此大小解压到磁盘 */
         private const val EXTRACT_TO_MEMORY_THRESHOLD = 50L * 1024 * 1024 // 50MB
 

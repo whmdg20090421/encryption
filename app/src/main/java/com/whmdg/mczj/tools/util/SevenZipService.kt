@@ -36,6 +36,15 @@ object SevenZipService {
 
     // ── 命令执行 ──────────────────────────────────────────
 
+    /** 获取二进制路径，未初始化时尝试懒初始化 */
+    private fun getBinaryPathOrInit(): String {
+        if (RootBinaryManager.isReady()) return RootBinaryManager.getBinaryPath()
+        // 懒初始化：应用启动时可能 root 尚未就绪
+        val ctx = com.whmdg.mczj.tools.ToolsApp.instance
+        RootBinaryManager.init(ctx)
+        return RootBinaryManager.getBinaryPath()
+    }
+
     private fun isRootMode(): Boolean =
         SpecialPermissionVerifier.isRootAvailable()
 
@@ -80,7 +89,7 @@ object SevenZipService {
      * @param password 密码（空=无密码）
      */
     fun listArchive(context: Context, archivePath: String, format: String, password: String = ""): List<ArchiveEntry> {
-        val bin = RootBinaryManager.getBinaryPath()
+        val bin = getBinaryPathOrInit()
         val pwArg = if (password.isNotEmpty()) " -p${shellEscape(password)}" else ""
         val pathArg = shellEscape(archivePath)
 
@@ -155,7 +164,7 @@ object SevenZipService {
         format: String,
         password: String = ""
     ): File {
-        val bin = RootBinaryManager.getBinaryPath()
+        val bin = getBinaryPathOrInit()
         val pwArg = if (password.isNotEmpty()) " -p${shellEscape(password)}" else ""
         val pathArg = shellEscape(archivePath)
         val entryArg = shellEscape(entryPath)
@@ -191,7 +200,7 @@ object SevenZipService {
         format: String,
         password: String = ""
     ): Process {
-        val bin = RootBinaryManager.getBinaryPath()
+        val bin = getBinaryPathOrInit()
         val pwArg = if (password.isNotEmpty()) " -p${shellEscape(password)}" else ""
         val pathArg = shellEscape(archivePath)
         val entryArg = shellEscape(entryPath)
