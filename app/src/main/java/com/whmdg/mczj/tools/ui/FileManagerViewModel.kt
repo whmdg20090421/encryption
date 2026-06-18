@@ -21,6 +21,7 @@ import com.whmdg.mczj.tools.util.FileAccessLevel
 import com.whmdg.mczj.tools.util.FileAccessor
 import com.whmdg.mczj.tools.util.SizeCalcResult
 import com.whmdg.mczj.tools.util.calculateFolderSize
+import com.whmdg.mczj.tools.util.ArchiveThumbnailManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -117,6 +118,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var jxlPackZip by mutableStateOf(false)
         private set
     var pendingExternalEntry by mutableStateOf<FileEntry?>(null)
+    var pendingApkEntry by mutableStateOf<FileEntry?>(null)
 
     // ── 压缩包浏览 ──
     var isInArchive by mutableStateOf(false)
@@ -1350,6 +1352,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun exitArchive() {
         // 关闭 reader 释放句柄
         try { archiveMemFs?.reader?.close() } catch (_: Exception) {}
+        // 清空缩略图缓存
+        ArchiveThumbnailManager.clearCache()
         // 先保存路径用于清理临时文件，再清空状态
         val tempFileHash = archiveFilePath.hashCode().toString().take(16)
         archiveMemFs = null
@@ -1730,11 +1734,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     // ── 文件操作 ──
     fun openFile(context: Context, entry: FileEntry): Screen? {
         DiagnosticLog.log("OpenFile", "请求打开: ${entry.path}")
-        if (entry.name.endsWith(".apk", ignoreCase = true) ||
-            entry.name.endsWith(".apex", ignoreCase = true)
-        ) {
-            DiagnosticLog.log("OpenFile", "拒绝打开 apk/apex: ${entry.name}")
-            Toast.makeText(context, "APK 文件请在应用管理器中安装", Toast.LENGTH_SHORT).show()
+        if (entry.name.endsWith(".apk", ignoreCase = true)) {
+            DiagnosticLog.log("OpenFile", "APK 文件，弹出信息弹窗: ${entry.name}")
+            pendingApkEntry = entry
+            return null
+        }
+        if (entry.name.endsWith(".apex", ignoreCase = true)) {
+            DiagnosticLog.log("OpenFile", "拒绝打开 apex: ${entry.name}")
+            Toast.makeText(context, "APEX 文件无法直接打开", Toast.LENGTH_SHORT).show()
             return null
         }
         val textExtensions = setOf(

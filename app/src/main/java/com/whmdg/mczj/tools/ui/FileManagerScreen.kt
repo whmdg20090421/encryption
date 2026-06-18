@@ -10,7 +10,9 @@ import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.util.FormatUtils
 import com.whmdg.mczj.tools.util.AppIconHelper
+import com.whmdg.mczj.tools.util.ArchiveThumbnailManager
 import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
@@ -57,6 +59,7 @@ import com.whmdg.mczj.tools.ui.components.extractExtension
 import com.whmdg.mczj.tools.ui.components.getFileTypeDrawableRes
 import com.whmdg.mczj.tools.ui.components.FileCategory
 import com.whmdg.mczj.tools.ui.components.FileTypeIcon
+import com.whmdg.mczj.tools.ui.components.ApkInfoDialog
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -240,6 +243,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var showPermissionEditor by remember { mutableStateOf(false) }
     var permissionEditorData by remember { mutableStateOf<FilePropertyData?>(null) }
     var permissionEditorEntry by remember { mutableStateOf<FileEntry?>(null) }
+    // APK 信息弹窗
+    var showApkDialog by remember { mutableStateOf(false) }
+    var apkDialogPath by remember { mutableStateOf("") }
     // 移动/复制（功能待实现，保留 UI 占位）
 
     // 文件操作进度（从 ViewModel StateFlow 收集）
@@ -1006,6 +1012,21 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 },
                                 archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null,
+                                onVisibleRangeChanged = if (vm.isInArchive) { first, last ->
+                                    ArchiveThumbnailManager.preloadRange(
+                                        scope = coroutineScope,
+                                        archivePath = vm.archiveFilePath,
+                                        format = vm.archiveFormat,
+                                        password = vm.archivePassword,
+                                        memFs = vm.archiveMemFs!!,
+                                        entries = vm.leftEntries,
+                                        startIndex = first - 5,
+                                        endIndex = last + 5
+                                    )
+                                } else null,
+                                thumbnailLoader = if (vm.isInArchive) { entry ->
+                                    ArchiveThumbnailManager.getThumbnail(vm.archiveFilePath, entry.path)
+                                } else null,
                                 selectedPaths = leftSelectedPaths,
                                 onSwipeSelect = { entry, index ->
                                     vm.focusedPanel = FocusedPanel.LEFT
@@ -1137,6 +1158,21 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 },
                                 archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null,
+                                onVisibleRangeChanged = if (vm.isInArchive) { first, last ->
+                                    ArchiveThumbnailManager.preloadRange(
+                                        scope = coroutineScope,
+                                        archivePath = vm.archiveFilePath,
+                                        format = vm.archiveFormat,
+                                        password = vm.archivePassword,
+                                        memFs = vm.archiveMemFs!!,
+                                        entries = vm.rightEntries,
+                                        startIndex = first - 5,
+                                        endIndex = last + 5
+                                    )
+                                } else null,
+                                thumbnailLoader = if (vm.isInArchive) { entry ->
+                                    ArchiveThumbnailManager.getThumbnail(vm.archiveFilePath, entry.path)
+                                } else null,
                                 selectedPaths = rightSelectedPaths,
                                 onSwipeSelect = { entry, index ->
                                     vm.focusedPanel = FocusedPanel.RIGHT
@@ -2327,6 +2363,34 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             dismissButton = {
                 TextButton(onClick = { vm.pendingExternalEntry = null }) {
                     Text("取消")
+                }
+            }
+        )
+    }
+
+    // ── APK 信息弹窗 ──
+    vm.pendingApkEntry?.let { entry ->
+        ApkInfoDialog(
+            apkPath = entry.path,
+            onDismiss = { vm.pendingApkEntry = null },
+            onViewAsArchive = {
+                val apkEntry = vm.pendingApkEntry ?: return@ApkInfoDialog
+                vm.pendingApkEntry = null
+                // 保存当前滚动位置
+                vm.saveScrollPosition(
+                    leftListState.firstVisibleItemIndex,
+                    leftListState.firstVisibleItemScrollOffset,
+                    rightListState.firstVisibleItemIndex,
+                    rightListState.firstVisibleItemScrollOffset
+                )
+                // 以 ZIP 形式打开 APK
+                coroutineScope.launch(Dispatchers.IO) {
+                    val error = vm.openArchive(apkEntry, "")
+                    withContext(Dispatchers.Main) {
+                        if (error != null) {
+                            Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 }
             }
         )
@@ -4502,7 +4566,9 @@ private fun FileBrowserPanel(
     selectedPaths: Set<String> = emptySet(),
     onSwipeSelect: (FileEntry, Int) -> Unit = { _, _ -> },
     onToggleSelect: (FileEntry) -> Unit = {},
-    extFlagsMap: Map<String, String> = emptyMap()
+    extFlagsMap: Map<String, String> = emptyMap(),
+    onVisibleRangeChanged: ((firstVisible: Int, lastVisible: Int) -> Unit)? = null,
+    thumbnailLoader: ((FileEntry) -> ImageBitmap?)? = null
 ) {
     val isMultiSelectMode = selectedPaths.isNotEmpty()
     Surface(
@@ -4532,6 +4598,20 @@ private fun FileBrowserPanel(
                 )
             }
         } else {
+            // 压缩包缩略图预加载：滚动停止时触发
+            if (onVisibleRangeChanged != null) {
+                LaunchedEffect(lazyListState.isScrollInProgress) {
+                    if (!lazyListState.isScrollInProgress) {
+                        val visible = lazyListState.layoutInfo.visibleItemsInfo
+                        if (visible.isNotEmpty()) {
+                            val first = visible.first().index
+                            val last = visible.last().index
+                            onVisibleRangeChanged(first, last)
+                        }
+                    }
+                }
+            }
+
             LazyColumn(
                 state = lazyListState,
                 modifier = Modifier.fillMaxSize(),
@@ -4563,6 +4643,12 @@ private fun FileBrowserPanel(
                     } else if (archiveSizeProvider != null) {
                         archiveSizeProvider(entry)
                     } else ""
+                    // 观察缓存版本变化以触发 recomposition
+                    val thumb = if (thumbnailLoader != null) {
+                        // 读取 cacheVersion 以建立观察关系，当缩略图加载完成时触发 recomposition
+                        ArchiveThumbnailManager.cacheVersion
+                        thumbnailLoader.invoke(entry)
+                    } else null
                     FileEntryRow(
                         entry = entry,
                         isFocused = isFocused,
@@ -4585,7 +4671,8 @@ private fun FileBrowserPanel(
                         },
                         onSwipe = { onSwipeSelect(entry, entryIndex) },
                         folderSize = dirSize,
-                        extFlags = extFlagsMap[entry.name] ?: ""
+                        extFlags = extFlagsMap[entry.name] ?: "",
+                        thumbnail = thumb
                     )
                 }
             }
@@ -4602,7 +4689,8 @@ private fun FileEntryRow(
     onLongClick: () -> Unit,
     onSwipe: (Float) -> Unit = {},
     folderSize: String = "",
-    extFlags: String = ""
+    extFlags: String = "",
+    thumbnail: ImageBitmap? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -4658,17 +4746,29 @@ private fun FileEntryRow(
                         && entry.name != "返回上一级"
 
                     if (isImageFile) {
-                        val imagePlaceholder = getFileTypeDrawableRes(category)
-                        AsyncImage(
-                            model = entry.path,
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(RoundedCornerShape(4.dp)),
-                            contentScale = ContentScale.Crop,
-                            placeholder = imagePlaceholder?.let { painterResource(it) },
-                            error = imagePlaceholder?.let { painterResource(it) }
-                        )
+                        if (thumbnail != null) {
+                            // 压缩包内图片：使用缓存的缩略图
+                            Image(
+                                painter = BitmapPainter(thumbnail),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(4.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            val imagePlaceholder = getFileTypeDrawableRes(category)
+                            AsyncImage(
+                                model = entry.path,
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(4.dp)),
+                                contentScale = ContentScale.Crop,
+                                placeholder = imagePlaceholder?.let { painterResource(it) },
+                                error = imagePlaceholder?.let { painterResource(it) }
+                            )
+                        }
                     } else {
                         val fileDrawableRes = if (!entry.isDirectory && entry.name != "返回上一级") {
                             getFileTypeDrawableRes(category)
@@ -4678,7 +4778,7 @@ private fun FileEntryRow(
                             Icon(
                                 painter = painterResource(fileDrawableRes),
                                 contentDescription = null,
-                                modifier = Modifier.size(28.dp),
+                                modifier = Modifier.size(36.dp),
                                 tint = Color.Unspecified
                             )
                         } else if (!entry.isDirectory && entry.name != "返回上一级"
@@ -4686,7 +4786,7 @@ private fun FileEntryRow(
                             FileTypeIcon(
                                 filename = entry.name,
                                 filePath = entry.path,
-                                iconSize = 28.dp
+                                iconSize = 36.dp
                             )
                         } else {
                             val appIconBitmap = if (entry.isDirectory && entry.name != "返回上一级") {
@@ -4700,7 +4800,7 @@ private fun FileEntryRow(
                                 Image(
                                     painter = BitmapPainter(appIconBitmap),
                                     contentDescription = null,
-                                    modifier = Modifier.size(28.dp),
+                                    modifier = Modifier.size(36.dp),
                                 )
                             } else {
                                 Icon(
@@ -4710,7 +4810,7 @@ private fun FileEntryRow(
                                         else -> Icons.Default.InsertDriveFile
                                     },
                                     contentDescription = null,
-                                    modifier = Modifier.size(28.dp),
+                                    modifier = Modifier.size(36.dp),
                                     tint = if (isFocused) MaterialTheme.colorScheme.primary
                                            else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
