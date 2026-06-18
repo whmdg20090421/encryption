@@ -54,12 +54,33 @@ object SevenZipService {
     /** 直接通过 su -c 执行命令，返回 (stdout, stderr, exitCode) */
     private fun execSu(command: String): Triple<String, String, Int> {
         val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
-        // 必须在不同线程并发读取 stdout/stderr，否则 pipe 缓冲区满时会死锁
+        // 并发读取 stdout/stderr，避免 pipe 缓冲区满时死锁
         var stderr = ""
         val stderrThread = Thread { stderr = process.errorStream.bufferedReader().readText() }
         stderrThread.start()
         val stdout = process.inputStream.bufferedReader().readText()
         stderrThread.join()
+        val exitCode = process.waitFor()
+        return Triple(stdout, stderr, exitCode)
+    }
+
+    /** 带超时的命令执行（30 秒），超时则 kill 进程并抛异常 */
+    private fun execWithTimeout(command: String, timeoutMs: Long = 30_000): Triple<String, String, Int> {
+        val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
+        var stdout = ""
+        var stderr = ""
+        val stdoutThread = Thread { stdout = process.inputStream.bufferedReader().readText() }
+        val stderrThread = Thread { stderr = process.errorStream.bufferedReader().readText() }
+        stdoutThread.start()
+        stderrThread.start()
+        stdoutThread.join(timeoutMs)
+        stderrThread.join(1000)
+        if (stdoutThread.isAlive || stderrThread.isAlive) {
+            process.destroyForcibly()
+            stdoutThread.join(1000)
+            stderrThread.join(1000)
+            throw SevenZipError.Other("命令超时 (${timeoutMs}ms): $command")
+        }
         val exitCode = process.waitFor()
         return Triple(stdout, stderr, exitCode)
     }
@@ -110,7 +131,7 @@ object SevenZipService {
     /** 简单格式（zip/7z/rar/tar）直接列出 */
     private fun listSimpleArchive(bin: String, pathArg: String, pwArg: String): List<ArchiveEntry> {
         val cmd = "$bin l -ba$pwArg $pathArg"
-        val (stdout, stderr, exitCode) = exec(cmd)
+        val (stdout, stderr, exitCode) = execWithTimeout(cmd)
         if (exitCode != 0) throw classifyError(stderr, exitCode)
         return parseListOutput(stdout)
     }
@@ -120,13 +141,11 @@ object SevenZipService {
         val tmpTar = File(context.cacheDir, "7za_inner_${pathArg.hashCode()}.tar")
         val tmpTarArg = shellEscape(tmpTar.absolutePath)
         try {
-            // 步骤 1：解压外层到临时 tar
             val cmd1 = "$bin e -ba -so$pwArg $pathArg > $tmpTarArg"
-            val (_, stderr1, code1) = exec(cmd1)
+            val (_, stderr1, code1) = execWithTimeout(cmd1)
             if (code1 != 0) throw classifyError(stderr1, code1)
-            // 步骤 2：列出 tar 内容
             val cmd2 = "$bin l -ba $tmpTarArg"
-            val (stdout2, stderr2, code2) = exec(cmd2)
+            val (stdout2, stderr2, code2) = execWithTimeout(cmd2)
             if (code2 != 0) throw classifyError(stderr2, code2)
             return parseListOutput(stdout2)
         } finally {
