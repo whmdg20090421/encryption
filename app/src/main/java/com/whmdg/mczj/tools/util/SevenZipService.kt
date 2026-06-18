@@ -41,7 +41,10 @@ object SevenZipService {
         if (RootBinaryManager.isReady()) return RootBinaryManager.getBinaryPath()
         // 懒初始化：应用启动时可能 root 尚未就绪
         val ctx = com.whmdg.mczj.tools.ToolsApp.instance
-        RootBinaryManager.init(ctx)
+        val path = RootBinaryManager.init(ctx)
+        if (path == null) {
+            DiagnosticLog.log("7za", "懒初始化失败: isRoot=${SpecialPermissionVerifier.isRootAvailable()} isShizuku=${SpecialPermissionVerifier.isShizukuAuthorized(ctx)}")
+        }
         return RootBinaryManager.getBinaryPath()
     }
 
