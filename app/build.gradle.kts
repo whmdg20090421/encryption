@@ -113,7 +113,7 @@ dependencies {
     implementation(platform(libs.sora.editor.bom))
     implementation(libs.sora.editor)
     implementation(libs.sora.language.java)
-    implementation(libs.photoView)
+    implementation(libs.telephoto.zoomable)
     implementation(libs.coil.compose)
     implementation(libs.libsu.core)
     implementation(libs.androidx.appcompat)

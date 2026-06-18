@@ -45,6 +45,9 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
                     .maxSizeBytes(100L * 1024 * 1024) // 100MB
                     .build()
             }
+            .components {
+                add(com.whmdg.mczj.tools.util.JxlDecoderFactory())
+            }
             .build()
     }
 

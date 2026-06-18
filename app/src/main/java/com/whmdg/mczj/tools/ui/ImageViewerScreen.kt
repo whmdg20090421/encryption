@@ -1,8 +1,5 @@
 package com.whmdg.mczj.tools.ui
 
-import android.net.Uri
-import android.view.GestureDetector
-import android.view.MotionEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,9 +14,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.viewinterop.AndroidView
-import com.github.chrisbanes.photoview.PhotoView
-import com.whmdg.mczj.tools.util.DiagnosticLog
+import androidx.compose.ui.layout.ContentScale
+import androidx.core.net.toUri
+import me.saket.telephoto.zoomable.DoubleClickToZoomListener
+import me.saket.telephoto.zoomable.rememberZoomableState
+import me.saket.telephoto.zoomable.SnapSpec
+import me.saket.telephoto.zoomable.image.coil3.ZoomableAsyncImage
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -68,51 +68,25 @@ fun ImageViewerScreen(
         ) {
             HorizontalPager(
                 state = pagerState,
-                userScrollEnabled = true,
                 modifier = Modifier.fillMaxSize()
             ) { page ->
-                val file = File(paths[page])
-                AndroidView(
-                    factory = { ctx ->
-                        PhotoView(ctx).apply {
-                            if (file.extension.equals("jxl", ignoreCase = true)) {
-                                try {
-                                    val bytes = file.readBytes()
-                                    val bitmap = com.awxkee.jxlcoder.JxlCoder.decode(bytes)
-                                    setImageBitmap(bitmap)
-                                } catch (e: Exception) {
-                                    DiagnosticLog.log("ImageViewer", "JXL 解码失败: ${e.message}")
-                                }
-                            } else {
-                                setImageURI(Uri.fromFile(file))
-                            }
-                            maximumScale = 5f
-                            minimumScale = 1f
+                val zoomableState = rememberZoomableState()
 
-                            // 双击缩放：仅 1x ↔ 2x，不放大到 5x
-                            setOnDoubleTapListener(object : GestureDetector.SimpleOnGestureListener() {
-                                override fun onDoubleTap(e: MotionEvent): Boolean {
-                                    val targetScale = if (scale > 1.5f) 1f else 2f
-                                    setScale(targetScale, e.x, e.y, true)
-                                    return true
-                                }
-                            })
+                // 翻页后重置缩放状态，防止离屏页面保留缩放
+                LaunchedEffect(pagerState.settledPage) {
+                    if (pagerState.settledPage != page) {
+                        zoomableState.resetZoom(animationSpec = SnapSpec())
+                    }
+                }
 
-                            // 边缘滑动翻页：放大状态下，滑到图片边缘时允许 pager 翻页
-                            setOnMatrixChangeListener {
-                                val displayRect = displayRect ?: return@setOnMatrixChangeListener
-                                val viewWidth = width.toFloat()
-                                if (displayRect.width() > viewWidth) {
-                                    val atLeftEdge = displayRect.left >= -1f
-                                    val atRightEdge = displayRect.right <= viewWidth + 1f
-                                    setAllowParentInterceptOnEdge(atLeftEdge || atRightEdge)
-                                } else {
-                                    setAllowParentInterceptOnEdge(true)
-                                }
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
+                ZoomableAsyncImage(
+                    model = File(paths[page]).toUri(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    zoomableState = zoomableState,
+                    contentScale = ContentScale.Fit,
+                    // 双击在 1x ↔ 2x 之间切换
+                    onDoubleClick = DoubleClickToZoomListener.cycle(maxZoomFactor = 2f)
                 )
             }
 
