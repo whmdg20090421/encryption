@@ -7,10 +7,10 @@ import android.provider.Settings
 import android.widget.Toast
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
-import com.whmdg.mczj.tools.util.CompressService
+
 import com.whmdg.mczj.tools.util.FormatUtils
 import com.whmdg.mczj.tools.util.AppIconHelper
-import com.whmdg.mczj.tools.util.ArchiveThumbnailManager
+
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
@@ -257,34 +257,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     // ── 外部打开警告 ──
     var forceOpenError by remember { mutableStateOf<String?>(null) }
 
-    // ── 压缩相关状态 ──
-    var showCompressDialog by remember { mutableStateOf(false) }
-    var compressEntry by remember { mutableStateOf<FileEntry?>(null) }
-    var showCompressProgress by remember { mutableStateOf(false) }
-    var compressProgress by remember { mutableStateOf(0f) }
-    var compressCurrentFile by remember { mutableStateOf(0) }
-    var compressTotalFiles by remember { mutableStateOf(0) }
-    var compressBytesProcessed by remember { mutableStateOf(0L) }
-    var compressTotalBytes by remember { mutableStateOf(0L) }
-    var compressOutputToOtherPanel by remember { mutableStateOf(false) }
-    var compressUseAes by remember { mutableStateOf(true) }
-    var compressOutputPath by remember { mutableStateOf("") }
-
-    // ── 压缩包浏览状态 ──
-    var showArchivePasswordDialog by remember { mutableStateOf(false) }
-    var archivePasswordInput by remember { mutableStateOf("") }
-    var archivePendingEntry by remember { mutableStateOf<FileEntry?>(null) }
-    var showArchiveOpening by remember { mutableStateOf(false) }
-    var archiveOpenError by remember { mutableStateOf<String?>(null) }
-
-    // ── 解压对话框状态 ──
-    var showExtractDialog by remember { mutableStateOf(false) }
-    var extractPendingEntry by remember { mutableStateOf<FileEntry?>(null) }
-    var extractToSubfolder by remember { mutableStateOf(true) } // true=解压到同名文件夹, false=解压到当前目录
-    var extractPath by remember { mutableStateOf("") }
-    var extractUseOtherPanel by remember { mutableStateOf(false) } // 基于另一窗口路径
-    var extractAfterPasswordOutputDir by remember { mutableStateOf("") } // 加密解压时暂存输出目录
-
     // ── 快捷访问 ──
     val quickAccessPrefs = context.getSharedPreferences("quick_access_prefs", Context.MODE_PRIVATE)
     val qaJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
@@ -393,15 +365,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // 返回手势：WebDAV → 回上一级或退出，压缩包内 → 回上一级或退出压缩包，回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
+    // 返回手势：WebDAV → 回上一级或退出，回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
     BackHandler {
         if (vm.isWebDavMode) {
             if (!vm.webDavGoBack()) {
                 vm.exitWebDavMode()
-            }
-        } else if (vm.isInArchive) {
-            if (!vm.goUpInArchive()) {
-                vm.exitArchive()
             }
         } else if (vm.isInRecycleBin) {
             if (!vm.goUpInRecycleBin()) {
@@ -423,11 +391,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 TopAppBar(
                     title = {
                         val titleText = when {
-                            vm.isInArchive -> {
-                                val relPath = vm.archivePath.removePrefix("/")
-                                if (relPath.isEmpty()) vm.archiveFileName
-                                else "${vm.archiveFileName}/$relPath"
-                            }
                             vm.isInRecycleBin -> "回收站"
                             else -> currentPath
                         }
@@ -660,9 +623,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             modifier = Modifier.weight(1f),
                             contentAlignment = Alignment.Center
                         ) {
-                            val canGoUp = if (vm.isInArchive) {
-                                !vm.isAtArchiveRoot
-                            } else if (vm.isInRecycleBin) {
+                            val canGoUp = if (vm.isInRecycleBin) {
                                 !vm.isAtRecycleBinRoot
                             } else {
                                 val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
@@ -675,8 +636,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
                             IconButton(
                                 onClick = {
-                                    if (vm.isInArchive) vm.goUpInArchive()
-                                    else if (vm.isInRecycleBin) vm.goUpInRecycleBin()
+                                    if (vm.isInRecycleBin) vm.goUpInRecycleBin()
                                     else saveScrollAndGoUp()
                                 },
                                 enabled = canGoUp
@@ -884,9 +844,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     }
                 } else {
                     val leftEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                    val leftParentPath = if (vm.isInArchive) {
-                        if (vm.isAtArchiveRoot) null else "archive_parent"
-                    } else if (vm.isInRecycleBin) {
+                    val leftParentPath = if (vm.isInRecycleBin) {
                         if (vm.isAtRecycleBinRoot) null
                         else java.io.File(vm.recycleBinPath).parentFile?.absolutePath?.let { p ->
                             if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
@@ -898,9 +856,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     } else null
 
                     val rightEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                    val rightParentPath = if (vm.isInArchive) {
-                        if (vm.isAtArchiveRoot) null else "archive_parent"
-                    } else if (vm.isInRecycleBin) {
+                    val rightParentPath = if (vm.isInRecycleBin) {
                         if (vm.isAtRecycleBinRoot) null
                         else java.io.File(vm.recycleBinPath).parentFile?.absolutePath?.let { p ->
                             if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
@@ -921,9 +877,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.LEFT
-                                    if (vm.isInArchive) {
-                                        vm.navigateInArchive(entry)
-                                    } else if (vm.isInRecycleBin) {
+                                    if (vm.isInRecycleBin) {
                                         vm.navigateInRecycleBin(entry)
                                     } else {
                                         DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
@@ -946,42 +900,17 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
                                     DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                     vm.focusedPanel = FocusedPanel.LEFT
-                                    if (vm.isInArchive) {
-                                        val screen = vm.openFileInArchive(context, entry)
-                                        if (screen != null) onNavigate(screen)
-                                    } else {
-                                        val archiveFormat = CompressService.detectFormat(entry.name)
-                                        if (archiveFormat != null) {
-                                            archivePendingEntry = entry
-                                            if (CompressService.isEncrypted(entry.path, archiveFormat)) {
-                                                archivePasswordInput = ""
-                                                showArchivePasswordDialog = true
-                                            } else {
-                                                showArchiveOpening = true
-                                                coroutineScope.launch(Dispatchers.IO) {
-                                                    val error = vm.openArchive(entry, "")
-                                                    withContext(Dispatchers.Main) {
-                                                        showArchiveOpening = false
-                                                        if (error != null) {
-                                                            Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            val screen = vm.openFile(context, entry)
-                                            if (screen != null) {
-                                                vm.saveScrollPosition(
-                                                    leftListState.firstVisibleItemIndex,
-                                                    leftListState.firstVisibleItemScrollOffset,
-                                                    rightListState.firstVisibleItemIndex,
-                                                    rightListState.firstVisibleItemScrollOffset
-                                                )
-                                                onNavigate(screen)
-                                            }
-                                            vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
-                                        }
+                                    val screen = vm.openFile(context, entry)
+                                    if (screen != null) {
+                                        vm.saveScrollPosition(
+                                            leftListState.firstVisibleItemIndex,
+                                            leftListState.firstVisibleItemScrollOffset,
+                                            rightListState.firstVisibleItemIndex,
+                                            rightListState.firstVisibleItemScrollOffset
+                                        )
+                                        onNavigate(screen)
                                     }
+                                    vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
                                 },
                                 onLongClick = { entry ->
                                     selectedEntry = entry
@@ -992,10 +921,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 parentPath = leftParentPath,
                                 lazyListState = leftListState,
                                 onNavigateUp = {
-                                    if (vm.isInArchive) {
-                                        vm.focusedPanel = FocusedPanel.LEFT
-                                        vm.goUpInArchive()
-                                    } else if (vm.isInRecycleBin) {
+                                    if (vm.isInRecycleBin) {
                                         vm.focusedPanel = FocusedPanel.LEFT
                                         vm.goUpInRecycleBin()
                                     } else if (leftParentPath != null) {
@@ -1011,22 +937,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
                                     }
                                 },
-                                archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null,
-                                onVisibleRangeChanged = if (vm.isInArchive) { first, last ->
-                                    ArchiveThumbnailManager.preloadRange(
-                                        scope = coroutineScope,
-                                        archivePath = vm.archiveFilePath,
-                                        format = vm.archiveFormat,
-                                        password = vm.archivePassword,
-                                        memFs = vm.archiveMemFs!!,
-                                        entries = vm.leftEntries,
-                                        startIndex = first - 5,
-                                        endIndex = last + 5
-                                    )
-                                } else null,
-                                thumbnailLoader = if (vm.isInArchive) { entry ->
-                                    ArchiveThumbnailManager.getThumbnail(vm.archiveFilePath, entry.path)
-                                } else null,
+                                archiveSizeProvider = null,
+                                onVisibleRangeChanged = null,
+                                thumbnailLoader = null,
                                 selectedPaths = leftSelectedPaths,
                                 onSwipeSelect = { entry, index ->
                                     vm.focusedPanel = FocusedPanel.LEFT
@@ -1071,9 +984,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.RIGHT
-                                    if (vm.isInArchive) {
-                                        vm.navigateInArchive(entry)
-                                    } else if (vm.isInRecycleBin) {
+                                    if (vm.isInRecycleBin) {
                                         vm.navigateInRecycleBin(entry)
                                     } else {
                                         DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
@@ -1092,42 +1003,17 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
                                     DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                     vm.focusedPanel = FocusedPanel.RIGHT
-                                    if (vm.isInArchive) {
-                                        val screen = vm.openFileInArchive(context, entry)
-                                        if (screen != null) onNavigate(screen)
-                                    } else {
-                                        val archiveFormat = CompressService.detectFormat(entry.name)
-                                        if (archiveFormat != null) {
-                                            archivePendingEntry = entry
-                                            if (CompressService.isEncrypted(entry.path, archiveFormat)) {
-                                                archivePasswordInput = ""
-                                                showArchivePasswordDialog = true
-                                            } else {
-                                                showArchiveOpening = true
-                                                coroutineScope.launch(Dispatchers.IO) {
-                                                    val error = vm.openArchive(entry, "")
-                                                    withContext(Dispatchers.Main) {
-                                                        showArchiveOpening = false
-                                                        if (error != null) {
-                                                            Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            val screen = vm.openFile(context, entry)
-                                            if (screen != null) {
-                                                vm.saveScrollPosition(
-                                                    leftListState.firstVisibleItemIndex,
-                                                    leftListState.firstVisibleItemScrollOffset,
-                                                    rightListState.firstVisibleItemIndex,
-                                                    rightListState.firstVisibleItemScrollOffset
-                                                )
-                                                onNavigate(screen)
-                                            }
-                                            vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
-                                        }
+                                    val screen = vm.openFile(context, entry)
+                                    if (screen != null) {
+                                        vm.saveScrollPosition(
+                                            leftListState.firstVisibleItemIndex,
+                                            leftListState.firstVisibleItemScrollOffset,
+                                            rightListState.firstVisibleItemIndex,
+                                            rightListState.firstVisibleItemScrollOffset
+                                        )
+                                        onNavigate(screen)
                                     }
+                                    vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
                                 },
                                 onLongClick = { entry ->
                                     selectedEntry = entry
@@ -1138,10 +1024,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 parentPath = rightParentPath,
                                 lazyListState = rightListState,
                                 onNavigateUp = {
-                                    if (vm.isInArchive) {
-                                        vm.focusedPanel = FocusedPanel.RIGHT
-                                        vm.goUpInArchive()
-                                    } else if (vm.isInRecycleBin) {
+                                    if (vm.isInRecycleBin) {
                                         vm.focusedPanel = FocusedPanel.RIGHT
                                         vm.goUpInRecycleBin()
                                     } else if (rightParentPath != null) {
@@ -1157,22 +1040,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
                                     }
                                 },
-                                archiveSizeProvider = if (vm.isInArchive) { entry -> vm.getArchiveSizeText(entry) } else null,
-                                onVisibleRangeChanged = if (vm.isInArchive) { first, last ->
-                                    ArchiveThumbnailManager.preloadRange(
-                                        scope = coroutineScope,
-                                        archivePath = vm.archiveFilePath,
-                                        format = vm.archiveFormat,
-                                        password = vm.archivePassword,
-                                        memFs = vm.archiveMemFs!!,
-                                        entries = vm.rightEntries,
-                                        startIndex = first - 5,
-                                        endIndex = last + 5
-                                    )
-                                } else null,
-                                thumbnailLoader = if (vm.isInArchive) { entry ->
-                                    ArchiveThumbnailManager.getThumbnail(vm.archiveFilePath, entry.path)
-                                } else null,
+                                archiveSizeProvider = null,
+                                onVisibleRangeChanged = null,
+                                thumbnailLoader = null,
                                 selectedPaths = rightSelectedPaths,
                                 onSwipeSelect = { entry, index ->
                                     vm.focusedPanel = FocusedPanel.RIGHT
@@ -1946,36 +1816,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         }
                                     }
                                 }
-                            } else if (vm.isInArchive) {
-                                // ── 压缩包模式：仅显示"关于" ──
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .clickable {
-                                                val entry = selectedEntry ?: return@clickable
-                                                propertyData = vm.getPropertyData(entry)
-                                                propertyEntry = entry
-                                                showPropertyDialog = true
-                                                selectedEntry = null
-                                            }
-                                            .padding(vertical = 16.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.Info,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(Modifier.width(4.dp))
-                                            Text("关于", style = MaterialTheme.typography.bodyLarge)
-                                        }
-                                    }
-                                }
                             } else {
                             val disabledColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                             val disabledIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
@@ -2192,12 +2032,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 }
                             }
-                            // ── 第四行：压缩 / 解压 ──
-                            val allArchives = if (isMultiSelect) {
-                                selectedEntries.all { CompressService.detectFormat(it.name) != null }
-                            } else {
-                                CompressService.detectFormat(selectedEntry?.name ?: "") != null
-                            }
+                            // ── 第四行：压缩 / 解压（占位） ──
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
@@ -2207,8 +2042,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable {
-                                            compressEntry = selectedEntry
-                                            showCompressDialog = true
+                                            Toast.makeText(context, "功能开发中", Toast.LENGTH_SHORT).show()
                                             selectedEntry = null
                                         }
                                         .padding(vertical = 16.dp),
@@ -2227,17 +2061,12 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 }
                                 VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
-                                // 右列：解压（仅当选中项全部为压缩包时可用）
+                                // 右列：解压
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clickable(enabled = allArchives) {
-                                            val entry = selectedEntry ?: return@clickable
-                                            extractPendingEntry = entry
-                                            extractPath = entry.path.substringBeforeLast('/')
-                                            extractToSubfolder = true
-                                            extractUseOtherPanel = false
-                                            showExtractDialog = true
+                                        .clickable {
+                                            Toast.makeText(context, "功能开发中", Toast.LENGTH_SHORT).show()
                                             selectedEntry = null
                                         }
                                         .padding(vertical = 16.dp),
@@ -2245,13 +2074,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 ) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("解压", style = MaterialTheme.typography.bodyLarge, color = if (allArchives) Color.Unspecified else disabledColor)
-                                            Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (allArchives) MaterialTheme.colorScheme.onSurface else disabledIconColor)
+                                            Text("解压", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp))
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (allArchives) MaterialTheme.colorScheme.onSurface else disabledIconColor)
-                                            Text("解压", style = MaterialTheme.typography.bodyLarge, color = if (allArchives) Color.Unspecified else disabledColor)
+                                            Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Text("解压", style = MaterialTheme.typography.bodyLarge)
                                         }
                                     }
                                 }
@@ -2372,27 +2201,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     vm.pendingApkEntry?.let { entry ->
         ApkInfoDialog(
             apkPath = entry.path,
-            onDismiss = { vm.pendingApkEntry = null },
-            onViewAsArchive = {
-                val apkEntry = vm.pendingApkEntry ?: return@ApkInfoDialog
-                vm.pendingApkEntry = null
-                // 保存当前滚动位置
-                vm.saveScrollPosition(
-                    leftListState.firstVisibleItemIndex,
-                    leftListState.firstVisibleItemScrollOffset,
-                    rightListState.firstVisibleItemIndex,
-                    rightListState.firstVisibleItemScrollOffset
-                )
-                // 以 ZIP 形式打开 APK
-                coroutineScope.launch(Dispatchers.IO) {
-                    val error = vm.openArchive(apkEntry, "")
-                    withContext(Dispatchers.Main) {
-                        if (error != null) {
-                            Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-            }
+            onDismiss = { vm.pendingApkEntry = null }
         )
     }
 
@@ -3461,925 +3270,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // ── 压缩弹窗面板 ──
-    if (showCompressDialog && compressEntry != null) {
-        val entry = compressEntry!!
-        val isDark = isSystemInDarkTheme()
-        val formats = listOf("zip", "7z", "tar", "tar.gz", "tar.bz2", "tar.xz", "jxl")
-        // 格式显示名（带标注）
-        val formatLabels = mapOf(
-            "jxl" to "jxl (图片)"
-        )
-        val suffixMap = mapOf(
-            "zip" to ".zip", "7z" to ".7z", "tar" to ".tar",
-            "tar.gz" to ".tar.gz", "tar.bz2" to ".tar.bz2", "tar.xz" to ".tar.xz",
-            "jxl" to ".jxl"
-        )
-
-        var selectedFormat by remember { mutableStateOf("zip") }
-        var compressLevel by remember { mutableStateOf(5) }
-        var compressPassword by remember { mutableStateOf("") }
-        var passwordVisible by remember { mutableStateOf(false) }
-        var showFormatDropdown by remember { mutableStateOf(false) }
-        var showLevelDropdown by remember { mutableStateOf(false) }
-        var fileName by remember { mutableStateOf(entry.name + ".zip") }
-
-        // 各格式实际支持的压缩等级范围
-        val levelRange = when (selectedFormat) {
-            "zip" -> 0..9
-            "7z" -> 0..9
-            "tar" -> null
-            "tar.gz" -> 0..9
-            "tar.bz2" -> 1..9   // BZip2 blockSize 参数，最小为 1
-            "tar.xz" -> 0..9
-            "jxl" -> 1..10      // JPEG XL Effort（1=最快，10=最大压缩比）
-            else -> 0..9
-        }
-        val defaultLevel = when (selectedFormat) {
-            "jxl" -> 7  // SQUIRREL
-            else -> 5
-        }
-
-        // 格式切换时更新后缀和压缩级别
-        LaunchedEffect(selectedFormat) {
-            val baseName = entry.name.substringBeforeLast(".")
-            fileName = if (selectedFormat == "jxl") {
-                baseName + if (vm.jxlPackZip) ".jxl.zip" else ".jxl"
-            } else {
-                baseName + (suffixMap[selectedFormat] ?: ".zip")
-            }
-            compressLevel = defaultLevel
-        }
-
-        // JXL 打包开关切换时更新后缀
-        LaunchedEffect(vm.jxlPackZip) {
-            if (selectedFormat == "jxl") {
-                val baseName = entry.name.substringBeforeLast(".")
-                fileName = baseName + if (vm.jxlPackZip) ".jxl.zip" else ".jxl"
-            }
-        }
-
-        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(0.85f),
-                    shape = RoundedCornerShape(24.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        // 标题
-                        Text(
-                            text = "创建压缩文件",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-
-                        // 文件名区域
-                        Column {
-                            Text(
-                                text = "文件名",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            TextField(
-                                value = fileName,
-                                onValueChange = { fileName = it },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = TextFieldDefaults.colors(
-                                    focusedContainerColor = Color.Transparent,
-                                    unfocusedContainerColor = Color.Transparent,
-                                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
-                                    unfocusedIndicatorColor = MaterialTheme.colorScheme.outline
-                                )
-                            )
-                        }
-
-                        // 并排双选项栏：格式 + 压缩级别
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            // 左列：格式
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "格式",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Box {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable { showFormatDropdown = true }
-                                            .background(
-                                                MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.3f),
-                                                RoundedCornerShape(8.dp)
-                                            )
-                                            .padding(horizontal = 12.dp, vertical = 10.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(formatLabels[selectedFormat] ?: selectedFormat, style = MaterialTheme.typography.bodyLarge)
-                                            Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
-                                        }
-                                    }
-                                    DropdownMenu(
-                                        expanded = showFormatDropdown,
-                                        onDismissRequest = { showFormatDropdown = false }
-                                    ) {
-                                        formats.forEach { format ->
-                                            DropdownMenuItem(
-                                                text = { Text(formatLabels[format] ?: format) },
-                                                onClick = {
-                                                    selectedFormat = format
-                                                    showFormatDropdown = false
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            // 右列：压缩级别（tar 时隐藏）
-                            if (levelRange != null) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "压缩级别 (${levelRange.first}-${levelRange.last})",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Box {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable { showLevelDropdown = true }
-                                                .background(
-                                                    MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.3f),
-                                                    RoundedCornerShape(8.dp)
-                                                )
-                                                .padding(horizontal = 12.dp, vertical = 10.dp)
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text(compressLevel.toString(), style = MaterialTheme.typography.bodyLarge)
-                                                Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
-                                            }
-                                        }
-                                        DropdownMenu(
-                                            expanded = showLevelDropdown,
-                                            onDismissRequest = { showLevelDropdown = false }
-                                        ) {
-                                            levelRange.forEach { level ->
-                                                DropdownMenuItem(
-                                                    text = { Text(level.toString()) },
-                                                    onClick = {
-                                                        compressLevel = level
-                                                        showLevelDropdown = false
-                                                    }
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // JXL 打包成 ZIP 开关
-                        if (selectedFormat == "jxl") {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "打包成 ZIP 压缩包",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Switch(
-                                    checked = vm.jxlPackZip,
-                                    onCheckedChange = { vm.updateJxlPackZip(it) },
-                                    modifier = Modifier.size(32.dp)
-                                )
-                            }
-                        }
-
-                        // 密码输入栏（JXL 不打包时不支持加密）
-                        if (selectedFormat != "jxl" || vm.jxlPackZip) Column {
-                            Text(
-                                text = "密码（不加密请留空）",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            TextField(
-                                value = compressPassword,
-                                onValueChange = { compressPassword = it },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                                colors = TextFieldDefaults.colors(
-                                    focusedContainerColor = Color.Transparent,
-                                    unfocusedContainerColor = Color.Transparent,
-                                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
-                                    unfocusedIndicatorColor = MaterialTheme.colorScheme.outline
-                                ),
-                                trailingIcon = {
-                                    IconButton(onClick = { passwordVisible = !passwordVisible }, modifier = Modifier.size(24.dp)) {
-                                        Icon(
-                                            if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(18.dp),
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            )
-                        }
-
-                        // 输出路径开关
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "其余基于定义窗口路径",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Switch(
-                                checked = compressOutputToOtherPanel,
-                                onCheckedChange = { compressOutputToOtherPanel = it },
-                                modifier = Modifier.size(32.dp)
-                            )
-                        }
-
-                        // ZIP加密方式（仅zip格式时显示）
-                        if (selectedFormat == "zip") {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "加密方式",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    TextButton(
-                                        onClick = { compressUseAes = false },
-                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
-                                    ) {
-                                        Text(
-                                            "ZipCrypto",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = if (!compressUseAes) MaterialTheme.colorScheme.primary
-                                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            textDecoration = if (!compressUseAes) TextDecoration.Underline else null
-                                        )
-                                    }
-                                    TextButton(
-                                        onClick = { compressUseAes = true },
-                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
-                                    ) {
-                                        Text(
-                                            "AES",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = if (compressUseAes) MaterialTheme.colorScheme.primary
-                                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            textDecoration = if (compressUseAes) TextDecoration.Underline else null
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // 底部按钮
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
-                        ) {
-                            TextButton(onClick = {
-                                showCompressDialog = false
-                                compressEntry = null
-                            }) {
-                                Text("取消", color = MaterialTheme.colorScheme.primary)
-                            }
-                            TextButton(onClick = {
-                                showCompressDialog = false
-                                compressCurrentFile = 0
-                                compressTotalFiles = 0
-                                compressProgress = 0f
-                                compressOutputPath = ""
-                                showCompressProgress = true
-
-                                vm.compress(
-                                    entry = entry,
-                                    fileName = fileName,
-                                    format = selectedFormat,
-                                    level = compressLevel,
-                                    password = compressPassword,
-                                    useAes = compressUseAes,
-                                    outputToOtherPanel = compressOutputToOtherPanel,
-                                    jxlPackZip = vm.jxlPackZip,
-                                    onProgress = { current, total, progress, bytesDone, bytesTotal ->
-                                        compressCurrentFile = current
-                                        compressTotalFiles = total
-                                        compressProgress = progress
-                                        compressBytesProcessed = bytesDone
-                                        compressTotalBytes = bytesTotal
-                                    },
-                                    onComplete = { success, outPath, error ->
-                                        compressOutputPath = outPath ?: ""
-                                        showCompressProgress = false
-                                        if (success) {
-                                            Toast.makeText(context, "压缩完成: ${outPath?.substringAfterLast('/')}", Toast.LENGTH_SHORT).show()
-                                        } else if (error != "已取消") {
-                                            Toast.makeText(context, "压缩失败: $error", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                )
-                            }) {
-                                Text("确定", color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ── 压缩进度条面板 ──
-    if (showCompressProgress) {
-        val isDark = isSystemInDarkTheme()
-        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(0.8f),
-                    shape = RoundedCornerShape(24.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        // 标题
-                        Text(
-                            text = "正在压缩...",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-
-                        // 第一行：压缩进度 + 字节大小
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "压缩进度",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = if (compressTotalBytes > 0) "${FormatUtils.formatBytes(compressBytesProcessed)} / ${FormatUtils.formatBytes(compressTotalBytes)}"
-                                       else "$compressCurrentFile/$compressTotalFiles",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-
-                        // 第二行：进度条 + 百分比
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            LinearProgressIndicator(
-                                progress = { compressProgress },
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(
-                                text = "${(compressProgress * 100).toInt()}%",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-
-                        // 取消按钮
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
-                        ) {
-                            TextButton(onClick = {
-                                // 取消压缩任务
-                                vm.compressCancelFlag.set(true)
-                                // 删除残余压缩包
-                                if (compressOutputPath.isNotEmpty()) {
-                                    File(compressOutputPath).delete()
-                                }
-                                showCompressProgress = false
-                                compressProgress = 0f
-                                compressCurrentFile = 0
-                                compressTotalFiles = 0
-                                compressOutputPath = ""
-                            }) {
-                                Text("取消", color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ── 文件操作进度弹窗（旧架构：压缩/解压） ──
-    fileOpProgress?.let { progress ->
-        val isDark = isSystemInDarkTheme()
-        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(0.8f),
-                    shape = RoundedCornerShape(24.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        // 标题（含文件计数）
-                        val titleText = if (progress.fileCount > 0) {
-                            "${progress.phase} ${progress.fileIndex + 1} / ${progress.fileCount}"
-                        } else {
-                            progress.phase
-                        }
-                        Text(
-                            text = titleText,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-
-                        // 当前文件名
-                        if (progress.currentFileName.isNotEmpty()) {
-                            Text(
-                                text = progress.currentFileName,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
-                        }
-
-                        // 大小信息
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "${FormatUtils.formatBytes(progress.currentBytes)} / ${FormatUtils.formatBytes(progress.totalBytes)}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "${(progress.fraction * 100).toInt()}%",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-
-                        // 进度条
-                        LinearProgressIndicator(
-                            progress = { progress.fraction },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-
-                        // 取消按钮
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
-                        ) {
-                            TextButton(onClick = {
-                                vm.fileOpCancelFlag.set(true)
-                            }) {
-                                Text("取消", color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ── 文件操作进度弹窗（新架构：复制/移动/删除） ──
-    fileOpManagerProgress?.let { progress ->
-        val isDark = isSystemInDarkTheme()
-        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(0.8f),
-                    shape = RoundedCornerShape(24.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        val titleText = if (progress.fileCount > 0) {
-                            "${progress.phase} ${progress.fileIndex + 1} / ${progress.fileCount}"
-                        } else {
-                            progress.phase
-                        }
-                        Text(
-                            text = titleText,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-
-                        if (progress.currentFileName.isNotEmpty()) {
-                            Text(
-                                text = progress.currentFileName,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "${FormatUtils.formatBytes(progress.currentBytes)} / ${FormatUtils.formatBytes(progress.totalBytes)}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "${(progress.fraction * 100).toInt()}%",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-
-                        LinearProgressIndicator(
-                            progress = { progress.fraction },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
-                        ) {
-                            TextButton(onClick = {
-                                FileOperationManager.cancelAll()
-                            }) {
-                                Text("取消", color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ── 文件冲突处理弹窗 ──
-    FileConflictDialog()
-
-    // ── 文件错误处理弹窗 ──
-    FileErrorDialog()
-
-    // ── 解压对话框 ──
-    if (showExtractDialog && extractPendingEntry != null) {
-        val entry = extractPendingEntry!!
-        val isDark = isSystemInDarkTheme()
-
-        Dialog(onDismissRequest = {
-            showExtractDialog = false
-            extractPendingEntry = null
-        }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(0.85f),
-                    shape = RoundedCornerShape(24.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        // 标题
-                        Text(
-                            text = "解压",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-
-                        // 单选：解压到当前目录 / 解压到文件夹
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(
-                                selected = !extractToSubfolder,
-                                onClick = { extractToSubfolder = false }
-                            )
-                            Text("解压到当前目录", modifier = Modifier.clickable { extractToSubfolder = false })
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(
-                                selected = extractToSubfolder,
-                                onClick = { extractToSubfolder = true }
-                            )
-                            Text("解压到文件夹...", modifier = Modifier.clickable { extractToSubfolder = true })
-                        }
-
-                        // 路径输入框
-                        OutlinedTextField(
-                            value = extractPath,
-                            onValueChange = { extractPath = it },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            textStyle = MaterialTheme.typography.bodyMedium
-                        )
-
-                        // 基于另一窗口路径
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clickable { extractUseOtherPanel = !extractUseOtherPanel }
-                                .padding(vertical = 2.dp)
-                        ) {
-                            Checkbox(
-                                checked = extractUseOtherPanel,
-                                onCheckedChange = { extractUseOtherPanel = it }
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "基于另一窗口路径",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-
-                        // 底部按钮
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
-                        ) {
-                            TextButton(onClick = {
-                                showExtractDialog = false
-                                extractPendingEntry = null
-                            }) {
-                                Text("关闭", color = MaterialTheme.colorScheme.primary)
-                            }
-                            TextButton(onClick = {
-                                showExtractDialog = false
-                                val basePath = if (extractUseOtherPanel) {
-                                    if (vm.focusedPanel == FocusedPanel.LEFT) vm.rightPath else vm.leftPath
-                                } else {
-                                    extractPath
-                                }
-                                val entryName = entry.name.substringBeforeLast('.')
-                                val outputDir = if (extractToSubfolder) "$basePath/$entryName" else basePath
-                                val extractEntry = entry
-
-                                // 检测是否加密
-                                val format = CompressService.detectFormat(extractEntry.name)
-                                val encrypted = format != null && CompressService.isEncrypted(extractEntry.path, format)
-
-                                fun doExtract() {
-                                    vm.extractArchive(
-                                        outputDir = outputDir,
-                                        extractToSubfolder = extractToSubfolder,
-                                        onProgress = { _, _, _, _ -> },
-                                        onComplete = { success, _, error ->
-                                            if (success) Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
-                                            else if (error != "已取消") Toast.makeText(context, "解压失败: $error", Toast.LENGTH_SHORT).show()
-                                        }
-                                    )
-                                }
-
-                                if (encrypted) {
-                                    // 弹密码框
-                                    archivePendingEntry = extractEntry
-                                    archivePasswordInput = ""
-                                    extractAfterPasswordOutputDir = outputDir
-                                    showArchivePasswordDialog = true
-                                } else {
-                                    // 无密码：先加载索引再解压
-                                    coroutineScope.launch(Dispatchers.IO) {
-                                        val error = vm.loadArchiveIndex(extractEntry, "")
-                                        withContext(Dispatchers.Main) {
-                                            if (error != null) {
-                                                Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                doExtract()
-                                            }
-                                        }
-                                    }
-                                }
-                                extractPendingEntry = null
-                            }) {
-                                Text("确定", color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ── 压缩包密码输入对话框 ──
-    if (showArchivePasswordDialog && archivePendingEntry != null) {
-        var passwordVisible by remember { mutableStateOf(false) }
-        var verifying by remember { mutableStateOf(false) }
-        var errorMsg by remember { mutableStateOf<String?>(null) }
-
-        AlertDialog(
-            onDismissRequest = {
-                showArchivePasswordDialog = false
-                archivePendingEntry = null
-                archivePasswordInput = ""
-                errorMsg = null
-            },
-            title = { Text("请输入密码") },
-            text = {
-                Column {
-                    Text(
-                        text = "「${archivePendingEntry!!.name}」已加密",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    TextField(
-                        value = archivePasswordInput,
-                        onValueChange = { archivePasswordInput = it; errorMsg = null },
-                        singleLine = true,
-                        label = { Text("密码") },
-                        modifier = Modifier.fillMaxWidth(),
-                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent
-                        ),
-                        trailingIcon = {
-                            IconButton(onClick = { passwordVisible = !passwordVisible }, modifier = Modifier.size(24.dp)) {
-                                Icon(
-                                    if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    )
-                    if (errorMsg != null) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(errorMsg!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        if (archivePasswordInput.isEmpty()) {
-                            errorMsg = "请输入密码"
-                            return@TextButton
-                        }
-                        verifying = true
-                        errorMsg = null
-                        val entry = archivePendingEntry!!
-                        val password = archivePasswordInput
-                        val outputDir = extractAfterPasswordOutputDir
-                        coroutineScope.launch(Dispatchers.IO) {
-                            val error = vm.loadArchiveIndex(entry, password)
-                            withContext(Dispatchers.Main) {
-                                verifying = false
-                                if (error != null) {
-                                    errorMsg = error
-                                } else {
-                                    showArchivePasswordDialog = false
-                                    archivePendingEntry = null
-                                    archivePasswordInput = ""
-                                    // 密码验证通过，直接解压
-                                    vm.extractArchive(
-                                        outputDir = outputDir,
-                                        extractToSubfolder = extractToSubfolder,
-                                        onProgress = { _, _, _, _ -> },
-                                        onComplete = { success, _, err ->
-                                            if (success) Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
-                                            else if (err != "已取消") Toast.makeText(context, "解压失败: $err", Toast.LENGTH_SHORT).show()
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    },
-                    enabled = !verifying && archivePasswordInput.isNotEmpty()
-                ) {
-                    Text(if (verifying) "验证中..." else "确认")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showArchivePasswordDialog = false
-                    archivePendingEntry = null
-                    archivePasswordInput = ""
-                    errorMsg = null
-                }) {
-                    Text("取消")
-                }
-            }
-        )
-    }
-
-    // ── 压缩包正在打开进度面板 ──
-    if (showArchiveOpening) {
-        val isDark = isSystemInDarkTheme()
-        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(0.8f),
-                    shape = RoundedCornerShape(24.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "正在打开...",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    }
-                }
-            }
-        }
-    }
-
     // ── 排序对话框 ──
     if (showSortDialog) {
         val fieldLabels = mapOf(
@@ -4473,32 +3363,25 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             confirmButton = {
                 TextButton(onClick = {
                     if (tempSortField == SortField.SIZE) {
-                        // 压缩包模式：文件夹大小已从索引获取，无需统计
-                        if (vm.isInArchive) {
+                        // 检查是否有未统计大小的文件夹
+                        val currentEntries = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftEntries else vm.rightEntries
+                        val unmeasured = currentEntries.filter { entry ->
+                            if (!entry.isDirectory) return@filter false
+                            val cached = vm.folderSizeDb.get(entry.path)
+                            if (cached != null) return@filter false // 已统计
+                            // 检查是否空文件夹或权限不足（受保护路径走 shell）
+                            val children = vm.listChildrenOrNull(entry.path)
+                            if (children == null || children.isEmpty()) return@filter false
+                            true
+                        }
+                        if (unmeasured.isNotEmpty()) {
+                            unmeasuredDirs = unmeasured
+                            showSortDialog = false
+                            showSortSizeRefreshDialog = true
+                        } else {
                             vm.updateSortField(tempSortField)
                             vm.updateSortOrder(tempSortOrder)
                             showSortDialog = false
-                        } else {
-                            // 检查是否有未统计大小的文件夹
-                            val currentEntries = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftEntries else vm.rightEntries
-                            val unmeasured = currentEntries.filter { entry ->
-                                if (!entry.isDirectory) return@filter false
-                                val cached = vm.folderSizeDb.get(entry.path)
-                                if (cached != null) return@filter false // 已统计
-                                // 检查是否空文件夹或权限不足（受保护路径走 shell）
-                                val children = vm.listChildrenOrNull(entry.path)
-                                if (children == null || children.isEmpty()) return@filter false
-                                true
-                            }
-                            if (unmeasured.isNotEmpty()) {
-                                unmeasuredDirs = unmeasured
-                                showSortDialog = false
-                                showSortSizeRefreshDialog = true
-                            } else {
-                                vm.updateSortField(tempSortField)
-                                vm.updateSortOrder(tempSortOrder)
-                                showSortDialog = false
-                            }
                         }
                     } else {
                         vm.updateSortField(tempSortField)
@@ -4643,12 +3526,7 @@ private fun FileBrowserPanel(
                     } else if (archiveSizeProvider != null) {
                         archiveSizeProvider(entry)
                     } else ""
-                    // 观察缓存版本变化以触发 recomposition
-                    val thumb = if (thumbnailLoader != null) {
-                        // 读取 cacheVersion 以建立观察关系，当缩略图加载完成时触发 recomposition
-                        ArchiveThumbnailManager.cacheVersion
-                        thumbnailLoader.invoke(entry)
-                    } else null
+                    val thumb = thumbnailLoader?.invoke(entry)
                     FileEntryRow(
                         entry = entry,
                         isFocused = isFocused,

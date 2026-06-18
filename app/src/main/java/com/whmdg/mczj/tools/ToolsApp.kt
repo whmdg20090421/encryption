@@ -30,14 +30,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
             .setTimeout(10))
         installGlobalCrashHandler()
         migrateWebViewData()
-        AppDataPaths.cleanArchiveCache(this)
         AppIconHelper.init(this)
-        // 初始化 7za 二进制（root 或 Shizuku 环境）
-        val hasShell = com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isRootAvailable() ||
-            com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(this)
-        if (hasShell) {
-            com.whmdg.mczj.tools.util.RootBinaryManager.init(this)
-        }
         WebView.setDataDirectorySuffix("app")
 
         // WebDAV: 初始化 Client 认证器

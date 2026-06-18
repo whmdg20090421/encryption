@@ -16,12 +16,10 @@ import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.DiagnosticLog
-import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.util.FileAccessLevel
 import com.whmdg.mczj.tools.util.FileAccessor
 import com.whmdg.mczj.tools.util.SizeCalcResult
 import com.whmdg.mczj.tools.util.calculateFolderSize
-import com.whmdg.mczj.tools.util.ArchiveThumbnailManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -120,25 +118,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var pendingExternalEntry by mutableStateOf<FileEntry?>(null)
     var pendingApkEntry by mutableStateOf<FileEntry?>(null)
 
-    // ── 压缩包浏览 ──
-    var isInArchive by mutableStateOf(false)
-        private set
-    var archivePath by mutableStateOf("")         // 压缩包内当前相对路径
-        private set
-    var archiveRootPath by mutableStateOf("")     // 压缩包根路径（始终 "/"）
-        private set
-    var archiveFilePath by mutableStateOf("")     // 原始压缩包文件路径
-        private set
-    var archiveFileName by mutableStateOf("")     // 原始压缩包文件名
-        private set
-    var archiveFormat by mutableStateOf("")
-        private set
-    var archivePassword by mutableStateOf("")
-        private set
-    var archiveUseRoot by mutableStateOf(false)   // 是否通过 7za root 通道访问
-        private set
-    var archiveMemFs: CompressService.ArchiveMemFs? = null
-        private set
     private val recycleBinJson = kotlinx.serialization.json.Json {
         ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true
     }
@@ -499,7 +478,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     // path = 显示路径（软链接路径），realPath = 真实路径（用于读取文件列表）
     fun navigateTo(path: String, realPath: String = path) {
         if (isInRecycleBin) isInRecycleBin = false
-        if (isInArchive) exitArchive()
         // path = 显示路径（软链接路径），realPath = 真实路径（用于读取文件列表）
         // 后退/前进/返回上一级传入的 realPath 默认等于 path，需要解析真实路径
         val resolvedRealPath = if (realPath == path && hasShellEngine) {
@@ -1229,411 +1207,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return recycleBinPath == binRoot
     }
 
-    // ── 压缩包浏览操作 ──
-
-    /** 压缩包是否在根目录 */
-    val isAtArchiveRoot: Boolean get() = archivePath == archiveRootPath
-
-    /**
-     * 打开压缩包进入预览模式。
-     * @param entry 压缩包文件的 FileEntry
-     * @param password 密码（空=无密码）
-     * @return 错误信息，null 表示成功
-     */
-    fun openArchive(entry: FileEntry, password: String): String? {
-        try {
-            // 检测格式
-            val format = CompressService.detectFormat(entry.name)
-                ?: CompressService.detectFormatByMagic(File(entry.path))
-                ?: return "不支持的压缩格式"
-
-            // 检测是否需要通过 root/shell 通道访问（Java API 无法读取受限路径）
-            val useRoot = hasShellEngine && !shellCanRead(entry.path)
-
-            if (!useRoot) {
-                // RAR5 检测：读取文件头 version byte，RAR5 的 header version >= 50
-                if (format == "rar") {
-                    try {
-                        val fis = File(entry.path).inputStream()
-                        val header = ByteArray(7)
-                        fis.read(header)
-                        fis.close()
-                        if (header.size >= 7 && header[6].toInt() and 0xFF >= 2) {
-                            return "不支持 RAR5+ 格式"
-                        }
-                    } catch (_: Exception) {}
-                }
-
-                // 密码验证
-                if (password.isNotEmpty()) {
-                    if (!CompressService.verifyPassword(entry.path, format, password)) {
-                        return "密码错误"
-                    }
-                }
-            }
-
-            // 读取索引
-            val memFs = CompressService.openArchiveIndex(entry.path, format, password, useRoot = useRoot)
-
-            archiveMemFs = memFs
-            archiveFilePath = entry.path
-            archiveFileName = entry.name
-            archiveFormat = format
-            archivePassword = password
-            archiveUseRoot = useRoot
-            archivePath = ""
-            archiveRootPath = ""
-            isInArchive = true
-
-            // 设置聚焦面板的 entries 为压缩包根目录内容
-            val rootEntries = listArchiveDir("")
-            if (focusedPanel == FocusedPanel.LEFT) {
-                leftEntries = rootEntries
-            } else {
-                rightEntries = rootEntries
-            }
-            return null
-        } catch (e: Exception) {
-            Log.e("FileMgr", "打开压缩包失败", e)
-            return "打开失败: ${e.message}"
-        }
-    }
-
-    /**
-     * 仅加载压缩包索引，不切换 UI 到浏览模式（供解压使用）。
-     * @param entry 压缩包文件的 FileEntry
-     * @param password 密码（空=无密码）
-     * @return 错误信息，null 表示成功
-     */
-    fun loadArchiveIndex(entry: FileEntry, password: String): String? {
-        try {
-            val format = CompressService.detectFormat(entry.name)
-                ?: CompressService.detectFormatByMagic(File(entry.path))
-                ?: return "不支持的压缩格式"
-
-            val useRoot = hasShellEngine && !shellCanRead(entry.path)
-
-            if (!useRoot) {
-                // RAR5 检测
-                if (format == "rar") {
-                    try {
-                        val fis = File(entry.path).inputStream()
-                        val header = ByteArray(7)
-                        fis.read(header)
-                        fis.close()
-                        if (header.size >= 7 && header[6].toInt() and 0xFF >= 2) {
-                            return "不支持 RAR5+ 格式"
-                        }
-                    } catch (_: Exception) {}
-                }
-
-                if (password.isNotEmpty()) {
-                    if (!CompressService.verifyPassword(entry.path, format, password)) {
-                        return "密码错误"
-                    }
-                }
-            }
-
-            val memFs = CompressService.openArchiveIndex(entry.path, format, password, useRoot = useRoot)
-            archiveMemFs = memFs
-            archiveFormat = format
-            archivePassword = password
-            archiveUseRoot = useRoot
-            return null
-        } catch (e: Exception) {
-            Log.e("FileMgr", "加载压缩包索引失败", e)
-            return "加载失败: ${e.message}"
-        }
-    }
-
-    /** 在压缩包内进入子文件夹 */
-    fun navigateInArchive(entry: FileEntry) {
-        if (!entry.isDirectory) return
-        val memFs = archiveMemFs ?: return
-        val targetPath = if (archivePath.isEmpty()) entry.name else "$archivePath/${entry.name}"
-        // 验证目标路径在压缩包内存在
-        val normalizedPath = targetPath.trimEnd('/')
-        val hasDir = memFs.entries.containsKey(normalizedPath) &&
-                memFs.entries[normalizedPath] is CompressService.ArchiveMemDir
-        val hasFiles = memFs.entries.keys.any { it.startsWith("$normalizedPath/") }
-        if (!hasDir && !hasFiles) {
-            Toast.makeText(context, "目录不存在: ${entry.name}", Toast.LENGTH_SHORT).show()
-            return
-        }
-        archivePath = targetPath
-        val entries = listArchiveDir(targetPath)
-        if (focusedPanel == FocusedPanel.LEFT) {
-            leftEntries = entries
-        } else {
-            rightEntries = entries
-        }
-    }
-
-    /** 在压缩包内返回上一级 */
-    fun goUpInArchive(): Boolean {
-        if (archivePath == archiveRootPath) return false
-        val parent = archivePath.substringBeforeLast("/", "")
-        archivePath = parent
-        val entries = listArchiveDir(parent)
-        if (focusedPanel == FocusedPanel.LEFT) {
-            leftEntries = entries
-        } else {
-            rightEntries = entries
-        }
-        return true
-    }
-
-    /** 退出压缩包预览模式 */
-    fun exitArchive() {
-        // 关闭 reader 释放句柄
-        try { archiveMemFs?.reader?.close() } catch (_: Exception) {}
-        // 清空缩略图缓存
-        ArchiveThumbnailManager.clearCache()
-        // 先保存路径用于清理临时文件，再清空状态
-        val tempFileHash = archiveFilePath.hashCode().toString().take(16)
-        archiveMemFs = null
-        isInArchive = false
-        archivePath = ""
-        archiveRootPath = ""
-        archiveFilePath = ""
-        archiveFileName = ""
-        archiveFormat = ""
-        archivePassword = ""
-        archiveUseRoot = false
-        // 清理临时解压文件
-        try {
-            val tempDir = File(AppDataPaths.archiveCache(context), tempFileHash)
-            if (tempDir.exists()) tempDir.deleteRecursively()
-        } catch (_: Exception) {}
-        refreshCurrent()
-    }
-
-    /** 列出压缩包内指定路径下的条目 */
-    private fun listArchiveDir(dirPath: String): List<FileEntry> {
-        val memFs = archiveMemFs ?: return emptyList()
-        val normalized = dirPath.trimEnd('/')
-        // prefix 统一不带前导 /，与 entries map key 格式一致
-        val prefix = if (normalized == "/" || normalized.isEmpty()) "" else normalized.removePrefix("/") + "/"
-
-        val dirNames = mutableSetOf<String>()
-        val files = mutableListOf<FileEntry>()
-
-        for ((path, entry) in memFs.entries) {
-            // path 统一去掉前导 / 再处理
-            val cleanPath = path.removePrefix("/")
-            if (prefix.isEmpty()) {
-                // 根目录：取第一级
-                if (cleanPath.isEmpty()) continue
-                val slashIdx = cleanPath.indexOf('/')
-                if (slashIdx < 0) {
-                    if (entry is CompressService.ArchiveMemFile) {
-                        files.add(FileEntry(
-                            path = cleanPath,
-                            name = entry.name,
-                            isDirectory = false,
-                            size = entry.size,
-                            lastModified = 0
-                        ))
-                    } else if (entry is CompressService.ArchiveMemDir) {
-                        dirNames.add(cleanPath)
-                    }
-                } else {
-                    dirNames.add(cleanPath.substring(0, slashIdx))
-                }
-            } else {
-                // 子目录：匹配前缀
-                if (!cleanPath.startsWith(prefix)) continue
-                val relative = cleanPath.removePrefix(prefix)
-                if (relative.isEmpty()) continue
-                val slashIdx = relative.indexOf('/')
-                if (slashIdx < 0) {
-                    if (entry is CompressService.ArchiveMemFile) {
-                        files.add(FileEntry(
-                            path = cleanPath,
-                            name = entry.name,
-                            isDirectory = false,
-                            size = entry.size,
-                            lastModified = 0
-                        ))
-                    } else if (entry is CompressService.ArchiveMemDir) {
-                        dirNames.add(relative)
-                    }
-                } else {
-                    dirNames.add(relative.substring(0, slashIdx))
-                }
-            }
-        }
-
-        // 构建目录 FileEntry（带 ArchiveMemDir.size）
-        val dirEntries = dirNames.map { dirName ->
-            val fullPath = if (prefix.isEmpty()) dirName else "$prefix$dirName"
-            val dirSize = (memFs.entries[fullPath] as? CompressService.ArchiveMemDir)?.size ?: 0L
-            FileEntry(
-                path = fullPath,
-                name = dirName,
-                isDirectory = true,
-                size = dirSize,
-                lastModified = 0
-            )
-        }
-
-        // 合并并排序（目录优先，然后按 sortField 排序）
-        val allEntries = dirEntries + files
-        return when (sortField) {
-            SortField.NAME -> if (sortOrder == SortOrder.ASC)
-                allEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
-            else
-                allEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
-            SortField.SIZE -> if (sortOrder == SortOrder.ASC)
-                allEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.size })
-            else
-                allEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.size } )
-            SortField.MODIFIED -> allEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
-            SortField.CREATED -> allEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
-        }
-    }
-
-    /**
-     * 打开压缩包内的文件（按需解压）。
-     * 小于 50MB → 解压到内存（ByteArray），速度快
-     * 大于等于 50MB → 解压到磁盘临时文件，避免内存溢出
-     */
-    fun openFileInArchive(context: Context, entry: FileEntry): Screen? {
-        val memFs = archiveMemFs ?: return null
-        val memEntry = memFs.entries[entry.path] as? CompressService.ArchiveMemFile ?: return null
-
-        val textExtensions = setOf(
-            "txt", "md", "json", "xml", "html", "htm", "css", "js",
-            "kt", "java", "py", "sh", "bat", "log", "csv", "yaml", "yml",
-            "toml", "ini", "conf", "cfg", "properties", "gradle", "kts",
-            "c", "cpp", "h", "hpp", "rs", "go", "rb", "php", "sql",
-            "lua", "r", "swift", "dart", "ts", "jsx", "tsx", "vue"
-        )
-        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
-        val ext = entry.name.substringAfterLast('.', "").lowercase()
-
-        val useMemory = memEntry.size in 1 until EXTRACT_TO_MEMORY_THRESHOLD
-
-        return try {
-            if (ext in textExtensions) {
-                // 文本文件：解压到内存再写临时文件（文本编辑器需要文件路径）
-                val data = CompressService.extractSingleFile(
-                    archiveFilePath, archiveFormat, archivePassword, memEntry, useRoot = archiveUseRoot
-                )
-                val tempDir = getArchiveTempDir(context)
-                val tempFile = File(tempDir, memEntry.name)
-                tempFile.writeBytes(data)
-                Screen.TextEditor(tempFile.absolutePath)
-            } else if (ext in imageExtensions) {
-                // 图片文件
-                val tempDir = getArchiveTempDir(context)
-                val tempFile = if (useMemory) {
-                    // 小于 50MB：解压到内存再写临时文件
-                    val data = CompressService.extractSingleFile(
-                        archiveFilePath, archiveFormat, archivePassword, memEntry, useRoot = archiveUseRoot
-                    )
-                    val f = File(tempDir, memEntry.name)
-                    f.writeBytes(data)
-                    f
-                } else {
-                    // 大于等于 50MB：直接解压到磁盘
-                    CompressService.extractSingleFileToDisk(
-                        archiveFilePath, archiveFormat, archivePassword, memEntry, tempDir, useRoot = archiveUseRoot
-                    )
-                }
-                // 构建图片列表（压缩包内所有图片）
-                val currentEntries = if (focusedPanel == FocusedPanel.LEFT) leftEntries else rightEntries
-                val imagePaths = currentEntries
-                    .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions }
-                    .mapNotNull { e ->
-                        val me = memFs.entries[e.path] as? CompressService.ArchiveMemFile ?: return@mapNotNull null
-                        try {
-                            val imgData = if (me.size in 1 until EXTRACT_TO_MEMORY_THRESHOLD) {
-                                CompressService.extractSingleFile(archiveFilePath, archiveFormat, archivePassword, me, useRoot = archiveUseRoot)
-                            } else null
-                            val tf = if (imgData != null) {
-                                val f = File(tempDir, me.name)
-                                f.writeBytes(imgData)
-                                f
-                            } else {
-                                CompressService.extractSingleFileToDisk(
-                                    archiveFilePath, archiveFormat, archivePassword, me, tempDir, useRoot = archiveUseRoot
-                                )
-                            }
-                            tf.absolutePath
-                        } catch (_: Exception) { null }
-                    }
-                val startIndex = imagePaths.indexOf(tempFile.absolutePath).coerceAtLeast(0)
-                Screen.ImageViewer(tempFile.absolutePath, imagePaths, startIndex)
-            } else {
-                // 其他文件
-                val tempDir = getArchiveTempDir(context)
-                val tempFile = if (useMemory) {
-                    val data = CompressService.extractSingleFile(
-                        archiveFilePath, archiveFormat, archivePassword, memEntry, useRoot = archiveUseRoot
-                    )
-                    val f = File(tempDir, memEntry.name)
-                    f.writeBytes(data)
-                    f
-                } else {
-                    CompressService.extractSingleFileToDisk(
-                        archiveFilePath, archiveFormat, archivePassword, memEntry, tempDir, useRoot = archiveUseRoot
-                    )
-                }
-                try {
-                    val uri = androidx.core.content.FileProvider.getUriForFile(
-                        context, "${context.packageName}.fileprovider", tempFile
-                    )
-                    val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
-                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                        setDataAndType(uri, mimeType)
-                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(intent)
-                } catch (e: Exception) {
-                    Toast.makeText(context, "无法打开文件: ${e.message}", Toast.LENGTH_SHORT).show()
-                }
-                null
-            }
-        } catch (e: Exception) {
-            Toast.makeText(context, "解压失败: ${e.message}", Toast.LENGTH_SHORT).show()
-            null
-        }
-    }
-
-    /** 获取压缩包临时解压目录，创建 .active 标记防止启动清理 */
-    private fun getArchiveTempDir(context: Context): File {
-        val tempDir = File(AppDataPaths.archiveCache(context), archiveFilePath.hashCode().toString().take(16))
-        if (!tempDir.exists()) tempDir.mkdirs()
-        File(tempDir, ".active").createNewFile()
-        return tempDir
-    }
-
-    /** 获取压缩包内文件的压缩率信息文本 */
-    fun getArchiveSizeText(entry: FileEntry): String {
-        val memFs = archiveMemFs ?: return ""
-        val memEntry = memFs.entries[entry.path] ?: return ""
-        when (memEntry) {
-            is CompressService.ArchiveMemDir -> {
-                if (memEntry.size <= 0) return ""
-                if (memEntry.compressedSize > 0) {
-                    val ratio = (memEntry.compressedSize * 100 / memEntry.size).toInt()
-                    return "(${formatSize(memEntry.compressedSize)}/${formatSize(memEntry.size)})($ratio%)"
-                }
-                return formatSize(memEntry.size)
-            }
-            is CompressService.ArchiveMemFile -> {
-                if (memEntry.size <= 0) return ""
-                if (memEntry.compressedSize > 0) {
-                    val ratio = (memEntry.compressedSize * 100 / memEntry.size).toInt()
-                    return "(${formatSize(memEntry.compressedSize)}/${formatSize(memEntry.size)})($ratio%)"
-                }
-                return formatSize(memEntry.size)
-            }
-        }
-    }
-
     /**
      * 退出回收站视图，恢复到正常目录浏览。
      */
@@ -1659,10 +1232,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateSortField(field: SortField) {
         sortField = field
         fmPrefs.edit().putString("sort_field", field.name).apply()
-        if (isInArchive) {
-            val entries = listArchiveDir(archivePath)
-            if (focusedPanel == FocusedPanel.LEFT) leftEntries = entries else rightEntries = entries
-        } else if (isInRecycleBin) {
+        if (isInRecycleBin) {
             val entries = listRecycleBinDir(java.io.File(recycleBinPath))
             if (focusedPanel == FocusedPanel.LEFT) leftEntries = entries else rightEntries = entries
         } else {
@@ -1674,10 +1244,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateSortOrder(order: SortOrder) {
         sortOrder = order
         fmPrefs.edit().putString("sort_order", order.name).apply()
-        if (isInArchive) {
-            val entries = listArchiveDir(archivePath)
-            if (focusedPanel == FocusedPanel.LEFT) leftEntries = entries else rightEntries = entries
-        } else if (isInRecycleBin) {
+        if (isInRecycleBin) {
             val entries = listRecycleBinDir(java.io.File(recycleBinPath))
             if (focusedPanel == FocusedPanel.LEFT) leftEntries = entries else rightEntries = entries
         } else {
@@ -2112,44 +1679,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun getPropertyData(entry: FileEntry): FilePropertyData {
-        // 压缩包模式：使用内存元数据，不访问文件系统
-        if (isInArchive) {
-            val memEntry = archiveMemFs?.entries?.get(entry.path)
-            val sizeBytes = when (memEntry) {
-                is CompressService.ArchiveMemFile -> memEntry.size
-                is CompressService.ArchiveMemDir -> memEntry.size
-                else -> entry.size
-            }
-            val sizeDisplay = if (sizeBytes > 0) "${formatSize(sizeBytes)} ($sizeBytes)" else "0 B (0)"
-            val type = if (entry.isDirectory) "文件夹" else {
-                val ext = entry.name.substringAfterLast('.', "").lowercase()
-                if (ext.isNotEmpty()) "${ext.uppercase()} 文件" else "文件"
-            }
-            var fileCount = 0
-            var folderCount = 0
-            if (entry.isDirectory && memEntry is CompressService.ArchiveMemDir) {
-                val prefix = entry.path + "/"
-                for ((path, child) in archiveMemFs!!.entries) {
-                    if (!path.startsWith(prefix)) continue
-                    if (child is CompressService.ArchiveMemDir) folderCount++ else fileCount++
-                }
-            }
-            return FilePropertyData(
-                name = entry.name,
-                directory = archiveFileName,
-                type = type,
-                sizeBytes = sizeBytes,
-                sizeDisplay = sizeDisplay,
-                modifiedTime = "",
-                permission = "",
-                owner = "",
-                group = "",
-                fileCount = fileCount,
-                folderCount = folderCount,
-                isDirectory = entry.isDirectory
-            )
-        }
-
         val file = File(entry.path)
 
         // shell 路径: ls -lapd 获取权限/用户名/组名，stat 获取 UID/GID 数值
@@ -2676,149 +2205,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return total
     }
 
-    // ── 压缩功能 ──
-
-    /** 压缩任务取消标志 */
-    val compressCancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
-
-    /**
-     * 执行压缩。
-     * @param entry 要压缩的文件/文件夹
-     * @param fileName 输出文件名（含后缀）
-     * @param format 压缩格式
-     * @param level 压缩级别
-     * @param password 密码（空=不加密）
-     * @param useAes zip 加密方式（true=AES, false=ZipCrypto）
-     * @param outputToOtherPanel 是否输出到非聚焦面板目录
-     * @param jxlPackZip JXL 格式是否打包成 ZIP
-     * @param onProgress 进度回调
-     * @param onComplete 完成回调 (success, outputPath?, error?)
-     */
-    fun compress(
-        entry: FileEntry,
-        fileName: String,
-        format: String,
-        level: Int,
-        password: String,
-        useAes: Boolean,
-        outputToOtherPanel: Boolean,
-        jxlPackZip: Boolean = false,
-        onProgress: (Int, Int, Float, Long, Long) -> Unit,
-        onComplete: (Boolean, String?, String?) -> Unit
-    ) {
-        compressCancelFlag.set(false)
-
-        val outputDir = if (outputToOtherPanel) {
-            if (focusedPanel == FocusedPanel.LEFT) rightPath else leftPath
-        } else {
-            if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
-        }
-
-        val outputPath = java.io.File(outputDir, fileName).absolutePath
-
-        val options = CompressService.CompressOptions(
-            sourcePath = entry.path,
-            outputPath = outputPath,
-            format = format,
-            compressionLevel = level,
-            password = password,
-            useAes = useAes,
-            jxlPackZip = jxlPackZip
-        )
-
-        CoroutineScope(Dispatchers.IO).launch {
-            CompressService.compress(options, compressCancelFlag, object : CompressService.ProgressCallback {
-                override fun onProgress(info: CompressService.ProgressInfo) {
-                    onProgress(info.currentFile, info.totalFiles, info.progress, info.bytesProcessed, info.totalBytes)
-                }
-
-                override fun onComplete(success: Boolean, outPath: String?, error: String?) {
-                    CoroutineScope(Dispatchers.Main).launch {
-                        onComplete(success, outPath, error)
-                        refreshCurrent()
-                    }
-                }
-            })
-        }
-    }
-
-    /**
-     * 批量解压当前打开的压缩包。
-     * @param outputDir 输出目录
-     * @param onProgress 进度回调 (currentFile, totalFiles, progress, currentFileName)
-     * @param onComplete 完成回调 (success, outputPath?, error?)
-     */
-    fun extractArchive(
-        outputDir: String,
-        extractToSubfolder: Boolean = true,
-        onProgress: (Int, Int, Float, String) -> Unit,
-        onComplete: (Boolean, String?, String?) -> Unit
-    ) {
-        val memFs = archiveMemFs ?: run {
-            onComplete(false, null, "压缩包未打开")
-            return
-        }
-        fileOpCancelFlag.set(false)
-
-        CoroutineScope(Dispatchers.IO).launch {
-            CompressService.extractAll(
-                memFs = memFs,
-                outputDir = File(outputDir),
-                cancelFlag = fileOpCancelFlag,
-                callback = object : CompressService.ProgressCallback {
-                    override fun onProgress(info: CompressService.ProgressInfo) {
-                        CoroutineScope(Dispatchers.Main).launch {
-                            _fileOpProgress.value = FileOpProgress(
-                                phase = "正在解压",
-                                currentBytes = info.bytesProcessed,
-                                totalBytes = info.totalBytes,
-                                currentFileName = info.currentFileName,
-                                fileIndex = info.currentFile,
-                                fileCount = info.totalFiles
-                            )
-                            onProgress(info.currentFile, info.totalFiles, info.progress, info.currentFileName)
-                        }
-                    }
-
-                    override fun onComplete(success: Boolean, outPath: String?, error: String?) {
-                        CoroutineScope(Dispatchers.Main).launch {
-                            _fileOpProgress.value = null
-                            onComplete(success, outPath, error)
-                            if (success) {
-                                // 解压到子文件夹时，直接使用压缩包内的原始大小写入 FolderSizeDb
-                                if (extractToSubfolder) {
-                                    val totalSize = memFs.entries.values
-                                        .filterIsInstance<CompressService.ArchiveMemFile>()
-                                        .sumOf { it.size }
-                                    if (totalSize > 0) {
-                                        val saveDir = AppDataPaths.fileManager(context)
-                                        folderSizeDb.put(outputDir, FolderSizeInfo(totalSize, System.currentTimeMillis()))
-                                        folderSizeDb.save(saveDir)
-                                        folderSizeDb = FolderSizeDb.load(saveDir)
-                                    }
-                                }
-                                // 刷新包含解压输出路径的面板
-                                val needRefreshLeft = leftPath == outputDir || leftPath.startsWith("$outputDir/")
-                                val needRefreshRight = rightPath == outputDir || rightPath.startsWith("$outputDir/")
-                                when {
-                                    needRefreshLeft && needRefreshRight -> refreshBoth()
-                                    needRefreshLeft -> {
-                                        leftEntries = listDirectory(leftPath)
-                                        loadExtFlagsForDir(leftPath, isLeft = true)
-                                    }
-                                    needRefreshRight -> {
-                                        rightEntries = listDirectory(rightPath)
-                                        loadExtFlagsForDir(rightPath, isLeft = false)
-                                    }
-                                    else -> refreshCurrent()
-                                }
-                            }
-                        }
-                    }
-                }
-            )
-        }
-    }
 
     companion object {
         private val RESTRICTED_ANDROID_PREFIXES = listOf(
@@ -2828,9 +2214,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             "/sdcard/Android/obb/"
         )
         private const val OWN_PACKAGE_NAME = "com.whmdg.mczj.tools"
-
-        /** 按需解压阈值：小于此大小的文件解压到内存，大于等于此大小解压到磁盘 */
-        private const val EXTRACT_TO_MEMORY_THRESHOLD = 50L * 1024 * 1024 // 50MB
 
         fun formatPermission(mode: Int): String {
             val type = when (mode and 0xF000) {
