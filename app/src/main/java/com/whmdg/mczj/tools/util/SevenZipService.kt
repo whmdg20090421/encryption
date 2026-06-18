@@ -54,8 +54,12 @@ object SevenZipService {
     /** 直接通过 su -c 执行命令，返回 (stdout, stderr, exitCode) */
     private fun execSu(command: String): Triple<String, String, Int> {
         val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
+        // 必须在不同线程并发读取 stdout/stderr，否则 pipe 缓冲区满时会死锁
+        var stderr = ""
+        val stderrThread = Thread { stderr = process.errorStream.bufferedReader().readText() }
+        stderrThread.start()
         val stdout = process.inputStream.bufferedReader().readText()
-        val stderr = process.errorStream.bufferedReader().readText()
+        stderrThread.join()
         val exitCode = process.waitFor()
         return Triple(stdout, stderr, exitCode)
     }
