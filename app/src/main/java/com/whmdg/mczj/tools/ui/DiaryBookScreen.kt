@@ -300,7 +300,7 @@ fun DiaryBookScreen(
                         .align(Alignment.BottomEnd)
                         .padding(end = 25.dp, bottom = 25.dp)
                         .onGloballyPositioned { coords ->
-                            val pos = coords.positionInRoot()
+                            val pos = coords.localToWindow(Offset.Zero)
                             fabOffsetX = pos.x / density.density
                             fabOffsetY = pos.y / density.density
                         }
