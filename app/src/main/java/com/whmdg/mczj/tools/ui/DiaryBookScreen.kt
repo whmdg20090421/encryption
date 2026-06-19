@@ -9,6 +9,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -54,7 +56,20 @@ fun DiaryBookScreen(
         listState.scrollToItem(todayIndex)
     }
 
-    Scaffold { innerPadding ->
+    val isDark = isSystemInDarkTheme()
+    val cyanColor = if (isDark) Color(0xFF4DB6AC) else Color(0xFF00BCD4)  // 暗青 / 亮青
+
+    Scaffold(
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { },
+                containerColor = cyanColor,
+                modifier = Modifier.padding(end = 10.dp, bottom = 10.dp)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "添加", tint = Color.White)
+            }
+        }
+    ) { innerPadding ->
     Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
         // 顶部工具栏 — 名称居中于整个工具栏，不与左侧按钮重叠
         Box(
@@ -79,14 +94,20 @@ fun DiaryBookScreen(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.align(Alignment.Center)
             )
+
+            // 设置按钮
+            IconButton(
+                onClick = { },
+                modifier = Modifier.align(Alignment.CenterEnd)
+            ) {
+                Icon(Icons.Default.Settings, contentDescription = "设置")
+            }
         }
 
         // 日期时间线 — 竖线贴左边缘，圆圈左边缘与屏幕齐平
         val circleRadius = 8.dp
         val circleDiameter = circleRadius * 2
         val timelineSpacing = 70.dp  // 圆心到圆心的距离
-        val isDark = isSystemInDarkTheme()
-        val cyanColor = if (isDark) Color(0xFF4DB6AC) else Color(0xFF00BCD4)  // 暗青 / 亮青
 
         LazyColumn(
             state = listState,
