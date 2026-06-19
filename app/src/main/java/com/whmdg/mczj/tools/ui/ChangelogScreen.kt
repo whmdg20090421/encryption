@@ -29,6 +29,23 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V2.8",
+        date = "2026-06-19",
+        items = listOf(
+            "日记模块：创建日记本、卡片列表、独立详情页，DiaryDb 双副本存储（参照 VaultDb 模式），状态栏间距统一处理",
+            "文件管理器 WebDAV 服务器快捷访问：添加 WebDAV 连接配置，支持远程文件浏览",
+            "WiFi 模块增强：WiFi 扫描（含排序）、已保存密码查看（Root）、WiFi 连接功能",
+            "APK 信息弹窗：点击 APK 文件可查看应用名称、版本、包名、签名等详细信息",
+            "图片查看器重构：PhotoView 替换为 Compose 原生方案（ZoomableImageState），集成 telephoto 库",
+            "文件操作架构重构：复制/移动/删除参考 MaterialFiles 架构重写，支持进度系统与前台服务",
+            "解压弹窗重构：自定义 Dialog + 路径编辑 + 另一窗口路径选择",
+            "文件夹大小统计算法优化：双内存 A/B 架构，统计过程可取消",
+            "Root 挂载空间状态：进入文件管理器时显示各挂载点容量信息",
+            "压缩包浏览与解压功能已移除（仅保留工具箱占位按钮）",
+            "WiFi 破解模块已移除（仅保留扫描和连接）"
+        )
+    ),
+    ChangelogVersion(
         version = "V2.7",
         date = "2026-06-15",
         items = listOf(

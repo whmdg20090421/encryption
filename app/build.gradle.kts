@@ -26,7 +26,7 @@ android {
         } catch (_: Exception) { 0 }
         versionCode = 1400000000 + gitCommitCount
         val ts = System.currentTimeMillis() / 1000
-        versionName = "2.7.%d".format(ts)
+        versionName = "2.8.%d".format(ts)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
