@@ -40,8 +40,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneId
 
 // 笔记本详情：点开某个笔记本后的内部界面
 @Composable
@@ -94,15 +96,15 @@ fun DiaryBookScreen(
     var fabCenterX by remember { mutableFloatStateOf(0f) }
     var fabCenterY by remember { mutableFloatStateOf(0f) }
 
-    // 动画触发：三阶段顺序执行，每阶段 500ms，总时长 1.5s
+    // 动画触发：三阶段顺序执行，每阶段 333ms，总时长约 1s
     LaunchedEffect(animTrigger) {
         if (animTrigger > 0) {
             // 阶段1：FAB 移动到屏幕中心 (0→0.333)
-            animate(0f, 0.333f, animationSpec = tween(500)) { value, _ -> animProgress = value }
+            animate(0f, 0.333f, animationSpec = tween(333)) { value, _ -> animProgress = value }
             // 阶段2：FAB 渐隐 + 裁剪圆从 FAB 向外扩展 (0.333→0.667)
-            animate(0.333f, 0.667f, animationSpec = tween(500)) { value, _ -> animProgress = value }
+            animate(0.333f, 0.667f, animationSpec = tween(333)) { value, _ -> animProgress = value }
             // 阶段3：裁剪圆心从 FAB 移到弹窗中心 (0.667→1.0)
-            animate(0.667f, 1f, animationSpec = tween(500)) { value, _ -> animProgress = value }
+            animate(0.667f, 1f, animationSpec = tween(333)) { value, _ -> animProgress = value }
         }
     }
 
@@ -261,17 +263,12 @@ fun DiaryBookScreen(
 
         // 叠加层：仅弹窗触发时渲染，半透明遮罩覆盖在时间线上方
         if (showDialog) Box(modifier = Modifier.fillMaxSize()) {
-            // 遮罩层
+            // 遮罩层（纯视觉，不响应触摸）
             val scrimAlpha = (animProgress * 0.4f).coerceIn(0f, 0.4f)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = scrimAlpha))
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onDoubleTap = { showDialog = false }
-                        )
-                    }
             )
 
             // 弹窗参数
@@ -327,6 +324,7 @@ fun DiaryBookScreen(
                         dialogHeight = coords.size.height / density.density
                     }
                     .clip(RoundedCornerShape(16.dp))
+                    .pointerInput(Unit) { detectTapGestures() }
                     .then(
                         if (animProgress < 0.999f) {
                             Modifier.drawWithContent {
@@ -379,6 +377,7 @@ private fun lerp(start: Float, stop: Float, fraction: Float): Float {
     return start + (stop - start) * fraction.coerceIn(0f, 1f)
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DiaryDialogContent(
     selectedDate: DateEntry,
@@ -388,7 +387,19 @@ private fun DiaryDialogContent(
 ) {
     var title by remember { mutableStateOf("") }
     val currentTime = LocalTime.now()
-    val timeText = "${currentTime.hour.toString().padStart(2, '0')}:${currentTime.minute.toString().padStart(2, '0')}"
+
+    // 日期状态（默认为时间线聚焦日期）
+    var selectedYear by remember { mutableIntStateOf(selectedDate.year.toInt()) }
+    var selectedMonth by remember { mutableIntStateOf(selectedDate.month.replace("月", "").toInt()) }
+    var selectedDay by remember { mutableIntStateOf(selectedDate.day.toInt()) }
+
+    // 时间状态（默认为系统当前时间）
+    var selectedHour by remember { mutableIntStateOf(currentTime.hour) }
+    var selectedMinute by remember { mutableIntStateOf(currentTime.minute) }
+
+    // 选择器弹窗状态
+    var showDatePicker by remember { mutableStateOf(false) }
+    var showTimePicker by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -434,16 +445,20 @@ private fun DiaryDialogContent(
             }
         )
 
-        // 日期
+        // 日期（可点击，弹出日历选择器）
         Text(
-            text = "${selectedDate.year}-${selectedDate.month.replace("月", "").padStart(2, '0')}-${selectedDate.day}",
-            style = MaterialTheme.typography.bodyLarge
+            text = "$selectedYear-${selectedMonth.toString().padStart(2, '0')}-${selectedDay.toString().padStart(2, '0')}",
+            style = MaterialTheme.typography.bodyLarge,
+            color = cyanColor,
+            modifier = Modifier.clickable { showDatePicker = true }
         )
 
-        // 时间
+        // 时间（可点击，弹出时间选择器）
         Text(
-            text = timeText,
-            style = MaterialTheme.typography.bodyLarge
+            text = "${selectedHour.toString().padStart(2, '0')}:${selectedMinute.toString().padStart(2, '0')}",
+            style = MaterialTheme.typography.bodyLarge,
+            color = cyanColor,
+            modifier = Modifier.clickable { showTimePicker = true }
         )
 
         // 底部按钮
@@ -457,6 +472,58 @@ private fun DiaryDialogContent(
             TextButton(onClick = onConfirm) {
                 Text("确定", color = cyanColor)
             }
+        }
+    }
+
+    // 日期选择器弹窗
+    if (showDatePicker) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = LocalDate.of(selectedYear, selectedMonth, selectedDay)
+                .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        )
+        DatePickerDialog(
+            onDismissRequest = {},
+            confirmButton = {
+                TextButton(onClick = {
+                    datePickerState.selectedDateMillis?.let { millis ->
+                        val date = Instant.ofEpochMilli(millis)
+                            .atZone(ZoneId.systemDefault()).toLocalDate()
+                        selectedYear = date.year
+                        selectedMonth = date.monthValue
+                        selectedDay = date.dayOfMonth
+                    }
+                    showDatePicker = false
+                }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) { Text("取消") }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+
+    // 时间选择器弹窗
+    if (showTimePicker) {
+        val timePickerState = rememberTimePickerState(
+            initialHour = selectedHour,
+            initialMinute = selectedMinute
+        )
+        TimePickerDialog(
+            onDismissRequest = {},
+            confirmButton = {
+                TextButton(onClick = {
+                    selectedHour = timePickerState.hour
+                    selectedMinute = timePickerState.minute
+                    showTimePicker = false
+                }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTimePicker = false }) { Text("取消") }
+            },
+            title = { Text("选择时间") }
+        ) {
+            TimePicker(state = timePickerState)
         }
     }
 }
