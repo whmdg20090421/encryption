@@ -81,6 +81,7 @@ fun DiaryBookScreen(
     var showDialog by remember { mutableStateOf(false) }
     var animTrigger by remember { mutableStateOf(0) }
     var animProgress by remember { mutableFloatStateOf(0f) }
+    var dialogHeight by remember { mutableFloatStateOf(0f) }
     val config = LocalConfiguration.current
     val density = LocalDensity.current
     val screenWidthPx = config.screenWidthDp.toFloat()
@@ -107,6 +108,8 @@ fun DiaryBookScreen(
 
     Scaffold { innerPadding ->
     Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+        // 时间线区域（占满剩余空间，叠加层和FAB都在其内部）
+        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
         // 顶部工具栏 — 名称居中于整个工具栏，不与左侧按钮重叠
         Box(
             modifier = Modifier
@@ -149,8 +152,8 @@ fun DiaryBookScreen(
             state = listState,
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f)
-                .padding(start = 5.dp, top = 8.dp, bottom = 8.dp)
+                .fillMaxSize()
+                .padding(start = 5.dp, top = 68.dp, bottom = 8.dp)
         ) {
             itemsIndexed(dates) { index, entry ->
                 val isSelected = index == selectedIndex
@@ -234,147 +237,140 @@ fun DiaryBookScreen(
             }
         }
 
-        // 叠加层：FAB + 展开弹窗
-        Box(modifier = Modifier.fillMaxSize()) {
-            // 遮罩层（alpha 跟随动画进度）
-            if (showDialog) {
-                val scrimAlpha = (animProgress * 0.4f).coerceIn(0f, 0.4f)
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = scrimAlpha))
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onDoubleTap = { showDialog = false }
-                            )
+        // FAB 按钮（始终显示在时间线上方）
+        FloatingActionButton(
+            onClick = {
+                animProgress = 0f
+                showDialog = true
+                animTrigger++
+            },
+            containerColor = cyanColor,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 25.dp, bottom = 25.dp)
+                .onGloballyPositioned { coords ->
+                    val pos = coords.localToWindow(Offset.Zero)
+                    fabScreenX = pos.x / density.density
+                    fabScreenY = pos.y / density.density
+                    fabCenterX = fabScreenX + 28f
+                    fabCenterY = fabScreenY + 28f
+                }
+        ) {
+            Icon(Icons.Default.Add, contentDescription = "添加", tint = Color.White)
+        }
+
+        // 叠加层：仅弹窗触发时渲染，半透明遮罩覆盖在时间线上方
+        if (showDialog) Box(modifier = Modifier.fillMaxSize()) {
+            // 遮罩层
+            val scrimAlpha = (animProgress * 0.4f).coerceIn(0f, 0.4f)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = scrimAlpha))
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onDoubleTap = { showDialog = false }
+                        )
+                    }
+            )
+
+            // 弹窗参数
+            val dialogWidthDp = screenWidthPx * 0.85f
+            val dialogOffsetX = (screenWidthPx - dialogWidthDp) / 2f
+            val dialogOffsetY = screenHeightPx * 0.25f
+            val dialogCenterX = dialogOffsetX + dialogWidthDp / 2f
+            val dialogCenterY = if (dialogHeight > 0f) dialogOffsetY + dialogHeight / 2f else dialogOffsetY + 150f
+
+            // 动画阶段进度
+            val moveProgress = (animProgress / 0.333f).coerceIn(0f, 1f)
+            val fadeInProgress = ((animProgress - 0.333f) / 0.334f).coerceIn(0f, 1f)
+
+            // FAB 当前位置（阶段1移动，阶段2/3固定在中心）
+            val fabCurrentX = lerp(fabCenterX, dialogCenterX, moveProgress)
+            val fabCurrentY = lerp(fabCenterY, dialogCenterY, moveProgress)
+            val fabAlpha = if (moveProgress < 1f) 1f else (1f - fadeInProgress)
+
+            // 裁剪圆参数
+            val boxHalfW = dialogWidthDp / 2f
+            val boxHalfH = if (dialogHeight > 0f) dialogHeight / 2f else 150f
+            val diagRadius = kotlin.math.sqrt((boxHalfW * boxHalfW + boxHalfH * boxHalfH).toDouble()).toFloat()
+
+            val clipCenterX: Float
+            val clipCenterY: Float
+            val clipRadius: Float
+
+            if (animProgress < 0.333f) {
+                clipCenterX = fabCurrentX
+                clipCenterY = fabCurrentY
+                clipRadius = 0f
+            } else if (animProgress < 0.667f) {
+                clipCenterX = fabCurrentX
+                clipCenterY = fabCurrentY
+                clipRadius = lerp(56f, diagRadius, fadeInProgress)
+            } else {
+                clipCenterX = dialogCenterX
+                clipCenterY = dialogCenterY
+                clipRadius = diagRadius
+            }
+
+            val relClipX = clipCenterX - dialogOffsetX
+            val relClipY = clipCenterY - dialogOffsetY
+
+            // 弹窗
+            val surfaceColor = MaterialTheme.colorScheme.surface
+            if (animProgress > 0f) Box(
+                modifier = Modifier
+                    .offset(x = dialogOffsetX.dp, y = dialogOffsetY.dp)
+                    .fillMaxWidth(0.85f)
+                    .wrapContentHeight()
+                    .onGloballyPositioned { coords ->
+                        dialogHeight = coords.size.height / density.density
+                    }
+                    .clip(RoundedCornerShape(16.dp))
+                    .then(
+                        if (animProgress < 0.999f) {
+                            Modifier.drawWithContent {
+                                val circleCenter = Offset(
+                                    x = relClipX.dp.toPx(),
+                                    y = relClipY.dp.toPx()
+                                )
+                                val path = Path().apply {
+                                    addOval(Rect(circleCenter, clipRadius.dp.toPx()))
+                                }
+                                clipPath(path) {
+                                    drawRect(surfaceColor)
+                                    this@drawWithContent.drawContent()
+                                }
+                            }
+                        } else {
+                            Modifier.background(surfaceColor)
                         }
+                    )
+            ) {
+                DiaryDialogContent(
+                    selectedDate = dates[selectedIndex],
+                    cyanColor = cyanColor,
+                    onDismiss = { showDialog = false },
+                    onConfirm = { /* 待实现 */ }
                 )
             }
 
-            if (showDialog) {
-                // 弹窗参数
-                val dialogWidthDp = screenWidthPx * 0.85f
-                val dialogOffsetX = (screenWidthPx - dialogWidthDp) / 2f
-                val dialogOffsetY = screenHeightPx * 0.25f
-                val dialogCenterX = dialogOffsetX + dialogWidthDp / 2f
-                val dialogCenterY = dialogOffsetY + 100f  // 弹窗大致上部
-
-                // 动画阶段进度
-                val moveProgress = (animProgress / 0.333f).coerceIn(0f, 1f)
-                val fadeInProgress = ((animProgress - 0.333f) / 0.334f).coerceIn(0f, 1f)
-
-                // FAB 当前位置（阶段1移动，阶段2/3固定在中心）
-                val fabCurrentX = lerp(fabCenterX, dialogCenterX, moveProgress)
-                val fabCurrentY = lerp(fabCenterY, dialogCenterY, moveProgress)
-                val fabAlpha = if (moveProgress < 1f) 1f else (1f - fadeInProgress)
-
-                // 裁剪圆参数
-                // 阶段1：半径=0（不可见）
-                // 阶段2：圆心跟随FAB，半径从56dp扩展到对角线
-                // 阶段3：圆心从FAB平移到弹窗中心，半径已足够大
-                val boxHalfW = dialogWidthDp / 2f
-                val boxHalfH = 150f  // 估计弹窗半高
-                val diagRadius = kotlin.math.sqrt((boxHalfW * boxHalfW + boxHalfH * boxHalfH).toDouble()).toFloat()
-
-                val clipCenterX: Float
-                val clipCenterY: Float
-                val clipRadius: Float
-
-                if (animProgress < 0.333f) {
-                    // 阶段1：不可见
-                    clipCenterX = fabCurrentX
-                    clipCenterY = fabCurrentY
-                    clipRadius = 0f
-                } else if (animProgress < 0.667f) {
-                    // 阶段2：裁剪圆从FAB位置扩展
-                    clipCenterX = fabCurrentX
-                    clipCenterY = fabCurrentY
-                    clipRadius = lerp(56f, diagRadius, fadeInProgress)
-                } else {
-                    // 阶段3：圆心从弹窗中心（FAB已到达的位置）保持
-                    clipCenterX = dialogCenterX
-                    clipCenterY = dialogCenterY
-                    clipRadius = diagRadius
-                }
-
-                // 裁剪圆心相对于弹窗Box的坐标
-                val relClipX = clipCenterX - dialogOffsetX
-                val relClipY = clipCenterY - dialogOffsetY
-
-                // 弹窗（仅在动画开始后渲染，避免首帧白色闪烁）
-                val surfaceColor = MaterialTheme.colorScheme.surface
-                if (animProgress > 0f) Box(
+            // FAB 加号（独立移动 + 渐隐）
+            if (fabAlpha > 0f) {
+                Box(
                     modifier = Modifier
-                        .offset(x = dialogOffsetX.dp, y = dialogOffsetY.dp)
-                        .fillMaxWidth(0.85f)
-                        .wrapContentHeight()
-                        .clip(RoundedCornerShape(16.dp))
-                        .then(
-                            if (animProgress < 0.999f) {
-                                Modifier.drawWithContent {
-                                    val circleCenter = Offset(
-                                        x = relClipX.dp.toPx(),
-                                        y = relClipY.dp.toPx()
-                                    )
-                                    val path = Path().apply {
-                                        addOval(Rect(circleCenter, clipRadius.dp.toPx()))
-                                    }
-                                    clipPath(path) {
-                                        drawRect(surfaceColor)
-                                        this@drawWithContent.drawContent()
-                                    }
-                                }
-                            } else {
-                                Modifier.background(surfaceColor)
-                            }
-                        )
+                        .offset(x = (fabCurrentX - 28f).dp, y = (fabCurrentY - 28f).dp)
+                        .size(56.dp)
+                        .alpha(fabAlpha)
+                        .clip(RoundedCornerShape(28.dp))
+                        .background(cyanColor),
+                    contentAlignment = Alignment.Center
                 ) {
-                    DiaryDialogContent(
-                        selectedDate = dates[selectedIndex],
-                        cyanColor = cyanColor,
-                        onDismiss = { showDialog = false },
-                        onConfirm = { /* 待实现 */ }
-                    )
-                }
-
-                // FAB 加号（独立移动 + 渐隐）
-                if (fabAlpha > 0f) {
-                    Box(
-                        modifier = Modifier
-                            .offset(x = (fabCurrentX - 28f).dp, y = (fabCurrentY - 28f).dp)
-                            .size(56.dp)
-                            .alpha(fabAlpha)
-                            .clip(RoundedCornerShape(28.dp))
-                            .background(cyanColor),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null, tint = Color.White)
-                    }
-                }
-            } else {
-                // FAB 按钮
-                FloatingActionButton(
-                    onClick = {
-                        animProgress = 0f
-                        showDialog = true
-                        animTrigger++
-                    },
-                    containerColor = cyanColor,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 25.dp, bottom = 25.dp)
-                        .onGloballyPositioned { coords ->
-                            val pos = coords.localToWindow(Offset.Zero)
-                            fabScreenX = pos.x / density.density
-                            fabScreenY = pos.y / density.density
-                            fabCenterX = fabScreenX + 28f
-                            fabCenterY = fabScreenY + 28f
-                        }
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "添加", tint = Color.White)
+                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White)
                 }
             }
         }
+        } // 外层 Box（时间线区域）
     }
     } // Scaffold
 }
