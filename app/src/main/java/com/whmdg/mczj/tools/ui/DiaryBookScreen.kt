@@ -263,7 +263,6 @@ fun DiaryBookScreen(
                 // 动画阶段进度
                 val moveProgress = (animProgress.value / 0.333f).coerceIn(0f, 1f)
                 val fadeInProgress = ((animProgress.value - 0.333f) / 0.334f).coerceIn(0f, 1f)
-                val expandProgress = ((animProgress.value - 0.667f) / 0.333f).coerceIn(0f, 1f)
 
                 // FAB 当前位置（阶段1移动，阶段2/3固定在中心）
                 val fabCurrentX = lerp(fabCenterX, dialogCenterX, moveProgress)
@@ -293,9 +292,9 @@ fun DiaryBookScreen(
                     clipCenterY = fabCurrentY
                     clipRadius = lerp(56f, diagRadius, fadeInProgress)
                 } else {
-                    // 阶段3：圆心从 FAB 位置平移到弹窗中心
-                    clipCenterX = lerp(fabCenterX, dialogCenterX, expandProgress)
-                    clipCenterY = lerp(fabCenterY, dialogCenterY, expandProgress)
+                    // 阶段3：圆心从弹窗中心（FAB已到达的位置）保持
+                    clipCenterX = dialogCenterX
+                    clipCenterY = dialogCenterY
                     clipRadius = diagRadius
                 }
 
@@ -304,13 +303,13 @@ fun DiaryBookScreen(
                 val relClipY = clipCenterY - dialogOffsetY
 
                 // 弹窗（始终在最终位置，纯裁剪控制可见性，无alpha）
+                val surfaceColor = MaterialTheme.colorScheme.surface
                 Box(
                     modifier = Modifier
                         .offset(x = dialogOffsetX.dp, y = dialogOffsetY.dp)
                         .fillMaxWidth(0.85f)
                         .wrapContentHeight()
                         .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surface)
                         .then(
                             if (animProgress.value < 0.999f) {
                                 Modifier.drawWithContent {
@@ -321,10 +320,13 @@ fun DiaryBookScreen(
                                     val path = Path().apply {
                                         addOval(Rect(circleCenter, clipRadius.dp.toPx()))
                                     }
-                                    clipPath(path) { this@drawWithContent.drawContent() }
+                                    clipPath(path) {
+                                        drawRect(surfaceColor)
+                                        this@drawWithContent.drawContent()
+                                    }
                                 }
                             } else {
-                                Modifier
+                                Modifier.background(surfaceColor)
                             }
                         )
                 ) {
