@@ -27,6 +27,7 @@ private fun formatTime(millis: Long): String {
     return sdf.format(Date(millis))
 }
 
+// 日记首页：显示所有笔记本列表
 @Composable
 fun DiaryScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
     val context = LocalContext.current
