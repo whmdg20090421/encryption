@@ -9,10 +9,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -24,8 +22,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.StrokeCap
@@ -79,21 +81,28 @@ fun DiaryBookScreen(
     var showDialog by remember { mutableStateOf(false) }
     var animTrigger by remember { mutableStateOf(0) }
     val animProgress = remember { Animatable(0f) }
-    val contentAlpha = remember { Animatable(0f) }
     val config = LocalConfiguration.current
     val density = LocalDensity.current
     val screenWidthPx = config.screenWidthDp.toFloat()
+    val screenHeightPx = config.screenHeightDp.toFloat()
 
-    // 记录 FAB 的屏幕坐标，作为动画起点
-    var fabOffsetX by remember { mutableFloatStateOf(0f) }
-    var fabOffsetY by remember { mutableFloatStateOf(0f) }
+    // 记录 FAB 的屏幕坐标（dp），动画起点
+    var fabScreenX by remember { mutableFloatStateOf(0f) }
+    var fabScreenY by remember { mutableFloatStateOf(0f) }
+    // FAB 中心坐标（相对于 overlayBox，动画阶段1 使用）
+    var fabCenterX by remember { mutableFloatStateOf(0f) }
+    var fabCenterY by remember { mutableFloatStateOf(0f) }
 
+    // 动画触发：三阶段顺序执行
     LaunchedEffect(animTrigger) {
         if (animTrigger > 0) {
             animProgress.snapTo(0f)
-            contentAlpha.snapTo(0f)
-            animProgress.animateTo(1f, animationSpec = tween(800))
-            contentAlpha.animateTo(1f, animationSpec = tween(400))
+            // 阶段1：FAB 移动到屏幕中心 (0→0.625)
+            animProgress.animateTo(0.625f, animationSpec = tween(500))
+            // 阶段2：FAB 渐隐 + 弹窗渐显 (0.625→0.875)
+            animProgress.animateTo(0.875f, animationSpec = tween(200))
+            // 阶段3：圆形裁剪向外扩展 (0.875→1.0)
+            animProgress.animateTo(1f, animationSpec = tween(150))
         }
     }
 
@@ -228,12 +237,13 @@ fun DiaryBookScreen(
 
         // 叠加层：FAB + 展开弹窗
         Box(modifier = Modifier.fillMaxSize()) {
-            // 遮罩层
+            // 遮罩层（alpha 跟随动画进度）
             if (showDialog) {
+                val scrimAlpha = (animProgress.value * 0.4f).coerceIn(0f, 0.4f)
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.4f))
+                        .background(Color.Black.copy(alpha = scrimAlpha))
                         .pointerInput(Unit) {
                             detectTapGestures(
                                 onDoubleTap = { showDialog = false }
@@ -243,49 +253,79 @@ fun DiaryBookScreen(
             }
 
             if (showDialog) {
-                // 动画：从 FAB 实际位置展开到屏幕中心，高度自适应内容
+                // 弹窗：始终在最终位置、最终大小，始终渲染内容
                 val dialogWidthDp = screenWidthPx * 0.85f
-                val endOffsetX = (screenWidthPx - dialogWidthDp) / 2f
-                val endOffsetY = config.screenHeightDp * 0.25f
-                val cornerRadius = lerp(28f, 16f, animProgress.value)
-                val animationDone = animProgress.value >= 1f
+                val dialogOffsetX = (screenWidthPx - dialogWidthDp) / 2f
+                val dialogOffsetY = screenHeightPx * 0.25f
 
-                val currentX = lerp(fabOffsetX, endOffsetX, animProgress.value)
-                val currentY = lerp(fabOffsetY, endOffsetY, animProgress.value)
-                val currentWidth = lerp(56f, dialogWidthDp, animProgress.value)
+                // 阶段1：FAB 移动进度 (0→1)
+                val moveProgress = (animProgress.value / 0.625f).coerceIn(0f, 1f)
+                // 阶段2：内容渐显进度 (0→1)
+                val fadeInProgress = ((animProgress.value - 0.625f) / 0.25f).coerceIn(0f, 1f)
+                // 阶段3：圆形扩展进度 (0→1)
+                val revealProgress = ((animProgress.value - 0.875f) / 0.125f).coerceIn(0f, 1f)
 
+                // 弹窗 alpha：阶段1 不可见，阶段2 渐显
+                val dialogAlpha = fadeInProgress
+
+                // FAB 加号的位置（独立于弹窗）
+                val fabCenterTargetX = dialogOffsetX + dialogWidthDp / 2f
+                val fabCenterTargetY = dialogOffsetY + 100f  // 大致弹窗上部
+                val fabCurrentX = lerp(fabCenterX, fabCenterTargetX, moveProgress) - 28f
+                val fabCurrentY = lerp(fabCenterY, fabCenterTargetY, moveProgress) - 28f
+
+                // 弹窗 Box（始终在最终位置）
                 Box(
                     modifier = Modifier
-                        .offset(x = currentX.dp, y = currentY.dp)
-                        .then(
-                            if (animationDone) Modifier.fillMaxWidth(0.85f) else Modifier.width(currentWidth.dp)
-                        )
+                        .offset(x = dialogOffsetX.dp, y = dialogOffsetY.dp)
+                        .fillMaxWidth(0.85f)
                         .wrapContentHeight()
-                        .clip(RoundedCornerShape(cornerRadius.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.surface)
+                        .alpha(dialogAlpha)
+                        .then(
+                            if (revealProgress in 0f..0.99f) {
+                                // 阶段3：圆形裁剪从 FAB 中心向外扩展
+                                Modifier.drawWithContent {
+                                    val circleCenter = Offset(
+                                        x = (fabCenterTargetX - dialogOffsetX).dp.toPx(),
+                                        y = (fabCenterTargetY - dialogOffsetY).dp.toPx()
+                                    )
+                                    val maxRadius = kotlin.math.sqrt(
+                                        (size.width * size.width + size.height * size.height).toDouble()
+                                    ).toFloat()
+                                    val circleRadius = maxRadius * revealProgress
+                                    val path = Path().apply {
+                                        addOval(Rect(circleCenter, circleRadius))
+                                    }
+                                    clipPath(path) { this@drawWithContent.drawContent() }
+                                }
+                            } else {
+                                Modifier
+                            }
+                        )
                 ) {
-                    // 加号图标（动画过程中渐隐）
-                    if (!animationDone) {
-                        Box(
-                            modifier = Modifier
-                                .size(56.dp)
-                                .alpha(1f - animProgress.value),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null, tint = Color.White)
-                        }
-                    }
+                    DiaryDialogContent(
+                        selectedDate = dates[selectedIndex],
+                        cyanColor = cyanColor,
+                        onDismiss = { showDialog = false },
+                        onConfirm = { /* 待实现 */ }
+                    )
+                }
 
-                    // 弹窗内容（动画完成后显示）
-                    if (animationDone) {
-                        Box(modifier = Modifier.alpha(contentAlpha.value)) {
-                            DiaryDialogContent(
-                                selectedDate = dates[selectedIndex],
-                                cyanColor = cyanColor,
-                                onDismiss = { showDialog = false },
-                                onConfirm = { /* 待实现 */ }
-                            )
-                        }
+                // FAB 加号（独立移动 + 渐隐）
+                val fabAlpha = if (moveProgress < 1f) 1f else (1f - fadeInProgress)
+                if (fabAlpha > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .offset(x = fabCurrentX.dp, y = fabCurrentY.dp)
+                            .size(56.dp)
+                            .alpha(fabAlpha)
+                            .clip(RoundedCornerShape(28.dp))
+                            .background(cyanColor),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, tint = Color.White)
                     }
                 }
             } else {
@@ -301,8 +341,10 @@ fun DiaryBookScreen(
                         .padding(end = 25.dp, bottom = 25.dp)
                         .onGloballyPositioned { coords ->
                             val pos = coords.localToWindow(Offset.Zero)
-                            fabOffsetX = pos.x / density.density
-                            fabOffsetY = pos.y / density.density
+                            fabScreenX = pos.x / density.density
+                            fabScreenY = pos.y / density.density
+                            fabCenterX = fabScreenX + 28f
+                            fabCenterY = fabScreenY + 28f
                         }
                 ) {
                     Icon(Icons.Default.Add, contentDescription = "添加", tint = Color.White)
@@ -330,9 +372,8 @@ private fun DiaryDialogContent(
 
     Column(
         modifier = Modifier
-            .fillMaxSize()
-            .padding(20.dp)
-            .verticalScroll(rememberScrollState()),
+            .fillMaxWidth()
+            .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // 标题
