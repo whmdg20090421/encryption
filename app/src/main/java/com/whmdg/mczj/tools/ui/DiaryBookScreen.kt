@@ -105,7 +105,6 @@ fun DiaryBookScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .offset(x = -(circleRadius))
                 .padding(top = 8.dp, bottom = 8.dp)
         ) {
             itemsIndexed(dates) { index, entry ->
@@ -116,7 +115,7 @@ fun DiaryBookScreen(
                 else
                     MaterialTheme.colorScheme.onSurfaceVariant
 
-                val entryHeight = 44.dp
+                val entryHeight = 66.dp
 
                 Box(
                     modifier = Modifier
