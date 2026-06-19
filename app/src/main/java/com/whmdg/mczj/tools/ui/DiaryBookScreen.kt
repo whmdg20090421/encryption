@@ -1,12 +1,17 @@
 package com.whmdg.mczj.tools.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -16,14 +21,22 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.time.LocalDate
+import java.time.LocalTime
 
 // 笔记本详情：点开某个笔记本后的内部界面
 @Composable
@@ -59,17 +72,24 @@ fun DiaryBookScreen(
     val isDark = isSystemInDarkTheme()
     val cyanColor = if (isDark) Color(0xFF4DB6AC) else Color(0xFF00BCD4)  // 暗青 / 亮青
 
-    Scaffold(
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { },
-                containerColor = cyanColor,
-                modifier = Modifier.padding(end = 10.dp, bottom = 10.dp)
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "添加", tint = Color.White)
-            }
+    // FAB 展开动画状态
+    var showDialog by remember { mutableStateOf(false) }
+    var animTrigger by remember { mutableStateOf(0) }
+    val animProgress = remember { Animatable(0f) }
+    val contentAlpha = remember { Animatable(0f) }
+    val config = LocalConfiguration.current
+    val screenWidthPx = config.screenWidthDp.toFloat()
+
+    LaunchedEffect(animTrigger) {
+        if (animTrigger > 0) {
+            animProgress.snapTo(0f)
+            contentAlpha.snapTo(0f)
+            animProgress.animateTo(1f, animationSpec = tween(300))
+            contentAlpha.animateTo(1f, animationSpec = tween(150))
         }
-    ) { innerPadding ->
+    }
+
+    Scaffold { innerPadding ->
     Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
         // 顶部工具栏 — 名称居中于整个工具栏，不与左侧按钮重叠
         Box(
@@ -197,8 +217,179 @@ fun DiaryBookScreen(
                 }
             }
         }
+
+        // 叠加层：FAB + 展开弹窗
+        Box(modifier = Modifier.fillMaxSize()) {
+            // 遮罩层
+            if (showDialog) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.4f))
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onDoubleTap = { showDialog = false }
+                            )
+                        }
+                )
+            }
+
+            if (showDialog) {
+                // 动画：从右下角展开到屏幕中心
+                val dialogWidthDp = screenWidthPx * 0.85f
+                val startOffsetX = screenWidthPx - 56f - 10f
+                val startOffsetY = config.screenHeightDp.toFloat() - 56f - 10f
+                val endOffsetX = (screenWidthPx - dialogWidthDp) / 2f
+                val endOffsetY = config.screenHeightDp * 0.25f
+                val startSize = 56f
+                val cornerRadius = lerp(28f, 16f, animProgress.value)
+
+                val currentX = lerp(startOffsetX, endOffsetX, animProgress.value)
+                val currentY = lerp(startOffsetY, endOffsetY, animProgress.value)
+                val currentWidth = lerp(startSize, dialogWidthDp, animProgress.value)
+                val currentHeight = if (animProgress.value < 0.5f) startSize else lerp(startSize, 300f, (animProgress.value - 0.5f) * 2f)
+
+                Box(
+                    modifier = Modifier
+                        .offset(x = currentX.dp, y = currentY.dp)
+                        .width(currentWidth.dp)
+                        .height(currentHeight.dp)
+                        .clip(RoundedCornerShape(cornerRadius.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                ) {
+                    // 加号图标（动画过程中渐隐）
+                    if (animProgress.value < 0.5f) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .alpha(1f - animProgress.value * 2f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, tint = Color.White)
+                        }
+                    }
+
+                    // 弹窗内容（动画后半段渐显）
+                    if (animProgress.value > 0.5f) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .alpha(contentAlpha.value)
+                        ) {
+                            DiaryDialogContent(
+                                selectedDate = dates[selectedIndex],
+                                cyanColor = cyanColor,
+                                onDismiss = { showDialog = false },
+                                onConfirm = { /* 待实现 */ }
+                            )
+                        }
+                    }
+                }
+            } else {
+                // FAB 按钮
+                FloatingActionButton(
+                    onClick = {
+                        showDialog = true
+                        animTrigger++
+                    },
+                    containerColor = cyanColor,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 10.dp, bottom = 10.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "添加", tint = Color.White)
+                }
+            }
+        }
     }
     } // Scaffold
+}
+
+private fun lerp(start: Float, stop: Float, fraction: Float): Float {
+    return start + (stop - start) * fraction.coerceIn(0f, 1f)
+}
+
+@Composable
+private fun DiaryDialogContent(
+    selectedDate: DateEntry,
+    cyanColor: Color,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    var title by remember { mutableStateOf("") }
+    val currentTime = LocalTime.now()
+    val timeText = "${currentTime.hour.toString().padStart(2, '0')}:${currentTime.minute.toString().padStart(2, '0')}"
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // 标题
+        Text(
+            text = "添加解释",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold
+        )
+
+        // 输入框
+        BasicTextField(
+            value = title,
+            onValueChange = { title = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 100.dp)
+                .background(
+                    MaterialTheme.colorScheme.surfaceVariant,
+                    RoundedCornerShape(8.dp)
+                )
+                .padding(12.dp),
+            textStyle = TextStyle(
+                fontSize = 16.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            decorationBox = { innerTextField ->
+                Box {
+                    if (title.isEmpty()) {
+                        Text(
+                            "输入内容...",
+                            fontSize = 16.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    innerTextField()
+                }
+            }
+        )
+
+        // 日期
+        Text(
+            text = "${selectedDate.year}-${selectedDate.month.replace("月", "").padStart(2, '0')}-${selectedDate.day}",
+            style = MaterialTheme.typography.bodyLarge
+        )
+
+        // 时间
+        Text(
+            text = timeText,
+            style = MaterialTheme.typography.bodyLarge
+        )
+
+        // 底部按钮
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+            TextButton(onClick = onConfirm) {
+                Text("确定", color = cyanColor)
+            }
+        }
+    }
 }
 
 private data class DateEntry(
