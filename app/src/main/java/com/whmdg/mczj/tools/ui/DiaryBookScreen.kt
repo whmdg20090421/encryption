@@ -93,16 +93,16 @@ fun DiaryBookScreen(
     var fabCenterX by remember { mutableFloatStateOf(0f) }
     var fabCenterY by remember { mutableFloatStateOf(0f) }
 
-    // 动画触发：三阶段顺序执行
+    // 动画触发：三阶段顺序执行，每阶段 500ms，总时长 1.5s
     LaunchedEffect(animTrigger) {
         if (animTrigger > 0) {
             animProgress.snapTo(0f)
-            // 阶段1：FAB 移动到屏幕中心 (0→0.625)
-            animProgress.animateTo(0.625f, animationSpec = tween(500))
-            // 阶段2：FAB 渐隐 + 弹窗渐显 (0.625→0.875)
-            animProgress.animateTo(0.875f, animationSpec = tween(200))
-            // 阶段3：圆形裁剪向外扩展 (0.875→1.0)
-            animProgress.animateTo(1f, animationSpec = tween(150))
+            // 阶段1：FAB 移动到屏幕中心 (0→0.333)
+            animProgress.animateTo(0.333f, animationSpec = tween(500))
+            // 阶段2：FAB 渐隐 + 裁剪圆从 FAB 向外扩展 (0.333→0.667)
+            animProgress.animateTo(0.667f, animationSpec = tween(500))
+            // 阶段3：裁剪圆心从 FAB 移到弹窗中心 (0.667→1.0)
+            animProgress.animateTo(1f, animationSpec = tween(500))
         }
     }
 
@@ -253,28 +253,57 @@ fun DiaryBookScreen(
             }
 
             if (showDialog) {
-                // 弹窗：始终在最终位置、最终大小，始终渲染内容
+                // 弹窗参数
                 val dialogWidthDp = screenWidthPx * 0.85f
                 val dialogOffsetX = (screenWidthPx - dialogWidthDp) / 2f
                 val dialogOffsetY = screenHeightPx * 0.25f
+                val dialogCenterX = dialogOffsetX + dialogWidthDp / 2f
+                val dialogCenterY = dialogOffsetY + 100f  // 弹窗大致上部
 
-                // 阶段1：FAB 移动进度 (0→1)
-                val moveProgress = (animProgress.value / 0.625f).coerceIn(0f, 1f)
-                // 阶段2：内容渐显进度 (0→1)
-                val fadeInProgress = ((animProgress.value - 0.625f) / 0.25f).coerceIn(0f, 1f)
-                // 阶段3：圆形扩展进度 (0→1)
-                val revealProgress = ((animProgress.value - 0.875f) / 0.125f).coerceIn(0f, 1f)
+                // 动画阶段进度
+                val moveProgress = (animProgress.value / 0.333f).coerceIn(0f, 1f)
+                val fadeInProgress = ((animProgress.value - 0.333f) / 0.334f).coerceIn(0f, 1f)
+                val expandProgress = ((animProgress.value - 0.667f) / 0.333f).coerceIn(0f, 1f)
 
-                // 弹窗 alpha：阶段1 不可见，阶段2 渐显
-                val dialogAlpha = fadeInProgress
+                // FAB 当前位置（阶段1移动，阶段2/3固定在中心）
+                val fabCurrentX = lerp(fabCenterX, dialogCenterX, moveProgress)
+                val fabCurrentY = lerp(fabCenterY, dialogCenterY, moveProgress)
+                val fabAlpha = if (moveProgress < 1f) 1f else (1f - fadeInProgress)
 
-                // FAB 加号的位置（独立于弹窗）
-                val fabCenterTargetX = dialogOffsetX + dialogWidthDp / 2f
-                val fabCenterTargetY = dialogOffsetY + 100f  // 大致弹窗上部
-                val fabCurrentX = lerp(fabCenterX, fabCenterTargetX, moveProgress) - 28f
-                val fabCurrentY = lerp(fabCenterY, fabCenterTargetY, moveProgress) - 28f
+                // 裁剪圆参数
+                // 阶段1：半径=0（不可见）
+                // 阶段2：圆心跟随FAB，半径从56dp扩展到对角线
+                // 阶段3：圆心从FAB平移到弹窗中心，半径已足够大
+                val boxHalfW = dialogWidthDp / 2f
+                val boxHalfH = 150f  // 估计弹窗半高
+                val diagRadius = kotlin.math.sqrt((boxHalfW * boxHalfW + boxHalfH * boxHalfH).toDouble()).toFloat()
 
-                // 弹窗 Box（始终在最终位置）
+                val clipCenterX: Float
+                val clipCenterY: Float
+                val clipRadius: Float
+
+                if (animProgress.value < 0.333f) {
+                    // 阶段1：不可见
+                    clipCenterX = fabCurrentX
+                    clipCenterY = fabCurrentY
+                    clipRadius = 0f
+                } else if (animProgress.value < 0.667f) {
+                    // 阶段2：裁剪圆从FAB位置扩展
+                    clipCenterX = fabCurrentX
+                    clipCenterY = fabCurrentY
+                    clipRadius = lerp(56f, diagRadius, fadeInProgress)
+                } else {
+                    // 阶段3：圆心从 FAB 位置平移到弹窗中心
+                    clipCenterX = lerp(fabCenterX, dialogCenterX, expandProgress)
+                    clipCenterY = lerp(fabCenterY, dialogCenterY, expandProgress)
+                    clipRadius = diagRadius
+                }
+
+                // 裁剪圆心相对于弹窗Box的坐标
+                val relClipX = clipCenterX - dialogOffsetX
+                val relClipY = clipCenterY - dialogOffsetY
+
+                // 弹窗（始终在最终位置，纯裁剪控制可见性，无alpha）
                 Box(
                     modifier = Modifier
                         .offset(x = dialogOffsetX.dp, y = dialogOffsetY.dp)
@@ -282,21 +311,15 @@ fun DiaryBookScreen(
                         .wrapContentHeight()
                         .clip(RoundedCornerShape(16.dp))
                         .background(MaterialTheme.colorScheme.surface)
-                        .alpha(dialogAlpha)
                         .then(
-                            if (revealProgress in 0f..0.99f) {
-                                // 阶段3：圆形裁剪从 FAB 中心向外扩展
+                            if (animProgress.value < 0.999f) {
                                 Modifier.drawWithContent {
                                     val circleCenter = Offset(
-                                        x = (fabCenterTargetX - dialogOffsetX).dp.toPx(),
-                                        y = (fabCenterTargetY - dialogOffsetY).dp.toPx()
+                                        x = relClipX.dp.toPx(),
+                                        y = relClipY.dp.toPx()
                                     )
-                                    val maxRadius = kotlin.math.sqrt(
-                                        (size.width * size.width + size.height * size.height).toDouble()
-                                    ).toFloat()
-                                    val circleRadius = maxRadius * revealProgress
                                     val path = Path().apply {
-                                        addOval(Rect(circleCenter, circleRadius))
+                                        addOval(Rect(circleCenter, clipRadius.dp.toPx()))
                                     }
                                     clipPath(path) { this@drawWithContent.drawContent() }
                                 }
@@ -314,11 +337,10 @@ fun DiaryBookScreen(
                 }
 
                 // FAB 加号（独立移动 + 渐隐）
-                val fabAlpha = if (moveProgress < 1f) 1f else (1f - fadeInProgress)
                 if (fabAlpha > 0f) {
                     Box(
                         modifier = Modifier
-                            .offset(x = fabCurrentX.dp, y = fabCurrentY.dp)
+                            .offset(x = (fabCurrentX - 28f).dp, y = (fabCurrentY - 28f).dp)
                             .size(56.dp)
                             .alpha(fabAlpha)
                             .clip(RoundedCornerShape(28.dp))
