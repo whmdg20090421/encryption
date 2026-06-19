@@ -17,15 +17,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Locale
+import java.time.LocalDate
 
 // 笔记本详情：点开某个笔记本后的内部界面
 @Composable
@@ -33,7 +29,6 @@ fun DiaryBookScreen(
     bookName: String,
     onBack: () -> Unit
 ) {
-    val density = LocalDensity.current
 
     // 生成日期列表：前后各 10 年，共约 7300 天
     val totalPast = 3650
@@ -41,14 +36,13 @@ fun DiaryBookScreen(
     val todayIndex = totalPast  // 今天在列表中的位置
 
     val dates = remember {
-        val monthFmt = SimpleDateFormat("M月", Locale.CHINA)
-        val dayFmt = SimpleDateFormat("dd", Locale.CHINA)
-        (-totalPast..totalFuture).map { offset ->
-            val c = Calendar.getInstance()
-            c.add(Calendar.DAY_OF_YEAR, offset)
+        val today = LocalDate.now()
+        (totalFuture downTo -totalPast).map { offset ->
+            val d = today.plusDays(offset.toLong())
             DateEntry(
-                month = monthFmt.format(c.time),
-                day = dayFmt.format(c.time)
+                year = d.year.toString(),
+                month = "${d.monthValue}月",
+                day = d.dayOfMonth.toString().padStart(2, '0')
             )
         }
     }
@@ -63,9 +57,6 @@ fun DiaryBookScreen(
     Scaffold { innerPadding ->
     Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
         // 顶部工具栏 — 名称居中于整个工具栏，不与左侧按钮重叠
-        var leftButtonEndPx by remember { mutableIntStateOf(0) }
-        val leftButtonEndDp = with(density) { leftButtonEndPx.toDp() }
-
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -75,9 +66,7 @@ fun DiaryBookScreen(
             // 返回按钮
             IconButton(
                 onClick = onBack,
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .onSizeChanged { leftButtonEndPx = it.width }
+                modifier = Modifier.align(Alignment.CenterStart)
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
             }
@@ -88,15 +77,14 @@ fun DiaryBookScreen(
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(start = leftButtonEndDp)
+                modifier = Modifier.align(Alignment.Center)
             )
         }
 
         // 日期时间线 — 竖线贴左边缘，圆圈左边缘与屏幕齐平
         val circleRadius = 8.dp
         val circleDiameter = circleRadius * 2
+        val timelineSpacing = 70.dp  // 圆心到圆心的距离
         val isDark = isSystemInDarkTheme()
         val cyanColor = if (isDark) Color(0xFF4DB6AC) else Color(0xFF00BCD4)  // 暗青 / 亮青
 
@@ -105,7 +93,7 @@ fun DiaryBookScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .padding(top = 8.dp, bottom = 8.dp)
+                .padding(start = 5.dp, top = 8.dp, bottom = 8.dp)
         ) {
             itemsIndexed(dates) { index, entry ->
                 val isSelected = index == selectedIndex
@@ -115,7 +103,7 @@ fun DiaryBookScreen(
                 else
                     MaterialTheme.colorScheme.onSurfaceVariant
 
-                val entryHeight = 66.dp
+                val entryHeight = timelineSpacing
 
                 Box(
                     modifier = Modifier
@@ -193,6 +181,7 @@ fun DiaryBookScreen(
 }
 
 private data class DateEntry(
+    val year: String,
     val month: String,
     val day: String
 )
