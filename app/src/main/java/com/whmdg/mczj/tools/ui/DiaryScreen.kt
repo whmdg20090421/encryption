@@ -1,11 +1,5 @@
 package com.whmdg.mczj.tools.ui
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,7 +13,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -138,36 +131,21 @@ private fun DiaryTopBar(
                 Icon(Icons.Default.Home, contentDescription = "返回主页")
             }
             Spacer(modifier = Modifier.weight(1f))
+        }
+
+        Box(modifier = Modifier.align(Alignment.CenterEnd)) {
             IconButton(onClick = onToggleMenu) {
                 Icon(Icons.Default.Add, contentDescription = "添加")
             }
-        }
-
-        AnimatedVisibility(
-            visible = showMenu,
-            enter = fadeIn(tween(200)) + slideInVertically(tween(250)) { -it },
-            exit = fadeOut(tween(150)) + slideOutVertically(tween(200)) { -it },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 48.dp, end = 8.dp)
-        ) {
-            Card(
-                modifier = Modifier
-                    .width(menuWidth)
-                    .shadow(8.dp, RoundedCornerShape(12.dp)),
-                shape = RoundedCornerShape(12.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { onToggleMenu() },
+                modifier = Modifier.width(menuWidth)
             ) {
-                Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                    Text(
-                        text = "添加日记本",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(onClick = onAddBook)
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                }
+                DropdownMenuItem(
+                    text = { Text("添加日记本", style = MaterialTheme.typography.bodyLarge) },
+                    onClick = onAddBook
+                )
             }
         }
     }
