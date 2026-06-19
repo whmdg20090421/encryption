@@ -9,19 +9,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 @Composable
 fun DiaryBookScreen(
-    bookName: String,
-    createdAt: Long,
-    lastEditedAt: Long,
     onBack: () -> Unit
 ) {
-    val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-
     Scaffold { innerPadding ->
     Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
         // 顶部工具栏
@@ -48,19 +40,6 @@ fun DiaryBookScreen(
                 .weight(1f)
                 .padding(16.dp)
         ) {
-            Text(text = bookName, style = MaterialTheme.typography.headlineMedium)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "创建：${sdf.format(Date(createdAt))}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = "最后编辑：${sdf.format(Date(lastEditedAt))}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(16.dp))
             Text("日记内容区域", style = MaterialTheme.typography.bodyLarge)
         }
     }

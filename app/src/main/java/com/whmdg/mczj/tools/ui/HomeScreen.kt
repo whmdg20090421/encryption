@@ -562,9 +562,6 @@ fun MainAppContainer() {
         }
         is Screen.DiaryBookDetail -> {
             DiaryBookScreen(
-                bookName = currentScreen.bookName,
-                createdAt = currentScreen.createdAt,
-                lastEditedAt = currentScreen.lastEditedAt,
                 onBack = { navigateBack() }
             )
         }
