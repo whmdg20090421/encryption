@@ -8,5 +8,6 @@ enum class Feature {
     SECURITY_SETTINGS,
     RP_HUB,
     DEBUG_MODE,
-    WIFI
+    WIFI,
+    DIARY
 }

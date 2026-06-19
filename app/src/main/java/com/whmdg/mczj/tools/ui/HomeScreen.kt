@@ -110,6 +110,7 @@ fun featureDisplayName(f: Feature): String = when (f) {
     Feature.DEBUG_MODE -> "调试模式"
     Feature.RP_HUB -> "RP-Hub"
     Feature.WIFI -> "WiFi"
+    Feature.DIARY -> "日记"
 }
 
 sealed class Screen {
@@ -134,6 +135,7 @@ sealed class Screen {
     object AuthManagement : Screen()
     object FunctionalTest : Screen()
     object RpHub : Screen()
+    object Diary : Screen()
     object Wifi : Screen()
     object About : Screen()
     object Changelog : Screen()
@@ -148,7 +150,8 @@ enum class ModuleId {
     BATCH_DOWNLOADER,
     SECURITY,
     RP_HUB,
-    WIFI
+    WIFI,
+    DIARY
 }
 
 data class ModuleEntry(
@@ -166,7 +169,8 @@ val MODULE_REGISTRY: Map<ModuleId, ModuleEntry> = mapOf(
     ModuleId.BATCH_DOWNLOADER to ModuleEntry("批量下载器", "FA 图片批量下载等工具", Icons.Default.Download, Feature.BATCH_DOWNLOADER, Screen.BatchDownloader),
     ModuleId.SECURITY to ModuleEntry("安全", "权限设置与特殊权限管理", Icons.Default.Lock, Feature.SECURITY_SETTINGS, Screen.Security),
     ModuleId.RP_HUB to ModuleEntry("RP-Hub", "本地角色扮演对话工具", Icons.Default.SmartToy, Feature.RP_HUB, Screen.RpHub),
-    ModuleId.WIFI to ModuleEntry("WiFi", "WiFi 网络扫描与分析", Icons.Default.Wifi, Feature.WIFI, Screen.Wifi)
+    ModuleId.WIFI to ModuleEntry("WiFi", "WiFi 网络扫描与分析", Icons.Default.Wifi, Feature.WIFI, Screen.Wifi),
+    ModuleId.DIARY to ModuleEntry("日记", "记录每日心情与想法", Icons.Default.Edit, Feature.DIARY, Screen.Diary)
 )
 
 /**
@@ -546,6 +550,11 @@ fun MainAppContainer() {
         }
         is Screen.RpHub -> {
             RpHubScreen(
+                onBack = { navigateBack() }
+            )
+        }
+        is Screen.Diary -> {
+            DiaryScreen(
                 onBack = { navigateBack() }
             )
         }
@@ -962,14 +971,16 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
             title = "应用",
             icon = Icons.Default.Apps
         ) {
-            val rpHubEntry = MODULE_REGISTRY[ModuleId.RP_HUB]!!
-            CompactSettingsItem(
-                title = rpHubEntry.title,
-                subtitle = rpHubEntry.subtitle,
-                icon = rpHubEntry.icon,
-                enabled = PermissionManager.has(rpHubEntry.feature),
-                onClick = { navigateToModule(ModuleId.RP_HUB) }
-            )
+            listOf(ModuleId.RP_HUB, ModuleId.DIARY).forEach { moduleId ->
+                val entry = MODULE_REGISTRY[moduleId]!!
+                CompactSettingsItem(
+                    title = entry.title,
+                    subtitle = entry.subtitle,
+                    icon = entry.icon,
+                    enabled = PermissionManager.has(entry.feature),
+                    onClick = { navigateToModule(moduleId) }
+                )
+            }
         }
 
         SettingsSection(
