@@ -25,7 +25,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Date
 import java.util.Locale
 
 // 笔记本详情：点开某个笔记本后的内部界面
@@ -42,17 +41,14 @@ fun DiaryBookScreen(
     val todayIndex = totalPast  // 今天在列表中的位置
 
     val dates = remember {
-        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         val monthFmt = SimpleDateFormat("M月", Locale.CHINA)
         val dayFmt = SimpleDateFormat("dd", Locale.CHINA)
         (-totalPast..totalFuture).map { offset ->
             val c = Calendar.getInstance()
             c.add(Calendar.DAY_OF_YEAR, offset)
             DateEntry(
-                date = sdf.format(c.time),
                 month = monthFmt.format(c.time),
-                day = dayFmt.format(c.time),
-                isToday = offset == 0
+                day = dayFmt.format(c.time)
             )
         }
     }
@@ -66,30 +62,27 @@ fun DiaryBookScreen(
 
     Scaffold { innerPadding ->
     Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-        // 顶部工具栏
-        var leftButtonEnd by remember { mutableIntStateOf(0) }
-        var rightButtonStart by remember { mutableIntStateOf(Int.MAX_VALUE) }
+        // 顶部工具栏 — 名称居中于整个工具栏，不与左侧按钮重叠
+        var leftButtonEndPx by remember { mutableIntStateOf(0) }
+        val leftButtonEndDp = with(density) { leftButtonEndPx.toDp() }
 
-        BoxWithConstraints(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(60.dp)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            val toolbarWidthPx = with(density) { maxWidth.toPx() }.toInt()
-
+            // 返回按钮
             IconButton(
                 onClick = onBack,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
-                    .onSizeChanged { leftButtonEnd = it.width }
+                    .onSizeChanged { leftButtonEndPx = it.width }
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
             }
 
-            val titleMaxWidth = (rightButtonStart - leftButtonEnd).coerceAtLeast(0)
-            val titleMaxWidthDp = with(density) { titleMaxWidth.toDp() }
-
+            // 名称 — 相对整个工具栏居中，左 padding 避让按钮
             Text(
                 text = bookName,
                 style = MaterialTheme.typography.titleMedium,
@@ -97,7 +90,7 @@ fun DiaryBookScreen(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .widthIn(max = titleMaxWidthDp)
+                    .padding(start = leftButtonEndDp)
             )
         }
 
@@ -105,8 +98,7 @@ fun DiaryBookScreen(
         val circleRadius = 8.dp
         val circleDiameter = circleRadius * 2
         val isDark = isSystemInDarkTheme()
-        val lineColor = if (isDark) Color(0xFF4DB6AC) else Color(0xFF00BCD4)     // 暗青 / 亮青
-        val cyanColor = if (isDark) Color(0xFF4DB6AC) else Color(0xFF00BCD4)
+        val cyanColor = if (isDark) Color(0xFF4DB6AC) else Color(0xFF00BCD4)  // 暗青 / 亮青
 
         LazyColumn(
             state = listState,
@@ -141,7 +133,7 @@ fun DiaryBookScreen(
                         val lineX = circleRadius.toPx()
                         val lineThickness = 1.5.dp.toPx()
                         drawLine(
-                            color = lineColor,
+                            color = cyanColor,
                             start = Offset(lineX, 0f),
                             end = Offset(lineX, size.height),
                             strokeWidth = lineThickness,
@@ -202,8 +194,6 @@ fun DiaryBookScreen(
 }
 
 private data class DateEntry(
-    val date: String,
     val month: String,
-    val day: String,
-    val isToday: Boolean
+    val day: String
 )

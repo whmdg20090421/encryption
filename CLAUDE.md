@@ -7,10 +7,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 禁止使用 Explore 工具。需要探索代码库时，直接启动 Agent 子任务完成，例如：Agent(查找 FileManagerScreen 中的 toolbar 代码)
 - 不要将 Explore 作为 Agent 的前置步骤单独调用
 
-## 工具使用限制
-
-当前 API 环境不支持 Explore 工具，调用它会静默失败（返回 0 tools）。
-
 - 严禁使用 Explore 工具
 - 所有需要探索/查找代码的任务，必须直接使用 Agent(任务描述) 完成
 - 例如：Agent(在 FileManagerScreen 中查找 toolbar 相关代码)
@@ -30,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 构建与运行
 
-> **注意**：本地无编译环境，不要运行 `./gradlew` 构建命令。修改代码后通过阅读源文件检查语法错误即可。
+> **注意**：本地无编译环境，不要运行 `./gradlew` 构建命令。修改代码后通过阅读源文件检查语法错误即可。在没有用户确定的命令前，不要自行上传代码。
 
 ```bash
 # 调试包
@@ -63,12 +59,14 @@ app/src/main/java/com/whmdg/mczj/tools/
 ├── util/
 │   ├── DiagnosticLog.kt               # 诊断日志工具
 │   ├── FormatUtils.kt                 # 格式化工具（文件大小等）
-│   ├── CompressService.kt             # 压缩/解压服务
 │   ├── FileAccessLevel.kt             # 文件访问通道枚举（NORMAL / SHIZUKU / ROOT）
 │   ├── FileAccessor.kt                # 文件访问抽象层（屏蔽普通/Shizuku/Root 差异）
-│   └── FolderSizeCalculator.kt        # 文件夹大小统计（全量+差异自底向上算法）
+│   ├── FolderSizeCalculator.kt        # 文件夹大小统计（全量+差异自底向上算法）
+│   ├── RootBinaryManager.kt           # 管理 APK 内嵌 7za 静态二进制
+│   ├── AppIconHelper.kt               # 文件管理器中显示已安装应用图标
+│   └── JxlCoilDecoder.kt             # Coil 图片加载器 JPEG XL 解码器
 ├── auth/                              # 认证/授权模块（密钥→功能特性门控）
-│   ├── Feature.kt                     # 功能枚举（ENCRYPTION_VAULT, FILE_MANAGER, BATCH_DOWNLOADER 等）
+│   ├── Feature.kt                     # 功能枚举（ENCRYPTION_VAULT, FILE_MANAGER, BATCH_DOWNLOADER, WIFI, DIARY, RP_HUB 等）
 │   ├── NativeAuth.kt                  # JNI 接口，调用 authcore 验证密码（返回派生密钥）
 │   ├── KeyProfile.kt                  # 密钥 ID → Feature 集合映射（3 组预置密钥）
 │   ├── PermissionManager.kt           # 全局认证状态管理（StateFlow<AuthState>）
@@ -102,6 +100,8 @@ app/src/main/java/com/whmdg/mczj/tools/
 │   │   └── CanonicalJson.kt           # Python json.dumps(sort_keys=True) 的 Kotlin 等价
 │   ├── models/
 │   │   └── EncryptionNode.kt          # 加密文件树节点模型
+│   ├── data/
+│   │   └── FolderSizeDb.kt            # 文件夹大小缓存数据库（v1.2 文本格式）
 │   └── services/                      # 业务逻辑层
 │       ├── VaultService.kt            # 保险箱 CRUD（创建/打开/删除/导入/改密）
 │       ├── VaultSession.kt            # 解锁后的在线会话（持有 DEK）
@@ -115,6 +115,24 @@ app/src/main/java/com/whmdg/mczj/tools/
 │   ├── AndroidPermissionLevel.kt      # 权限级别枚举（STANDARD → ROOT 六级）
 │   ├── MyAccessibilityService.kt      # 无障碍服务声明
 │   └── MyDeviceAdminReceiver.kt       # 设备管理器接收器
+├── fileop/                            # 文件操作模块（参考 MaterialFiles 架构）
+│   ├── FileOperator.kt                # 文件操作抽象接口（copy/move/delete/mkdir）
+│   ├── JavaFileOperator.kt            # Java File API 实现
+│   ├── ShellFileOperator.kt           # Root/Shizuku Shell 实现
+│   ├── FileOperationJob.kt            # Job 基类
+│   ├── CopyJob.kt / MoveJob.kt / DeleteJob.kt  # 具体操作 Job
+│   ├── FileOperationManager.kt        # 全局单例，StateFlow 驱动进度/冲突/错误弹窗
+│   ├── FileOperationService.kt        # 前台 Service 执行长时间操作
+│   └── webdav/                        # WebDAV 客户端模块
+│       ├── WebDavServerConfig.kt      # 服务器配置模型
+│       ├── WebDavServerStore.kt       # 配置持久化存储
+│       ├── WebDavFileClient.kt        # WebDAV 文件操作（实现 FileOperator 接口）
+│       ├── WebDavPath.kt              # 路径解析
+│       ├── WebDavAuthenticator.kt     # 认证
+│       └── client/                    # 底层 HTTP 客户端（OkHttp + dav4jvm）
+│           ├── Client.kt
+│           ├── Authentication.kt
+│           └── Authority.kt
 └── ui/
     ├── HomeScreen.kt                  # 导航容器 + 主页/加密/云盘/设置所有屏幕
     ├── VaultCreateScreen.kt           # 新建保险箱向导（含 Argon2id 基准测试）
@@ -134,8 +152,19 @@ app/src/main/java/com/whmdg/mczj/tools/
     ├── PermissionManagementConfigScreen.kt  # 权限管理配置
     ├── PermissionGuideViewModel.kt    # 权限引导 ViewModel
     ├── ErrorDialog.kt                 # 错误对话框组件
+    ├── DiaryScreen.kt                 # 日记首页（笔记本列表 + DropdownMenu）
+    ├── DiaryBookScreen.kt             # 笔记本详情（日期时间线 + Canvas 圆圈）
+    ├── DiaryModels.kt                 # 日记数据模型（DiaryBook / DiaryDb，JSON 持久化）
+    ├── ImageViewerScreen.kt           # 图片查看器（HorizontalPager + telephoto zoom）
+    ├── TextEditorScreen.kt            # 代码/文本编辑器（Sora CodeEditor）
+    ├── ChangelogScreen.kt             # 更新日志
+    ├── AboutScreen.kt                 # 关于页面
+    ├── WebDavEditDialog.kt            # WebDAV 服务器编辑对话框
+    ├── FileOperationDialogs.kt        # 文件操作冲突/错误确认弹窗
     ├── components/
-    │   └── GlowCard.kt               # 青色光晕边框卡片组件
+    │   ├── GlowCard.kt               # 青色光晕边框卡片组件
+    │   ├── ApkInfoDialog.kt          # APK 信息弹窗
+    │   └── FileTypeIcon.kt           # 文件类型彩色图标组件
     ├── encryption/
     │   ├── EncryptionProgressIcon.kt  # 加密进度动画图标
     │   └── EncryptionProgressPanel.kt # 加密进度面板（任务列表/统计）
@@ -177,18 +206,27 @@ third_party/argon2/                    # 内嵌 Argon2 实现（供 JNI 直接�
 
 ```
 主页 (Dashboard)
-  └── 加密 (EncryptionHome)
-        ├── 保险箱列表 (VaultsListTab)
-        │     ├── 新建保险箱 (VaultCreate)
-        │     ├── 打开保险箱 (VaultOpen)  ← 含 TEE 生物识别快速解锁
-        │     └── 修改密码 (VaultChangePassword)
-        ├── 云盘 (CloudTab)             ← 占位，待实现
-        └── 设置 (EncryptionSettingsTab)
+  ├── 加密 (EncryptionHome)
+  │     ├── 保险箱列表 (VaultsListTab)
+  │     │     ├── 新建保险箱 (VaultCreate)
+  │     │     ├── 打开保险箱 (VaultOpen)  ← 含 TEE 生物识别快速解锁
+  │     │     └── 修改密码 (VaultChangePassword)
+  │     ├── 云盘 (CloudTab)             ← 占位，待实现
+  │     └── 设置 (EncryptionSettingsTab)
+  ├── 日记 (Diary)
+  │     └── 笔记本详情 (DiaryBookDetail)  ← 日期时间线
+  ├── WiFi (Wifi)
+  ├── 批量下载 (BatchDownloader)
+  ├── FA 下载 (FADownloader / FALogin)
+  ├── DeviantArt 下载 (DeviantDownloader / DeviantLogin)
+  └── 文件管理器 (FileManager)           ← 含 WebDAV 快捷访问
 
 设置 (Settings)
-  └── 安全 (Security)
-        ├── 权限设置 (PermissionSettings)
-        └── 特殊权限 (SpecialPermissions)
+  ├── 安全 (Security)
+  │     ├── 权限设置 (PermissionSettings)
+  │     └── 特殊权限 (SpecialPermissions)
+  ├── 关于 (About)
+  └── 更新日志 (Changelog)
 ```
 
 ### 加密模型（KEK-DEK 两层结构）
@@ -287,6 +325,34 @@ FileAccessor（FolderSizeCalculator 使用）
 - `ls -lap` 输出解析使用逐字符定位（非 `split("\\s+")`），精确保留文件名中的连续空格
 - 大小统计 BFS 前执行 `find -type d | wc -l` 获取总目录数，实现实时进度显示
 
+### 文件操作模块（fileop）
+
+参考 MaterialFiles 架构，采用 Job 模式：
+
+```
+FileOperationManager（全局单例）
+    ├── StateFlow<FileOperationState> → 进度/冲突/错误 UI
+    ├── enqueue(job) → 前台 Service 执行
+    └── suspend 等待用户决策（冲突覆盖/跳过/重命名）
+
+FileOperator（抽象接口）
+    ├── JavaFileOperator → 普通路径
+    ├── ShellFileOperator → Root/Shizuku 路径
+    └── WebDavFileClient → WebDAV 远程路径
+
+CopyJob / MoveJob / DeleteJob
+    └── 递归遍历 → 冲突检测 → 执行 → 进度回调
+```
+
+**WebDAV 客户端**：基于 OkHttp + dav4jvm，配置持久化在 `AppDataPaths`，通过 `WebDavEditDialog` 编辑服务器信息。
+
+### 日记模块
+
+- `DiaryBook` 数据模型 + `DiaryDb` JSON 持久化（存储于 `AppDataPaths`）
+- 导航：`Screen.Diary`（笔记本列表）→ `Screen.DiaryBookDetail`（笔记本详情）
+- 笔记本详情页左侧日期时间线：Canvas 绘制竖线 + 空心圆圈，LazyColumn 前后各 10 年无限滚动
+- 工具栏名称居中：`onSizeChanged` 动态测量按钮宽度，`widthIn(max)` 约束避免重叠
+
 ---
 
 ## CI/CD
@@ -297,7 +363,7 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 - **预构建**：`python3 tools/gen_password_hashes.py` 生成 Native 认证哈希（`hashes.inc` + `obf_key.h`，均 gitignored）
 - **签名**：release 签名通过 secrets 注入（`KEYSTORE_B64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`），缺失时自动回退到 debug 签名
 - **ABI**：仅构建 `arm64-v8a`
-- **版本号**：`versionCode` 基于时间戳动态生成，`versionName` 格式 `2.1.<timestamp>`
+- **版本号**：`versionCode` 基于 git commit count 动态生成，`versionName` 格式 `<major>.<minor>.<timestamp>`
 - **产物**：重命名为 `工具箱-v<版本>-<日期时间>-arm64-v8a-release.apk`，保留 30 天
 
 ---
@@ -317,6 +383,9 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 ---
 
 ## 重要约定
+
+### 开发原则
+- **禁止兜底式修复**：遇到 bug 时，先追根溯源理解为什么会出错，而不是急着加 `coerce`、`coerceAtMost`、`?: fallback` 等兜底逻辑。例如 `Int.MAX_VALUE` 作为哨兵值导致下游计算产生极端数值，应改用合理的数据结构（如 `Int? = null` 表示"不存在"），而非在消费端加 `coerceAtMost` 压制症状。兜底掩盖了真实问题，让代码更难理解和维护。
 
 ### 认证安全
 - `NativeAuth` 的 JNI 层使用内嵌 Argon2 验证密码，派生密钥仅在内存中短暂存在
