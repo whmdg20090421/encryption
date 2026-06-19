@@ -136,6 +136,7 @@ sealed class Screen {
     object FunctionalTest : Screen()
     object RpHub : Screen()
     object Diary : Screen()
+    data class DiaryBookDetail(val bookName: String, val createdAt: Long, val lastEditedAt: Long) : Screen()
     object Wifi : Screen()
     object About : Screen()
     object Changelog : Screen()
@@ -555,6 +556,15 @@ fun MainAppContainer() {
         }
         is Screen.Diary -> {
             DiaryScreen(
+                onBack = { navigateBack() },
+                onNavigate = { navigateTo(it) }
+            )
+        }
+        is Screen.DiaryBookDetail -> {
+            DiaryBookScreen(
+                bookName = screen.bookName,
+                createdAt = screen.createdAt,
+                lastEditedAt = screen.lastEditedAt,
                 onBack = { navigateBack() }
             )
         }

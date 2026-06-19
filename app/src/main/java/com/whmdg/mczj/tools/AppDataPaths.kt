@@ -76,6 +76,13 @@ object AppDataPaths {
         return dir
     }
 
+    /** 日记模块目录 */
+    fun diary(context: Context): File {
+        val dir = File(root(context), "日记")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     /** 回收站目录（外部 media 目录，卸载后保留） */
     fun recycleBin(context: Context): File {
         val mediaDir = context.getExternalMediaDirs().firstOrNull()
