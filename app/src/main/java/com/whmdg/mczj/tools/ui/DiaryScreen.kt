@@ -78,39 +78,39 @@ fun DiaryScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                     Icon(Icons.Default.Home, contentDescription = "返回主页")
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                Box {
-                    IconButton(onClick = { showMenu = !showMenu }) {
-                        Icon(Icons.Default.Add, contentDescription = "添加")
-                    }
-                    AnimatedVisibility(
-                        visible = showMenu,
-                        enter = fadeIn(tween(200)) + slideInVertically(tween(250)) { -it },
-                        exit = fadeOut(tween(150)) + slideOutVertically(tween(200)) { -it },
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = 48.dp, end = 8.dp)
-                    ) {
-                        Card(
+                IconButton(onClick = { showMenu = !showMenu }) {
+                    Icon(Icons.Default.Add, contentDescription = "添加")
+                }
+            }
+
+            // 弹出面板（在 Box 作用域内，可用 Alignment）
+            AnimatedVisibility(
+                visible = showMenu,
+                enter = fadeIn(tween(200)) + slideInVertically(tween(250)) { -it },
+                exit = fadeOut(tween(150)) + slideOutVertically(tween(200)) { -it },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 48.dp, end = 8.dp)
+            ) {
+                Card(
+                    modifier = Modifier
+                        .width(menuWidth)
+                        .shadow(8.dp, RoundedCornerShape(12.dp)),
+                    shape = RoundedCornerShape(12.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                ) {
+                    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                        Text(
+                            text = "添加日记本",
                             modifier = Modifier
-                                .width(menuWidth)
-                                .shadow(8.dp, RoundedCornerShape(12.dp)),
-                            shape = RoundedCornerShape(12.dp),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                                Text(
-                                    text = "添加日记本",
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            showMenu = false
-                                            showCreateDialog = true
-                                        }
-                                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
-                            }
-                        }
+                                .fillMaxWidth()
+                                .clickable {
+                                    showMenu = false
+                                    showCreateDialog = true
+                                }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            style = MaterialTheme.typography.bodyLarge
+                        )
                     }
                 }
             }
