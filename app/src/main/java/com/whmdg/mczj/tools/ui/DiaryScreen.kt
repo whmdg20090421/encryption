@@ -62,7 +62,8 @@ fun DiaryScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
         )
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Scaffold { innerPadding ->
+    Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
         // 顶部工具栏
         DiaryTopBar(
             onBack = onBack,
@@ -112,6 +113,7 @@ fun DiaryScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
             Text("底部工具栏", style = MaterialTheme.typography.bodyMedium)
         }
     }
+    } // Scaffold
 }
 
 @Composable

@@ -22,7 +22,8 @@ fun DiaryBookScreen(
 ) {
     val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Scaffold { innerPadding ->
+    Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
         // 顶部工具栏
         Box(
             modifier = Modifier
@@ -63,4 +64,5 @@ fun DiaryBookScreen(
             Text("日记内容区域", style = MaterialTheme.typography.bodyLarge)
         }
     }
+    } // Scaffold
 }
