@@ -23,34 +23,11 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.whmdg.mczj.tools.AppDataPaths
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-
-private val json = Json { prettyPrint = false }
-
-private fun booksFile(context: android.content.Context): File =
-    File(AppDataPaths.diary(context), "books.json")
-
-private fun loadBooks(context: android.content.Context): List<DiaryBook> {
-    val file = booksFile(context)
-    if (!file.exists()) return emptyList()
-    return try {
-        json.decodeFromString<List<DiaryBook>>(file.readText())
-    } catch (_: Exception) {
-        emptyList()
-    }
-}
-
-private fun saveBooks(context: android.content.Context, books: List<DiaryBook>) {
-    booksFile(context).writeText(json.encodeToString(books))
-}
 
 private fun formatTime(millis: Long): String {
     val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
@@ -62,27 +39,25 @@ fun DiaryScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
     val context = LocalContext.current
     var showMenu by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
-    var books by remember { mutableStateOf(listOf<DiaryBook>()) }
+    var db by remember { mutableStateOf(DiaryDb.empty()) }
     val configuration = LocalConfiguration.current
     val menuWidth = (configuration.screenWidthDp * 0.4f).dp
 
     LaunchedEffect(Unit) {
-        books = withContext(Dispatchers.IO) { loadBooks(context) }
+        db = withContext(Dispatchers.IO) { DiaryDb.load(context) }
     }
 
     if (showCreateDialog) {
         CreateBookDialog(
-            existingNames = books.map { it.name }.toSet(),
+            existingNames = db.books.map { it.name }.toSet(),
             onDismiss = { showCreateDialog = false },
             onConfirm = { name ->
                 val now = System.currentTimeMillis()
                 val newBook = DiaryBook(name = name, createdAt = now, lastEditedAt = now)
-                val updated = books + newBook
-                books = updated
+                db.addBook(newBook)
+                db = db.copy() // 触发重组
                 showCreateDialog = false
-                Thread {
-                    saveBooks(context, updated)
-                }.start()
+                Thread { db.save(context) }.start()
             }
         )
     }
@@ -107,7 +82,6 @@ fun DiaryScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                     IconButton(onClick = { showMenu = !showMenu }) {
                         Icon(Icons.Default.Add, contentDescription = "添加")
                     }
-                    // 弹出面板
                     AnimatedVisibility(
                         visible = showMenu,
                         enter = fadeIn(tween(200)) + slideInVertically(tween(250)) { -it },
@@ -143,7 +117,7 @@ fun DiaryScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
         }
 
         // 主内容区域
-        if (books.isEmpty()) {
+        if (db.books.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -160,7 +134,7 @@ fun DiaryScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(books) { book ->
+                items(db.books) { book ->
                     DiaryBookCard(book) {
                         onNavigate(Screen.DiaryBookDetail(book.name, book.createdAt, book.lastEditedAt))
                     }
