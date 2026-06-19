@@ -1,6 +1,6 @@
 package com.whmdg.mczj.tools.ui
 
-import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -80,7 +80,7 @@ fun DiaryBookScreen(
     // FAB 展开动画状态
     var showDialog by remember { mutableStateOf(false) }
     var animTrigger by remember { mutableStateOf(0) }
-    val animProgress = remember { Animatable(0f) }
+    var animProgress by remember { mutableFloatStateOf(0f) }
     val config = LocalConfiguration.current
     val density = LocalDensity.current
     val screenWidthPx = config.screenWidthDp.toFloat()
@@ -96,13 +96,12 @@ fun DiaryBookScreen(
     // 动画触发：三阶段顺序执行，每阶段 500ms，总时长 1.5s
     LaunchedEffect(animTrigger) {
         if (animTrigger > 0) {
-            animProgress.snapTo(0f)
             // 阶段1：FAB 移动到屏幕中心 (0→0.333)
-            animProgress.animateTo(0.333f, animationSpec = tween(500))
+            animate(0f, 0.333f, animationSpec = tween(500)) { value, _ -> animProgress = value }
             // 阶段2：FAB 渐隐 + 裁剪圆从 FAB 向外扩展 (0.333→0.667)
-            animProgress.animateTo(0.667f, animationSpec = tween(500))
+            animate(0.333f, 0.667f, animationSpec = tween(500)) { value, _ -> animProgress = value }
             // 阶段3：裁剪圆心从 FAB 移到弹窗中心 (0.667→1.0)
-            animProgress.animateTo(1f, animationSpec = tween(500))
+            animate(0.667f, 1f, animationSpec = tween(500)) { value, _ -> animProgress = value }
         }
     }
 
@@ -239,7 +238,7 @@ fun DiaryBookScreen(
         Box(modifier = Modifier.fillMaxSize()) {
             // 遮罩层（alpha 跟随动画进度）
             if (showDialog) {
-                val scrimAlpha = (animProgress.value * 0.4f).coerceIn(0f, 0.4f)
+                val scrimAlpha = (animProgress * 0.4f).coerceIn(0f, 0.4f)
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -261,8 +260,8 @@ fun DiaryBookScreen(
                 val dialogCenterY = dialogOffsetY + 100f  // 弹窗大致上部
 
                 // 动画阶段进度
-                val moveProgress = (animProgress.value / 0.333f).coerceIn(0f, 1f)
-                val fadeInProgress = ((animProgress.value - 0.333f) / 0.334f).coerceIn(0f, 1f)
+                val moveProgress = (animProgress / 0.333f).coerceIn(0f, 1f)
+                val fadeInProgress = ((animProgress - 0.333f) / 0.334f).coerceIn(0f, 1f)
 
                 // FAB 当前位置（阶段1移动，阶段2/3固定在中心）
                 val fabCurrentX = lerp(fabCenterX, dialogCenterX, moveProgress)
@@ -281,12 +280,12 @@ fun DiaryBookScreen(
                 val clipCenterY: Float
                 val clipRadius: Float
 
-                if (animProgress.value < 0.333f) {
+                if (animProgress < 0.333f) {
                     // 阶段1：不可见
                     clipCenterX = fabCurrentX
                     clipCenterY = fabCurrentY
                     clipRadius = 0f
-                } else if (animProgress.value < 0.667f) {
+                } else if (animProgress < 0.667f) {
                     // 阶段2：裁剪圆从FAB位置扩展
                     clipCenterX = fabCurrentX
                     clipCenterY = fabCurrentY
@@ -302,16 +301,16 @@ fun DiaryBookScreen(
                 val relClipX = clipCenterX - dialogOffsetX
                 val relClipY = clipCenterY - dialogOffsetY
 
-                // 弹窗（始终在最终位置，纯裁剪控制可见性，无alpha）
+                // 弹窗（仅在动画开始后渲染，避免首帧白色闪烁）
                 val surfaceColor = MaterialTheme.colorScheme.surface
-                Box(
+                if (animProgress > 0f) Box(
                     modifier = Modifier
                         .offset(x = dialogOffsetX.dp, y = dialogOffsetY.dp)
                         .fillMaxWidth(0.85f)
                         .wrapContentHeight()
                         .clip(RoundedCornerShape(16.dp))
                         .then(
-                            if (animProgress.value < 0.999f) {
+                            if (animProgress < 0.999f) {
                                 Modifier.drawWithContent {
                                     val circleCenter = Offset(
                                         x = relClipX.dp.toPx(),
@@ -356,6 +355,7 @@ fun DiaryBookScreen(
                 // FAB 按钮
                 FloatingActionButton(
                     onClick = {
+                        animProgress = 0f
                         showDialog = true
                         animTrigger++
                     },
