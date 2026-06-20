@@ -118,15 +118,6 @@ object CompressService {
 
         // zip4j addFile 会递归添加目录内容，所以只传文件，目录条目由 zip4j 自动创建
         val filesOnly = files.filter { it.isFile }
-        val paramsList = filesOnly.map { file ->
-            val p = ZipParameters()
-            p.isEncryptFiles = baseParams.isEncryptFiles
-            p.encryptionMethod = baseParams.encryptionMethod
-            p.aesKeyStrength = baseParams.aesKeyStrength
-            p.compressionLevel = baseParams.compressionLevel
-            p.fileNameInZip = computeEntryName(file, sources)
-            p
-        }
 
         if (cancelFlag.get()) {
             File(options.outputPath).delete()
@@ -134,12 +125,19 @@ object CompressService {
             return
         }
 
-        zipFile.addFiles(filesOnly, paramsList)
-
-        if (cancelFlag.get()) {
-            File(options.outputPath).delete()
-            callback.onComplete(false, null, "已取消")
-            return
+        for (file in filesOnly) {
+            if (cancelFlag.get()) {
+                File(options.outputPath).delete()
+                callback.onComplete(false, null, "已取消")
+                return
+            }
+            val params = ZipParameters()
+            params.isEncryptFiles = baseParams.isEncryptFiles
+            params.encryptionMethod = baseParams.encryptionMethod
+            params.aesKeyStrength = baseParams.aesKeyStrength
+            params.compressionLevel = baseParams.compressionLevel
+            params.fileNameInZip = computeEntryName(file, sources)
+            zipFile.addFile(file, params)
         }
 
         val count = filesOnly.size
