@@ -8,6 +8,7 @@ import android.widget.Toast
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
 
+import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.util.FormatUtils
 import com.whmdg.mczj.tools.util.AppIconHelper
 
@@ -246,6 +247,18 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     // APK 信息弹窗
     var showApkDialog by remember { mutableStateOf(false) }
     var apkDialogPath by remember { mutableStateOf("") }
+    // ── 压缩对话框 ──
+    var showCompressDialog by remember { mutableStateOf(false) }
+    var compressEntries by remember { mutableStateOf(listOf<FileEntry>()) }
+    var showCompressProgress by remember { mutableStateOf(false) }
+    var compressProgress by remember { mutableFloatStateOf(0f) }
+    var compressCurrentFile by remember { mutableIntStateOf(0) }
+    var compressTotalFiles by remember { mutableIntStateOf(0) }
+    var compressBytesProcessed by remember { mutableStateOf(0L) }
+    var compressTotalBytes by remember { mutableStateOf(0L) }
+    var compressOutputPath by remember { mutableStateOf("") }
+    var compressUseAes by remember { mutableStateOf(true) }
+    var compressOutputToOtherPanel by remember { mutableStateOf(false) }
     // 移动/复制（功能待实现，保留 UI 占位）
 
     // 文件操作进度（从 ViewModel StateFlow 收集）
@@ -2042,7 +2055,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable {
-                                            Toast.makeText(context, "功能开发中", Toast.LENGTH_SHORT).show()
+                                            compressEntries = selectedEntries
+                                            compressOutputToOtherPanel = false
+                                            compressUseAes = true
+                                            showCompressDialog = true
                                             selectedEntry = null
                                         }
                                         .padding(vertical = 16.dp),
@@ -3429,6 +3445,395 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 }
             }
         )
+    }
+
+    // ── 压缩对话框 ──
+    if (showCompressDialog && compressEntries.isNotEmpty()) {
+        val isDark = isSystemInDarkTheme()
+        val formats = listOf("zip", "7z", "tar", "tar.gz", "tar.bz2", "tar.xz")
+        val suffixMap = mapOf(
+            "zip" to ".zip", "7z" to ".7z", "tar" to ".tar",
+            "tar.gz" to ".tar.gz", "tar.bz2" to ".tar.bz2", "tar.xz" to ".tar.xz"
+        )
+
+        var selectedFormat by remember { mutableStateOf("zip") }
+        var compressLevel by remember { mutableIntStateOf(5) }
+        var compressPassword by remember { mutableStateOf("") }
+        var passwordVisible by remember { mutableStateOf(false) }
+        var showFormatDropdown by remember { mutableStateOf(false) }
+        var showLevelDropdown by remember { mutableStateOf(false) }
+
+        val defaultFileName = if (compressEntries.size == 1) {
+            compressEntries[0].name + ".zip"
+        } else {
+            val dirName = if (vm.focusedPanel == FocusedPanel.LEFT) {
+                vm.leftPath.substringAfterLast('/').ifEmpty { "压缩包" }
+            } else {
+                vm.rightPath.substringAfterLast('/').ifEmpty { "压缩包" }
+            }
+            "$dirName.zip"
+        }
+        var fileName by remember { mutableStateOf(defaultFileName) }
+
+        val levelRange = CompressService.getLevelRange(selectedFormat)
+        val defaultLevel = CompressService.getDefaultLevel(selectedFormat)
+
+        LaunchedEffect(selectedFormat) {
+            val baseName = if (compressEntries.size == 1) {
+                compressEntries[0].name.substringBeforeLast(".")
+            } else {
+                val dirName = if (vm.focusedPanel == FocusedPanel.LEFT) {
+                    vm.leftPath.substringAfterLast('/').ifEmpty { "压缩包" }
+                } else {
+                    vm.rightPath.substringAfterLast('/').ifEmpty { "压缩包" }
+                }
+                dirName
+            }
+            fileName = baseName + (suffixMap[selectedFormat] ?: ".zip")
+            compressLevel = defaultLevel
+        }
+
+        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.85f),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Text(
+                            text = if (compressEntries.size == 1) "创建压缩文件" else "创建压缩文件（${compressEntries.size} 个项目）",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        // 文件名
+                        Column {
+                            Text("文件名", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            TextField(
+                                value = fileName,
+                                onValueChange = { fileName = it },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent,
+                                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedIndicatorColor = MaterialTheme.colorScheme.outline
+                                )
+                            )
+                        }
+
+                        // 格式 + 压缩级别
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("格式", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Box {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { showFormatDropdown = true }
+                                            .background(
+                                                MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.3f),
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(selectedFormat, style = MaterialTheme.typography.bodyLarge)
+                                            Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
+                                        }
+                                    }
+                                    DropdownMenu(
+                                        expanded = showFormatDropdown,
+                                        onDismissRequest = { showFormatDropdown = false }
+                                    ) {
+                                        formats.forEach { format ->
+                                            DropdownMenuItem(
+                                                text = { Text(format) },
+                                                onClick = {
+                                                    selectedFormat = format
+                                                    showFormatDropdown = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (levelRange != null) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("压缩级别 (${levelRange.first}-${levelRange.last})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Box {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { showLevelDropdown = true }
+                                                .background(
+                                                    MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.3f),
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(compressLevel.toString(), style = MaterialTheme.typography.bodyLarge)
+                                                Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
+                                            }
+                                        }
+                                        DropdownMenu(
+                                            expanded = showLevelDropdown,
+                                            onDismissRequest = { showLevelDropdown = false }
+                                        ) {
+                                            levelRange.forEach { level ->
+                                                DropdownMenuItem(
+                                                    text = { Text(level.toString()) },
+                                                    onClick = {
+                                                        compressLevel = level
+                                                        showLevelDropdown = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 密码
+                        Column {
+                            Text("密码（不加密请留空）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            TextField(
+                                value = compressPassword,
+                                onValueChange = { compressPassword = it },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                visualTransformation = if (passwordVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent,
+                                    focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedIndicatorColor = MaterialTheme.colorScheme.outline
+                                ),
+                                trailingIcon = {
+                                    IconButton(onClick = { passwordVisible = !passwordVisible }, modifier = Modifier.size(24.dp)) {
+                                        Icon(
+                                            if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            )
+                        }
+
+                        // 输出到另一面板
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("输出到另一面板路径", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Switch(
+                                checked = compressOutputToOtherPanel,
+                                onCheckedChange = { compressOutputToOtherPanel = it },
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+
+                        // ZIP 加密方式
+                        if (selectedFormat == "zip" && compressPassword.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("加密方式", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(
+                                        onClick = { compressUseAes = false },
+                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                    ) {
+                                        Text(
+                                            "ZipCrypto",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (!compressUseAes) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            textDecoration = if (!compressUseAes) androidx.compose.ui.text.style.TextDecoration.Underline else null
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = { compressUseAes = true },
+                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                    ) {
+                                        Text(
+                                            "AES",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (compressUseAes) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            textDecoration = if (compressUseAes) androidx.compose.ui.text.style.TextDecoration.Underline else null
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // 底部按钮
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = {
+                                showCompressDialog = false
+                                compressEntries = emptyList()
+                            }) {
+                                Text("取消", color = MaterialTheme.colorScheme.primary)
+                            }
+                            TextButton(onClick = {
+                                showCompressDialog = false
+                                compressCurrentFile = 0
+                                compressTotalFiles = 0
+                                compressProgress = 0f
+                                compressOutputPath = ""
+                                showCompressProgress = true
+
+                                vm.compress(
+                                    entries = compressEntries,
+                                    fileName = fileName,
+                                    format = selectedFormat,
+                                    level = compressLevel,
+                                    password = compressPassword,
+                                    useAes = compressUseAes,
+                                    outputToOtherPanel = compressOutputToOtherPanel,
+                                    onProgress = { current, total, progress, bytesDone, bytesTotal ->
+                                        compressCurrentFile = current
+                                        compressTotalFiles = total
+                                        compressProgress = progress
+                                        compressBytesProcessed = bytesDone
+                                        compressTotalBytes = bytesTotal
+                                    },
+                                    onComplete = { success, outPath, error ->
+                                        compressOutputPath = outPath ?: ""
+                                        showCompressProgress = false
+                                        if (success) {
+                                            Toast.makeText(context, "压缩完成: ${outPath?.substringAfterLast('/')}", Toast.LENGTH_SHORT).show()
+                                        } else if (error != "已取消") {
+                                            Toast.makeText(context, "压缩失败: $error", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                )
+                            }) {
+                                Text("确定", color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 压缩进度面板 ──
+    if (showCompressProgress) {
+        val isDark = isSystemInDarkTheme()
+        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.8f),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Text(
+                            text = "正在压缩...",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("压缩进度", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = if (compressTotalBytes > 0) "${FormatUtils.formatBytes(compressBytesProcessed)} / ${FormatUtils.formatBytes(compressTotalBytes)}" else "$compressCurrentFile/$compressTotalFiles",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            LinearProgressIndicator(
+                                progress = { compressProgress },
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = "${(compressProgress * 100).toInt()}%",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = {
+                                vm.compressCancelFlag.set(true)
+                                if (compressOutputPath.isNotEmpty()) {
+                                    File(compressOutputPath).delete()
+                                }
+                                showCompressProgress = false
+                                compressProgress = 0f
+                                compressCurrentFile = 0
+                                compressTotalFiles = 0
+                                compressOutputPath = ""
+                            }) {
+                                Text("取消", color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
