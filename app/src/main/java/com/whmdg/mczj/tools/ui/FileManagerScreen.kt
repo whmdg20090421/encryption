@@ -3675,7 +3675,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
 
                         // ZIP 使用 AES-256 加密（默认关闭，使用 ZipCrypto）
-                        if (selectedFormat == "zip" && compressPassword.isNotEmpty()) {
+                        if (selectedFormat == "zip") {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
