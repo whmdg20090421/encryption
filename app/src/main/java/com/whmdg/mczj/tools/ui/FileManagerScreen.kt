@@ -2061,7 +2061,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             if (entries.isNotEmpty()) {
                                                 compressEntries = entries
                                                 compressOutputToOtherPanel = false
-                                                compressUseAes = true
+                                                compressUseAes = false
                                                 showCompressDialog = true
                                             }
                                             selectedEntry = null
@@ -3467,6 +3467,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         var passwordVisible by remember { mutableStateOf(false) }
         var showFormatDropdown by remember { mutableStateOf(false) }
         var showLevelDropdown by remember { mutableStateOf(false) }
+        val fmPrefs = remember { context.getSharedPreferences("fm_prefs", Context.MODE_PRIVATE) }
+        LaunchedEffect(Unit) {
+            compressUseAes = fmPrefs.getBoolean("compress_use_aes", false)
+        }
 
         val defaultFileName = if (compressEntries.size == 1) {
             compressEntries[0].name + ".zip"
@@ -3670,38 +3674,23 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             )
                         }
 
-                        // ZIP 加密方式
+                        // ZIP 使用 AES-256 加密（默认关闭，使用 ZipCrypto）
                         if (selectedFormat == "zip" && compressPassword.isNotEmpty()) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("加密方式", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    TextButton(
-                                        onClick = { compressUseAes = false },
-                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
-                                    ) {
-                                        Text(
-                                            "ZipCrypto",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = if (!compressUseAes) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            textDecoration = if (!compressUseAes) androidx.compose.ui.text.style.TextDecoration.Underline else null
-                                        )
-                                    }
-                                    TextButton(
-                                        onClick = { compressUseAes = true },
-                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
-                                    ) {
-                                        Text(
-                                            "AES",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = if (compressUseAes) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            textDecoration = if (compressUseAes) androidx.compose.ui.text.style.TextDecoration.Underline else null
-                                        )
-                                    }
-                                }
+                                Text("使用 AES-256 加密", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Switch(
+                                    checked = compressUseAes,
+                                    onCheckedChange = {
+                                        compressUseAes = it
+                                        context.getSharedPreferences("fm_prefs", Context.MODE_PRIVATE)
+                                            .edit().putBoolean("compress_use_aes", it).apply()
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                )
                             }
                         }
 
