@@ -109,26 +109,23 @@ object CompressService {
         callback: ProgressCallback
     ) {
         val zipFile = ZipFile(options.outputPath, options.password.toCharArray())
-        val params = ZipParameters().apply {
+        val baseParams = ZipParameters().apply {
             isEncryptFiles = true
             encryptionMethod = if (options.useAes) EncryptionMethod.AES else EncryptionMethod.ZIP_STANDARD
             aesKeyStrength = if (options.useAes) AesKeyStrength.KEY_STRENGTH_256 else null
             compressionLevel = zip4jLevel(options.compressionLevel)
         }
 
-        for (file in files) {
-            if (cancelFlag.get()) {
-                File(options.outputPath).delete()
-                callback.onComplete(false, null, "已取消")
-                return
-            }
-
-            val entryName = computeEntryName(file, sources)
-            params.fileNameInZip = entryName
-            zipFile.addFile(file, params)
-
-            val count = counter.incrementAndGet()
-            callback.onProgress(ProgressInfo(count, total, count.toFloat() / total, file.name))
+        // zip4j addFile 会递归添加目录内容，所以只传文件，目录条目由 zip4j 自动创建
+        val filesOnly = files.filter { it.isFile }
+        val paramsList = filesOnly.map { file ->
+            val p = ZipParameters()
+            p.isEncryptFiles = baseParams.isEncryptFiles
+            p.encryptionMethod = baseParams.encryptionMethod
+            p.aesKeyStrength = baseParams.aesKeyStrength
+            p.compressionLevel = baseParams.compressionLevel
+            p.fileNameInZip = computeEntryName(file, sources)
+            p
         }
 
         if (cancelFlag.get()) {
@@ -137,6 +134,16 @@ object CompressService {
             return
         }
 
+        zipFile.addFiles(filesOnly, paramsList)
+
+        if (cancelFlag.get()) {
+            File(options.outputPath).delete()
+            callback.onComplete(false, null, "已取消")
+            return
+        }
+
+        val count = filesOnly.size
+        callback.onProgress(ProgressInfo(count, total, 1f))
         callback.onComplete(true, options.outputPath, null)
     }
 
@@ -378,6 +385,7 @@ object CompressService {
     /** 转换压缩级别到 zip4j 的 CompressionLevel */
     private fun zip4jLevel(level: Int): CompressionLevel {
         return when {
+            level <= 0 -> CompressionLevel.NO_COMPRESSION
             level <= 1 -> CompressionLevel.FASTEST
             level <= 3 -> CompressionLevel.FASTER
             level <= 5 -> CompressionLevel.NORMAL
