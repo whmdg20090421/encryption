@@ -2055,10 +2055,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable {
-                                            compressEntries = selectedEntries
-                                            compressOutputToOtherPanel = false
-                                            compressUseAes = true
-                                            showCompressDialog = true
+                                            val entries = selectedEntries.ifEmpty {
+                                                listOfNotNull(selectedEntry)
+                                            }
+                                            if (entries.isNotEmpty()) {
+                                                compressEntries = entries
+                                                compressOutputToOtherPanel = false
+                                                compressUseAes = true
+                                                showCompressDialog = true
+                                            }
                                             selectedEntry = null
                                         }
                                         .padding(vertical = 16.dp),
