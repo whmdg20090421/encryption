@@ -64,6 +64,58 @@ class ShellService : IShellService.Stub() {
         }
     }
 
+    /**
+     * 执行命令并将 7zzs 进度实时写入文件。
+     * 运行在 Shizuku 进程中，UID 2000 或 0。
+     * Binder 调用阻塞直到命令完成。
+     */
+    override fun executeStreaming(command: String, progressPath: String) {
+        val progressFile = java.io.File(progressPath)
+        try {
+            val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
+
+            // stdout 读取线程：解析进度并写入文件
+            val tOut = Thread {
+                try {
+                    process.inputStream.bufferedReader().use { reader ->
+                        var line: String?
+                        while (reader.readLine().also { line = it } != null) {
+                            if (Thread.interrupted()) break
+                            val l = line ?: continue
+                            // 解析 7zzs 进度行: "  75%  1"（百分比 + 文件序号）
+                            val match = Regex("""\s*(\d+)%\s+(\d+)""").find(l)
+                            if (match != null) {
+                                val percent = match.groupValues[1]
+                                val fileNum = match.groupValues[2]
+                                try { progressFile.writeText("$percent:$fileNum\n") } catch (_: Exception) {}
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            // stderr 读取线程（丢弃，避免管道缓冲满）
+            val tErr = Thread {
+                try {
+                    process.errorStream.bufferedReader().use { reader ->
+                        while (reader.readLine() != null) { /* 丢弃 */ }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            tOut.start()
+            tErr.start()
+            process.waitFor()
+            tOut.join(5000)
+            tErr.join(5000)
+
+            val exitCode = process.exitValue()
+            try { progressFile.writeText("DONE:$exitCode\n") } catch (_: Exception) {}
+        } catch (e: Exception) {
+            try { progressFile.writeText("DONE:-1\n") } catch (_: Exception) {}
+        }
+    }
+
     override fun destroy() {
         // Shizuku 调用销毁时的清理（当前无需特殊处理）
     }

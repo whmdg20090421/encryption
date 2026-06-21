@@ -25,9 +25,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import java.nio.file.Files
 import java.nio.file.attribute.BasicFileAttributes
 import android.system.Os
@@ -108,6 +110,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var refreshVersion by mutableStateOf(0L)
         private set
+
+    // ── 压缩任务 ──
+    private val compressCancelFlag = AtomicBoolean(false)
+    private var compressJob: Job? = null
 
     // ── 回收站 ──
     var isInRecycleBin by mutableStateOf(false)
@@ -2206,6 +2212,61 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return total
     }
 
+    /**
+     * 启动压缩任务。
+     * @param entries 待压缩的文件列表
+     * @param outputPath 输出压缩包完整路径
+     * @param format 格式: zip/7z/tar/tar.gz/tar.bz2/tar.xz
+     * @param level 压缩级别 0-9
+     * @param password 密码（空=不加密）
+     * @param useAes ZIP 是否使用 AES-256
+     * @param onProgress 进度回调（主线程）
+     * @param onComplete 完成回调（主线程）
+     */
+    fun compress(
+        entries: List<FileEntry>,
+        outputPath: String,
+        format: String,
+        level: Int,
+        password: String,
+        useAes: Boolean,
+        onProgress: (CompressService.ProgressInfo) -> Unit,
+        onComplete: (Boolean, String?, String?) -> Unit
+    ) {
+        compressCancelFlag.set(false)
+        compressJob?.cancel()
+        compressJob = viewModelScope.launch(Dispatchers.IO) {
+            val options = CompressService.CompressOptions(
+                sourcePaths = entries.map { it.path },
+                outputPath = outputPath,
+                format = format,
+                compressionLevel = level,
+                password = password,
+                useAes = useAes
+            )
+            CompressService.compress(
+                context = getApplication(),
+                options = options,
+                permissionLevel = permissionLevel,
+                cancelFlag = compressCancelFlag,
+                callback = object : CompressService.ProgressCallback {
+                    override fun onProgress(info: CompressService.ProgressInfo) {
+                        onProgress(info)
+                    }
+                    override fun onComplete(success: Boolean, path: String?, error: String?) {
+                        launch(Dispatchers.Main) { onComplete(success, path, error) }
+                    }
+                }
+            )
+        }
+    }
+
+    /** 取消正在进行的压缩任务 */
+    fun cancelCompress() {
+        compressCancelFlag.set(true)
+        compressJob?.cancel()
+        compressJob = null
+    }
 
     companion object {
         private val RESTRICTED_ANDROID_PREFIXES = listOf(

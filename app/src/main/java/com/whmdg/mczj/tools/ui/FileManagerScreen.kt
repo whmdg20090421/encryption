@@ -260,6 +260,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var compressOutputPath by remember { mutableStateOf("") }
     var compressUseAes by remember { mutableStateOf(encSettings.compressUseAes) }
     var compressOutputToOtherPanel by remember { mutableStateOf(false) }
+    var compressError by remember { mutableStateOf<Throwable?>(null) }
     // 移动/复制（功能待实现，保留 UI 占位）
 
     // 文件操作进度（从 ViewModel StateFlow 收集）
@@ -3465,6 +3466,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         var selectedFormat by remember { mutableStateOf("zip") }
         var compressLevel by remember { mutableIntStateOf(5) }
         var compressPassword by remember { mutableStateOf("") }
+        var passwordError by remember { mutableStateOf<String?>(null) }
         var passwordVisible by remember { mutableStateOf(false) }
         var showFormatDropdown by remember { mutableStateOf(false) }
         var showLevelDropdown by remember { mutableStateOf(false) }
@@ -3605,7 +3607,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                 horizontalArrangement = Arrangement.SpaceBetween,
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Text(compressLevel.toString(), style = MaterialTheme.typography.bodyLarge)
+                                                Text(if (compressLevel == 0) "0 (仅存储)" else compressLevel.toString(), style = MaterialTheme.typography.bodyLarge)
                                                 Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(20.dp))
                                             }
                                         }
@@ -3615,7 +3617,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         ) {
                                             levelRange.forEach { level ->
                                                 DropdownMenuItem(
-                                                    text = { Text(level.toString()) },
+                                                    text = { Text(if (level == 0) "0 (仅存储)" else level.toString()) },
                                                     onClick = {
                                                         compressLevel = level
                                                         showLevelDropdown = false
@@ -3633,8 +3635,17 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             Text("密码（不加密请留空）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             TextField(
                                 value = compressPassword,
-                                onValueChange = { compressPassword = it },
+                                onValueChange = {
+                                    compressPassword = it
+                                    passwordError = when {
+                                        it.contains(' ') -> "密码不能包含空字符"
+                                        it.contains('\n') -> "密码不能包含换行符"
+                                        it.contains('\r') -> "密码不能包含回车符"
+                                        else -> null
+                                    }
+                                },
                                 singleLine = true,
+                                isError = passwordError != null,
                                 modifier = Modifier.fillMaxWidth(),
                                 visualTransformation = if (passwordVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
                                 colors = TextFieldDefaults.colors(
@@ -3654,6 +3665,14 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 }
                             )
+                            if (passwordError != null) {
+                                Text(
+                                    passwordError!!,
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(start = 0.dp, top = 4.dp)
+                                )
+                            }
                         }
 
                         // 输出到另一面板
@@ -3716,11 +3735,52 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             }) {
                                 Text("取消", color = MaterialTheme.colorScheme.primary)
                             }
-                            TextButton(onClick = {
-                                showCompressDialog = false
-                                Toast.makeText(context, "压缩功能未实现", Toast.LENGTH_SHORT).show()
-                            }) {
-                                Text("确定", color = MaterialTheme.colorScheme.primary)
+                            val canConfirm = passwordError == null && fileName.isNotBlank()
+                            TextButton(
+                                onClick = {
+                                    val outDir = if (compressOutputToOtherPanel) {
+                                        if (vm.focusedPanel == FocusedPanel.LEFT) vm.rightPath else vm.leftPath
+                                    } else {
+                                        compressEntries[0].path.substringBeforeLast('/')
+                                    }
+                                    val outputPath = "$outDir/$fileName"
+
+                                    showCompressDialog = false
+                                    showCompressProgress = true
+                                    compressProgress = 0f
+                                    compressBytesProcessed = 0
+                                    compressTotalBytes = 0
+                                    compressCurrentFile = 0
+                                    compressTotalFiles = 0
+
+                                    vm.compress(
+                                        entries = compressEntries,
+                                        outputPath = outputPath,
+                                        format = selectedFormat,
+                                        level = compressLevel,
+                                        password = compressPassword,
+                                        useAes = compressUseAes,
+                                        onProgress = { info ->
+                                            compressProgress = info.progress
+                                            compressBytesProcessed = info.bytesProcessed
+                                            compressTotalBytes = info.totalBytes
+                                            compressCurrentFile = info.currentFile
+                                            compressTotalFiles = info.totalFiles
+                                        },
+                                        onComplete = { success, path, error ->
+                                            showCompressProgress = false
+                                            if (success) {
+                                                Toast.makeText(context, "压缩完成", Toast.LENGTH_SHORT).show()
+                                                vm.refresh()
+                                            } else {
+                                                compressError = RuntimeException(error ?: "压缩失败")
+                                            }
+                                        }
+                                    )
+                                },
+                                enabled = canConfirm
+                            ) {
+                                Text("确定", color = if (canConfirm) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
                             }
                         }
                     }
@@ -3792,11 +3852,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             horizontalArrangement = Arrangement.End
                         ) {
                             TextButton(onClick = {
+                                vm.cancelCompress()
                                 showCompressProgress = false
                                 compressProgress = 0f
                                 compressCurrentFile = 0
                                 compressTotalFiles = 0
-                                compressOutputPath = ""
+                                compressBytesProcessed = 0
+                                compressTotalBytes = 0
                             }) {
                                 Text("取消", color = MaterialTheme.colorScheme.primary)
                             }
@@ -3805,6 +3867,14 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 }
             }
         }
+    }
+
+    // ── 压缩错误弹窗 ──
+    if (compressError != null) {
+        ErrorDialog(
+            error = compressError,
+            onDismiss = { compressError = null }
+        )
     }
 }
 

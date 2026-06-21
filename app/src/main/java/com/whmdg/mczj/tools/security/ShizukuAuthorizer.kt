@@ -306,4 +306,10 @@ object ShizukuAuthorizer {
     }
 
     fun getLastError(): String = lastError
+
+    /**
+     * 获取 ShellService 引用（供 CompressService 等需要流式执行的场景）。
+     * 调用前确保 UserService 已绑定（通过 executeCommand 或 ensureBound）。
+     */
+    fun getShellService(): IShellService? = shellService
 }
