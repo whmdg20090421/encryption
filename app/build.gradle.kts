@@ -125,10 +125,6 @@ dependencies {
     implementation(libs.androidx.appcompat)
 
     // 压缩/解压
-    implementation("net.lingala.zip4j:zip4j:2.11.5")          // ZIP + AES 加密
-    implementation("org.apache.commons:commons-compress:1.26.1") // TAR/GZ/BZ2/XZ/7z
-    implementation("com.github.junrar:junrar:7.5.5")           // RAR 解压
-    implementation("org.tukaani:xz:1.9")                       // XZ 压缩（commons-compress 依赖）
     implementation(libs.jxl.coder)                              // JPEG XL 图片压缩
 
     // WebDAV

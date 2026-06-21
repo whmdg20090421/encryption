@@ -116,7 +116,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var jxlPackZip by mutableStateOf(false)
         private set
-    val compressCancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
     var pendingExternalEntry by mutableStateOf<FileEntry?>(null)
     var pendingApkEntry by mutableStateOf<FileEntry?>(null)
 
@@ -1229,77 +1228,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateJxlPackZip(value: Boolean) {
         jxlPackZip = value
         fmPrefs.edit().putBoolean("jxl_pack_zip", value).apply()
-    }
-
-    /**
-     * 压缩文件/文件夹。
-     * @param entries 要压缩的条目列表（支持多选）
-     * @param fileName 输出文件名
-     * @param format 压缩格式（zip, 7z, tar, tar.gz, tar.bz2, tar.xz）
-     * @param level 压缩级别
-     * @param password 密码（空=不加密）
-     * @param useAes zip 加密方式（true=AES, false=ZipCrypto）
-     * @param outputToOtherPanel 是否输出到非聚焦面板目录
-     * @param onProgress 进度回调
-     * @param onComplete 完成回调 (success, outputPath?, error?)
-     */
-    fun compress(
-        entries: List<FileEntry>,
-        fileName: String,
-        format: String,
-        level: Int,
-        password: String,
-        useAes: Boolean,
-        outputToOtherPanel: Boolean,
-        onProgress: (Int, Int, Float, Long, Long) -> Unit,
-        onComplete: (Boolean, String?, String?) -> Unit
-    ) {
-        compressCancelFlag.set(false)
-
-        val outputDir = if (outputToOtherPanel) {
-            if (focusedPanel == FocusedPanel.LEFT) rightPath else leftPath
-        } else {
-            if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
-        }
-
-        val outputPath = java.io.File(outputDir, fileName).absolutePath
-
-        val options = CompressService.CompressOptions(
-            sourcePaths = entries.map { it.path },
-            outputPath = outputPath,
-            format = format,
-            compressionLevel = level,
-            password = password,
-            useAes = useAes
-        )
-
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                CompressService.compress(options, compressCancelFlag, object : CompressService.ProgressCallback {
-                    override fun onProgress(info: CompressService.ProgressInfo) {
-                        onProgress(info.currentFile, info.totalFiles, info.progress, info.bytesProcessed, info.totalBytes)
-                    }
-
-                    override fun onComplete(success: Boolean, outPath: String?, error: String?) {
-                        CoroutineScope(Dispatchers.Main).launch {
-                            try {
-                                onComplete(success, outPath, error)
-                                refreshCurrent()
-                            } catch (e: Exception) {
-                                DiagnosticLog.log("Compress", "完成回调异常: ${e.message}")
-                                DiagnosticLog.exportCrashReport(context, e, "来源: FileManagerViewModel.compress 完成回调")
-                            }
-                        }
-                    }
-                })
-            } catch (e: Exception) {
-                DiagnosticLog.log("Compress", "压缩协程异常: ${e.message}")
-                DiagnosticLog.exportCrashReport(context, e, "来源: FileManagerViewModel.compress 协程")
-                CoroutineScope(Dispatchers.Main).launch {
-                    onComplete(false, null, e.message ?: "压缩失败")
-                }
-            }
-        }
     }
 
     fun updateSortField(field: SortField) {

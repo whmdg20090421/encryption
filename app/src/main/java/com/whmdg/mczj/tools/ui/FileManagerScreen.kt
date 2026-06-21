@@ -3718,37 +3718,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             }
                             TextButton(onClick = {
                                 showCompressDialog = false
-                                compressCurrentFile = 0
-                                compressTotalFiles = 0
-                                compressProgress = 0f
-                                compressOutputPath = ""
-                                showCompressProgress = true
-
-                                vm.compress(
-                                    entries = compressEntries,
-                                    fileName = fileName,
-                                    format = selectedFormat,
-                                    level = compressLevel,
-                                    password = compressPassword,
-                                    useAes = compressUseAes,
-                                    outputToOtherPanel = compressOutputToOtherPanel,
-                                    onProgress = { current, total, progress, bytesDone, bytesTotal ->
-                                        compressCurrentFile = current
-                                        compressTotalFiles = total
-                                        compressProgress = progress
-                                        compressBytesProcessed = bytesDone
-                                        compressTotalBytes = bytesTotal
-                                    },
-                                    onComplete = { success, outPath, error ->
-                                        compressOutputPath = outPath ?: ""
-                                        showCompressProgress = false
-                                        if (success) {
-                                            Toast.makeText(context, "压缩完成: ${outPath?.substringAfterLast('/')}", Toast.LENGTH_SHORT).show()
-                                        } else if (error != "已取消") {
-                                            Toast.makeText(context, "压缩失败: $error", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                )
+                                Toast.makeText(context, "压缩功能未实现", Toast.LENGTH_SHORT).show()
                             }) {
                                 Text("确定", color = MaterialTheme.colorScheme.primary)
                             }
@@ -3822,10 +3792,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             horizontalArrangement = Arrangement.End
                         ) {
                             TextButton(onClick = {
-                                vm.compressCancelFlag.set(true)
-                                if (compressOutputPath.isNotEmpty()) {
-                                    File(compressOutputPath).delete()
-                                }
                                 showCompressProgress = false
                                 compressProgress = 0f
                                 compressCurrentFile = 0
