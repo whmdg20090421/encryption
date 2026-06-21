@@ -83,6 +83,13 @@ object AppDataPaths {
         return dir
     }
 
+    /** 二进制工具目录（7za 等） */
+    fun binaries(context: Context): File {
+        val dir = File(root(context), "bin")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     /** 回收站目录（外部 media 目录，卸载后保留） */
     fun recycleBin(context: Context): File {
         val mediaDir = context.getExternalMediaDirs().firstOrNull()
@@ -117,6 +124,9 @@ object AppDataPaths {
     /** 文件管理器 SharedPreferences（同一个界面的设置存在同一个 XML） */
     const val PREFS_FILE_MANAGER = "file_manager_prefs"
 
+    /** 文件管理器快捷访问 SharedPreferences */
+    const val PREFS_QUICK_ACCESS = "quick_access_prefs"
+
     /** 安全设置 SharedPreferences（已废弃，统一使用 PREFS_LEGACY_SPECIAL_PERMISSIONS） */
     const val PREFS_SECURITY = "special_permissions"
 
@@ -149,6 +159,18 @@ object AppDataPaths {
 
     /** FA 授权历史 SharedPreferences */
     const val PREFS_FA_HISTORY = "fa_author_history"
+
+    /** WiFi 密码 SharedPreferences */
+    const val PREFS_WIFI_PASSWORDS = "wifi_passwords"
+
+    /** WiFi 免责声明 SharedPreferences */
+    const val PREFS_WIFI_DISCLAIMER = "wifi_disclaimer"
+
+    /** 认证 Token SharedPreferences */
+    const val PREFS_AUTH_TOKEN = "auth_token_store_v1"
+
+    /** WebDAV 服务器配置 SharedPreferences */
+    const val PREFS_WEBDAV_SERVERS = "webdav_servers"
 
     /**
      * 将 SAF tree URI 转换为绝对文件路径。

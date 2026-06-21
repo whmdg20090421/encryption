@@ -41,8 +41,7 @@ import com.whmdg.mczj.tools.ui.components.GlowCard
 import com.whmdg.mczj.tools.ui.components.GlowInfoRow
 import com.whmdg.mczj.tools.ui.components.GlowSection
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
-
-private const val PREFS_NAME = "wifi_disclaimer"
+import com.whmdg.mczj.tools.AppDataPaths
 private const val KEY_ACCEPTED = "accepted"
 
 /** WiFi 网络信息 */
@@ -163,7 +162,7 @@ private fun securityIcon(security: String) = when (security) {
 @Composable
 fun WifiScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+    val prefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_WIFI_DISCLAIMER, Context.MODE_PRIVATE) }
     var disclaimerAccepted by remember { mutableStateOf(prefs.getBoolean(KEY_ACCEPTED, false)) }
     var showDisclaimer by remember { mutableStateOf(!disclaimerAccepted) }
 
@@ -1124,7 +1123,7 @@ private fun saveWifiPasswords(context: Context, entries: List<WifiPasswordEntry>
         }
         jsonArray.put(obj)
     }
-    context.getSharedPreferences("wifi_passwords", Context.MODE_PRIVATE)
+    context.getSharedPreferences(AppDataPaths.PREFS_WIFI_PASSWORDS, Context.MODE_PRIVATE)
         .edit()
         .putString("data", jsonArray.toString())
         .apply()
@@ -1132,7 +1131,7 @@ private fun saveWifiPasswords(context: Context, entries: List<WifiPasswordEntry>
 
 /** 从 SharedPreferences 读取已存储的记录 */
 private fun loadStoredWifiPasswords(context: Context): List<WifiPasswordEntry> {
-    val json = context.getSharedPreferences("wifi_passwords", Context.MODE_PRIVATE)
+    val json = context.getSharedPreferences(AppDataPaths.PREFS_WIFI_PASSWORDS, Context.MODE_PRIVATE)
         .getString("data", null) ?: return emptyList()
     return try {
         val arr = org.json.JSONArray(json)

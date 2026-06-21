@@ -1,19 +1,19 @@
 package com.whmdg.mczj.tools.fileop.webdav
 
 import android.content.Context
+import com.whmdg.mczj.tools.AppDataPaths
 import kotlinx.serialization.json.Json
 
 /**
  * WebDAV server configuration persistence using SharedPreferences + JSON.
  */
 object WebDavServerStore {
-    private const val PREFS_NAME = "webdav_servers"
     private const val KEY_SERVERS = "servers_json"
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true }
 
     fun getAll(context: Context): List<WebDavServerConfig> {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(AppDataPaths.PREFS_WEBDAV_SERVERS, Context.MODE_PRIVATE)
         val saved = prefs.getString(KEY_SERVERS, null) ?: return emptyList()
         return try {
             json.decodeFromString<List<WebDavServerConfig>>(saved)
@@ -39,7 +39,7 @@ object WebDavServerStore {
     }
 
     private fun writeAll(context: Context, list: List<WebDavServerConfig>) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(AppDataPaths.PREFS_WEBDAV_SERVERS, Context.MODE_PRIVATE)
         prefs.edit().putString(KEY_SERVERS, json.encodeToString(list)).apply()
     }
 }

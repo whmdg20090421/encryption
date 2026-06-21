@@ -179,6 +179,7 @@ data class PanelNavState(
 fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     val context = LocalContext.current
     val vm: FileManagerViewModel = viewModel()
+    val encSettings = remember { EncryptionSettings(context) }
 
     var hasStoragePermission by remember {
         mutableStateOf(Environment.isExternalStorageManager())
@@ -257,7 +258,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var compressBytesProcessed by remember { mutableStateOf(0L) }
     var compressTotalBytes by remember { mutableStateOf(0L) }
     var compressOutputPath by remember { mutableStateOf("") }
-    var compressUseAes by remember { mutableStateOf(true) }
+    var compressUseAes by remember { mutableStateOf(encSettings.compressUseAes) }
     var compressOutputToOtherPanel by remember { mutableStateOf(false) }
     // 移动/复制（功能待实现，保留 UI 占位）
 
@@ -271,7 +272,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var forceOpenError by remember { mutableStateOf<String?>(null) }
 
     // ── 快捷访问 ──
-    val quickAccessPrefs = context.getSharedPreferences("quick_access_prefs", Context.MODE_PRIVATE)
+    val quickAccessPrefs = context.getSharedPreferences(AppDataPaths.PREFS_QUICK_ACCESS, Context.MODE_PRIVATE)
     val qaJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
     var quickAccessList by remember {
         val saved = quickAccessPrefs.getString("entries", null)
@@ -2061,7 +2062,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             if (entries.isNotEmpty()) {
                                                 compressEntries = entries
                                                 compressOutputToOtherPanel = false
-                                                compressUseAes = false
+                                                compressUseAes = encSettings.compressUseAes
                                                 showCompressDialog = true
                                             }
                                             selectedEntry = null
@@ -3467,11 +3468,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         var passwordVisible by remember { mutableStateOf(false) }
         var showFormatDropdown by remember { mutableStateOf(false) }
         var showLevelDropdown by remember { mutableStateOf(false) }
-        val fmPrefs = remember { context.getSharedPreferences("fm_prefs", Context.MODE_PRIVATE) }
-        LaunchedEffect(Unit) {
-            compressUseAes = fmPrefs.getBoolean("compress_use_aes", false)
-        }
-
         val defaultFileName = if (compressEntries.size == 1) {
             compressEntries[0].name + ".zip"
         } else {
@@ -3676,21 +3672,36 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
                         // ZIP 使用 AES-256 加密（默认关闭，使用 ZipCrypto）
                         if (selectedFormat == "zip") {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("使用 AES-256 加密", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Switch(
-                                    checked = compressUseAes,
-                                    onCheckedChange = {
-                                        compressUseAes = it
-                                        context.getSharedPreferences("fm_prefs", Context.MODE_PRIVATE)
-                                            .edit().putBoolean("compress_use_aes", it).apply()
-                                    },
-                                    modifier = Modifier.size(32.dp)
-                                )
+                            val isEnabled = compressPassword.isNotEmpty()
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        "使用 AES-256 加密",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (isEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                    )
+                                    Switch(
+                                        checked = compressUseAes,
+                                        onCheckedChange = {
+                                            compressUseAes = it
+                                            encSettings.setCompressUseAes(it)
+                                        },
+                                        enabled = isEnabled,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
+                                if (!isEnabled) {
+                                    Text(
+                                        "加密未启用",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                                        modifier = Modifier.padding(start = 0.dp, top = 2.dp)
+                                    )
+                                }
                             }
                         }
 

@@ -2,10 +2,9 @@ package com.whmdg.mczj.tools.auth
 
 import android.content.Context
 import android.util.Base64
+import com.whmdg.mczj.tools.AppDataPaths
 
 object TokenStorage {
-
-    private const val SP_NAME = "auth_token_store_v1"
     private const val KEY_WK = "wk"
     private const val KEY_IV_W = "iv_w"
     private const val KEY_CT = "ct"
@@ -23,7 +22,7 @@ object TokenStorage {
     )
 
     fun load(ctx: Context): Blob? {
-        val sp = ctx.getSharedPreferences(SP_NAME, Context.MODE_PRIVATE)
+        val sp = ctx.getSharedPreferences(AppDataPaths.PREFS_AUTH_TOKEN, Context.MODE_PRIVATE)
         val wk = sp.getString(KEY_WK, null) ?: return null
         val ivW = sp.getString(KEY_IV_W, null) ?: return null
         val ct = sp.getString(KEY_CT, null) ?: return null
@@ -41,7 +40,7 @@ object TokenStorage {
     }
 
     fun save(ctx: Context, blob: Blob) {
-        ctx.getSharedPreferences(SP_NAME, Context.MODE_PRIVATE).edit()
+        ctx.getSharedPreferences(AppDataPaths.PREFS_AUTH_TOKEN, Context.MODE_PRIVATE).edit()
             .putString(KEY_WK, Base64.encodeToString(blob.wrappedKey, Base64.NO_WRAP))
             .putString(KEY_IV_W, Base64.encodeToString(blob.ivWrap, Base64.NO_WRAP))
             .putString(KEY_CT, Base64.encodeToString(blob.cipherToken, Base64.NO_WRAP))
@@ -52,6 +51,6 @@ object TokenStorage {
     }
 
     fun clear(ctx: Context) {
-        ctx.getSharedPreferences(SP_NAME, Context.MODE_PRIVATE).edit().clear().apply()
+        ctx.getSharedPreferences(AppDataPaths.PREFS_AUTH_TOKEN, Context.MODE_PRIVATE).edit().clear().apply()
     }
 }

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.whmdg.mczj.tools.AppDataPaths
 import kotlin.system.exitProcess
 
 /**
@@ -38,7 +39,7 @@ object SecurityEnforcer {
             try {
                 // 清除授权状态
                 // 注意：这里不能调用 suspend 函数，所以直接清除存储
-                val sp = context.getSharedPreferences("auth_token_store_v1", Context.MODE_PRIVATE)
+                val sp = context.getSharedPreferences(AppDataPaths.PREFS_AUTH_TOKEN, Context.MODE_PRIVATE)
                 sp.edit().clear().apply()
 
                 // 尝试删除 Keystore 密钥

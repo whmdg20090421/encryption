@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.util
 
 import android.content.Context
 import android.util.Log
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import java.io.File
 
@@ -23,7 +24,7 @@ object RootBinaryManager {
     fun init(context: Context): String? {
         if (binaryPath != null) return binaryPath
 
-        val target = File(context.filesDir, "bin/$TARGET_NAME")
+        val target = File(AppDataPaths.binaries(context), TARGET_NAME)
 
         // 检查是否已存在且可执行
         if (target.exists() && target.canExecute() && target.length() > 0) {

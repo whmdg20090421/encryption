@@ -11,6 +11,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 所有需要探索/查找代码的任务，必须直接使用 Agent(任务描述) 完成
 - 例如：Agent(在 FileManagerScreen 中查找 toolbar 相关代码)
 
+## 代码查找规范
+
+- 寻找某个模块或功能时，**优先查看本文件 CLAUDE.md 中记录的项目结构树状图**及其对文件的解释
+- 如果树状图中没有找到，再进行广泛搜索（grep/find）
+
+## 数据存储规范
+
+- 所有本地持久化数据必须通过 `AppDataPaths.kt` 管理
+- SharedPreferences 名称使用 `AppDataPaths.PREFS_*` 常量，禁止硬编码
+- 文件存储使用 `AppDataPaths.*()` 方法获取目录路径
+- 新增模块时先在 `AppDataPaths` 中定义常量/方法再使用
+
 # 艨艟战舰工具箱 Android 项目
 
 ## 项目概览
