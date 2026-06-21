@@ -3638,7 +3638,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onValueChange = {
                                     compressPassword = it
                                     passwordError = when {
-                                        it.contains(' ') -> "密码不能包含空字符"
+                                        it.contains('\0') -> "密码不能包含空字符"
                                         it.contains('\n') -> "密码不能包含换行符"
                                         it.contains('\r') -> "密码不能包含回车符"
                                         else -> null
