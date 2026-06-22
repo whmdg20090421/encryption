@@ -57,7 +57,7 @@ object ArchiveBrowser {
     // ── 缓存序列化 ──
 
     @Serializable
-    private data class CacheArchiveNode(
+    internal data class CacheArchiveNode(
         val name: String,
         val isDirectory: Boolean,
         val size: Long = 0,
@@ -65,7 +65,7 @@ object ArchiveBrowser {
     )
 
     @Serializable
-    data class ArchiveSessionCache(
+    internal data class ArchiveSessionCache(
         val archivePath: String,
         val archiveName: String,
         val root: CacheArchiveNode,
