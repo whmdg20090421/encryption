@@ -69,13 +69,16 @@ object ArchiveBrowser {
             Log.d(TAG, "列表命令: $cmd")
 
             val (stdout, stderr, exitCode) = executeCommand(cmd, permissionLevel, context)
+            Log.d(TAG, "执行完毕: exitCode=$exitCode, stdout=${stdout.length}字节, stderr=${stderr.take(200)}")
 
             if (exitCode != 0) {
                 val errMsg = detectPasswordError(stderr, exitCode)
+                Log.w(TAG, "非零退出: $errMsg")
                 return@withContext Result.failure(Exception(errMsg))
             }
 
             val entries = parseListOutput(stdout)
+            Log.d(TAG, "解析到 ${entries.size} 个条目")
             val root = buildTree(entries)
             val rootEntries = nodeChildrenToEntries(root)
 
@@ -283,10 +286,31 @@ object ArchiveBrowser {
                 val process = ProcessBuilder("su", "-c", cmd)
                     .redirectErrorStream(false)
                     .start()
-                val stdout = process.inputStream.bufferedReader().readText()
-                val stderr = process.errorStream.bufferedReader().readText()
+                // 并发读取 stdout 和 stderr，避免管道缓冲区满导致死锁
+                val stdoutBuf = StringBuilder()
+                val stderrBuf = StringBuilder()
+                val tOut = Thread {
+                    try {
+                        process.inputStream.bufferedReader().use { r ->
+                            val buf = CharArray(8192)
+                            var n: Int
+                            while (r.read(buf).also { n = it } != -1) stdoutBuf.append(buf, 0, n)
+                        }
+                    } catch (_: Exception) {}
+                }
+                val tErr = Thread {
+                    try {
+                        process.errorStream.bufferedReader().use { r ->
+                            val buf = CharArray(8192)
+                            var n: Int
+                            while (r.read(buf).also { n = it } != -1) stderrBuf.append(buf, 0, n)
+                        }
+                    } catch (_: Exception) {}
+                }
+                tOut.start(); tErr.start()
                 val exitCode = process.waitFor()
-                Triple(stdout, stderr, exitCode)
+                tOut.join(5000); tErr.join(5000)
+                Triple(stdoutBuf.toString().trimEnd(), stderrBuf.toString().trimEnd(), exitCode)
             }
             "SHIZUKU" -> {
                 val service = ShizukuAuthorizer.getShellService()
@@ -307,10 +331,30 @@ object ArchiveBrowser {
                 val process = ProcessBuilder("sh", "-c", cmd)
                     .redirectErrorStream(false)
                     .start()
-                val stdout = process.inputStream.bufferedReader().readText()
-                val stderr = process.errorStream.bufferedReader().readText()
+                val stdoutBuf = StringBuilder()
+                val stderrBuf = StringBuilder()
+                val tOut = Thread {
+                    try {
+                        process.inputStream.bufferedReader().use { r ->
+                            val buf = CharArray(8192)
+                            var n: Int
+                            while (r.read(buf).also { n = it } != -1) stdoutBuf.append(buf, 0, n)
+                        }
+                    } catch (_: Exception) {}
+                }
+                val tErr = Thread {
+                    try {
+                        process.errorStream.bufferedReader().use { r ->
+                            val buf = CharArray(8192)
+                            var n: Int
+                            while (r.read(buf).also { n = it } != -1) stderrBuf.append(buf, 0, n)
+                        }
+                    } catch (_: Exception) {}
+                }
+                tOut.start(); tErr.start()
                 val exitCode = process.waitFor()
-                Triple(stdout, stderr, exitCode)
+                tOut.join(5000); tErr.join(5000)
+                Triple(stdoutBuf.toString().trimEnd(), stderrBuf.toString().trimEnd(), exitCode)
             }
         }
     }
