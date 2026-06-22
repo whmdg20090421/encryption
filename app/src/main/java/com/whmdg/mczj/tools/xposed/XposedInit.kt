@@ -1,6 +1,5 @@
 package com.whmdg.mczj.tools.xposed
 
-import android.content.Context
 import android.util.Log
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
@@ -34,27 +33,24 @@ class XposedInit : XposedModule() {
 
     private fun writeActiveFlag() {
         try {
-            val flagFile = File(filesDir, FLAG_FILE_NAME)
+            val flagFile = File(ACTIVE_FLAG_PATH)
+            flagFile.parentFile?.mkdirs()
             flagFile.writeText("${System.currentTimeMillis()}")
-            val fixedFile = File(FIXED_FLAG_PATH)
-            fixedFile.parentFile?.mkdirs()
-            fixedFile.writeText("${System.currentTimeMillis()}")
         } catch (_: Throwable) {
         }
     }
 
     companion object {
-        private const val FLAG_FILE_NAME = "xposed_active.flag"
-        private const val FIXED_FLAG_PATH = "/data/local/tmp/mczj_xposed_active.flag"
+        private const val ACTIVE_FLAG_PATH = "/data/local/tmp/mczj_xposed_active.flag"
 
-        fun isModuleActive(context: Context): Boolean {
+        fun isModuleActive(): Boolean {
             try {
                 Class.forName("io.github.libxposed.api.XposedContext")
                 return true
             } catch (_: Throwable) {
             }
             return try {
-                File(FIXED_FLAG_PATH).exists()
+                File(ACTIVE_FLAG_PATH).exists()
             } catch (_: Throwable) {
                 false
             }
