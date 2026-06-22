@@ -223,11 +223,38 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 加载文件夹大小数据库
         folderSizeDb = FolderSizeDb.load(AppDataPaths.fileManager(context))
 
-        // 初始加载
-        leftEntries = listDirectory(lHome)
-        rightEntries = listDirectory(rHome)
-        loadExtFlagsForDir(lHome, isLeft = true)
-        loadExtFlagsForDir(rHome, isLeft = false)
+        // 初始加载（优先尝试恢复压缩包会话）
+        val cachedArchive = ArchiveBrowser.loadSessionCache(context)
+        if (cachedArchive != null) {
+            val (cache, sourcePanel) = cachedArchive
+            try {
+                val session = ArchiveBrowser.restoreSession(cache)
+                isInArchiveMode = true
+                archiveSession = session
+                if (sourcePanel == "LEFT") {
+                    leftPath = session.currentPath
+                    leftEntries = session.currentEntries
+                    rightPath = rHome
+                    rightEntries = listDirectory(rHome)
+                } else {
+                    rightPath = session.currentPath
+                    rightEntries = session.currentEntries
+                    leftPath = lHome
+                    leftEntries = listDirectory(lHome)
+                }
+                ArchiveBrowser.clearSessionCache(context)
+            } catch (e: Exception) {
+                DiagnosticLog.log("FileMgr", "恢复压缩包会话失败: ${e.message}")
+                ArchiveBrowser.clearSessionCache(context)
+                leftEntries = listDirectory(lHome)
+                rightEntries = listDirectory(rHome)
+            }
+        } else {
+            leftEntries = listDirectory(lHome)
+            rightEntries = listDirectory(rHome)
+        }
+        loadExtFlagsForDir(leftPath, isLeft = true)
+        loadExtFlagsForDir(rightPath, isLeft = false)
     }
 
     /**
@@ -2386,6 +2413,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
         archiveSession = session
         isInArchiveMode = true
+        ArchiveBrowser.saveSessionCache(context, session, focusedPanel.name)
     }
 
     /** 从 Screen 层调用进入压缩包浏览模式（密码验证成功后） */
@@ -2405,6 +2433,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             rightEntries = newSession.currentEntries
             rightPath = newSession.currentPath
         }
+        ArchiveBrowser.saveSessionCache(context, newSession, focusedPanel.name)
     }
 
     /** 压缩包内返回上一级，返回 false 表示已在根目录 */
@@ -2424,6 +2453,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             rightEntries = newSession.currentEntries
             rightPath = newSession.currentPath
         }
+        ArchiveBrowser.saveSessionCache(context, newSession, focusedPanel.name)
         return true
     }
 
@@ -2432,13 +2462,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val session = archiveSession ?: return
         if (focusedPanel == FocusedPanel.LEFT) {
             leftPath = session.originalPath
-            leftEntries = session.originalEntries
+            leftEntries = session.originalEntries.ifEmpty { listDirectory(session.originalPath) }
         } else {
             rightPath = session.originalPath
-            rightEntries = session.originalEntries
+            rightEntries = session.originalEntries.ifEmpty { listDirectory(session.originalPath) }
         }
         archiveSession = null
         isInArchiveMode = false
+        ArchiveBrowser.clearSessionCache(context)
     }
 
     /** 当前是否在压缩包根目录 */

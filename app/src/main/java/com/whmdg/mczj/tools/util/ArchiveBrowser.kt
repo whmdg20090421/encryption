@@ -3,10 +3,14 @@ package com.whmdg.mczj.tools.util
 import android.content.Context
 import android.util.Base64
 import android.util.Log
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.security.ShizukuAuthorizer
 import com.whmdg.mczj.tools.ui.FileEntry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import java.io.File
 
 /**
  * 压缩包浏览工具类。
@@ -49,6 +53,89 @@ object ArchiveBrowser {
         val originalPath: String,
         val originalEntries: List<FileEntry>
     )
+
+    // ── 缓存序列化 ──
+
+    @Serializable
+    private data class CacheArchiveNode(
+        val name: String,
+        val isDirectory: Boolean,
+        val size: Long = 0,
+        val children: List<CacheArchiveNode> = emptyList()
+    )
+
+    @Serializable
+    data class ArchiveSessionCache(
+        val archivePath: String,
+        val archiveName: String,
+        val root: CacheArchiveNode,
+        val currentPath: String,
+        val originalPath: String,
+        val sourcePanel: String
+    )
+
+    private val cacheJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private const val CACHE_FILE_NAME = "archive_session_cache.json"
+
+    private fun toCacheNode(node: ArchiveNode): CacheArchiveNode = CacheArchiveNode(
+        name = node.name, isDirectory = node.isDirectory, size = node.size,
+        children = node.children.map { toCacheNode(it) }
+    )
+
+    private fun fromCacheNode(cache: CacheArchiveNode): ArchiveNode = ArchiveNode(
+        name = cache.name, isDirectory = cache.isDirectory, size = cache.size,
+        children = cache.children.map { fromCacheNode(it) }.toMutableList()
+    )
+
+    fun saveSessionCache(context: Context, session: ArchiveSession, sourcePanel: String) {
+        try {
+            val cache = ArchiveSessionCache(
+                archivePath = session.archivePath,
+                archiveName = session.archiveName,
+                root = toCacheNode(session.root),
+                currentPath = session.currentPath,
+                originalPath = session.originalPath,
+                sourcePanel = sourcePanel
+            )
+            File(AppDataPaths.fileManager(context), CACHE_FILE_NAME).writeText(cacheJson.encodeToString(cache))
+        } catch (e: Exception) {
+            Log.e(TAG, "保存压缩包会话缓存失败", e)
+        }
+    }
+
+    fun loadSessionCache(context: Context): Pair<ArchiveSessionCache, String>? {
+        val file = File(AppDataPaths.fileManager(context), CACHE_FILE_NAME)
+        if (!file.exists()) return null
+        return try {
+            val cache = cacheJson.decodeFromString<ArchiveSessionCache>(file.readText())
+            if (!File(cache.archivePath).exists() || cache.root.children.isEmpty()) {
+                file.delete(); return null
+            }
+            Pair(cache, cache.sourcePanel)
+        } catch (e: Exception) {
+            Log.e(TAG, "读取压缩包会话缓存失败", e)
+            file.delete(); null
+        }
+    }
+
+    fun clearSessionCache(context: Context) {
+        try { File(AppDataPaths.fileManager(context), CACHE_FILE_NAME).delete() } catch (_: Exception) {}
+    }
+
+    fun restoreSession(cache: ArchiveSessionCache): ArchiveSession {
+        val root = fromCacheNode(cache.root)
+        val node = if (cache.currentPath == cache.archivePath) root
+            else findNode(root, cache.currentPath, cache.archivePath) ?: root
+        return ArchiveSession(
+            archivePath = cache.archivePath,
+            archiveName = cache.archiveName,
+            root = root,
+            currentPath = cache.currentPath,
+            currentEntries = nodeChildrenToEntries(node),
+            originalPath = cache.originalPath,
+            originalEntries = emptyList()
+        )
+    }
 
     /**
      * 打开压缩包，构建目录树。
