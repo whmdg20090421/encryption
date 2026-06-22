@@ -380,9 +380,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // 返回手势：WebDAV → 回上一级或退出，回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
+    // 返回手势：压缩包 → 回上一级或退出压缩包，WebDAV → 回上一级或退出，回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
     BackHandler {
-        if (vm.isWebDavMode) {
+        if (vm.isInArchiveMode) {
+            if (!vm.archiveGoUp()) {
+                vm.exitArchive()
+            }
+        } else if (vm.isWebDavMode) {
             if (!vm.webDavGoBack()) {
                 vm.exitWebDavMode()
             }
@@ -406,6 +410,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 TopAppBar(
                     title = {
                         val titleText = when {
+                            vm.isInArchiveMode -> vm.archiveSession?.let {
+                                if (it.currentPath == it.archivePath) it.archiveName
+                                else "${it.archiveName} / ${it.currentPath.removePrefix(it.archivePath).trimStart('/')}"
+                            } ?: "压缩包"
                             vm.isInRecycleBin -> "回收站"
                             else -> currentPath
                         }
@@ -573,7 +581,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         ) {
                             IconButton(
                                 onClick = {
-                                    if (vm.isWebDavMode) {
+                                    if (vm.isInArchiveMode) {
+                                        vm.archiveGoUp()
+                                    } else if (vm.isWebDavMode) {
                                         vm.webDavGoBack()
                                     } else {
                                         val targetPath = vm.goBack()
@@ -583,7 +593,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         }
                                     }
                                 },
-                                enabled = if (vm.isWebDavMode) vm.webDavCurrentPath != "/" else vm.currentNavState.canGoBack
+                                enabled = if (vm.isInArchiveMode) !vm.isAtArchiveRoot()
+                                    else if (vm.isWebDavMode) vm.webDavCurrentPath != "/"
+                                    else vm.currentNavState.canGoBack
                             ) {
                                 Icon(Icons.Default.ArrowBack, contentDescription = "后退")
                             }
@@ -601,7 +613,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         vm.pendingScrollTo = Triple(targetPath, saved?.first ?: 0, saved?.second ?: 0)
                                     }
                                 },
-                                enabled = vm.currentNavState.canGoForward
+                                enabled = !vm.isInArchiveMode && vm.currentNavState.canGoForward
                             ) {
                                 Icon(Icons.Default.ArrowForward, contentDescription = "前进")
                             }
@@ -611,7 +623,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             modifier = Modifier.weight(1f),
                             contentAlignment = Alignment.Center
                         ) {
-                            IconButton(onClick = { showCreateTypeDialog = true }) {
+                            IconButton(
+                                onClick = { showCreateTypeDialog = true },
+                                enabled = !vm.isInArchiveMode
+                            ) {
                                 Icon(Icons.Default.Add, contentDescription = "新建")
                             }
                         }
@@ -620,7 +635,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             modifier = Modifier.weight(1f),
                             contentAlignment = Alignment.Center
                         ) {
-                            IconButton(onClick = { vm.syncPaths() }) {
+                            IconButton(
+                                onClick = { vm.syncPaths() },
+                                enabled = !vm.isInArchiveMode
+                            ) {
                                 Icon(Icons.Default.SwapHoriz, contentDescription = "同步路径")
                             }
                         }
@@ -629,7 +647,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             modifier = Modifier.weight(1f),
                             contentAlignment = Alignment.Center
                         ) {
-                            IconButton(onClick = { vm.refreshCurrent() }) {
+                            IconButton(
+                                onClick = { vm.refreshCurrent() },
+                                enabled = !vm.isInArchiveMode
+                            ) {
                                 Icon(Icons.Default.Refresh, contentDescription = "刷新")
                             }
                         }
@@ -638,7 +659,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             modifier = Modifier.weight(1f),
                             contentAlignment = Alignment.Center
                         ) {
-                            val canGoUp = if (vm.isInRecycleBin) {
+                            val canGoUp = if (vm.isInArchiveMode) {
+                                !vm.isAtArchiveRoot()
+                            } else if (vm.isInRecycleBin) {
                                 !vm.isAtRecycleBinRoot
                             } else {
                                 val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
@@ -651,7 +674,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
                             IconButton(
                                 onClick = {
-                                    if (vm.isInRecycleBin) vm.goUpInRecycleBin()
+                                    if (vm.isInArchiveMode) vm.archiveGoUp()
+                                    else if (vm.isInRecycleBin) vm.goUpInRecycleBin()
                                     else saveScrollAndGoUp()
                                 },
                                 enabled = canGoUp
@@ -858,29 +882,37 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                     }
                 } else {
-                    val leftEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                    val leftParentPath = if (vm.isInRecycleBin) {
+                    val leftParentPath = if (vm.isInArchiveMode && vm.focusedPanel == FocusedPanel.LEFT) {
+                        if (vm.isAtArchiveRoot()) null else "__archive_parent__"
+                    } else if (vm.isInRecycleBin) {
                         if (vm.isAtRecycleBinRoot) null
                         else java.io.File(vm.recycleBinPath).parentFile?.absolutePath?.let { p ->
                             if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
                         }
-                    } else if (vm.leftPath != leftEffectiveRoot && vm.leftPath.contains('/')) {
-                        vm.leftPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-                            if (p != vm.leftPath && vm.canAccessPath(p)) p else null
-                        }
-                    } else null
+                    } else {
+                        val leftEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
+                        if (vm.leftPath != leftEffectiveRoot && vm.leftPath.contains('/')) {
+                            vm.leftPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
+                                if (p != vm.leftPath && vm.canAccessPath(p)) p else null
+                            }
+                        } else null
+                    }
 
-                    val rightEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                    val rightParentPath = if (vm.isInRecycleBin) {
+                    val rightParentPath = if (vm.isInArchiveMode && vm.focusedPanel == FocusedPanel.RIGHT) {
+                        if (vm.isAtArchiveRoot()) null else "__archive_parent__"
+                    } else if (vm.isInRecycleBin) {
                         if (vm.isAtRecycleBinRoot) null
                         else java.io.File(vm.recycleBinPath).parentFile?.absolutePath?.let { p ->
                             if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
                         }
-                    } else if (vm.rightPath != rightEffectiveRoot && vm.rightPath.contains('/')) {
-                        vm.rightPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-                            if (p != vm.rightPath && vm.canAccessPath(p)) p else null
-                        }
-                    } else null
+                    } else {
+                        val rightEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
+                        if (vm.rightPath != rightEffectiveRoot && vm.rightPath.contains('/')) {
+                            vm.rightPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
+                                if (p != vm.rightPath && vm.canAccessPath(p)) p else null
+                            }
+                        } else null
+                    }
 
                     val leftFocused = vm.focusedPanel == FocusedPanel.LEFT
                     Layout(
@@ -892,7 +924,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.LEFT
-                                    if (vm.isInRecycleBin) {
+                                    if (vm.isInArchiveMode) {
+                                        vm.navigateInArchive(entry)
+                                    } else if (vm.isInRecycleBin) {
                                         vm.navigateInRecycleBin(entry)
                                     } else {
                                         DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
@@ -912,6 +946,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 },
                                 onFileClick = { entry ->
+                                    if (vm.isInArchiveMode) return@FileBrowserPanel
                                     DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
                                     DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                     vm.focusedPanel = FocusedPanel.LEFT
@@ -936,7 +971,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 parentPath = leftParentPath,
                                 lazyListState = leftListState,
                                 onNavigateUp = {
-                                    if (vm.isInRecycleBin) {
+                                    if (vm.isInArchiveMode) {
+                                        vm.focusedPanel = FocusedPanel.LEFT
+                                        vm.archiveGoUp()
+                                    } else if (vm.isInRecycleBin) {
                                         vm.focusedPanel = FocusedPanel.LEFT
                                         vm.goUpInRecycleBin()
                                     } else if (leftParentPath != null) {
@@ -999,7 +1037,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.RIGHT
-                                    if (vm.isInRecycleBin) {
+                                    if (vm.isInArchiveMode) {
+                                        vm.navigateInArchive(entry)
+                                    } else if (vm.isInRecycleBin) {
                                         vm.navigateInRecycleBin(entry)
                                     } else {
                                         DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
@@ -1015,6 +1055,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 },
                                 onFileClick = { entry ->
+                                    if (vm.isInArchiveMode) return@FileBrowserPanel
                                     DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
                                     DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                     vm.focusedPanel = FocusedPanel.RIGHT
@@ -1039,7 +1080,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 parentPath = rightParentPath,
                                 lazyListState = rightListState,
                                 onNavigateUp = {
-                                    if (vm.isInRecycleBin) {
+                                    if (vm.isInArchiveMode) {
+                                        vm.focusedPanel = FocusedPanel.RIGHT
+                                        vm.archiveGoUp()
+                                    } else if (vm.isInRecycleBin) {
                                         vm.focusedPanel = FocusedPanel.RIGHT
                                         vm.goUpInRecycleBin()
                                     } else if (rightParentPath != null) {
@@ -3874,6 +3918,18 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         ErrorDialog(
             error = compressError,
             onDismiss = { compressError = null }
+        )
+    }
+
+    // ── 压缩包密码输入弹窗 ──
+    val archivePwdEntry = vm.archivePasswordRequest
+    if (archivePwdEntry != null) {
+        com.whmdg.mczj.tools.auth.PasswordDialog(
+            title = "输入压缩包密码",
+            onDismiss = { vm.archivePasswordRequest = null },
+            onVerify = { password ->
+                vm.openArchiveWithPassword(archivePwdEntry, password)
+            }
         )
     }
 }

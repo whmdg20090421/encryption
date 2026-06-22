@@ -15,6 +15,7 @@ import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+import com.whmdg.mczj.tools.util.ArchiveBrowser
 import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.FileAccessLevel
@@ -114,6 +115,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     // ── 压缩任务 ──
     private val compressCancelFlag = AtomicBoolean(false)
     private var compressJob: Job? = null
+
+    // ── 压缩包浏览 ──
+    var isInArchiveMode by mutableStateOf(false)
+        private set
+    var archiveSession by mutableStateOf<com.whmdg.mczj.tools.util.ArchiveBrowser.ArchiveSession?>(null)
+        private set
+    /** 密码弹窗状态：null=不显示，FileEntry=需要密码的压缩包 */
+    var archivePasswordRequest by mutableStateOf<FileEntry?>(null)
 
     // ── 回收站 ──
     var isInRecycleBin by mutableStateOf(false)
@@ -1354,6 +1363,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             Toast.makeText(context, "APEX 文件无法直接打开", Toast.LENGTH_SHORT).show()
             return null
         }
+        if (ArchiveBrowser.isArchiveFile(entry.name)) {
+            DiagnosticLog.log("OpenFile", "压缩包文件，进入浏览模式: ${entry.name}")
+            openArchive(entry)
+            return null
+        }
         val textExtensions = setOf(
             "txt", "md", "json", "xml", "html", "htm", "css", "js",
             "kt", "java", "py", "sh", "bat", "log", "csv", "yaml", "yml",
@@ -2266,6 +2280,171 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         compressCancelFlag.set(true)
         compressJob?.cancel()
         compressJob = null
+    }
+
+    // ── 压缩包浏览 ──
+
+    /** 打开压缩包（首次，无密码）。若需要密码则设置 archivePasswordRequest 触发弹窗 */
+    fun openArchive(entry: FileEntry) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+                val currentPathVal = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
+                val currentEntriesVal = if (focusedPanel == FocusedPanel.LEFT) leftEntries else rightEntries
+
+                val result = ArchiveBrowser.openArchive(
+                    context = context,
+                    archivePath = entry.path,
+                    archiveName = entry.name,
+                    permissionLevel = permLevel,
+                    password = "",
+                    originalPath = currentPathVal,
+                    originalEntries = currentEntriesVal
+                )
+
+                withContext(Dispatchers.Main) {
+                    result.fold(
+                        onSuccess = { session ->
+                            enterArchiveMode(session)
+                        },
+                        onFailure = { error ->
+                            val msg = error.message ?: ""
+                            if (msg == "NEED_PASSWORD") {
+                                // 需要密码，触发弹窗
+                                archivePasswordRequest = entry
+                            } else {
+                                loadError = RuntimeException("打开压缩包失败: $msg")
+                            }
+                        }
+                    )
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    loadError = RuntimeException("打开压缩包失败: ${e.message}")
+                }
+            }
+        }
+    }
+
+    /** 密码弹窗验证回调：带密码重试打开压缩包 */
+    /** 带密码重试打开压缩包（挂起函数，供密码弹窗 onVerify 使用）。返回 true=成功 */
+    suspend fun openArchiveWithPassword(entry: FileEntry, password: String): Boolean {
+        return try {
+            val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+            val currentPathVal = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
+            val currentEntriesVal = if (focusedPanel == FocusedPanel.LEFT) leftEntries else rightEntries
+
+            val result = ArchiveBrowser.openArchive(
+                context = context,
+                archivePath = entry.path,
+                archiveName = entry.name,
+                permissionLevel = permLevel,
+                password = password,
+                originalPath = currentPathVal,
+                originalEntries = currentEntriesVal
+            )
+
+            result.fold(
+                onSuccess = { session ->
+                    withContext(Dispatchers.Main) {
+                        enterArchiveMode(session)
+                        archivePasswordRequest = null
+                    }
+                    true
+                },
+                onFailure = { error ->
+                    val msg = error.message ?: ""
+                    if (msg == "NEED_PASSWORD") {
+                        // 密码错误，保持弹窗
+                        false
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            loadError = RuntimeException("打开压缩包失败: $msg")
+                            archivePasswordRequest = null
+                        }
+                        false
+                    }
+                }
+            )
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                loadError = RuntimeException("打开压缩包失败: ${e.message}")
+                archivePasswordRequest = null
+            }
+            false
+        }
+    }
+
+    /** 进入压缩包浏览模式 */
+    private fun enterArchiveMode(session: ArchiveBrowser.ArchiveSession) {
+        if (focusedPanel == FocusedPanel.LEFT) {
+            leftEntries = session.currentEntries
+            leftPath = session.currentPath
+        } else {
+            rightEntries = session.currentEntries
+            rightPath = session.currentPath
+        }
+        archiveSession = session
+        isInArchiveMode = true
+    }
+
+    /** 从 Screen 层调用进入压缩包浏览模式（密码验证成功后） */
+    fun enterArchiveModeFromScreen(session: ArchiveBrowser.ArchiveSession) {
+        enterArchiveMode(session)
+    }
+
+    /** 在压缩包内导航到子目录 */
+    fun navigateInArchive(entry: FileEntry) {
+        val session = archiveSession ?: return
+        val newSession = ArchiveBrowser.navigateTo(session, entry.name) ?: return
+        archiveSession = newSession
+        if (focusedPanel == FocusedPanel.LEFT) {
+            leftEntries = newSession.currentEntries
+            leftPath = newSession.currentPath
+        } else {
+            rightEntries = newSession.currentEntries
+            rightPath = newSession.currentPath
+        }
+    }
+
+    /** 压缩包内返回上一级，返回 false 表示已在根目录 */
+    fun archiveGoUp(): Boolean {
+        val session = archiveSession ?: return false
+        val newSession = ArchiveBrowser.navigateUp(session)
+        if (newSession == null) {
+            // 已在根目录，退出压缩包
+            exitArchive()
+            return true
+        }
+        archiveSession = newSession
+        if (focusedPanel == FocusedPanel.LEFT) {
+            leftEntries = newSession.currentEntries
+            leftPath = newSession.currentPath
+        } else {
+            rightEntries = newSession.currentEntries
+            rightPath = newSession.currentPath
+        }
+        return true
+    }
+
+    /** 退出压缩包浏览模式，恢复原始状态 */
+    fun exitArchive() {
+        val session = archiveSession ?: return
+        if (focusedPanel == FocusedPanel.LEFT) {
+            leftPath = session.originalPath
+            leftEntries = session.originalEntries
+        } else {
+            rightPath = session.originalPath
+            rightEntries = session.originalEntries
+        }
+        archiveSession = null
+        isInArchiveMode = false
+    }
+
+    /** 当前是否在压缩包根目录 */
+    fun isAtArchiveRoot(): Boolean {
+        val session = archiveSession ?: return true
+        return ArchiveBrowser.isAtRoot(session)
     }
 
     companion object {

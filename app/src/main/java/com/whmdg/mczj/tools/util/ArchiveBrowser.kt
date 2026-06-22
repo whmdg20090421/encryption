@@ -1,0 +1,317 @@
+package com.whmdg.mczj.tools.util
+
+import android.content.Context
+import android.util.Base64
+import android.util.Log
+import com.whmdg.mczj.tools.security.ShizukuAuthorizer
+import com.whmdg.mczj.tools.ui.FileEntry
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+/**
+ * 压缩包浏览工具类。
+ * 通过 7zzs l -ba 命令读取压缩包目录结构，构建内存目录树，支持只读浏览。
+ */
+object ArchiveBrowser {
+
+    private const val TAG = "ArchiveBrowser"
+
+    /** 支持的压缩包扩展名 */
+    private val ARCHIVE_EXTENSIONS = setOf(
+        "zip", "7z", "rar", "tar", "gz", "bz2", "xz",
+        "lz4", "zst", "lzma", "cab", "iso", "dmg"
+    )
+
+    /** 判断文件名是否为压缩包 */
+    fun isArchiveFile(name: String): Boolean {
+        val ext = name.substringAfterLast('.', "").lowercase()
+        // 复合扩展名：tar.gz, tar.bz2, tar.xz
+        val secondExt = name.substringBeforeLast('.', "").substringAfterLast('.', "").lowercase()
+        if (secondExt == "tar" && ext in setOf("gz", "bz2", "xz")) return true
+        return ext in ARCHIVE_EXTENSIONS
+    }
+
+    /** 压缩包目录树节点 */
+    data class ArchiveNode(
+        val name: String,
+        val isDirectory: Boolean,
+        val size: Long = 0,
+        val children: MutableList<ArchiveNode> = mutableListOf()
+    )
+
+    /** 压缩包浏览会话 */
+    data class ArchiveSession(
+        val archivePath: String,
+        val archiveName: String,
+        val root: ArchiveNode,
+        val currentPath: String,
+        val currentEntries: List<FileEntry>,
+        val originalPath: String,
+        val originalEntries: List<FileEntry>
+    )
+
+    /**
+     * 打开压缩包，构建目录树。
+     * @return ArchiveSession 成功，或 Pair(null, errorMessage) 失败
+     */
+    suspend fun openArchive(
+        context: Context,
+        archivePath: String,
+        archiveName: String,
+        permissionLevel: String,
+        password: String = "",
+        originalPath: String = "",
+        originalEntries: List<FileEntry> = emptyList()
+    ): Result<ArchiveSession> = withContext(Dispatchers.IO) {
+        try {
+            val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
+            val cmd = SevenZipCommand.buildListCommand(binaryPath, archivePath, password)
+            Log.d(TAG, "列表命令: $cmd")
+
+            val (stdout, stderr, exitCode) = executeCommand(cmd, permissionLevel, context)
+
+            if (exitCode != 0) {
+                val errMsg = detectPasswordError(stderr, exitCode)
+                return@withContext Result.failure(Exception(errMsg))
+            }
+
+            val entries = parseListOutput(stdout)
+            val root = buildTree(entries)
+            val rootEntries = nodeChildrenToEntries(root)
+
+            Result.success(
+                ArchiveSession(
+                    archivePath = archivePath,
+                    archiveName = archiveName,
+                    root = root,
+                    currentPath = archivePath,
+                    currentEntries = rootEntries,
+                    originalPath = originalPath,
+                    originalEntries = originalEntries
+                )
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "打开压缩包失败", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 检测是否为密码错误（需要用户输入密码）。
+     * @return 错误消息，若为密码相关则返回特定标记
+     */
+    fun detectPasswordError(stderr: String, exitCode: Int): String {
+        val lower = stderr.lowercase()
+        return when {
+            exitCode == 2 && ("wrong password" in lower || "密码" in lower) ->
+                "NEED_PASSWORD"
+            exitCode == 2 && ("data error" in lower || "损坏" in lower) ->
+                "NEED_PASSWORD"
+            exitCode == 2 ->
+                "NEED_PASSWORD"
+            else ->
+                stderr.ifBlank { "7zzs 退出码: $exitCode" }
+        }
+    }
+
+    /**
+     * 在压缩包内导航到子目录。
+     * @return 新的 ArchiveSession（currentPath 和 currentEntries 更新），或 null（找不到子目录）
+     */
+    fun navigateTo(session: ArchiveSession, dirName: String): ArchiveSession? {
+        val currentPath = session.currentPath
+        val currentNode = findNode(session.root, currentPath, session.archivePath)
+            ?: return null
+        val child = currentNode.children.find { it.name == dirName && it.isDirectory }
+            ?: return null
+
+        val newPath = "$currentPath/$dirName"
+        val entries = nodeChildrenToEntries(child)
+
+        return session.copy(
+            currentPath = newPath,
+            currentEntries = entries
+        )
+    }
+
+    /**
+     * 在压缩包内返回上一级。
+     * @return 新的 ArchiveSession，或 null（已在根目录）
+     */
+    fun navigateUp(session: ArchiveSession): ArchiveSession? {
+        if (session.currentPath == session.archivePath) return null
+
+        val parentPath = session.currentPath.substringBeforeLast('/')
+        val parentNode = findNode(session.root, parentPath, session.archivePath)
+            ?: return null
+        val entries = nodeChildrenToEntries(parentNode)
+
+        return session.copy(
+            currentPath = parentPath,
+            currentEntries = entries
+        )
+    }
+
+    /** 当前是否在压缩包根目录 */
+    fun isAtRoot(session: ArchiveSession): Boolean {
+        return session.currentPath == session.archivePath
+    }
+
+    // ── 内部实现 ──
+
+    /** 解析 7zzs l -ba 输出，提取文件/目录条目 */
+    private fun parseListOutput(output: String): List<ParsedEntry> {
+        val entries = mutableListOf<ParsedEntry>()
+        // 7zzs -ba 输出中，空行之前是表头，之后是文件列表
+        // 也可能没有空行分隔，直接从第一个匹配行开始
+        val lineRegex = Regex(
+            """^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+.{5}\s+[\d]+\s+[\d]+\s+.+$"""
+        )
+        val fieldRegex = Regex(
+            """^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(\S{5})\s+(\d+)\s+(\d+)\s+(.+)$"""
+        )
+
+        for (line in output.lines()) {
+            val trimmed = line.trimEnd()
+            if (trimmed.isBlank()) continue
+            if (!lineRegex.matches(trimmed)) continue
+
+            val match = fieldRegex.matchEntire(trimmed) ?: continue
+            val attrs = match.groupValues[3]
+            val size = match.groupValues[5].toLongOrNull() ?: 0
+            var path = match.groupValues[6].trim()
+            // 统一路径分隔符
+            path = path.replace('\\', '/')
+
+            val isDir = attrs.startsWith('D')
+            entries.add(ParsedEntry(path = path, isDirectory = isDir, size = size))
+        }
+
+        return entries
+    }
+
+    /** 解析后的原始条目 */
+    private data class ParsedEntry(
+        val path: String,
+        val isDirectory: Boolean,
+        val size: Long
+    )
+
+    /** 从扁平路径列表构建目录树 */
+    private fun buildTree(entries: List<ParsedEntry>): ArchiveNode {
+        val root = ArchiveNode(name = "", isDirectory = true)
+
+        for (entry in entries) {
+            val parts = entry.path.split('/').filter { it.isNotEmpty() }
+            if (parts.isEmpty()) continue
+
+            var current = root
+            for (i in parts.indices) {
+                val part = parts[i]
+                val isLast = i == parts.size - 1
+
+                val existing = current.children.find { it.name == part }
+                if (existing != null) {
+                    if (isLast && !entry.isDirectory) {
+                        // 叶子文件节点，更新大小
+                        val idx = current.children.indexOf(existing)
+                        current.children[idx] = existing.copy(size = entry.size)
+                    }
+                    current = existing
+                } else {
+                    val node = if (isLast && !entry.isDirectory) {
+                        ArchiveNode(name = part, isDirectory = false, size = entry.size)
+                    } else {
+                        ArchiveNode(name = part, isDirectory = true)
+                    }
+                    current.children.add(node)
+                    current = node
+                }
+            }
+        }
+
+        // 排序：目录在前，文件在后，各自按名称排序
+        sortTree(root)
+        return root
+    }
+
+    /** 递归排序目录树（目录在前，文件在后） */
+    private fun sortTree(node: ArchiveNode) {
+        node.children.sortWith(compareBy<ArchiveNode> { !it.isDirectory }.thenBy { it.name })
+        for (child in node.children) {
+            if (child.isDirectory) sortTree(child)
+        }
+    }
+
+    /** 根据虚拟路径在树中查找节点 */
+    private fun findNode(root: ArchiveNode, virtualPath: String, archivePath: String): ArchiveNode? {
+        if (virtualPath == archivePath) return root
+
+        val relativePath = virtualPath.removePrefix(archivePath).trimStart('/')
+        if (relativePath.isBlank()) return root
+
+        val parts = relativePath.split('/').filter { it.isNotEmpty() }
+        var current = root
+        for (part in parts) {
+            val child = current.children.find { it.name == part && it.isDirectory }
+                ?: return null
+            current = child
+        }
+        return current
+    }
+
+    /** 将节点的子节点转换为 FileEntry 列表（供 UI 使用） */
+    private fun nodeChildrenToEntries(node: ArchiveNode): List<FileEntry> {
+        return node.children.map { child ->
+            FileEntry(
+                path = child.name,
+                name = child.name,
+                isDirectory = child.isDirectory,
+                size = if (child.isDirectory) 0 else child.size
+            )
+        }
+    }
+
+    /** 执行 shell 命令，返回 (stdout, stderr, exitCode) */
+    private suspend fun executeCommand(
+        cmd: String,
+        permissionLevel: String,
+        context: Context
+    ): Triple<String, String, Int> = withContext(Dispatchers.IO) {
+        when (permissionLevel) {
+            "ROOT" -> {
+                val process = ProcessBuilder("su", "-c", cmd)
+                    .redirectErrorStream(false)
+                    .start()
+                val stdout = process.inputStream.bufferedReader().readText()
+                val stderr = process.errorStream.bufferedReader().readText()
+                val exitCode = process.waitFor()
+                Triple(stdout, stderr, exitCode)
+            }
+            "SHIZUKU" -> {
+                val service = ShizukuAuthorizer.getShellService()
+                    ?: throw IllegalStateException("Shizuku UserService 未连接")
+                val result = service.execute(cmd)
+                // ShellService 返回格式: stdoutB64\nstderrB64\nexitCode
+                val parts = result.split("\n")
+                val stdout = if (parts.size >= 1 && parts[0].isNotEmpty()) {
+                    String(Base64.decode(parts[0], Base64.NO_WRAP), Charsets.UTF_8)
+                } else ""
+                val stderr = if (parts.size >= 2 && parts[1].isNotEmpty()) {
+                    String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
+                } else ""
+                val exitCode = parts.getOrNull(2)?.trim()?.toIntOrNull() ?: -1
+                Triple(stdout, stderr, exitCode)
+            }
+            else -> {
+                val process = ProcessBuilder("sh", "-c", cmd)
+                    .redirectErrorStream(false)
+                    .start()
+                val stdout = process.inputStream.bufferedReader().readText()
+                val stderr = process.errorStream.bufferedReader().readText()
+                val exitCode = process.waitFor()
+                Triple(stdout, stderr, exitCode)
+            }
+        }
+    }
+}

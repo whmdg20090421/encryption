@@ -60,4 +60,19 @@ object SevenZipCommand {
 
         return cmd.toString()
     }
+
+    /**
+     * 构建 7zzs 列表命令（用于压缩包浏览）。
+     * 输出格式: `<binary> l -ba [-p'pwd'] <archive>`
+     * @param password 空=不带密码
+     */
+    fun buildListCommand(binaryPath: String, archivePath: String, password: String = ""): String {
+        val cmd = StringBuilder(escape(binaryPath))
+        cmd.append(" l -ba")
+        if (password.isNotEmpty()) {
+            cmd.append(" -p${escapePassword(password)}")
+        }
+        cmd.append(" ${escape(archivePath)}")
+        return cmd.toString()
+    }
 }

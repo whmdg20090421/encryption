@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun PasswordDialog(
+    title: String = "输入密钥",
     onDismiss: () -> Unit,
     onVerify: suspend (String) -> Boolean
 ) {
@@ -72,7 +73,7 @@ fun PasswordDialog(
 
     AlertDialog(
         onDismissRequest = { if (!isProcessing) onDismiss() },
-        title = { Text("输入密钥") },
+        title = { Text(title) },
         text = {
             Column {
                 val now = System.currentTimeMillis()
