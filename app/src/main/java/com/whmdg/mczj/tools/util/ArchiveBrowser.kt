@@ -103,7 +103,7 @@ object ArchiveBrowser {
         }
     }
 
-    fun loadSessionCache(context: Context): Pair<ArchiveSessionCache, String>? {
+    internal fun loadSessionCache(context: Context): Pair<ArchiveSessionCache, String>? {
         val file = File(AppDataPaths.fileManager(context), CACHE_FILE_NAME)
         if (!file.exists()) return null
         return try {
@@ -122,7 +122,7 @@ object ArchiveBrowser {
         try { File(AppDataPaths.fileManager(context), CACHE_FILE_NAME).delete() } catch (_: Exception) {}
     }
 
-    fun restoreSession(cache: ArchiveSessionCache): ArchiveSession {
+    internal fun restoreSession(cache: ArchiveSessionCache): ArchiveSession {
         val root = fromCacheNode(cache.root)
         val node = if (cache.currentPath == cache.archivePath) root
             else findNode(root, cache.currentPath, cache.archivePath) ?: root
