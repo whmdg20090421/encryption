@@ -39,7 +39,8 @@ object ArchiveBrowser {
     data class ArchiveNode(
         val name: String,
         val isDirectory: Boolean,
-        val size: Long = 0,
+        var size: Long = 0,            // 原始大小
+        var compressedSize: Long = 0,  // 压缩后大小
         val children: MutableList<ArchiveNode> = mutableListOf()
     )
 
@@ -61,6 +62,7 @@ object ArchiveBrowser {
         val name: String,
         val isDirectory: Boolean,
         val size: Long = 0,
+        val compressedSize: Long = 0,
         val children: List<CacheArchiveNode> = emptyList()
     )
 
@@ -78,12 +80,12 @@ object ArchiveBrowser {
     private const val CACHE_FILE_NAME = "archive_session_cache.json"
 
     private fun toCacheNode(node: ArchiveNode): CacheArchiveNode = CacheArchiveNode(
-        name = node.name, isDirectory = node.isDirectory, size = node.size,
+        name = node.name, isDirectory = node.isDirectory, size = node.size, compressedSize = node.compressedSize,
         children = node.children.map { toCacheNode(it) }
     )
 
     private fun fromCacheNode(cache: CacheArchiveNode): ArchiveNode = ArchiveNode(
-        name = cache.name, isDirectory = cache.isDirectory, size = cache.size,
+        name = cache.name, isDirectory = cache.isDirectory, size = cache.size, compressedSize = cache.compressedSize,
         children = cache.children.map { fromCacheNode(it) }.toMutableList()
     )
 
@@ -266,13 +268,14 @@ object ArchiveBrowser {
 
             val match = fieldRegex.matchEntire(trimmed) ?: continue
             val attrs = match.groupValues[3]
+            val compressedSize = match.groupValues[4].toLongOrNull() ?: 0
             val size = match.groupValues[5].toLongOrNull() ?: 0
             var path = match.groupValues[6].trim()
             // 统一路径分隔符
             path = path.replace('\\', '/')
 
             val isDir = attrs.startsWith('D')
-            entries.add(ParsedEntry(path = path, isDirectory = isDir, size = size))
+            entries.add(ParsedEntry(path = path, isDirectory = isDir, size = size, compressedSize = compressedSize))
         }
 
         return entries
@@ -282,7 +285,8 @@ object ArchiveBrowser {
     private data class ParsedEntry(
         val path: String,
         val isDirectory: Boolean,
-        val size: Long
+        val size: Long,
+        val compressedSize: Long
     )
 
     /** 从扁平路径列表构建目录树 */
@@ -303,12 +307,12 @@ object ArchiveBrowser {
                     if (isLast && !entry.isDirectory) {
                         // 叶子文件节点，更新大小
                         val idx = current.children.indexOf(existing)
-                        current.children[idx] = existing.copy(size = entry.size)
+                        current.children[idx] = existing.copy(size = entry.size, compressedSize = entry.compressedSize)
                     }
                     current = existing
                 } else {
                     val node = if (isLast && !entry.isDirectory) {
-                        ArchiveNode(name = part, isDirectory = false, size = entry.size)
+                        ArchiveNode(name = part, isDirectory = false, size = entry.size, compressedSize = entry.compressedSize)
                     } else {
                         ArchiveNode(name = part, isDirectory = true)
                     }
@@ -320,7 +324,24 @@ object ArchiveBrowser {
 
         // 排序：目录在前，文件在后，各自按名称排序
         sortTree(root)
+        // 递归计算目录的累计大小
+        calculateDirectorySizes(root)
         return root
+    }
+
+    /** 递归计算每个目录节点的原始大小和压缩大小总和 */
+    private fun calculateDirectorySizes(node: ArchiveNode): Pair<Long, Long> {
+        if (!node.isDirectory) return Pair(node.size, node.compressedSize)
+        var totalSize = 0L
+        var totalCompressed = 0L
+        for (child in node.children) {
+            val (s, c) = calculateDirectorySizes(child)
+            totalSize += s
+            totalCompressed += c
+        }
+        node.size = totalSize
+        node.compressedSize = totalCompressed
+        return Pair(totalSize, totalCompressed)
     }
 
     /** 递归排序目录树（目录在前，文件在后） */
@@ -355,7 +376,8 @@ object ArchiveBrowser {
                 path = child.name,
                 name = child.name,
                 isDirectory = child.isDirectory,
-                size = if (child.isDirectory) 0 else child.size
+                size = child.size,
+                compressedSize = child.compressedSize
             )
         }
     }

@@ -121,7 +121,8 @@ data class FileEntry(
     val permission: String = "",
     val size: Long = 0,
     val lastModified: Long = 0,
-    val createdAt: Long = 0
+    val createdAt: Long = 0,
+    val compressedSize: Long = 0
 )
 
 @kotlinx.serialization.Serializable
@@ -990,7 +991,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
                                     }
                                 },
-                                archiveSizeProvider = null,
+                                archiveSizeProvider = if (vm.isInArchiveMode) { entry ->
+                                    if (entry.compressedSize > 0 || entry.size > 0)
+                                        "${compactSize(entry.compressedSize)}(${compactSize(entry.size)})"
+                                    else "--"
+                                } else null,
                                 onVisibleRangeChanged = null,
                                 thumbnailLoader = null,
                                 selectedPaths = leftSelectedPaths,
@@ -1099,7 +1104,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
                                     }
                                 },
-                                archiveSizeProvider = null,
+                                archiveSizeProvider = if (vm.isInArchiveMode) { entry ->
+                                    if (entry.compressedSize > 0 || entry.size > 0)
+                                        "${compactSize(entry.compressedSize)}(${compactSize(entry.size)})"
+                                    else "--"
+                                } else null,
                                 onVisibleRangeChanged = null,
                                 thumbnailLoader = null,
                                 selectedPaths = rightSelectedPaths,
