@@ -17,7 +17,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.ui.components.GlowCard
 import com.whmdg.mczj.tools.ui.components.GlowListItem
-import com.whmdg.mczj.tools.xposed.XposedInit
+import com.whmdg.mczj.tools.util.XposedDetector
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,7 +74,7 @@ fun SecurityScreen(
 
 @Composable
 private fun XposedDetectionItem() {
-    val isActive = remember { XposedInit.isModuleActive() }
+    val isActive = remember { XposedDetector.isModuleActive() }
 
     GlowListItem(
         title = "Xposed 模块",

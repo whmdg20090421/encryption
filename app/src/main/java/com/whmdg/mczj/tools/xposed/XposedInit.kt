@@ -42,18 +42,5 @@ class XposedInit : XposedModule() {
 
     companion object {
         private const val ACTIVE_FLAG_PATH = "/data/local/tmp/mczj_xposed_active.flag"
-
-        fun isModuleActive(): Boolean {
-            try {
-                Class.forName("io.github.libxposed.api.XposedContext")
-                return true
-            } catch (_: Throwable) {
-            }
-            return try {
-                File(ACTIVE_FLAG_PATH).exists()
-            } catch (_: Throwable) {
-                false
-            }
-        }
     }
 }
