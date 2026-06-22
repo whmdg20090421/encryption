@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- LSPosed 推荐作用域：系统框架 -->
+    <string-array name="xposed_scope">
+        <item>android</item>
+        <item>system_server</item>
+    </string-array>
+</resources>

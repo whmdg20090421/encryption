@@ -158,6 +158,20 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- LSPosed 模块声明 -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="艨艟战舰工具箱 - LSPosed 模块" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="100" />
+        <meta-data
+            android:name="xposedscope"
+            android:resource="@array/xposed_scope" />
+
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"

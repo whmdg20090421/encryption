@@ -133,6 +133,9 @@ dependencies {
     }
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // libxposed API（编译时依赖，运行时由 Vector/LSPosed 框架提供）
+    compileOnly("io.github.libxposed:api:100")
+
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

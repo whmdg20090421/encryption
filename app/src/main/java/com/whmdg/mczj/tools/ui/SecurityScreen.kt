@@ -1,20 +1,24 @@
 package com.whmdg.mczj.tools.ui
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.ui.components.GlowCard
 import com.whmdg.mczj.tools.ui.components.GlowListItem
+import com.whmdg.mczj.tools.xposed.XposedInit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,9 +65,31 @@ fun SecurityScreen(
                             icon = Icons.Default.Settings,
                             onClick = { onNavigate(Screen.PermissionManagementConfig) }
                         )
+                        XposedDetectionItem()
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun XposedDetectionItem() {
+    val context = LocalContext.current
+    val isActive = remember { XposedInit.isModuleActive(context) }
+
+    GlowListItem(
+        title = "Xposed 模块",
+        subtitle = if (isActive) "模块已生效" else "模块未生效",
+        icon = if (isActive) Icons.Default.CheckCircle else Icons.Default.Close,
+        iconTint = if (isActive) Color(0xFF4CAF50) else Color(0xFFF44336),
+        trailing = {
+            Icon(
+                imageVector = if (isActive) Icons.Default.CheckCircle else Icons.Default.Close,
+                contentDescription = null,
+                tint = if (isActive) Color(0xFF4CAF50) else Color(0xFFF44336),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    )
 }
