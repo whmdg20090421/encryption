@@ -1,28 +1,22 @@
 package com.whmdg.mczj.tools.util
 
-import java.io.File
-
-/**
- * Xposed 模块生效检测（纯 Java，不依赖 libxposed API）
- * 避免 compileOnly 依赖在运行时引发 NoClassDefFoundError
- */
 object XposedDetector {
 
-    private const val ACTIVE_FLAG_PATH = "/data/local/tmp/mczj_xposed_active.flag"
+    private const val PROP_ACTIVE = "mczj.xposed.active"
 
-    /**
-     * 检测 Xposed 模块是否生效
-     * 1. 反射检查 libxposed API 类是否被框架注入当前进程
-     * 2. 检查标记文件（模块在任意进程加载时写入）
-     */
     fun isModuleActive(): Boolean {
+        // 方法一：反射检查 libxposed API 类是否被框架注入当前进程
         try {
             Class.forName("io.github.libxposed.api.XposedContext")
             return true
         } catch (_: Throwable) {
         }
+        // 方法二：读取 system_server 设置的系统属性
         return try {
-            File(ACTIVE_FLAG_PATH).exists()
+            val clazz = Class.forName("android.os.SystemProperties")
+            val getMethod = clazz.getMethod("get", String::class.java, String::class.java)
+            val value = getMethod.invoke(null, PROP_ACTIVE, "") as String
+            value.isNotEmpty()
         } catch (_: Throwable) {
             false
         }
