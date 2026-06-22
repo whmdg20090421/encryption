@@ -105,16 +105,14 @@ object ArchiveBrowser {
      */
     fun detectPasswordError(stderr: String, exitCode: Int): String {
         val lower = stderr.lowercase()
-        return when {
-            exitCode == 2 && ("wrong password" in lower || "密码" in lower) ->
-                "NEED_PASSWORD"
-            exitCode == 2 && ("data error" in lower || "损坏" in lower) ->
-                "NEED_PASSWORD"
-            exitCode == 2 ->
-                "NEED_PASSWORD"
-            else ->
-                stderr.ifBlank { "7zzs 退出码: $exitCode" }
-        }
+        // 仅当 stderr 明确包含密码/加密相关关键词时才判定为需要密码
+        val isPasswordRelated = "wrong password" in lower
+                || "cannot open encrypted" in lower
+                || "data error" in lower
+                || "unsupported" in lower && "encryption" in lower
+        if (exitCode == 2 && isPasswordRelated) return "NEED_PASSWORD"
+        // 其他所有非零退出码，返回实际错误信息供 UI 显示
+        return stderr.ifBlank { "7zzs 退出码: $exitCode" }
     }
 
     /**
