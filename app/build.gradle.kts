@@ -134,7 +134,27 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // libxposed API（编译时依赖，运行时由 Vector/LSPosed 框架提供）
-    compileOnly("io.github.libxposed:api:100")
+    // 优先从 Maven Central 拉取，失败则使用仓库内本地源码编译
+    val xposedApiVersion = "101.0.1"
+    val xposedMavenCoord = "io.github.libxposed:api:$xposedApiVersion"
+    val xposedMavenAvailable = try {
+        val checkConfig = configurations.create("xposedMavenCheck") {
+            isCanBeResolved = true
+            isCanBeConsumed = false
+        }
+        dependencies.add(checkConfig.name, xposedMavenCoord)
+        checkConfig.resolve()
+        true
+    } catch (_: Exception) {
+        false
+    }
+    if (xposedMavenAvailable) {
+        logger.lifecycle("libxposed API: 使用 Maven 依赖 ($xposedMavenCoord)")
+        compileOnly(xposedMavenCoord)
+    } else {
+        logger.lifecycle("libxposed API: Maven 不可用，使用本地源码编译")
+        implementation(project(":libs:libxposed-api"))
+    }
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

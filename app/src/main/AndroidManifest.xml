@@ -167,7 +167,7 @@
             android:value="艨艟战舰工具箱 - LSPosed 模块" />
         <meta-data
             android:name="xposedminversion"
-            android:value="100" />
+            android:value="101" />
         <meta-data
             android:name="xposedscope"
             android:resource="@array/xposed_scope" />
