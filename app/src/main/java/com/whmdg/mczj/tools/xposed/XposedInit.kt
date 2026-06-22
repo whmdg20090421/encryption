@@ -1,30 +1,26 @@
 package com.whmdg.mczj.tools.xposed
 
-import android.util.Log
+import io.github.libxposed.api.XposedContext
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
-import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
-import io.github.libxposed.api.XposedModuleInterface.SystemServerStartingParam
-class XposedInit : XposedModule() {
+import io.github.libxposed.api.XposedModuleInterface.SystemServerLoadedParam
 
-    override fun onModuleLoaded(param: ModuleLoadedParam) {
-        log(Log.INFO, "艨艟", "模块已加载: 进程=${param.processName}, systemServer=${param.isSystemServer}")
+class XposedInit(base: XposedContext, param: ModuleLoadedParam) : XposedModule(base, param) {
+
+    init {
+        log("艨艟: 模块已加载, 进程=${param.processName}, systemServer=${param.isSystemServer}")
         setActiveProperty()
     }
 
     override fun onPackageLoaded(param: PackageLoadedParam) {
-        log(Log.INFO, "艨艟", "包已加载: ${param.packageName}, first=${param.isFirstPackage}")
+        log("艨艟: 包已加载: ${param.packageName}, first=${param.isFirstPackage}")
 
         // TODO: 在此处添加 hook 逻辑
     }
 
-    override fun onPackageReady(param: PackageReadyParam) {
-        log(Log.INFO, "艨艟", "包就绪: ${param.packageName}")
-    }
-
-    override fun onSystemServerStarting(param: SystemServerStartingParam) {
-        log(Log.INFO, "艨艟", "system_server 启动中")
+    override fun onSystemServerLoaded(param: SystemServerLoadedParam) {
+        log("艨艟: system_server 已加载")
         setActiveProperty()
     }
 

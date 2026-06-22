@@ -135,7 +135,7 @@ dependencies {
 
     // libxposed API（编译时依赖，运行时由 Vector/LSPosed 框架提供）
     // 优先从 Maven Central 拉取，失败则使用仓库内本地源码编译
-    val xposedApiVersion = "101.0.1"
+    val xposedApiVersion = "100"
     val xposedMavenCoord = "io.github.libxposed:api:$xposedApiVersion"
     val xposedMavenAvailable = try {
         val checkConfig = configurations.create("xposedMavenCheck") {
