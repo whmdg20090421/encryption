@@ -7,46 +7,22 @@ package com.whmdg.mczj.tools.util
 object SevenZipCommand {
 
     /**
-     * 路径转义：反斜杠转义所有 shell 特殊字符。
-     *
-     * 反斜杠转义在以下场景正确生效：
-     * - ArchiveBrowser：命令通过 stdin 管道（sh -s）传递，字节原样到达 shell
-     * - FileManagerViewModel 等：命令通过 libsu（Shell.cmd）传递，libsu 内部处理引号
-     *
-     * 如果命令通过 sh -c "..." 双引号传递（非 stdin 管道），反斜杠会被外层 shell
-     * 消费（\[ → [），导致 glob 展开。ArchiveBrowser.executeCommand() 已用
-     * stdin 管道（ProcessBuilder("sh") + outputStream）彻底绕过此问题。
+     * 路径转义：单引号包裹，shell 不做任何解析（行业标准做法）。
+     * 单引号内部唯一特殊的是单引号本身，用 '\'' 替换（闭合→转义插入→重开）。
+     * 适用于所有执行路径：su -c、sh -c、libsu、Shizuku ShellService。
      */
     fun escape(path: String): String {
         if (path.isEmpty()) return "''"
-        val sb = StringBuilder(path.length + 16)
-        for (c in path) {
-            if (c in SHELL_SPECIAL) sb.append('\\')
-            sb.append(c)
-        }
-        return sb.toString()
+        return "'" + path.replace("'", "'\\''") + "'"
     }
 
     /**
-     * 密码转义：与路径转义逻辑相同，反斜杠转义所有 shell 特殊字符。
+     * 密码转义：与路径转义逻辑相同，单引号包裹。
      */
     fun escapePassword(pwd: String): String {
         if (pwd.isEmpty()) return "''"
-        val sb = StringBuilder(pwd.length + 16)
-        for (c in pwd) {
-            if (c in SHELL_SPECIAL) sb.append('\\')
-            sb.append(c)
-        }
-        return sb.toString()
+        return "'" + pwd.replace("'", "'\\''") + "'"
     }
-
-    /** 需要反斜杠转义的 shell 特殊字符 */
-    private val SHELL_SPECIAL = setOf(
-        ' ', '\t', '\'', '"', '\\',
-        '(', ')', '[', ']', '{', '}',
-        '*', '?', '!', '#', '$', '&', ';',
-        '|', '<', '>', '`', '~'
-    )
 
     /**
      * 构建 7zzs 压缩命令。

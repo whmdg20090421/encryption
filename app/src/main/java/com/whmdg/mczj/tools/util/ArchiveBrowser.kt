@@ -560,57 +560,42 @@ object ArchiveBrowser {
     /** 命令执行超时时间（毫秒） */
     private const val COMMAND_TIMEOUT_MS = 30_000L
 
-    /**
-     * 等待进程结束并收集 stdout/stderr。用于命令已通过 su -c 参数传递的场景。
-     */
-    private fun drainProcess(process: Process): Triple<String, String, Int> {
-        val stdoutBuf = StringBuilder()
-        val stderrBuf = StringBuilder()
-        val tOut = Thread {
-            try {
-                process.inputStream.bufferedReader().use { r ->
-                    val buf = CharArray(8192)
-                    var n: Int
-                    while (r.read(buf).also { n = it } != -1) stdoutBuf.append(buf, 0, n)
-                }
-            } catch (_: Exception) {}
+    /** 执行 shell 命令，返回 (stdout, stderr, exitCode)。
+     *  路径已由 SevenZipCommand.escape() 用单引号包裹，可安全传递给任何 shell。 */
+    private suspend fun executeCommand(
+        cmd: String,
+        permissionLevel: String,
+        context: Context
+    ): Triple<String, String, Int> = withContext(Dispatchers.IO) {
+        val process = when (permissionLevel) {
+            "ROOT" -> {
+                Log.d(TAG, "ROOT 执行: $cmd")
+                ProcessBuilder("su", "-c", cmd)
+                    .redirectErrorStream(false)
+                    .start()
+            }
+            "SHIZUKU" -> {
+                val service = ShizukuAuthorizer.getShellService()
+                    ?: throw IllegalStateException("Shizuku UserService 未连接")
+                Log.d(TAG, "SHIZUKU 执行: $cmd")
+                val result = withTimeout(COMMAND_TIMEOUT_MS) { service.execute(cmd) }
+                val parts = result.split("\n")
+                val stdout = if (parts.size >= 1 && parts[0].isNotEmpty()) {
+                    String(Base64.decode(parts[0], Base64.NO_WRAP), Charsets.UTF_8)
+                } else ""
+                val stderr = if (parts.size >= 2 && parts[1].isNotEmpty()) {
+                    String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
+                } else ""
+                val exitCode = parts.getOrNull(2)?.trim()?.toIntOrNull() ?: -1
+                return@withContext Triple(stdout, stderr, exitCode)
+            }
+            else -> {
+                Log.d(TAG, "NORMAL 执行: $cmd")
+                ProcessBuilder("sh", "-c", cmd)
+                    .redirectErrorStream(false)
+                    .start()
+            }
         }
-        val tErr = Thread {
-            try {
-                process.errorStream.bufferedReader().use { r ->
-                    val buf = CharArray(8192)
-                    var n: Int
-                    while (r.read(buf).also { n = it } != -1) stderrBuf.append(buf, 0, n)
-                }
-            } catch (_: Exception) {}
-        }
-        tOut.start(); tErr.start()
-        val watchdog = Thread {
-            try {
-                Thread.sleep(COMMAND_TIMEOUT_MS)
-                process.destroyForcibly()
-            } catch (_: Exception) {}
-        }
-        watchdog.isDaemon = true
-        watchdog.start()
-        val exitCode = process.waitFor()
-        watchdog.interrupt()
-        tOut.join(5000); tErr.join(5000)
-        return Triple(stdoutBuf.toString().trimEnd(), stderrBuf.toString().trimEnd(), exitCode)
-    }
-
-    /**
-     * 通过 stdin 管道执行 shell 命令。
-     * 将命令原始字节写入 sh 进程的 stdin，完全绕过所有 shell 参数解析层。
-     * SevenZipCommand.escape() 的反斜杠转义（如 `\[` `\*`）原样到达 sh，正确生效。
-     * 仅用于 NORMAL 路径（普通用户进程，stdin 正常转发）。
-     */
-    private fun executeWithStdin(process: Process, cmd: String): Triple<String, String, Int> {
-        // 写入命令后关闭 stdin，sh 读到 EOF 即开始执行
-        Thread {
-            try { process.outputStream.use { it.write(cmd.toByteArray(Charsets.UTF_8)) } }
-            catch (_: Exception) {}
-        }.start()
         // 并发读取 stdout/stderr，避免管道缓冲区满导致死锁
         val stdoutBuf = StringBuilder()
         val stderrBuf = StringBuilder()
@@ -633,7 +618,7 @@ object ArchiveBrowser {
             } catch (_: Exception) {}
         }
         tOut.start(); tErr.start()
-        // 超时看门狗：超时后强制终止进程
+        // 超时看门狗
         val watchdog = Thread {
             try {
                 Thread.sleep(COMMAND_TIMEOUT_MS)
@@ -645,57 +630,6 @@ object ArchiveBrowser {
         val exitCode = process.waitFor()
         watchdog.interrupt()
         tOut.join(5000); tErr.join(5000)
-        return Triple(stdoutBuf.toString().trimEnd(), stderrBuf.toString().trimEnd(), exitCode)
-    }
-
-    /** 执行 shell 命令，返回 (stdout, stderr, exitCode) */
-    private suspend fun executeCommand(
-        cmd: String,
-        permissionLevel: String,
-        context: Context
-    ): Triple<String, String, Int> = withContext(Dispatchers.IO) {
-        when (permissionLevel) {
-            "ROOT" -> {
-                // 临时脚本：命令写入文件 → su -c sh /tmp/cmd → 删除。
-                // 绕过 su 的 stdin 不转发和管道不支持问题。
-                val tmpFile = File(context.cacheDir, "cmd_${Thread.currentThread().id}.sh")
-                try {
-                    tmpFile.writeText(cmd, Charsets.UTF_8)
-                    Log.d(TAG, "ROOT 执行(tmp): $cmd")
-                    val process = ProcessBuilder("su", "-c", "sh '${tmpFile.absolutePath}'")
-                        .redirectErrorStream(false)
-                        .start()
-                    drainProcess(process)
-                } finally {
-                    tmpFile.delete()
-                }
-            }
-            "SHIZUKU" -> {
-                val service = ShizukuAuthorizer.getShellService()
-                    ?: throw IllegalStateException("Shizuku UserService 未连接")
-                // ShellService 只接受命令字符串，用 Base64 编码绕过所有 shell 解释层。
-                val b64 = Base64.encodeToString(cmd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                val safeCmd = "printf '%s' '$b64' | base64 -d | sh -s"
-                Log.d(TAG, "SHIZUKU 执行(b64): $cmd")
-                val result = withTimeout(COMMAND_TIMEOUT_MS) { service.execute(safeCmd) }
-                val parts = result.split("\n")
-                val stdout = if (parts.size >= 1 && parts[0].isNotEmpty()) {
-                    String(Base64.decode(parts[0], Base64.NO_WRAP), Charsets.UTF_8)
-                } else ""
-                val stderr = if (parts.size >= 2 && parts[1].isNotEmpty()) {
-                    String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
-                } else ""
-                val exitCode = parts.getOrNull(2)?.trim()?.toIntOrNull() ?: -1
-                Triple(stdout, stderr, exitCode)
-            }
-            else -> {
-                // stdin 管道：直接 sh，命令通过 stdin 传入（普通用户进程，stdin 正常转发）
-                Log.d(TAG, "NORMAL 执行(stdin): $cmd")
-                val process = ProcessBuilder("sh")
-                    .redirectErrorStream(false)
-                    .start()
-                executeWithStdin(process, cmd)
-            }
-        }
+        Triple(stdoutBuf.toString().trimEnd(), stderrBuf.toString().trimEnd(), exitCode)
     }
 }
