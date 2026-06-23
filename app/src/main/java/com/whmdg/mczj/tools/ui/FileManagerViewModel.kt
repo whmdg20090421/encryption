@@ -130,6 +130,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var archivePasswordRequest by mutableStateOf<FileEntry?>(null)
     /** Debug 模式压缩包解析信息 */
     var archiveDebugInfo by mutableStateOf<com.whmdg.mczj.tools.util.ArchiveBrowser.ArchiveDebugInfo?>(null)
+    /** 档案打开错误弹窗：null=不显示，Pair(文件名, 错误信息)=显示 */
+    var archiveOpenError by mutableStateOf<Pair<String, String>?>(null)
 
     // ── 回收站 ──
     var isInRecycleBin by mutableStateOf(false)
@@ -2476,12 +2478,23 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val currentPathVal = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
                 val currentEntriesVal = if (focusedPanel == FocusedPanel.LEFT) leftEntries else rightEntries
 
-                // 先检测是否需要密码
-                if (ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)) {
+                val passwordCheck = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
+
+                if (passwordCheck == null) {
+                    // exitCode≠0 且未检测到加密标志 → 档案本身有问题
+                    withContext(Dispatchers.Main) {
+                        archiveOpenError = Pair(entry.name, "该压缩包无法读取，可能已损坏或格式不受支持。")
+                    }
+                    return@launch
+                }
+
+                if (passwordCheck) {
+                    // Encrypted = + → 需要密码
                     withContext(Dispatchers.Main) { archivePasswordRequest = entry }
                     return@launch
                 }
 
+                // 不需要密码，直接打开
                 val result = ArchiveBrowser.openArchive(
                     context = context,
                     archivePath = entry.path,
@@ -2498,13 +2511,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                             enterArchiveMode(session)
                         },
                         onFailure = { error ->
-                            loadError = RuntimeException("打开压缩包失败: ${error.message}")
+                            archiveOpenError = Pair(entry.name, "打开压缩包失败: ${error.message}")
                         }
                     )
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    loadError = RuntimeException("打开压缩包失败: ${e.message}")
+                    archiveOpenError = Pair(entry.name, "打开压缩包异常: ${e.message}")
                 }
             }
         }

@@ -2359,6 +2359,20 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         )
     }
 
+    // ── 压缩包打开错误弹窗 ──
+    vm.archiveOpenError?.let { (fileName, message) ->
+        AlertDialog(
+            onDismissRequest = { vm.archiveOpenError = null },
+            title = { Text("无法打开压缩包") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { vm.archiveOpenError = null }) {
+                    Text("确定")
+                }
+            }
+        )
+    }
+
     // ── 强行打开失败详情 ──
     if (forceOpenError != null) {
         AlertDialog(

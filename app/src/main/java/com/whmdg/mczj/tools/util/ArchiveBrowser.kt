@@ -45,17 +45,31 @@ object ArchiveBrowser {
         return name.substringBeforeLast('.')
     }
 
-    /** 探测压缩包是否需要密码（通过 l -slt 检查 Encrypted 字段） */
+    /**
+     * 探测压缩包是否需要密码。
+     * 始终传入哑密码 -pdummy：
+     * - 无加密：7z 忽略密码参数，正常输出，Encrypted = -，exitCode=0
+     * - ZIP 加密/7Z 内容加密：能读头部，Encrypted = +，exitCode=0
+     * - 7Z 头部加密：尝试用 dummy 解密头部失败，exitCode≠0
+     *
+     * 返回值：
+     * - true  → 需要密码（Encrypted = +）
+     * - false → 不需要密码（无加密，正常打开）
+     * - null  → 档案本身有问题（exitCode≠0 且未检测到加密标志）
+     */
     suspend fun checkPasswordRequired(
         context: Context,
         archivePath: String,
         permissionLevel: String
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): Boolean? = withContext(Dispatchers.IO) {
         val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
-        val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath)
-        val (stdout, _, exitCode) = executeCommand(cmd, permissionLevel, context)
-        if (exitCode != 0) return@withContext false
-        stdout.contains("Encrypted = +")
+        val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
+        val (stdout, stderr, exitCode) = executeCommand(cmd, permissionLevel, context)
+        if (stdout.contains("Encrypted = +")) return@withContext true
+        if (exitCode == 0) return@withContext false
+        // 头部加密的 7Z：exitCode≠0，stdout 为空，stderr 包含密码相关提示
+        if (stderr.contains("password", ignoreCase = true)) return@withContext true
+        null
     }
 
     /** 压缩包目录树节点 */
@@ -244,10 +258,10 @@ object ArchiveBrowser {
         try {
             val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
 
-            // 1. 密码检测
-            val detailCmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath)
+            // 1. 密码检测（传入哑密码，确保头部加密的 7Z 也能被检测到）
+            val detailCmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
             val (detStdout, detStderr, detExit) = executeCommand(detailCmd, permissionLevel, context)
-            val passwordRequired = detExit == 0 && detStdout.contains("Encrypted = +")
+            val passwordRequired = detStdout.contains("Encrypted = +")
 
             // 2. 列表命令
             val listCmd = SevenZipCommand.buildListCommand(binaryPath, archivePath)
