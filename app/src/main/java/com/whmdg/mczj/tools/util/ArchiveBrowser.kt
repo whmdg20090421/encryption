@@ -35,6 +35,27 @@ object ArchiveBrowser {
         return ext in ARCHIVE_EXTENSIONS
     }
 
+    /** 去掉压缩包扩展名，用于解压目标路径计算 */
+    fun stripArchiveExtension(name: String): String {
+        val lower = name.lowercase()
+        if (lower.endsWith(".tar.gz") || lower.endsWith(".tar.bz2") || lower.endsWith(".tar.xz")) {
+            return name.substringBeforeLast('.').substringBeforeLast('.')
+        }
+        return name.substringBeforeLast('.')
+    }
+
+    /** 探测压缩包是否需要密码 */
+    suspend fun checkPasswordRequired(
+        context: Context,
+        archivePath: String,
+        permissionLevel: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
+        val cmd = SevenZipCommand.buildListCommand(binaryPath, archivePath, password = "")
+        val (_, stderr, exitCode) = executeCommand(cmd, permissionLevel, context)
+        detectPasswordError(stderr, exitCode) == "NEED_PASSWORD"
+    }
+
     /** 压缩包目录树节点 */
     data class ArchiveNode(
         val name: String,

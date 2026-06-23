@@ -11,6 +11,7 @@ import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.util.FormatUtils
 import com.whmdg.mczj.tools.util.AppIconHelper
+import com.whmdg.mczj.tools.util.ArchiveBrowser
 
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.ImageBitmap
@@ -100,6 +101,8 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.animation.core.Animatable
@@ -262,6 +265,22 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var compressUseAes by remember { mutableStateOf(encSettings.compressUseAes) }
     var compressOutputToOtherPanel by remember { mutableStateOf(false) }
     var compressError by remember { mutableStateOf<Throwable?>(null) }
+
+    // ── 解压对话框 ──
+    var showExtractDialog by remember { mutableStateOf(false) }
+    var extractTargetEntries by remember { mutableStateOf(listOf<FileEntry>()) }
+    var extractOutputPath by remember { mutableStateOf("") }
+    var showExtractProgress by remember { mutableStateOf(false) }
+    var extractProgress by remember { mutableFloatStateOf(0f) }
+    var extractCurrentFile by remember { mutableIntStateOf(0) }
+    var extractTotalFiles by remember { mutableIntStateOf(0) }
+    var extractBytesProcessed by remember { mutableStateOf(0L) }
+    var extractTotalBytes by remember { mutableStateOf(0L) }
+    var extractError by remember { mutableStateOf<Throwable?>(null) }
+    var showExtractPasswordDialog by remember { mutableStateOf(false) }
+    var extractPasswordInput by remember { mutableStateOf("") }
+    var extractPasswordError by remember { mutableStateOf<String?>(null) }
+
     // 移动/复制（功能待实现，保留 UI 占位）
 
     // 文件操作进度（从 ViewModel StateFlow 收集）
@@ -2138,11 +2157,16 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 }
                                 VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
                                 // 右列：解压
+                                val extractEntries = selectedEntries.ifEmpty { listOfNotNull(selectedEntry) }
+                                val canExtract = extractEntries.isNotEmpty()
+                                    && extractEntries.all { ArchiveBrowser.isArchiveFile(it.name) }
+                                    && !vm.isInArchiveMode
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clickable {
-                                            Toast.makeText(context, "功能开发中", Toast.LENGTH_SHORT).show()
+                                        .clickable(enabled = canExtract) {
+                                            extractTargetEntries = extractEntries
+                                            showExtractDialog = true
                                             selectedEntry = null
                                         }
                                         .padding(vertical = 16.dp),
@@ -2150,13 +2174,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 ) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("解压", style = MaterialTheme.typography.bodyLarge)
-                                            Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Text("解压", style = MaterialTheme.typography.bodyLarge, color = if (canExtract) Color.Unspecified else disabledColor)
+                                            Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (canExtract) MaterialTheme.colorScheme.onSurface else disabledIconColor)
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Text("解压", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (canExtract) MaterialTheme.colorScheme.onSurface else disabledIconColor)
+                                            Text("解压", style = MaterialTheme.typography.bodyLarge, color = if (canExtract) Color.Unspecified else disabledColor)
                                         }
                                     }
                                 }
@@ -3927,6 +3951,359 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         ErrorDialog(
             error = compressError,
             onDismiss = { compressError = null }
+        )
+    }
+
+    // ── 解压对话框 ──
+    if (showExtractDialog && extractTargetEntries.isNotEmpty()) {
+        val isDark = isSystemInDarkTheme()
+        // 目标路径计算
+        val firstEntry = extractTargetEntries.first()
+        val archiveParent = firstEntry.path.substringBeforeLast('/')
+        val strippedName = ArchiveBrowser.stripArchiveExtension(firstEntry.name)
+        val currentDir = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPath else vm.rightPath
+
+        var extractMode by remember { mutableStateOf(0) }  // 0=压缩包所在文件夹, 1=当前文件夹
+        var extractPasswordVisible by remember { mutableStateOf(false) }
+        var extractPasswordInputLocal by remember { mutableStateOf("") }
+
+        LaunchedEffect(extractMode, extractTargetEntries) {
+            extractOutputPath = when (extractMode) {
+                0 -> "$archiveParent/$strippedName"
+                1 -> currentDir
+                else -> "$archiveParent/$strippedName"
+            }
+        }
+
+        Dialog(onDismissRequest = { showExtractDialog = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.85f),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = if (extractTargetEntries.size == 1) "解压文件" else "解压文件（${extractTargetEntries.size} 个项目）",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        // 解压模式选择
+                        Text("解压方式", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = extractMode == 0, onClick = { extractMode = 0 })
+                            Text("解压到压缩包所在文件夹", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.clickable { extractMode = 0 })
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = extractMode == 1, onClick = { extractMode = 1 })
+                            Text("解压到当前文件夹", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.clickable { extractMode = 1 })
+                        }
+
+                        // 目标路径（可编辑）
+                        OutlinedTextField(
+                            value = extractOutputPath,
+                            onValueChange = { extractOutputPath = it },
+                            label = { Text("解压到") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyMedium
+                        )
+
+                        // 密码输入（可选）
+                        OutlinedTextField(
+                            value = extractPasswordInputLocal,
+                            onValueChange = { extractPasswordInputLocal = it },
+                            label = { Text("密码（无密码可留空）") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            visualTransformation = if (extractPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            trailingIcon = {
+                                IconButton(onClick = { extractPasswordVisible = !extractPasswordVisible }) {
+                                    Icon(
+                                        if (extractPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                        contentDescription = null
+                                    )
+                                }
+                            },
+                            textStyle = MaterialTheme.typography.bodyMedium
+                        )
+
+                        // 按钮
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = {
+                                showExtractDialog = false
+                                extractTargetEntries = emptyList()
+                            }) {
+                                Text("取消", color = MaterialTheme.colorScheme.primary)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            TextButton(
+                                onClick = {
+                                    val entries = extractTargetEntries
+                                    val outputDir = extractOutputPath
+                                    val password = extractPasswordInputLocal
+                                    showExtractDialog = false
+                                    showExtractProgress = true
+                                    extractProgress = 0f
+                                    extractBytesProcessed = 0
+                                    extractTotalBytes = 0
+                                    extractCurrentFile = 0
+                                    extractTotalFiles = 0
+                                    vm.extract(
+                                        entries = entries,
+                                        outputDir = outputDir,
+                                        password = password,
+                                        onPasswordRequired = {
+                                            showExtractProgress = false
+                                            extractPasswordInput = ""
+                                            extractPasswordError = null
+                                            showExtractPasswordDialog = true
+                                        },
+                                        onProgress = { info ->
+                                            extractProgress = info.progress
+                                            extractBytesProcessed = info.bytesProcessed
+                                            extractTotalBytes = info.totalBytes
+                                            extractCurrentFile = info.currentFile
+                                            extractTotalFiles = info.totalFiles
+                                        },
+                                        onComplete = { success, _, error ->
+                                            showExtractProgress = false
+                                            extractProgress = 0f
+                                            extractBytesProcessed = 0
+                                            extractTotalBytes = 0
+                                            if (!success && error != null) {
+                                                extractError = RuntimeException(error)
+                                            }
+                                        }
+                                    )
+                                },
+                                enabled = extractOutputPath.isNotBlank()
+                            ) {
+                                Text("确定", color = if (extractOutputPath.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 解压密码输入弹窗 ──
+    if (showExtractPasswordDialog) {
+        val isDark = isSystemInDarkTheme()
+        Dialog(onDismissRequest = { showExtractPasswordDialog = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.85f),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "此压缩包需要密码",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        OutlinedTextField(
+                            value = extractPasswordInput,
+                            onValueChange = { extractPasswordInput = it; extractPasswordError = null },
+                            label = { Text("输入密码") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            isError = extractPasswordError != null,
+                            textStyle = MaterialTheme.typography.bodyMedium
+                        )
+                        if (extractPasswordError != null) {
+                            Text(
+                                text = extractPasswordError!!,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = {
+                                showExtractPasswordDialog = false
+                                extractPasswordInput = ""
+                                extractPasswordError = null
+                                vm.cancelExtract()
+                            }) {
+                                Text("取消", color = MaterialTheme.colorScheme.primary)
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            TextButton(onClick = {
+                                val password = extractPasswordInput
+                                showExtractPasswordDialog = false
+                                showExtractProgress = true
+                                extractProgress = 0f
+                                extractBytesProcessed = 0
+                                extractTotalBytes = 0
+                                extractCurrentFile = 0
+                                extractTotalFiles = 0
+                                vm.extract(
+                                    entries = extractTargetEntries,
+                                    outputDir = extractOutputPath,
+                                    password = password,
+                                    onPasswordRequired = {
+                                        showExtractProgress = false
+                                        extractPasswordError = "密码错误"
+                                        showExtractPasswordDialog = true
+                                    },
+                                    onProgress = { info ->
+                                        extractProgress = info.progress
+                                        extractBytesProcessed = info.bytesProcessed
+                                        extractTotalBytes = info.totalBytes
+                                        extractCurrentFile = info.currentFile
+                                        extractTotalFiles = info.totalFiles
+                                    },
+                                    onComplete = { success, _, error ->
+                                        showExtractProgress = false
+                                        extractProgress = 0f
+                                        extractBytesProcessed = 0
+                                        extractTotalBytes = 0
+                                        if (!success && error != null) {
+                                            extractError = RuntimeException(error)
+                                        }
+                                    }
+                                )
+                            }) {
+                                Text("确定", color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 解压进度面板 ──
+    if (showExtractProgress) {
+        val isDark = isSystemInDarkTheme()
+        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.8f),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Text(
+                            text = "正在解压...",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("解压进度", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = if (extractTotalBytes > 0) "${FormatUtils.formatBytes(extractBytesProcessed)} / ${FormatUtils.formatBytes(extractTotalBytes)}" else "$extractCurrentFile/$extractTotalFiles",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            LinearProgressIndicator(
+                                progress = { extractProgress },
+                                modifier = Modifier.weight(1f),
+                            )
+                            Text(
+                                text = "${(extractProgress * 100).toInt()}%",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = {
+                                vm.cancelExtract()
+                                showExtractProgress = false
+                                extractProgress = 0f
+                                extractCurrentFile = 0
+                                extractTotalFiles = 0
+                                extractBytesProcessed = 0
+                                extractTotalBytes = 0
+                            }) {
+                                Text("取消", color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 解压错误弹窗 ──
+    if (extractError != null) {
+        ErrorDialog(
+            error = extractError,
+            onDismiss = { extractError = null }
         )
     }
 

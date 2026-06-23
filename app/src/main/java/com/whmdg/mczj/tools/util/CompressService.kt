@@ -28,6 +28,14 @@ object CompressService {
         val useAes: Boolean = true,   // zip 加密方式
     )
 
+    data class ExtractOptions(
+        val archivePath: String,
+        val outputDir: String,
+        val password: String = "",
+        val fileSizes: List<Long>,       // 每个文件的原始大小（从 7zzs l 获取，顺序与 -bsp1 一致）
+        val totalUncompressedBytes: Long  // 解压后总字节数
+    )
+
     data class ProgressInfo(
         val currentFile: Int,
         val totalFiles: Int,
@@ -90,6 +98,48 @@ object CompressService {
         }
     }
 
+    /**
+     * 解压入口（挂起函数，在 Dispatchers.IO 上执行）。
+     * 解压前需通过 7zzs l 获取 fileSizes 列表，实现真实字节级进度。
+     */
+    suspend fun extract(
+        context: Context,
+        options: ExtractOptions,
+        permissionLevel: String,
+        cancelFlag: AtomicBoolean,
+        callback: ProgressCallback
+    ) = withContext(Dispatchers.IO) {
+        val binaryPath = resolveBinary(context)
+        if (binaryPath == null) {
+            callback.onComplete(false, null, "无法准备解压工具，请检查权限或重新安装应用")
+            return@withContext
+        }
+
+        val cmd = SevenZipCommand.buildExtractCommand(
+            binaryPath, options.archivePath, options.outputDir, options.password
+        )
+        Log.d(TAG, "解压命令: $cmd")
+
+        try {
+            when (permissionLevel) {
+                "ROOT" -> executeExtractWithProcessBuilder(
+                    arrayOf("su", "-c", cmd), options.fileSizes, options.totalUncompressedBytes, cancelFlag, callback
+                )
+                "SHIZUKU" -> executeExtractViaShizuku(
+                    context, cmd, options.fileSizes, options.totalUncompressedBytes, cancelFlag, callback
+                )
+                else -> executeExtractWithProcessBuilder(
+                    arrayOf("sh", "-c", cmd), options.fileSizes, options.totalUncompressedBytes, cancelFlag, callback
+                )
+            }
+            callback.onComplete(true, options.outputDir, null)
+        } catch (e: CancellationException) {
+            callback.onComplete(false, null, "解压已取消")
+        } catch (e: Exception) {
+            callback.onComplete(false, null, e.message ?: "解压失败")
+        }
+    }
+
     /** 确定二进制路径（统一提取到 AppDataPaths.binaries()） */
     private fun resolveBinary(context: Context): String? {
         return try {
@@ -131,6 +181,54 @@ object CompressService {
             readerThread.start()
 
             // 等待进程完成（协程可取消）
+            while (process.isAlive) {
+                if (cancelFlag.get() || !isActive) {
+                    process.destroyForcibly()
+                    break
+                }
+                delay(100)
+            }
+
+            readerThread.join(5000)
+            val exitCode = process.waitFor()
+
+            if (cancelFlag.get()) throw CancellationException("用户取消")
+            if (exitCode != 0) throw RuntimeException("7zzs 退出码: $exitCode")
+        } catch (e: CancellationException) {
+            process.destroyForcibly()
+            throw e
+        }
+    }
+
+    /**
+     * 解压专用 ProcessBuilder 执行（普通/Root 权限）。
+     * 使用 parseExtractProgressLine() 实现真实字节级进度。
+     */
+    private suspend fun executeExtractWithProcessBuilder(
+        command: Array<String>,
+        fileSizes: List<Long>,
+        totalBytes: Long,
+        cancelFlag: AtomicBoolean,
+        callback: ProgressCallback
+    ) = withContext(Dispatchers.IO) {
+        val process = ProcessBuilder(*command)
+            .redirectErrorStream(true)
+            .start()
+
+        try {
+            val readerThread = Thread {
+                try {
+                    process.inputStream.bufferedReader().use { reader ->
+                        var line: String?
+                        while (reader.readLine().also { line = it } != null) {
+                            if (cancelFlag.get()) break
+                            parseExtractProgressLine(line!!, fileSizes, totalBytes, callback)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            readerThread.start()
+
             while (process.isAlive) {
                 if (cancelFlag.get() || !isActive) {
                     process.destroyForcibly()
@@ -218,6 +316,77 @@ object CompressService {
         }
     }
 
+    /**
+     * 解压专用 Shizuku 权限执行。
+     * 使用真实字节级进度计算。
+     */
+    private suspend fun executeExtractViaShizuku(
+        context: Context,
+        cmd: String,
+        fileSizes: List<Long>,
+        totalBytes: Long,
+        cancelFlag: AtomicBoolean,
+        callback: ProgressCallback
+    ) = withContext(Dispatchers.IO) {
+        val service = ShizukuAuthorizer.getShellService()
+            ?: throw IllegalStateException("Shizuku UserService 未连接")
+
+        val progressFile = File.createTempFile("extract_progress", ".txt", context.cacheDir)
+
+        try {
+            val pollJob = launch {
+                var lastKey = ""
+                while (isActive && !cancelFlag.get()) {
+                    delay(300)
+                    try {
+                        val content = progressFile.readText().trim()
+                        if (content.startsWith("DONE:")) break
+                        val parts = content.split(":")
+                        val percent = parts.getOrNull(0)?.toIntOrNull() ?: continue
+                        val fileNum = parts.getOrNull(1)?.toIntOrNull() ?: 1
+                        val key = "$percent:$fileNum"
+                        if (key != lastKey) {
+                            lastKey = key
+                            // 真实字节级进度计算
+                            var completedBytes = 0L
+                            for (i in 0 until (fileNum - 1).coerceAtMost(fileSizes.size)) {
+                                completedBytes += fileSizes[i]
+                            }
+                            val currentFileIdx = (fileNum - 1).coerceIn(0, fileSizes.size - 1)
+                            val currentFilePartial = fileSizes[currentFileIdx] * percent / 100L
+                            val bytesProcessed = (completedBytes + currentFilePartial).coerceAtMost(totalBytes)
+                            val overallProgress = if (totalBytes > 0) {
+                                (bytesProcessed.toFloat() / totalBytes).coerceIn(0f, 1f)
+                            } else {
+                                percent / 100f
+                            }
+                            val info = ProgressInfo(
+                                currentFile = fileNum,
+                                totalFiles = fileSizes.size,
+                                progress = overallProgress,
+                                bytesProcessed = bytesProcessed,
+                                totalBytes = totalBytes
+                            )
+                            withContext(Dispatchers.Main) { callback.onProgress(info) }
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+
+            service.executeStreaming(cmd, progressFile.absolutePath)
+
+            pollJob.cancel()
+
+            val result = progressFile.readText().trim()
+            val exitCode = result.removePrefix("DONE:").trim().toIntOrNull() ?: -1
+
+            if (cancelFlag.get()) throw CancellationException("用户取消")
+            if (exitCode != 0) throw RuntimeException("7zzs 退出码: $exitCode")
+        } finally {
+            progressFile.delete()
+        }
+    }
+
     /** 解析 7zzs -bsp1 输出的进度行，计算真实总体进度 */
     private fun parseProgressLine(
         line: String,
@@ -245,6 +414,44 @@ object CompressService {
             totalFiles = totalFiles,
             progress = overallProgress,
             bytesProcessed = (totalBytes * overallProgress).toLong(),
+            totalBytes = totalBytes
+        )
+        callback.onProgress(info)
+    }
+
+    /**
+     * 解压专用进度解析，基于 fileSizes 计算真实已解压字节数。
+     * bytesProcessed = 已完成文件字节和 + 当前文件大小 * 当前百分比
+     */
+    private fun parseExtractProgressLine(
+        line: String,
+        fileSizes: List<Long>,
+        totalBytes: Long,
+        callback: ProgressCallback
+    ) {
+        val match = Regex("""\s*(\d+)%\s+(\d+)""").find(line) ?: return
+        val percent = match.groupValues[1].toIntOrNull() ?: return
+        val fileNum = match.groupValues[2].toIntOrNull() ?: return
+        if (percent < 0 || percent > 100 || fileNum < 1) return
+
+        var completedBytes = 0L
+        for (i in 0 until (fileNum - 1).coerceAtMost(fileSizes.size)) {
+            completedBytes += fileSizes[i]
+        }
+        val currentFileIdx = (fileNum - 1).coerceIn(0, fileSizes.size - 1)
+        val currentFilePartial = fileSizes[currentFileIdx] * percent / 100L
+        val bytesProcessed = (completedBytes + currentFilePartial).coerceAtMost(totalBytes)
+        val overallProgress = if (totalBytes > 0) {
+            (bytesProcessed.toFloat() / totalBytes).coerceIn(0f, 1f)
+        } else {
+            percent / 100f
+        }
+
+        val info = ProgressInfo(
+            currentFile = fileNum,
+            totalFiles = fileSizes.size,
+            progress = overallProgress,
+            bytesProcessed = bytesProcessed,
             totalBytes = totalBytes
         )
         callback.onProgress(info)

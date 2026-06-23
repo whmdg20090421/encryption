@@ -116,6 +116,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private val compressCancelFlag = AtomicBoolean(false)
     private var compressJob: Job? = null
 
+    // ── 解压任务 ──
+    private val extractCancelFlag = AtomicBoolean(false)
+    private var extractJob: Job? = null
+
     // ── 压缩包浏览 ──
     var isInArchiveMode by mutableStateOf(false)
         private set
@@ -2307,6 +2311,122 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         compressCancelFlag.set(true)
         compressJob?.cancel()
         compressJob = null
+    }
+
+    // ── 解压 ──
+
+    /**
+     * 解压压缩包。
+     * 解压前通过 7zzs l 获取文件列表和大小，实现真实字节级进度。
+     * 若需要密码则通过回调通知 UI 弹密码框。
+     */
+    fun extract(
+        entries: List<FileEntry>,
+        outputDir: String,
+        password: String,
+        onPasswordRequired: () -> Unit,
+        onProgress: (CompressService.ProgressInfo) -> Unit,
+        onComplete: (Boolean, String?, String?) -> Unit
+    ) {
+        extractCancelFlag.set(false)
+        extractJob?.cancel()
+        extractJob = viewModelScope.launch(Dispatchers.IO) {
+            val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+            val context = getApplication<Application>()
+
+            for (entry in entries) {
+                if (extractCancelFlag.get()) break
+
+                // 若用户未提供密码，先探测是否需要密码
+                if (password.isEmpty()) {
+                    val needsPassword = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
+                    if (needsPassword) {
+                        withContext(Dispatchers.Main) { onPasswordRequired() }
+                        return@launch
+                    }
+                }
+
+                // 通过 7zzs l 获取文件列表（含原始大小）
+                val sessionResult = ArchiveBrowser.openArchive(
+                    context = context,
+                    archivePath = entry.path,
+                    archiveName = entry.name,
+                    permissionLevel = permLevel,
+                    password = password
+                )
+                val session = sessionResult.getOrNull()
+                if (session == null) {
+                    val err = sessionResult.exceptionOrNull()
+                    val msg = err?.message ?: ""
+                    if (msg == "NEED_PASSWORD") {
+                        withContext(Dispatchers.Main) { onPasswordRequired() }
+                        return@launch
+                    }
+                    withContext(Dispatchers.Main) {
+                        onComplete(false, null, "读取压缩包信息失败: $msg")
+                    }
+                    return@launch
+                }
+
+                // 构建 fileSizes 列表（扁平化的文件大小列表，顺序与 7zzs l 输出一致）
+                val fileSizes = flattenFileSizes(session.root)
+                val totalBytes = fileSizes.sum()
+
+                // 计算单个压缩包的目标目录
+                val singleOutputDir = if (entries.size == 1) {
+                    outputDir
+                } else {
+                    // 多个压缩包时，每个解压到以自身命名的子目录
+                    "$outputDir/${ArchiveBrowser.stripArchiveExtension(entry.name)}"
+                }
+
+                val options = CompressService.ExtractOptions(
+                    archivePath = entry.path,
+                    outputDir = singleOutputDir,
+                    password = password,
+                    fileSizes = fileSizes,
+                    totalUncompressedBytes = totalBytes
+                )
+
+                CompressService.extract(
+                    context = context,
+                    options = options,
+                    permissionLevel = permLevel,
+                    cancelFlag = extractCancelFlag,
+                    callback = object : CompressService.ProgressCallback {
+                        override fun onProgress(info: CompressService.ProgressInfo) {
+                            onProgress(info)
+                        }
+                        override fun onComplete(success: Boolean, path: String?, error: String?) {
+                            launch(Dispatchers.Main) { onComplete(success, path, error) }
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    /** 取消正在进行的解压任务 */
+    fun cancelExtract() {
+        extractCancelFlag.set(true)
+        extractJob?.cancel()
+        extractJob = null
+    }
+
+    /** 递归展开目录树，获取扁平的文件大小列表（顺序与 7zzs l 一致） */
+    private fun flattenFileSizes(node: ArchiveBrowser.ArchiveNode): List<Long> {
+        val result = mutableListOf<Long>()
+        fun walk(n: ArchiveBrowser.ArchiveNode) {
+            for (child in n.children) {
+                if (child.isDirectory) {
+                    walk(child)
+                } else {
+                    result.add(child.size)
+                }
+            }
+        }
+        walk(node)
+        return result
     }
 
     // ── 压缩包浏览 ──

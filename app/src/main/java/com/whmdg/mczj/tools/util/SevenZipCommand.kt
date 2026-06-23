@@ -75,4 +75,27 @@ object SevenZipCommand {
         cmd.append(" ${escape(archivePath)}")
         return cmd.toString()
     }
+
+    /**
+     * 构建 7zzs 解压命令。
+     * 输出格式: `<binary> x [-p'pwd'] -bsp1 2>&1 <archive> -o<outputDir> -aoa`
+     * @param password 空=不带密码
+     */
+    fun buildExtractCommand(
+        binaryPath: String,
+        archivePath: String,
+        outputDir: String,
+        password: String = ""
+    ): String {
+        val cmd = StringBuilder(escape(binaryPath))
+        cmd.append(" x")
+        if (password.isNotEmpty()) {
+            cmd.append(" -p${escapePassword(password)}")
+        }
+        cmd.append(" -bsp1 2>&1")
+        cmd.append(" ${escape(archivePath)}")
+        cmd.append(" -o${escape(outputDir)}")
+        cmd.append(" -aoa")
+        return cmd.toString()
+    }
 }
