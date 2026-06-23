@@ -127,6 +127,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     /** 密码弹窗状态：null=不显示，FileEntry=需要密码的压缩包 */
     var archivePasswordRequest by mutableStateOf<FileEntry?>(null)
+    /** Debug 模式压缩包解析信息 */
+    var archiveDebugInfo by mutableStateOf<com.whmdg.mczj.tools.util.ArchiveBrowser.ArchiveDebugInfo?>(null)
 
     // ── 回收站 ──
     var isInRecycleBin by mutableStateOf(false)
@@ -1390,7 +1392,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── 文件操作 ──
-    fun openFile(context: Context, entry: FileEntry): Screen? {
+    fun openFile(context: Context, entry: FileEntry, isDebug: Boolean = false): Screen? {
         DiagnosticLog.log("OpenFile", "请求打开: ${entry.path}")
         if (entry.name.endsWith(".apk", ignoreCase = true)) {
             DiagnosticLog.log("OpenFile", "APK 文件，弹出信息弹窗: ${entry.name}")
@@ -1403,8 +1405,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return null
         }
         if (ArchiveBrowser.isArchiveFile(entry.name)) {
-            DiagnosticLog.log("OpenFile", "压缩包文件，进入浏览模式: ${entry.name}")
-            openArchive(entry)
+            if (isDebug) {
+                DiagnosticLog.log("OpenFile", "压缩包文件（Debug 模式），解析信息: ${entry.name}")
+                debugOpenArchive(entry)
+            } else {
+                DiagnosticLog.log("OpenFile", "压缩包文件，进入浏览模式: ${entry.name}")
+                openArchive(entry)
+            }
             return null
         }
         val textExtensions = setOf(
@@ -2500,6 +2507,36 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    /** Debug 模式：解析压缩包信息，弹出预览弹窗 */
+    fun debugOpenArchive(entry: FileEntry) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+            val currentPathVal = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
+            val currentEntriesVal = if (focusedPanel == FocusedPanel.LEFT) leftEntries else rightEntries
+
+            val info = ArchiveBrowser.parseArchiveDebug(
+                context = context,
+                archivePath = entry.path,
+                archiveName = entry.name,
+                permissionLevel = permLevel,
+                originalPath = currentPathVal,
+                originalEntries = currentEntriesVal
+            )
+
+            withContext(Dispatchers.Main) {
+                archiveDebugInfo = info
+            }
+        }
+    }
+
+    /** Debug 弹窗确认打开：从 debugInfo.session 进入压缩包浏览模式 */
+    fun confirmOpenArchive() {
+        val info = archiveDebugInfo ?: return
+        val session = info.session ?: return
+        enterArchiveMode(session)
+        archiveDebugInfo = null
     }
 
     /** 密码弹窗验证回调：带密码重试打开压缩包 */

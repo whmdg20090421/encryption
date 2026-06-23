@@ -77,6 +77,21 @@ object ArchiveBrowser {
         val originalEntries: List<FileEntry>
     )
 
+    /** 压缩包 Debug 解析信息 */
+    data class ArchiveDebugInfo(
+        val archivePath: String,
+        val archiveName: String,
+        val passwordRequired: Boolean,
+        val listCommand: String,
+        val listExitCode: Int,
+        val listStdout: String,
+        val listStderr: String,
+        val parsedEntryCount: Int,
+        val rootEntries: List<FileEntry>,
+        val error: String? = null,
+        val session: ArchiveSession? = null
+    )
+
     // ── 缓存序列化 ──
 
     @Serializable
@@ -213,6 +228,79 @@ object ArchiveBrowser {
         } catch (e: Exception) {
             Log.e(TAG, "打开压缩包失败", e)
             Result.failure(e)
+        }
+    }
+
+    /** Debug 模式：解析压缩包信息但不进入浏览模式 */
+    suspend fun parseArchiveDebug(
+        context: Context,
+        archivePath: String,
+        archiveName: String,
+        permissionLevel: String,
+        originalPath: String = "",
+        originalEntries: List<FileEntry> = emptyList()
+    ): ArchiveDebugInfo = withContext(Dispatchers.IO) {
+        try {
+            val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
+
+            // 1. 密码检测
+            val detailCmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath)
+            val (detStdout, detStderr, detExit) = executeCommand(detailCmd, permissionLevel, context)
+            val passwordRequired = detExit == 0 && detStdout.contains("Encrypted = +")
+
+            // 2. 列表命令
+            val listCmd = SevenZipCommand.buildListCommand(binaryPath, archivePath)
+            val (stdout, stderr, exitCode) = executeCommand(listCmd, permissionLevel, context)
+
+            if (exitCode != 0) {
+                val errMsg = stderr.ifBlank { "7zzs 退出码: $exitCode" }
+                return@withContext ArchiveDebugInfo(
+                    archivePath = archivePath, archiveName = archiveName,
+                    passwordRequired = passwordRequired,
+                    listCommand = listCmd, listExitCode = exitCode,
+                    listStdout = stdout, listStderr = stderr,
+                    parsedEntryCount = 0, rootEntries = emptyList(),
+                    error = errMsg
+                )
+            }
+
+            val entries = parseListOutput(stdout)
+            if (entries.isEmpty()) {
+                return@withContext ArchiveDebugInfo(
+                    archivePath = archivePath, archiveName = archiveName,
+                    passwordRequired = passwordRequired,
+                    listCommand = listCmd, listExitCode = exitCode,
+                    listStdout = stdout, listStderr = stderr,
+                    parsedEntryCount = 0, rootEntries = emptyList(),
+                    error = "压缩包内容为空，可能是加密文件或格式不受支持"
+                )
+            }
+
+            val root = buildTree(entries)
+            val rootEntries = nodeChildrenToEntries(root)
+            val session = ArchiveSession(
+                archivePath = archivePath, archiveName = archiveName,
+                root = root, currentPath = archivePath, currentEntries = rootEntries,
+                originalPath = originalPath, originalEntries = originalEntries
+            )
+
+            ArchiveDebugInfo(
+                archivePath = archivePath, archiveName = archiveName,
+                passwordRequired = passwordRequired,
+                listCommand = listCmd, listExitCode = exitCode,
+                listStdout = stdout, listStderr = stderr,
+                parsedEntryCount = entries.size, rootEntries = rootEntries,
+                session = session
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Debug 解析压缩包失败", e)
+            ArchiveDebugInfo(
+                archivePath = archivePath, archiveName = archiveName,
+                passwordRequired = false, listCommand = "", listExitCode = -1,
+                listStdout = "", listStderr = "",
+                parsedEntryCount = 0, rootEntries = emptyList(),
+                error = e.message ?: "未知异常"
+            )
         }
     }
 

@@ -66,6 +66,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -961,7 +962,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
                                     DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                     vm.focusedPanel = FocusedPanel.LEFT
-                                    val screen = vm.openFile(context, entry)
+                                    val screen = vm.openFile(context, entry, isDebugMode)
                                     if (screen != null) {
                                         vm.saveScrollPosition(
                                             leftListState.firstVisibleItemIndex,
@@ -1074,7 +1075,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
                                     DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                     vm.focusedPanel = FocusedPanel.RIGHT
-                                    val screen = vm.openFile(context, entry)
+                                    val screen = vm.openFile(context, entry, isDebugMode)
                                     if (screen != null) {
                                         vm.saveScrollPosition(
                                             leftListState.firstVisibleItemIndex,
@@ -2293,6 +2294,68 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         ApkInfoDialog(
             apkPath = entry.path,
             onDismiss = { vm.pendingApkEntry = null }
+        )
+    }
+
+    // ── 压缩包 Debug 信息弹窗 ──
+    vm.archiveDebugInfo?.let { info ->
+        AlertDialog(
+            onDismissRequest = { vm.archiveDebugInfo = null },
+            title = { Text("压缩包 Debug 信息", fontWeight = FontWeight.Bold) },
+            text = {
+                val scrollState = rememberScrollState()
+                Column(
+                    modifier = Modifier.fillMaxWidth().verticalScroll(scrollState),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    @Composable
+                    fun InfoRow(label: String, value: String) {
+                        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        Text(value, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    }
+                    InfoRow("文件名", info.archiveName)
+                    InfoRow("路径", info.archivePath)
+                    InfoRow("需要密码", if (info.passwordRequired) "是" else "否")
+                    Spacer(Modifier.height(4.dp))
+                    InfoRow("列表命令", info.listCommand)
+                    InfoRow("退出码", info.listExitCode.toString())
+                    if (info.listStderr.isNotBlank()) {
+                        InfoRow("stderr", info.listStderr.take(500))
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    InfoRow("解析条目数", info.parsedEntryCount.toString())
+                    if (info.rootEntries.isNotEmpty()) {
+                        Text("根目录内容:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        info.rootEntries.forEach { entry ->
+                            val icon = if (entry.isDirectory) "📁" else "📄"
+                            val sizeStr = if (entry.isDirectory) "" else " (${FormatUtils.formatFileSize(entry.size)})"
+                            Text(
+                                text = "$icon ${entry.name}$sizeStr",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                    if (info.error != null) {
+                        Spacer(Modifier.height(4.dp))
+                        Text("错误:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
+                        Text(info.error, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { vm.archiveDebugInfo = null }) {
+                    Text("取消")
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { vm.confirmOpenArchive() },
+                    enabled = info.session != null
+                ) {
+                    Text("打开")
+                }
+            }
         )
     }
 
