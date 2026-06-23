@@ -126,6 +126,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var archiveSession by mutableStateOf<com.whmdg.mczj.tools.util.ArchiveBrowser.ArchiveSession?>(null)
         private set
+    /** 压缩包密码缓存：archivePath → password（仅内存，进程退出即清除） */
+    private val archivePasswordCache = mutableMapOf<String, String>()
     /** 密码弹窗状态：null=不显示，FileEntry=需要密码的压缩包 */
     var archivePasswordRequest by mutableStateOf<FileEntry?>(null)
     /** Debug 模式压缩包解析信息 */
@@ -2355,8 +2357,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             for (entry in entries) {
                 if (extractCancelFlag.get()) break
 
-                // 若用户未提供密码，先探测是否需要密码
-                if (password.isEmpty()) {
+                // 优先使用调用方传入的密码，其次使用缓存密码
+                val effectivePassword = password.ifEmpty { archivePasswordCache[entry.path] ?: "" }
+
+                // 若无密码，先探测是否需要密码
+                if (effectivePassword.isEmpty()) {
                     val needsPassword = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
                     if (needsPassword == true) {
                         withContext(Dispatchers.Main) { onPasswordRequired() }
@@ -2370,7 +2375,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     archivePath = entry.path,
                     archiveName = entry.name,
                     permissionLevel = permLevel,
-                    password = password
+                    password = effectivePassword
                 )
                 val session = sessionResult.getOrNull()
                 if (session == null) {
@@ -2397,7 +2402,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val options = CompressService.ExtractOptions(
                     archivePath = entry.path,
                     outputDir = singleOutputDir,
-                    password = password,
+                    password = effectivePassword,
                     fileSizes = fileSizes,
                     totalUncompressedBytes = totalBytes
                 )
@@ -2412,6 +2417,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                             onProgress(info)
                         }
                         override fun onComplete(success: Boolean, path: String?, error: String?) {
+                            if (success && effectivePassword.isNotEmpty()) {
+                                archivePasswordCache[entry.path] = effectivePassword
+                            }
                             launch(Dispatchers.Main) { onComplete(success, path, error) }
                         }
                     }
@@ -2545,11 +2553,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Debug 弹窗确认打开：从 debugInfo.session 进入压缩包浏览模式，或触发密码对话框 */
+    /** Debug 弹窗确认打开：需要密码时弹密码框，否则直接进入浏览模式 */
     fun confirmOpenArchive() {
         val info = archiveDebugInfo ?: return
-        // 需要密码但无 session → 弹出密码对话框
-        if (info.passwordRequired && info.session == null) {
+        if (info.passwordRequired) {
             val entry = info.sourceEntry ?: return
             archiveDebugInfo = null
             archivePasswordRequest = entry
@@ -2580,6 +2587,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
             result.fold(
                 onSuccess = { session ->
+                    archivePasswordCache[entry.path] = password
                     withContext(Dispatchers.Main) {
                         enterArchiveMode(session)
                         archivePasswordRequest = null
