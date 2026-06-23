@@ -560,6 +560,20 @@ object ArchiveBrowser {
     /** 命令执行超时时间（毫秒） */
     private const val COMMAND_TIMEOUT_MS = 30_000L
 
+    /**
+     * 用 heredoc 包裹命令，绕过 shell 展开。
+     * 原理：命令通过 stdin 传递给 sh，不经过命令行参数的 shell 展开层，
+     * 中括号、星号等 glob 字符和反斜杠转义全部原样保留。
+     *
+     * 执行链路：su -c 'cat <<'"'"'_EOF_'"'"' | sh\n<cmd>\n_EOF_'
+     *   cat 从 stdin 读取 heredoc 内容 → 管道传给 sh → sh 执行原样命令
+     */
+    private fun wrapInHeredoc(cmd: String): String {
+        // 使用随机分隔符避免命令内容中出现相同字符串
+        val marker = "ARCHB_${System.nanoTime().toString(36)}"
+        return "cat <<'$marker' | sh\n$cmd\n$marker"
+    }
+
     /** 执行 shell 命令，返回 (stdout, stderr, exitCode) */
     private suspend fun executeCommand(
         cmd: String,
@@ -568,7 +582,10 @@ object ArchiveBrowser {
     ): Triple<String, String, Int> = withContext(Dispatchers.IO) {
         when (permissionLevel) {
             "ROOT" -> {
-                val process = ProcessBuilder("su", "-c", cmd)
+                // heredoc 方式：命令通过 stdin 传递，彻底绕过 su -c 的 shell 展开
+                val safeCmd = wrapInHeredoc(cmd)
+                Log.d(TAG, "ROOT 执行: $safeCmd")
+                val process = ProcessBuilder("su", "-c", safeCmd)
                     .redirectErrorStream(false)
                     .start()
                 // 并发读取 stdout 和 stderr，避免管道缓冲区满导致死锁
@@ -610,7 +627,10 @@ object ArchiveBrowser {
             "SHIZUKU" -> {
                 val service = ShizukuAuthorizer.getShellService()
                     ?: throw IllegalStateException("Shizuku UserService 未连接")
-                val result = withTimeout(COMMAND_TIMEOUT_MS) { service.execute(cmd) }
+                // heredoc 包裹：Shizuku 的 ShellService 内部也是 Runtime.exec("sh", "-c", cmd)
+                // 反斜杠转义在 sh -c 的双引号解析中同样会被消费，需要 heredoc 绕过
+                val safeCmd = wrapInHeredoc(cmd)
+                val result = withTimeout(COMMAND_TIMEOUT_MS) { service.execute(safeCmd) }
                 // ShellService 返回格式: stdoutB64\nstderrB64\nexitCode
                 val parts = result.split("\n")
                 val stdout = if (parts.size >= 1 && parts[0].isNotEmpty()) {
@@ -623,7 +643,9 @@ object ArchiveBrowser {
                 Triple(stdout, stderr, exitCode)
             }
             else -> {
-                val process = ProcessBuilder("sh", "-c", cmd)
+                // heredoc 包裹：sh -c 同样会消费反斜杠转义
+                val safeCmd = wrapInHeredoc(cmd)
+                val process = ProcessBuilder("sh", "-c", safeCmd)
                     .redirectErrorStream(false)
                     .start()
                 val stdoutBuf = StringBuilder()

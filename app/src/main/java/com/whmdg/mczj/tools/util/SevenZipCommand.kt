@@ -8,8 +8,12 @@ object SevenZipCommand {
 
     /**
      * 路径转义：反斜杠转义所有 shell 特殊字符。
-     * 使用反斜杠而非单引号，因为命令可能经过 su -c 嵌套 shell 传递，
-     * 某些 su 实现会剥离单引号导致 [] 等字符被 glob 展开。
+     *
+     * 注意：反斜杠转义仅在命令通过 heredoc（ArchiveBrowser.wrapInHeredoc）或
+     * 直接传给 libsu（Shell.cmd）时有效。如果命令通过 sh -c "..." 双引号传递，
+     * 反斜杠会被 shell 消费（\[ → [），导致 glob 展开。ArchiveBrowser 已用
+     * heredoc 绕过此问题；其他调用方（FileManagerViewModel 等）走 libsu，由
+     * libsu 内部处理引号，不受影响。
      */
     fun escape(path: String): String {
         if (path.isEmpty()) return "''"
