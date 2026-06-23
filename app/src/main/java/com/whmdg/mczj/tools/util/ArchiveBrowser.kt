@@ -561,17 +561,51 @@ object ArchiveBrowser {
     private const val COMMAND_TIMEOUT_MS = 30_000L
 
     /**
-     * 用 heredoc 包裹命令，绕过 shell 展开。
-     * 原理：命令通过 stdin 传递给 sh，不经过命令行参数的 shell 展开层，
-     * 中括号、星号等 glob 字符和反斜杠转义全部原样保留。
-     *
-     * 执行链路：su -c 'cat <<'"'"'_EOF_'"'"' | sh\n<cmd>\n_EOF_'
-     *   cat 从 stdin 读取 heredoc 内容 → 管道传给 sh → sh 执行原样命令
+     * 通过 stdin 管道执行 shell 命令。
+     * 将命令原始字节写入 sh 进程的 stdin，完全绕过所有 shell 参数解析层。
+     * SevenZipCommand.escape() 的反斜杠转义（如 `\[` `\*`）原样到达 sh，正确生效。
      */
-    private fun wrapInHeredoc(cmd: String): String {
-        // 使用随机分隔符避免命令内容中出现相同字符串
-        val marker = "ARCHB_${System.nanoTime().toString(36)}"
-        return "cat <<'$marker' | sh\n$cmd\n$marker"
+    private fun executeWithStdin(process: Process, cmd: String): Triple<String, String, Int> {
+        // 写入命令后关闭 stdin，sh 读到 EOF 即开始执行
+        Thread {
+            try { process.outputStream.use { it.write(cmd.toByteArray(Charsets.UTF_8)) } }
+            catch (_: Exception) {}
+        }.start()
+        // 并发读取 stdout/stderr，避免管道缓冲区满导致死锁
+        val stdoutBuf = StringBuilder()
+        val stderrBuf = StringBuilder()
+        val tOut = Thread {
+            try {
+                process.inputStream.bufferedReader().use { r ->
+                    val buf = CharArray(8192)
+                    var n: Int
+                    while (r.read(buf).also { n = it } != -1) stdoutBuf.append(buf, 0, n)
+                }
+            } catch (_: Exception) {}
+        }
+        val tErr = Thread {
+            try {
+                process.errorStream.bufferedReader().use { r ->
+                    val buf = CharArray(8192)
+                    var n: Int
+                    while (r.read(buf).also { n = it } != -1) stderrBuf.append(buf, 0, n)
+                }
+            } catch (_: Exception) {}
+        }
+        tOut.start(); tErr.start()
+        // 超时看门狗：超时后强制终止进程
+        val watchdog = Thread {
+            try {
+                Thread.sleep(COMMAND_TIMEOUT_MS)
+                process.destroyForcibly()
+            } catch (_: Exception) {}
+        }
+        watchdog.isDaemon = true
+        watchdog.start()
+        val exitCode = process.waitFor()
+        watchdog.interrupt()
+        tOut.join(5000); tErr.join(5000)
+        return Triple(stdoutBuf.toString().trimEnd(), stderrBuf.toString().trimEnd(), exitCode)
     }
 
     /** 执行 shell 命令，返回 (stdout, stderr, exitCode) */
@@ -582,56 +616,22 @@ object ArchiveBrowser {
     ): Triple<String, String, Int> = withContext(Dispatchers.IO) {
         when (permissionLevel) {
             "ROOT" -> {
-                // heredoc 方式：命令通过 stdin 传递，彻底绕过 su -c 的 shell 展开
-                val safeCmd = wrapInHeredoc(cmd)
-                Log.d(TAG, "ROOT 执行: $safeCmd")
-                val process = ProcessBuilder("su", "-c", safeCmd)
+                // stdin 管道：su -c sh 启动 shell，命令通过 stdin 传入，不经过任何参数解析
+                Log.d(TAG, "ROOT 执行(stdin): $cmd")
+                val process = ProcessBuilder("su", "-c", "sh")
                     .redirectErrorStream(false)
                     .start()
-                // 并发读取 stdout 和 stderr，避免管道缓冲区满导致死锁
-                val stdoutBuf = StringBuilder()
-                val stderrBuf = StringBuilder()
-                val tOut = Thread {
-                    try {
-                        process.inputStream.bufferedReader().use { r ->
-                            val buf = CharArray(8192)
-                            var n: Int
-                            while (r.read(buf).also { n = it } != -1) stdoutBuf.append(buf, 0, n)
-                        }
-                    } catch (_: Exception) {}
-                }
-                val tErr = Thread {
-                    try {
-                        process.errorStream.bufferedReader().use { r ->
-                            val buf = CharArray(8192)
-                            var n: Int
-                            while (r.read(buf).also { n = it } != -1) stderrBuf.append(buf, 0, n)
-                        }
-                    } catch (_: Exception) {}
-                }
-                tOut.start(); tErr.start()
-                // 超时看门狗：超时后强制终止进程
-                val watchdog = Thread {
-                    try {
-                        Thread.sleep(COMMAND_TIMEOUT_MS)
-                        process.destroyForcibly()
-                    } catch (_: Exception) {}
-                }
-                watchdog.isDaemon = true
-                watchdog.start()
-                val exitCode = process.waitFor()
-                watchdog.interrupt()
-                tOut.join(5000); tErr.join(5000)
-                Triple(stdoutBuf.toString().trimEnd(), stderrBuf.toString().trimEnd(), exitCode)
+                executeWithStdin(process, cmd)
             }
             "SHIZUKU" -> {
                 val service = ShizukuAuthorizer.getShellService()
                     ?: throw IllegalStateException("Shizuku UserService 未连接")
-                // heredoc 包裹：Shizuku 的 ShellService 内部也是 Runtime.exec("sh", "-c", cmd)
-                // 反斜杠转义在 sh -c 的双引号解析中同样会被消费，需要 heredoc 绕过
-                val safeCmd = wrapInHeredoc(cmd)
+                // ShellService 只接受命令字符串，无法直接用 stdin。
+                // Base64 编码绕过所有 shell 解释层：printf 输出原始字节 → sh -s 从 stdin 读取执行。
+                val b64 = Base64.encodeToString(cmd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                val safeCmd = "printf '%s' '$b64' | base64 -d | sh -s"
+                Log.d(TAG, "SHIZUKU 执行(b64): $cmd")
                 val result = withTimeout(COMMAND_TIMEOUT_MS) { service.execute(safeCmd) }
-                // ShellService 返回格式: stdoutB64\nstderrB64\nexitCode
                 val parts = result.split("\n")
                 val stdout = if (parts.size >= 1 && parts[0].isNotEmpty()) {
                     String(Base64.decode(parts[0], Base64.NO_WRAP), Charsets.UTF_8)
@@ -643,44 +643,12 @@ object ArchiveBrowser {
                 Triple(stdout, stderr, exitCode)
             }
             else -> {
-                // heredoc 包裹：sh -c 同样会消费反斜杠转义
-                val safeCmd = wrapInHeredoc(cmd)
-                val process = ProcessBuilder("sh", "-c", safeCmd)
+                // stdin 管道：直接 sh，命令通过 stdin 传入
+                Log.d(TAG, "NORMAL 执行(stdin): $cmd")
+                val process = ProcessBuilder("sh")
                     .redirectErrorStream(false)
                     .start()
-                val stdoutBuf = StringBuilder()
-                val stderrBuf = StringBuilder()
-                val tOut = Thread {
-                    try {
-                        process.inputStream.bufferedReader().use { r ->
-                            val buf = CharArray(8192)
-                            var n: Int
-                            while (r.read(buf).also { n = it } != -1) stdoutBuf.append(buf, 0, n)
-                        }
-                    } catch (_: Exception) {}
-                }
-                val tErr = Thread {
-                    try {
-                        process.errorStream.bufferedReader().use { r ->
-                            val buf = CharArray(8192)
-                            var n: Int
-                            while (r.read(buf).also { n = it } != -1) stderrBuf.append(buf, 0, n)
-                        }
-                    } catch (_: Exception) {}
-                }
-                tOut.start(); tErr.start()
-                val watchdog = Thread {
-                    try {
-                        Thread.sleep(COMMAND_TIMEOUT_MS)
-                        process.destroyForcibly()
-                    } catch (_: Exception) {}
-                }
-                watchdog.isDaemon = true
-                watchdog.start()
-                val exitCode = process.waitFor()
-                watchdog.interrupt()
-                tOut.join(5000); tErr.join(5000)
-                Triple(stdoutBuf.toString().trimEnd(), stderrBuf.toString().trimEnd(), exitCode)
+                executeWithStdin(process, cmd)
             }
         }
     }

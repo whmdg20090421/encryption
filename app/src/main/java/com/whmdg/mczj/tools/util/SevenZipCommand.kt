@@ -9,11 +9,13 @@ object SevenZipCommand {
     /**
      * 路径转义：反斜杠转义所有 shell 特殊字符。
      *
-     * 注意：反斜杠转义仅在命令通过 heredoc（ArchiveBrowser.wrapInHeredoc）或
-     * 直接传给 libsu（Shell.cmd）时有效。如果命令通过 sh -c "..." 双引号传递，
-     * 反斜杠会被 shell 消费（\[ → [），导致 glob 展开。ArchiveBrowser 已用
-     * heredoc 绕过此问题；其他调用方（FileManagerViewModel 等）走 libsu，由
-     * libsu 内部处理引号，不受影响。
+     * 反斜杠转义在以下场景正确生效：
+     * - ArchiveBrowser：命令通过 stdin 管道（sh -s）传递，字节原样到达 shell
+     * - FileManagerViewModel 等：命令通过 libsu（Shell.cmd）传递，libsu 内部处理引号
+     *
+     * 如果命令通过 sh -c "..." 双引号传递（非 stdin 管道），反斜杠会被外层 shell
+     * 消费（\[ → [），导致 glob 展开。ArchiveBrowser.executeCommand() 已用
+     * stdin 管道（ProcessBuilder("sh") + outputStream）彻底绕过此问题。
      */
     fun escape(path: String): String {
         if (path.isEmpty()) return "''"
