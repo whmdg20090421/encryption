@@ -60,7 +60,7 @@ object ArchiveBrowser {
     /** 压缩包目录树节点 */
     data class ArchiveNode(
         val name: String,
-        val isDirectory: Boolean,
+        var isDirectory: Boolean,
         var size: Long = 0,            // 原始大小
         var compressedSize: Long = 0,  // 压缩后大小
         val children: MutableList<ArchiveNode> = mutableListOf()
@@ -190,6 +190,12 @@ object ArchiveBrowser {
 
             val entries = parseListOutput(stdout)
             Log.d(TAG, "解析到 ${entries.size} 个条目")
+
+            if (entries.isEmpty()) {
+                Log.w(TAG, "压缩包内容为空（可能是加密或格式不支持）")
+                return@withContext Result.failure(Exception("压缩包内容为空，可能是加密文件或格式不受支持"))
+            }
+
             val root = buildTree(entries)
             val rootEntries = nodeChildrenToEntries(root)
 
@@ -311,9 +317,12 @@ object ArchiveBrowser {
                 val existing = current.children.find { it.name == part }
                 if (existing != null) {
                     if (isLast && !entry.isDirectory) {
-                        // 叶子文件节点，更新大小
-                        val idx = current.children.indexOf(existing)
-                        current.children[idx] = existing.copy(size = entry.size, compressedSize = entry.compressedSize)
+                        // 叶子文件节点，就地更新大小（不用 copy，避免节点脱离树）
+                        existing.size = entry.size
+                        existing.compressedSize = entry.compressedSize
+                    } else if (!isLast && !existing.isDirectory) {
+                        // 非叶子路径段必须是目录（7z 某些情况下目录条目不带 D 属性）
+                        existing.isDirectory = true
                     }
                     current = existing
                 } else {

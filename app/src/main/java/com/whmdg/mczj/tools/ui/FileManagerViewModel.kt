@@ -2565,7 +2565,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 在压缩包内导航到子目录 */
     fun navigateInArchive(entry: FileEntry) {
         val session = archiveSession ?: return
-        val newSession = ArchiveBrowser.navigateTo(session, entry.name) ?: return
+        val newSession = ArchiveBrowser.navigateTo(session, entry.name)
+        if (newSession == null) {
+            loadError = RuntimeException("无法进入压缩包子目录: ${entry.name}")
+            return
+        }
         archiveSession = newSession
         if (focusedPanel == FocusedPanel.LEFT) {
             leftEntries = newSession.currentEntries
