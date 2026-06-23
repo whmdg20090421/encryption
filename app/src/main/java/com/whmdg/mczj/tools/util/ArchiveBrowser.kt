@@ -46,14 +46,50 @@ object ArchiveBrowser {
     }
 
     /**
+     * 快速检测 7z 文件是否头部加密（读二进制头部，无需启动进程）。
+     * 7z 格式：前 6 字节魔数 `37 7A BC AF 27 1C`，偏移 32 处为头部类型：
+     * - 0x01 (kHeader) → 明文头部，无加密
+     * - 0x17 (kEncodedHeader) → 头部被编码/加密，需要密码
+     *
+     * @return true=头部加密, false=无头部加密或非7z文件
+     */
+    private fun is7zHeaderEncrypted(archivePath: String): Boolean {
+        if (!archivePath.endsWith(".7z", ignoreCase = true)) return false
+        return try {
+            val file = java.io.File(archivePath)
+            if (file.length() < 33) return false
+            file.inputStream().use { stream ->
+                // 校验魔数
+                val magic = ByteArray(6)
+                if (stream.read(magic) != 6) return false
+                if (magic[0] != 0x37.toByte() || magic[1] != 0x7A.toByte() ||
+                    magic[2] != 0xBC.toByte() || magic[3] != 0xAF.toByte() ||
+                    magic[4] != 0x27.toByte() || magic[5] != 0x1C.toByte()) return false
+                // 跳过 version(2) + startHeaderCRC(4) + nextHeaderOffset(8) + nextHeaderSize(8) + nextHeaderCRC(4) = 26 字节
+                val skipped = stream.skip(26)
+                if (skipped < 26) return false
+                // 读取头部类型字节
+                val headerType = stream.read()
+                if (headerType == -1) return false
+                Log.d(TAG, "7z 头部类型: 0x${headerType.toString(16).uppercase()} (0x17=kEncodedHeader)")
+                headerType == 0x17
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "读取 7z 二进制头部失败", e)
+            false
+        }
+    }
+
+    /**
      * 探测压缩包是否需要密码。
-     * 始终传入哑密码 -pdummy：
-     * - 无加密：7z 忽略密码参数，正常输出，Encrypted = -，exitCode=0
-     * - ZIP 加密/7Z 内容加密：能读头部，Encrypted = +，exitCode=0
-     * - 7Z 头部加密：尝试用 dummy 解密头部失败，exitCode≠0
+     * 检测策略（按优先级）：
+     * 1. 7z 二进制头部快速检测：偏移 32 == 0x17 → 头部加密（无需启动进程）
+     * 2. 7zzs l -slt 输出中 Method 字段含 `7zAES` → 内容加密（最可靠）
+     * 3. 输出含 `Encrypted = +` → 加密
+     * 4. exitCode=2 且为 7z 文件 → 头部加密（兜底）
      *
      * 返回值：
-     * - true  → 需要密码（Encrypted = +）
+     * - true  → 需要密码
      * - false → 不需要密码（无加密，正常打开）
      * - null  → 档案本身有问题（exitCode≠0 且未检测到加密标志）
      */
@@ -62,12 +98,20 @@ object ArchiveBrowser {
         archivePath: String,
         permissionLevel: String
     ): Boolean? = withContext(Dispatchers.IO) {
+        // 快速路径：读 7z 二进制头部，0x17 = kEncodedHeader = 头部加密
+        if (is7zHeaderEncrypted(archivePath)) {
+            Log.d(TAG, "7z 二进制头部检测: kEncodedHeader(0x17)，头部加密")
+            return@withContext true
+        }
+
         val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
         val baseCmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
         // 用 2>&1 将 stderr 合并到 stdout，防止某些 su 实现吞掉 stderr
         val cmd = "$baseCmd 2>&1"
         val (merged, _, exitCode) = executeCommand(cmd, permissionLevel, context)
         Log.d(TAG, "密码检测: exitCode=$exitCode, output=${merged.length}字节, 前200字=${merged.take(200)}")
+        // Method 字段含 7zAES → 加密（最可靠的命令行检测方式）
+        if (merged.contains("7zAES", ignoreCase = true)) return@withContext true
         if (merged.contains("Encrypted = +")) return@withContext true
         if (exitCode == 0) return@withContext false
         // 头部加密的 7Z：exitCode≠0，输出包含密码相关提示
@@ -264,11 +308,14 @@ object ArchiveBrowser {
         try {
             val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
 
-            // 1. 密码检测（传入哑密码，确保头部加密的 7Z 也能被检测到）
+            // 1. 密码检测：二进制头部快速检测 + 命令行详细检测
+            val headerEncrypted = is7zHeaderEncrypted(archivePath)
             val detailBaseCmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
             val detailCmd = "$detailBaseCmd 2>&1"
             val (detMerged, _, detExit) = executeCommand(detailCmd, permissionLevel, context)
-            val passwordRequired = detMerged.contains("Encrypted = +")
+            val passwordRequired = headerEncrypted
+                    || detMerged.contains("7zAES", ignoreCase = true)
+                    || detMerged.contains("Encrypted = +")
                     || detMerged.contains("password", ignoreCase = true)
                     || detMerged.contains("密码")
                     || (archivePath.endsWith(".7z", ignoreCase = true) && detExit == 2)
