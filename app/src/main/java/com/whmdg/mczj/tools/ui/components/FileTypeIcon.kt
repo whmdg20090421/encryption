@@ -32,6 +32,7 @@ enum class FileCategory {
 
     APK,        // 安装包：apk, xapk, apks, aab
     CODE,       // 代码文件：kt, java, py, js, ts, html, css, xml, json, c, cpp, h, go, rs, sh, bat, sql, yaml, yml, toml
+    ARCHIVE,    // 压缩包：zip, 7z, rar, tar, gz, bz2, xz, lz4, zst, lzma, cab, iso, dmg
     OTHER       // 其他：无法识别的后缀
 }
 
@@ -56,7 +57,7 @@ fun categorizeFile(extension: String): FileCategory = when (extension) {
     "mp3", "flac", "wav", "aac", "ogg", "wma", "m4a", "opus",
     "amr", "ape", "aiff", "mid", "midi" -> FileCategory.AUDIO
     "zip", "7z", "rar", "tar", "gz", "bz2", "xz", "lz4", "zst",
-    "lzma", "cab", "iso", "dmg" -> FileCategory.OTHER
+    "lzma", "cab", "iso", "dmg" -> FileCategory.ARCHIVE
     "apk", "xapk", "apks", "aab" -> FileCategory.APK
     "kt", "java", "py", "js", "ts", "tsx", "jsx", "html", "htm",
     "css", "scss", "less", "xml", "json", "c", "cpp", "h", "hpp",
@@ -76,6 +77,7 @@ fun getFileTypeDrawableRes(category: FileCategory): Int? = when (category) {
 
     FileCategory.APK -> null  // APK 图标从文件动态读取
     FileCategory.CODE -> R.drawable.file_type_code
+    FileCategory.ARCHIVE -> R.drawable.file_type_archive
     FileCategory.OTHER -> null
 }
 

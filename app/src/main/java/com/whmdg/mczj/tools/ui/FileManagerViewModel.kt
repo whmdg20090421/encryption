@@ -1410,6 +1410,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return null
         }
         if (ArchiveBrowser.isArchiveFile(entry.name)) {
+            // 7z 格式不支持浏览（加密检测复杂），仅支持解压
+            if (entry.name.endsWith(".7z", ignoreCase = true)) {
+                DiagnosticLog.log("OpenFile", "7z 文件，不支持浏览: ${entry.name}")
+                return null
+            }
             if (isDebug) {
                 DiagnosticLog.log("OpenFile", "压缩包文件（Debug 模式），解析信息: ${entry.name}")
                 debugOpenArchive(entry)

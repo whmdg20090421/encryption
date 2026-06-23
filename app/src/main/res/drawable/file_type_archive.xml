@@ -1,0 +1,21 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 主体：压缩包外形 -->
+    <path
+        android:pathData="M20,6H16V4C16,2.9 15.1,2 14,2H10C8.9,2 8,2.9 8,4V6H4C2.9,6 2,6.9 2,8V20C2,21.1 2.9,22 4,22H20C21.1,22 22,21.1 22,20V8C22,6.9 21.1,6 20,6ZM10,4H14V6H10V4Z"
+        android:fillColor="#795548"/>
+    <!-- 拉链中间横条 -->
+    <path
+        android:pathData="M4,10H20V12H4V10Z"
+        android:fillColor="#D7CCC8"/>
+    <!-- 拉链锯齿 -->
+    <path
+        android:pathData="M6,12H8V14H6V12ZM10,12H12V14H10V12ZM14,12H16V14H14V12ZM18,12H20V14H18V12Z"
+        android:fillColor="#BCAAA4"/>
+    <path
+        android:pathData="M4,14H20V16H4V14Z"
+        android:fillColor="#D7CCC8"/>
+</vector>
