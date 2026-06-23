@@ -2688,6 +2688,34 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         ArchiveBrowser.clearSessionCache(context)
     }
 
+    /**
+     * 从压缩包中提取单个文件并返回对应的 Screen。
+     * 供 FileManagerScreen 的 onFileClick 在 isInArchiveMode 时调用。
+     * @return 提取成功后对应的 Screen，失败返回 null（由调用方 Toast 提示）
+     */
+    suspend fun openArchiveFile(context: Context, entry: FileEntry): Screen? {
+        val session = archiveSession ?: return null
+        // 构建压缩包内相对路径
+        val subPath = session.currentPath.removePrefix(session.archivePath).removePrefix("/")
+        val relativePath = if (subPath.isEmpty()) entry.name else "$subPath/${entry.name}"
+        val password = archivePasswordCache[session.archivePath] ?: ""
+        val outputDir = java.io.File(context.externalCacheDir, "archive_preview")
+
+        DiagnosticLog.log("OpenFile", "压缩包内提取: $relativePath")
+        val extracted = ArchiveBrowser.extractSingleFile(
+            context, session.archivePath, relativePath,
+            outputDir.absolutePath, password, permissionLevel
+        )
+        if (extracted == null) {
+            DiagnosticLog.log("OpenFile", "提取失败: $relativePath")
+            return null
+        }
+        DiagnosticLog.log("OpenFile", "提取成功: ${extracted.absolutePath}")
+        // 用提取后的临时文件构建 FileEntry，复用 openFile 的类型判断
+        val tempEntry = entry.copy(path = extracted.absolutePath, name = extracted.name)
+        return openFile(context, tempEntry)
+    }
+
     /** 当前是否在压缩包根目录 */
     fun isAtArchiveRoot(): Boolean {
         val session = archiveSession ?: return true

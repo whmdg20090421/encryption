@@ -570,6 +570,43 @@ object ArchiveBrowser {
         }
     }
 
+    /**
+     * 从压缩包中提取单个文件到指定目录。
+     * @param archivePath 压缩包路径
+     * @param fileName 压缩包内相对路径，如 "docs/readme.txt"
+     * @param outputDir 输出目录
+     * @param password 密码（空=不带密码）
+     * @param permissionLevel 执行权限级别
+     * @return 提取后的文件，失败返回 null
+     */
+    suspend fun extractSingleFile(
+        context: Context,
+        archivePath: String,
+        fileName: String,
+        outputDir: String,
+        password: String = "",
+        permissionLevel: String = "NORMAL"
+    ): File? = withContext(Dispatchers.IO) {
+        try {
+            val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
+            val cmd = SevenZipCommand.buildExtractSingleCommand(
+                binaryPath, archivePath, fileName, outputDir, password
+            )
+            Log.d(TAG, "提取单文件: $fileName")
+            val (stdout, stderr, exitCode) = executeCommand(cmd, permissionLevel, context)
+            if (exitCode != 0) {
+                Log.w(TAG, "提取失败 exitCode=$exitCode stderr=$stderr")
+                return@withContext null
+            }
+            // 保留目录结构：outputDir/fileName
+            val outputFile = File(outputDir, fileName)
+            if (outputFile.exists()) outputFile else null
+        } catch (e: Exception) {
+            Log.e(TAG, "提取单文件异常", e)
+            null
+        }
+    }
+
     /** 命令执行超时时间（毫秒） */
     private const val COMMAND_TIMEOUT_MS = 30_000L
 

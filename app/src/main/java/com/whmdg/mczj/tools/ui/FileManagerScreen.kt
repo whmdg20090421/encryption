@@ -231,6 +231,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var forceDeleteEntry by remember { mutableStateOf<FileEntry?>(null) }
     var showPermanentDeleteDialog by remember { mutableStateOf(false) }
     var permanentDeleteTarget by remember { mutableStateOf<String?>(null) }
+    var permanentDeleteMultiNames by remember { mutableStateOf<List<String>>(emptyList()) }
     var showHistoryPanel by remember { mutableStateOf(false) }
     var panelTab by remember { mutableStateOf(0) } // 0=历史, 1=书签
     var bookmarkDeleteVisible by remember { mutableStateOf(setOf<String>()) }
@@ -958,7 +959,26 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 },
                                 onFileClick = { entry ->
-                                    if (vm.isInArchiveMode) return@FileBrowserPanel
+                                    if (vm.isInArchiveMode) {
+                                        DiagnosticLog.beginSession("[LEFT] 压缩包内点击文件 '${entry.name}'")
+                                        DiagnosticLog.log("FileMgr", "[LEFT] 压缩包内文件 name='${entry.name}'")
+                                        vm.focusedPanel = FocusedPanel.LEFT
+                                        coroutineScope.launch {
+                                            val screen = vm.openArchiveFile(context, entry)
+                                            if (screen != null) {
+                                                vm.saveScrollPosition(
+                                                    leftListState.firstVisibleItemIndex,
+                                                    leftListState.firstVisibleItemScrollOffset,
+                                                    rightListState.firstVisibleItemIndex,
+                                                    rightListState.firstVisibleItemScrollOffset
+                                                )
+                                                onNavigate(screen)
+                                            } else {
+                                                Toast.makeText(context, "文件提取失败", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                        return@FileBrowserPanel
+                                    }
                                     DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
                                     DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                     vm.focusedPanel = FocusedPanel.LEFT
@@ -1071,7 +1091,26 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     }
                                 },
                                 onFileClick = { entry ->
-                                    if (vm.isInArchiveMode) return@FileBrowserPanel
+                                    if (vm.isInArchiveMode) {
+                                        DiagnosticLog.beginSession("[RIGHT] 压缩包内点击文件 '${entry.name}'")
+                                        DiagnosticLog.log("FileMgr", "[RIGHT] 压缩包内文件 name='${entry.name}'")
+                                        vm.focusedPanel = FocusedPanel.RIGHT
+                                        coroutineScope.launch {
+                                            val screen = vm.openArchiveFile(context, entry)
+                                            if (screen != null) {
+                                                vm.saveScrollPosition(
+                                                    leftListState.firstVisibleItemIndex,
+                                                    leftListState.firstVisibleItemScrollOffset,
+                                                    rightListState.firstVisibleItemIndex,
+                                                    rightListState.firstVisibleItemScrollOffset
+                                                )
+                                                onNavigate(screen)
+                                            } else {
+                                                Toast.makeText(context, "文件提取失败", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                        return@FileBrowserPanel
+                                    }
                                     DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
                                     DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
                                     vm.focusedPanel = FocusedPanel.RIGHT
@@ -1829,6 +1868,16 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         ) {
                             if (vm.isInRecycleBin) {
                                 // ── 回收站模式：永久删除 / 恢复到原位置 ──
+                                // 多选模式下显示选中数量
+                                if (isMultiSelect) {
+                                    Text(
+                                        text = "已选中 ${activeSelectedPaths.size} 个项目",
+                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    HorizontalDivider()
+                                }
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically
@@ -1838,10 +1887,15 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         modifier = Modifier
                                             .weight(1f)
                                             .clickable {
-                                                val entry = selectedEntry ?: return@clickable
-                                                permanentDeleteTarget = entry.name
-                                                showPermanentDeleteDialog = true
-                                                selectedEntry = null
+                                                if (isMultiSelect) {
+                                                    permanentDeleteMultiNames = selectedEntries.map { it.name }
+                                                    showPermanentDeleteDialog = true
+                                                } else {
+                                                    val entry = selectedEntry ?: return@clickable
+                                                    permanentDeleteTarget = entry.name
+                                                    showPermanentDeleteDialog = true
+                                                    selectedEntry = null
+                                                }
                                             }
                                             .padding(vertical = 16.dp),
                                         contentAlignment = Alignment.Center
@@ -1871,15 +1925,23 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         modifier = Modifier
                                             .weight(1f)
                                             .clickable {
-                                                val entry = selectedEntry ?: return@clickable
-                                                val error = vm.restoreFromRecycleBin(entry.name)
-                                                if (error == null) {
-                                                    Toast.makeText(context, "已恢复到原位置", Toast.LENGTH_SHORT).show()
-                                                    vm.enterRecycleBin() // 刷新回收站列表
-                                                } else {
-                                                    Toast.makeText(context, "恢复失败: $error", Toast.LENGTH_SHORT).show()
+                                                val namesToRestore = if (isMultiSelect) selectedEntries.map { it.name }
+                                                else listOfNotNull(selectedEntry?.name)
+                                                if (namesToRestore.isEmpty()) return@clickable
+                                                var failCount = 0
+                                                for (name in namesToRestore) {
+                                                    val error = vm.restoreFromRecycleBin(name)
+                                                    if (error != null) failCount++
                                                 }
+                                                if (failCount == 0) {
+                                                    Toast.makeText(context, "已恢复 ${namesToRestore.size} 个项目", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(context, "恢复完成，${failCount} 个失败", Toast.LENGTH_SHORT).show()
+                                                }
+                                                vm.enterRecycleBin()
                                                 selectedEntry = null
+                                                if (vm.focusedPanel == FocusedPanel.LEFT) leftSelectedPaths = emptySet()
+                                                else rightSelectedPaths = emptySet()
                                             }
                                             .padding(vertical = 16.dp),
                                         contentAlignment = Alignment.Center
@@ -2645,30 +2707,54 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     }
 
     // ── 回收站永久删除确认对话框 ──
-    if (showPermanentDeleteDialog && permanentDeleteTarget != null) {
+    if (showPermanentDeleteDialog && (permanentDeleteTarget != null || permanentDeleteMultiNames.isNotEmpty())) {
+        val isMultiDelete = permanentDeleteMultiNames.isNotEmpty()
         AlertDialog(
-            onDismissRequest = { showPermanentDeleteDialog = false; permanentDeleteTarget = null },
+            onDismissRequest = {
+                showPermanentDeleteDialog = false; permanentDeleteTarget = null; permanentDeleteMultiNames = emptyList()
+            },
             title = { Text("永久删除") },
-            text = { Text("确定要永久删除「${permanentDeleteTarget}」吗？此操作不可撤销。") },
+            text = {
+                if (isMultiDelete) Text("确定要永久删除选中的 ${permanentDeleteMultiNames.size} 个项目吗？此操作不可撤销。")
+                else Text("确定要永久删除「${permanentDeleteTarget}」吗？此操作不可撤销。")
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    val name = permanentDeleteTarget ?: return@TextButton
-                    val error = vm.permanentDelete(name)
-                    if (error == null) {
-                        Toast.makeText(context, "已永久删除", Toast.LENGTH_SHORT).show()
-                        vm.enterRecycleBin() // 刷新回收站列表
+                    if (isMultiDelete) {
+                        var failCount = 0
+                        for (name in permanentDeleteMultiNames) {
+                            val error = vm.permanentDelete(name)
+                            if (error != null) failCount++
+                        }
+                        if (failCount == 0) {
+                            Toast.makeText(context, "已永久删除 ${permanentDeleteMultiNames.size} 个项目", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "删除完成，${failCount} 个失败", Toast.LENGTH_SHORT).show()
+                        }
+                        if (vm.focusedPanel == FocusedPanel.LEFT) leftSelectedPaths = emptySet()
+                        else rightSelectedPaths = emptySet()
                     } else {
-                        Toast.makeText(context, "删除失败: $error", Toast.LENGTH_SHORT).show()
+                        val name = permanentDeleteTarget ?: return@TextButton
+                        val error = vm.permanentDelete(name)
+                        if (error == null) {
+                            Toast.makeText(context, "已永久删除", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "删除失败: $error", Toast.LENGTH_SHORT).show()
+                        }
                     }
+                    vm.enterRecycleBin()
                     showPermanentDeleteDialog = false
                     permanentDeleteTarget = null
+                    permanentDeleteMultiNames = emptyList()
                     selectedEntry = null
                 }) {
                     Text("确定", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showPermanentDeleteDialog = false; permanentDeleteTarget = null }) {
+                TextButton(onClick = {
+                    showPermanentDeleteDialog = false; permanentDeleteTarget = null; permanentDeleteMultiNames = emptyList()
+                }) {
                     Text("取消")
                 }
             }

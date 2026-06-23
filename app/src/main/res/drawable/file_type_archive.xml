@@ -1,21 +1,22 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <!-- 主体：压缩包外形 -->
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
+    <!-- 外层深棕色圆角矩形（背景） -->
     <path
-        android:pathData="M20,6H16V4C16,2.9 15.1,2 14,2H10C8.9,2 8,2.9 8,4V6H4C2.9,6 2,6.9 2,8V20C2,21.1 2.9,22 4,22H20C21.1,22 22,21.1 22,20V8C22,6.9 21.1,6 20,6ZM10,4H14V6H10V4Z"
-        android:fillColor="#795548"/>
-    <!-- 拉链中间横条 -->
+        android:pathData="M244,26 A218,218 0 0 1 462,26 L562,26 A218,218 0 0 1 780,244 L780,780 A218,218 0 0 1 562,998 L462,998 A218,218 0 0 1 244,780 Z"
+        android:fillColor="#6E3418"/>
+    <!-- 白色文档盒子 -->
     <path
-        android:pathData="M4,10H20V12H4V10Z"
-        android:fillColor="#D7CCC8"/>
-    <!-- 拉链锯齿 -->
+        android:pathData="M306,384 A56,56 0 0 1 362,328 L662,328 A56,56 0 0 1 718,384 L718,702 A56,56 0 0 1 662,758 L362,758 A56,56 0 0 1 306,702 Z"
+        android:fillColor="#FBF9F6"/>
+    <!-- 顶部灰色标题栏（上方圆角，下方直角） -->
     <path
-        android:pathData="M6,12H8V14H6V12ZM10,12H12V14H10V12ZM14,12H16V14H14V12ZM18,12H20V14H18V12Z"
-        android:fillColor="#BCAAA4"/>
+        android:pathData="M306,384 A56,56 0 0 1 362,328 L662,328 A56,56 0 0 1 718,384 L718,396 L306,396 Z"
+        android:fillColor="#F0EEEC"/>
+    <!-- 向下箭头（下载/解压含义） -->
     <path
-        android:pathData="M4,14H20V16H4V14Z"
-        android:fillColor="#D7CCC8"/>
+        android:pathData="M471,476 L553,476 L553,596 L636,596 L512,730 L388,596 L471,596 Z"
+        android:fillColor="#7A3F20"/>
 </vector>

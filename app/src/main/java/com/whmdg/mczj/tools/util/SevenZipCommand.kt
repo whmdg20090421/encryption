@@ -123,4 +123,30 @@ object SevenZipCommand {
         cmd.append(" -aoa")
         return cmd.toString()
     }
+
+    /**
+     * 构建 7zzs 单文件提取命令。
+     * 使用 -i! 指定单个文件，保留目录结构。
+     * 输出格式: `<binary> x [-p'pwd'] -i!'fileName' 'archive' -o<outputDir> -aoa 2>&1`
+     * @param fileName 压缩包内相对路径，如 "docs/readme.txt"
+     * @param password 空=不带密码
+     */
+    fun buildExtractSingleCommand(
+        binaryPath: String,
+        archivePath: String,
+        fileName: String,
+        outputDir: String,
+        password: String = ""
+    ): String {
+        val cmd = StringBuilder(escape(binaryPath))
+        cmd.append(" x")
+        if (password.isNotEmpty()) {
+            cmd.append(" -p${escapePassword(password)}")
+        }
+        cmd.append(" -i!'$fileName'")
+        cmd.append(" ${escape(archivePath)}")
+        cmd.append(" -o${escape(outputDir)}")
+        cmd.append(" -aoa 2>&1")
+        return cmd.toString()
+    }
 }
