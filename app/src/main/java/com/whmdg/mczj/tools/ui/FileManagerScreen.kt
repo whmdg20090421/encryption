@@ -2328,7 +2328,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         Text("根目录内容:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                         info.rootEntries.forEach { entry ->
                             val icon = if (entry.isDirectory) "📁" else "📄"
-                            val sizeStr = if (entry.isDirectory) "" else " (${FormatUtils.formatFileSize(entry.size)})"
+                            val sizeStr = if (entry.isDirectory) "" else " (${FormatUtils.formatBytes(entry.size)})"
                             Text(
                                 text = "$icon ${entry.name}$sizeStr",
                                 style = MaterialTheme.typography.bodySmall,
