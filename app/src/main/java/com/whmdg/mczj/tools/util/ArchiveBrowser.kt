@@ -8,6 +8,7 @@ import com.whmdg.mczj.tools.security.ShizukuAuthorizer
 import com.whmdg.mczj.tools.ui.FileEntry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -485,6 +486,9 @@ object ArchiveBrowser {
         }
     }
 
+    /** 命令执行超时时间（毫秒） */
+    private const val COMMAND_TIMEOUT_MS = 30_000L
+
     /** 执行 shell 命令，返回 (stdout, stderr, exitCode) */
     private suspend fun executeCommand(
         cmd: String,
@@ -518,14 +522,24 @@ object ArchiveBrowser {
                     } catch (_: Exception) {}
                 }
                 tOut.start(); tErr.start()
+                // 超时看门狗：超时后强制终止进程
+                val watchdog = Thread {
+                    try {
+                        Thread.sleep(COMMAND_TIMEOUT_MS)
+                        process.destroyForcibly()
+                    } catch (_: Exception) {}
+                }
+                watchdog.isDaemon = true
+                watchdog.start()
                 val exitCode = process.waitFor()
+                watchdog.interrupt()
                 tOut.join(5000); tErr.join(5000)
                 Triple(stdoutBuf.toString().trimEnd(), stderrBuf.toString().trimEnd(), exitCode)
             }
             "SHIZUKU" -> {
                 val service = ShizukuAuthorizer.getShellService()
                     ?: throw IllegalStateException("Shizuku UserService 未连接")
-                val result = service.execute(cmd)
+                val result = withTimeout(COMMAND_TIMEOUT_MS) { service.execute(cmd) }
                 // ShellService 返回格式: stdoutB64\nstderrB64\nexitCode
                 val parts = result.split("\n")
                 val stdout = if (parts.size >= 1 && parts[0].isNotEmpty()) {
@@ -562,7 +576,16 @@ object ArchiveBrowser {
                     } catch (_: Exception) {}
                 }
                 tOut.start(); tErr.start()
+                val watchdog = Thread {
+                    try {
+                        Thread.sleep(COMMAND_TIMEOUT_MS)
+                        process.destroyForcibly()
+                    } catch (_: Exception) {}
+                }
+                watchdog.isDaemon = true
+                watchdog.start()
                 val exitCode = process.waitFor()
+                watchdog.interrupt()
                 tOut.join(5000); tErr.join(5000)
                 Triple(stdoutBuf.toString().trimEnd(), stderrBuf.toString().trimEnd(), exitCode)
             }

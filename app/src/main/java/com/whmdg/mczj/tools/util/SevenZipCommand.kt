@@ -6,14 +6,41 @@ package com.whmdg.mczj.tools.util
  */
 object SevenZipCommand {
 
-    /** 路径单引号转义：' → '\'' */
-    fun escape(path: String): String = "'" + path.replace("'", "'\\''") + "'"
+    /**
+     * 路径转义：反斜杠转义所有 shell 特殊字符。
+     * 使用反斜杠而非单引号，因为命令可能经过 su -c 嵌套 shell 传递，
+     * 某些 su 实现会剥离单引号导致 [] 等字符被 glob 展开。
+     */
+    fun escape(path: String): String {
+        if (path.isEmpty()) return "''"
+        val sb = StringBuilder(path.length + 16)
+        for (c in path) {
+            if (c in SHELL_SPECIAL) sb.append('\\')
+            sb.append(c)
+        }
+        return sb.toString()
+    }
 
     /**
-     * 密码转义：单引号包裹，内部单引号用 '\'' 转义。
-     * 所有字符保留，不省略、不过滤。
+     * 密码转义：与路径转义逻辑相同，反斜杠转义所有 shell 特殊字符。
      */
-    fun escapePassword(pwd: String): String = "'" + pwd.replace("'", "'\\''") + "'"
+    fun escapePassword(pwd: String): String {
+        if (pwd.isEmpty()) return "''"
+        val sb = StringBuilder(pwd.length + 16)
+        for (c in pwd) {
+            if (c in SHELL_SPECIAL) sb.append('\\')
+            sb.append(c)
+        }
+        return sb.toString()
+    }
+
+    /** 需要反斜杠转义的 shell 特殊字符 */
+    private val SHELL_SPECIAL = setOf(
+        ' ', '\t', '\'', '"', '\\',
+        '(', ')', '[', ']', '{', '}',
+        '*', '?', '!', '#', '$', '&', ';',
+        '|', '<', '>', '`', '~'
+    )
 
     /**
      * 构建 7zzs 压缩命令。

@@ -41,8 +41,8 @@ suspend fun calculateFolderSize(
     onBinderCooldown: (suspend (secondsLeft: Int) -> Unit)? = null
 ): SizeCalcResult {
     // ── 0. 统计总目录数（用于进度条） ──
-    val escaped = rootPath.replace("'", "'\\''")
-    val (countOut, _, countExit) = accessor.exec("find '$escaped' -type d | wc -l")
+    val escaped = SevenZipCommand.escape(rootPath)
+    val (countOut, _, countExit) = accessor.exec("find $escaped -type d | wc -l")
     val totalDirs = countOut.trim().toIntOrNull()?.coerceAtLeast(0) ?: 0
     onTotal(totalDirs)
 

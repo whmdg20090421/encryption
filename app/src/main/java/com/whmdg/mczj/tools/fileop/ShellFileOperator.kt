@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.fileop
 
 import android.content.Context
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+import com.whmdg.mczj.tools.util.SevenZipCommand
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -23,9 +24,7 @@ class ShellFileOperator(
         }
     }
 
-    private fun escape(path: String): String {
-        return path.replace("'", "'\\''")
-    }
+    private fun escape(path: String): String = SevenZipCommand.escape(path)
 
     private fun checkExit(command: String, errorMsg: String) {
         val (_, stderr, exitCode) = exec(command)
@@ -38,7 +37,7 @@ class ShellFileOperator(
         val size = fileSize(src)
         val escapedSrc = escape(src)
         val escapedDst = escape(dst)
-        checkExit("cp '$escapedSrc' '$escapedDst'", "复制失败")
+        checkExit("cp $escapedSrc $escapedDst", "复制失败")
         // Shell cp 无法获取实时进度，复制完成后回调总大小
         onProgress(size)
     }
@@ -46,36 +45,36 @@ class ShellFileOperator(
     override fun moveFile(src: String, dst: String): Boolean {
         val escapedSrc = escape(src)
         val escapedDst = escape(dst)
-        val (_, _, exitCode) = exec("mv '$escapedSrc' '$escapedDst'")
+        val (_, _, exitCode) = exec("mv $escapedSrc $escapedDst")
         return exitCode == 0
     }
 
     override fun deleteFile(path: String) {
         val escaped = escape(path)
-        checkExit("rm -rf '$escaped'", "删除失败")
+        checkExit("rm -rf $escaped", "删除失败")
     }
 
     override fun mkdir(path: String) {
         val escaped = escape(path)
-        checkExit("mkdir -p '$escaped'", "创建目录失败")
+        checkExit("mkdir -p $escaped", "创建目录失败")
     }
 
     override fun exists(path: String): Boolean {
         val escaped = escape(path)
-        val (_, _, exitCode) = exec("test -e '$escaped'")
+        val (_, _, exitCode) = exec("test -e $escaped")
         return exitCode == 0
     }
 
     override fun isDirectory(path: String): Boolean {
         val escaped = escape(path)
-        val (_, _, exitCode) = exec("test -d '$escaped'")
+        val (_, _, exitCode) = exec("test -d $escaped")
         return exitCode == 0
     }
 
     override fun listChildren(path: String): List<FileChildInfo>? {
         val normalized = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-        val escaped = normalized.replace("'", "'\\''")
-        val command = "ls -lAp '$escaped'"
+        val escaped = SevenZipCommand.escape(normalized)
+        val command = "ls -lAp $escaped"
         val (stdout, _, exitCode) = try {
             exec(command)
         } catch (_: Throwable) {
@@ -117,14 +116,14 @@ class ShellFileOperator(
 
     override fun fileSize(path: String): Long {
         val escaped = escape(path)
-        val (stdout, _, exitCode) = exec("stat -c %s '$escaped'")
+        val (stdout, _, exitCode) = exec("stat -c %s $escaped")
         if (exitCode != 0) return 0L
         return stdout.trim().toLongOrNull() ?: 0L
     }
 
     override fun lastModified(path: String): Long {
         val escaped = escape(path)
-        val (stdout, _, exitCode) = exec("stat -c %Y '$escaped'")
+        val (stdout, _, exitCode) = exec("stat -c %Y $escaped")
         if (exitCode != 0) return 0L
         val epochSec = stdout.trim().toLongOrNull() ?: return 0L
         return epochSec * 1000

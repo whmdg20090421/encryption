@@ -268,9 +268,9 @@ object SpecialPermissionVerifier {
         if (!isRootAvailable()) return false
         val path = file.absolutePath
         if (path.isEmpty() || path == "/" || path.isBlank()) return false
-        val escaped = path.replace("'", "'\\''")
+        val escaped = com.whmdg.mczj.tools.util.SevenZipCommand.escape(path)
         // 目录需要递归 chmod，文件只需单层
-        val chmodCmd = if (file.isDirectory) "chmod -R 777 '$escaped'" else "chmod 777 '$escaped'"
+        val chmodCmd = if (file.isDirectory) "chmod -R 777 $escaped" else "chmod 777 $escaped"
         executeRootCommandSilent(chmodCmd)
 
         // 3. chmod 后重试 Java 删除

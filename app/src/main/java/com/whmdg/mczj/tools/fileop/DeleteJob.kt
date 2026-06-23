@@ -3,6 +3,7 @@ package com.whmdg.mczj.tools.fileop
 import android.content.Context
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+import com.whmdg.mczj.tools.util.SevenZipCommand
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.IOException
@@ -128,8 +129,8 @@ class DeleteJob(
             if (!file.delete()) {
                 // 尝试 shell 删除
                 try {
-                    val escaped = entry.path.replace("'", "'\\''")
-                    val (_, stderr, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("rm -f '$escaped'")
+                    val escaped = SevenZipCommand.escape(entry.path)
+                    val (_, stderr, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("rm -f $escaped")
                     if (exitCode != 0) {
                         throw IOException("删除失败: $stderr")
                     }
@@ -151,8 +152,8 @@ class DeleteJob(
         if (!file.delete()) {
             // 尝试 shell 删除
             try {
-                val escaped = file.absolutePath.replace("'", "'\\''")
-                val (_, stderr, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("rm -rf '$escaped'")
+                val escaped = SevenZipCommand.escape(file.absolutePath)
+                val (_, stderr, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("rm -rf $escaped")
                 if (exitCode != 0) {
                     throw IOException("删除失败: $stderr")
                 }

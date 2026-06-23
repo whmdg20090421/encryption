@@ -17,6 +17,7 @@ import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.ArchiveBrowser
 import com.whmdg.mczj.tools.util.CompressService
+import com.whmdg.mczj.tools.util.SevenZipCommand
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.FileAccessLevel
 import com.whmdg.mczj.tools.util.FileAccessor
@@ -275,11 +276,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun shellPathExists(path: String): Boolean {
         if (!hasShellEngine) return File(path).exists()
-        val escaped = path.replace("'", "'\\''")
+        val escaped = SevenZipCommand.escape(path)
         val (_, _, exit) = try {
             when {
-                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -e '$escaped'")
-                SpecialPermissionVerifier.isShizukuAuthorized(getApplication()) -> SpecialPermissionVerifier.executeShizukuCommand("test -e '$escaped'")
+                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -e $escaped")
+                SpecialPermissionVerifier.isShizukuAuthorized(getApplication()) -> SpecialPermissionVerifier.executeShizukuCommand("test -e $escaped")
                 else -> return File(path).exists()
             }
         } catch (_: Exception) { return false }
@@ -291,11 +292,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun shellIsDirectory(path: String): Boolean {
         if (!hasShellEngine) return File(path).isDirectory
-        val escaped = path.replace("'", "'\\''")
+        val escaped = SevenZipCommand.escape(path)
         val (_, _, exit) = try {
             when {
-                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -d '$escaped'")
-                SpecialPermissionVerifier.isShizukuAuthorized(getApplication()) -> SpecialPermissionVerifier.executeShizukuCommand("test -d '$escaped'")
+                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -d $escaped")
+                SpecialPermissionVerifier.isShizukuAuthorized(getApplication()) -> SpecialPermissionVerifier.executeShizukuCommand("test -d $escaped")
                 else -> return File(path).isDirectory
             }
         } catch (_: Exception) { return false }
@@ -394,13 +395,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun listDirEntriesViaShell(path: String, showHidden: Boolean, longFormat: Boolean = false, displayPath: String = path): List<FileEntry> {
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
         val normalizedDisplayPath = if (displayPath == "/") "/" else displayPath.trimEnd('/').ifEmpty { "/" }
-        val escapedPath = normalizedPath.replace("'", "'\\''")
+        val escapedPath = SevenZipCommand.escape(normalizedPath)
         val flags = buildString {
             append("-l")
             if (showHidden) append("a")
             append("p")
         }
-        val command = "ls $flags '$escapedPath'"
+        val command = "ls $flags $escapedPath"
 
         val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (stdout, stderr, exitCode) = try {
@@ -556,9 +557,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun resolveIfSymlink(path: String): String {
         if (!hasShellEngine) return path
         symlinkResolveCache[path]?.let { return it }
-        val escaped = path.replace("'", "'\\''")
+        val escaped = SevenZipCommand.escape(path)
         val (out, _, exit) = try {
-            executeShell("readlink -f '$escaped'")
+            executeShell("readlink -f $escaped")
         } catch (_: Exception) { Triple("", "", -1) }
         val resolved = if (exit == 0 && out.isNotBlank() && out.trim() != path) out.trim() else path
         symlinkResolveCache[path] = resolved
@@ -577,8 +578,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val toCheck = symlinks.filter { it.key !in symlinkTypeCache }
         if (toCheck.isEmpty()) return
         val cmd = toCheck.entries.joinToString("; ") { (path, _) ->
-            val escaped = path.replace("'", "'\\''")
-            "test -d '$escaped' && echo '1' || echo '0'"
+            val escaped = SevenZipCommand.escape(path)
+            "test -d $escaped && echo '1' || echo '0'"
         }
         val (out, _, exit) = try { executeShell(cmd) } catch (_: Exception) { return }
         if (exit != 0 && out.isBlank()) return
@@ -969,15 +970,15 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         if (hasShellEngine) {
-            val escapedSrc = entry.path.replace("'", "'\\''")
-            val escapedDst = target.absolutePath.replace("'", "'\\''")
+            val escapedSrc = SevenZipCommand.escape(entry.path)
+            val escapedDst = SevenZipCommand.escape(target.absolutePath)
             val cpFlag = if (entry.isDirectory) "-rf" else "-f"
             val (_, cpErr, cpExit) = try {
-                executeShell("cp $cpFlag '$escapedSrc' '$escapedDst'")
+                executeShell("cp $cpFlag $escapedSrc $escapedDst")
             } catch (e: Exception) { return e.message ?: "复制失败" }
             if (cpExit != 0) return "复制失败: $cpErr"
             val rmFlag = if (entry.isDirectory) "-rf" else "-f"
-            executeShell("rm $rmFlag '$escapedSrc'")
+            executeShell("rm $rmFlag $escapedSrc")
         } else {
             val source = File(entry.path)
             try {
@@ -1015,10 +1016,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val dest = File(parent, newName)
 
         if (hasShellEngine) {
-            val escapedSrc = entry.path.replace("'", "'\\''")
-            val escapedDst = dest.absolutePath.replace("'", "'\\''")
+            val escapedSrc = SevenZipCommand.escape(entry.path)
+            val escapedDst = SevenZipCommand.escape(dest.absolutePath)
             val (_, err, exit) = try {
-                executeShell("mv '$escapedSrc' '$escapedDst'")
+                executeShell("mv $escapedSrc $escapedDst")
             } catch (e: Exception) { return e.message ?: "重命名失败" }
             return if (exit == 0) null else "重命名失败: $err"
         }
@@ -1034,10 +1035,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun deleteEntry(entry: FileEntry): String? {
         if (hasShellEngine) {
-            val escaped = entry.path.replace("'", "'\\''")
+            val escaped = SevenZipCommand.escape(entry.path)
             val flag = if (entry.isDirectory) "-rf" else "-f"
             val (_, err, exit) = try {
-                executeShell("rm $flag '$escaped'")
+                executeShell("rm $flag $escaped")
             } catch (e: Exception) { return e.message ?: "删除失败" }
             return if (exit == 0) null else "删除失败: $err"
         }
@@ -1054,8 +1055,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val target = File(parentPath, name)
 
         if (hasShellEngine) {
-            val escaped = target.absolutePath.replace("'", "'\\''")
-            val cmd = if (isFolder) "mkdir '$escaped'" else "touch '$escaped'"
+            val escaped = SevenZipCommand.escape(target.absolutePath)
+            val cmd = if (isFolder) "mkdir $escaped" else "touch $escaped"
             val (_, err, exit) = try {
                 executeShell(cmd)
             } catch (e: Exception) { return e.message ?: "创建失败" }
@@ -1502,8 +1503,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 通过 shell 列出目录直接子项（含文件大小），用于受保护目录 */
     private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? {
-        val escapedPath = dirPath.replace("'", "'\\''")
-        val cmd = "ls -lap '$escapedPath'"
+        val escapedPath = SevenZipCommand.escape(dirPath)
+        val cmd = "ls -lap $escapedPath"
         val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
         val (stdout, _, exitCode) = try {
             when {
@@ -1621,7 +1622,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val entries = mutableListOf<FileEntry>()
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
         val normalizedDisplayPath = if (displayPath == "/") "/" else displayPath.trimEnd('/').ifEmpty { "/" }
-        val escapedPath = normalizedPath.replace("'", "'\\''")
+        val escapedPath = SevenZipCommand.escape(normalizedPath)
 
         // 判断是否使用 Shizuku（ADB 权限 + Shizuku 在线）
         val useShizuku = !useRoot && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
@@ -1636,7 +1637,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             if (showHidden) "-1Ap" else "-1p"
         }
-        val command = "ls $lsFlags '$escapedPath'"
+        val command = "ls $lsFlags $escapedPath"
         val tag = when {
             useRoot -> "LsRoot"
             useShizuku -> "LsShizuku"
@@ -1755,9 +1756,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         var group = ""
 
         if (hasShellEngine) {
-            val escaped = entry.path.replace("'", "'\\''")
+            val escaped = SevenZipCommand.escape(entry.path)
             val (lsOut, _, lsExit) = try {
-                executeShell("ls -lapd '$escaped'")
+                executeShell("ls -lapd $escaped")
             } catch (_: Exception) { Triple("", "", -1) }
             if (lsExit == 0 && lsOut.isNotBlank()) {
                 val line = lsOut.lines().firstOrNull { it.isNotBlank() && !it.startsWith("total ") }
@@ -1856,8 +1857,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (entry.isDirectory) {
             if (hasShellEngine) {
                 // shell 模式：一条 find 命令递归统计文件和文件夹数量
-                val escaped = entry.path.replace("'", "'\\''")
-                val cmd = "d=\$(find '$escaped' -mindepth 1 -type d | wc -l); f=\$(find '$escaped' -type f | wc -l); echo \"\$d \$f\""
+                val escaped = SevenZipCommand.escape(entry.path)
+                val cmd = "d=\$(find $escaped -mindepth 1 -type d | wc -l); f=\$(find $escaped -type f | wc -l); echo \"\$d \$f\""
                 val (out, _, exit) = try { executeShell(cmd) } catch (_: Exception) { Triple("", "", -1) }
                 if (exit == 0 && out.isNotBlank()) {
                     val parts = out.trim().split("\\s+".toRegex())
@@ -2105,28 +2106,28 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 如果中途失败，会尝试回滚到原始权限。
      */
     fun applyPermissions(path: String, mode: Int, uid: Int, gid: Int, originalMode: Int, originalUid: Int, originalGid: Int): String? {
-        val escapedPath = path.replace("'", "'\\''")
+        val escapedPath = SevenZipCommand.escape(path)
 
         // chmod
         val octal = String.format("%o", mode and 0x1FF)
         val (_, chmodErr, chmodExit) = try {
-            SpecialPermissionVerifier.executeRootCommandFull("chmod $octal '$escapedPath'")
+            SpecialPermissionVerifier.executeRootCommandFull("chmod $octal $escapedPath")
         } catch (e: Exception) { return "chmod 执行异常: ${e.message}" }
         if (chmodExit != 0) return "chmod 失败 (exit $chmodExit): $chmodErr"
 
         // chown
         val (_, chownErr, chownExit) = try {
-            SpecialPermissionVerifier.executeRootCommandFull("chown $uid:$gid '$escapedPath'")
+            SpecialPermissionVerifier.executeRootCommandFull("chown $uid:$gid $escapedPath")
         } catch (e: Exception) {
             // 回滚 chmod
             val rollbackOctal = String.format("%o", originalMode and 0x1FF)
-            try { SpecialPermissionVerifier.executeRootCommandFull("chmod $rollbackOctal '$escapedPath'") } catch (_: Exception) {}
+            try { SpecialPermissionVerifier.executeRootCommandFull("chmod $rollbackOctal $escapedPath") } catch (_: Exception) {}
             return "chown 执行异常: ${e.message}"
         }
         if (chownExit != 0) {
             // 回滚 chmod
             val rollbackOctal = String.format("%o", originalMode and 0x1FF)
-            try { SpecialPermissionVerifier.executeRootCommandFull("chmod $rollbackOctal '$escapedPath'") } catch (_: Exception) {}
+            try { SpecialPermissionVerifier.executeRootCommandFull("chmod $rollbackOctal $escapedPath") } catch (_: Exception) {}
             return "chown 失败 (exit $chownExit): $chownErr"
         }
 
@@ -2151,8 +2152,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun readExtFlags(path: String): String {
         if (!hasShellEngine) return ""
         val realPath = toRealPathForAttr(path)
-        val escaped = realPath.replace("'", "'\\''")
-        val (out, _, exit) = try { executeShell("lsattr '$escaped'") } catch (_: Exception) { Triple("", "", -1) }
+        val escaped = SevenZipCommand.escape(realPath)
+        val (out, _, exit) = try { executeShell("lsattr $escaped") } catch (_: Exception) { Triple("", "", -1) }
         if (exit != 0 || out.isBlank()) return ""
         val line = out.lines().firstOrNull { it.isNotBlank() } ?: return ""
         // lsattr 输出格式: "----i----------  /path/to/file" 或 "----i----------" (部分实现)
@@ -2171,10 +2172,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val realPath = toRealPathForAttr(dirPath)
-        val escaped = realPath.trimEnd('/').replace("'", "'\\''")
+        val escaped = SevenZipCommand.escape(realPath.trimEnd('/'))
         // 使用 lsattr 目录/* 展开通配符，确保列出目录内容（Android toybox 的 lsattr 可能不支持目录参数）
         val (out, _, exit) = try {
-            executeShell("lsattr '$escaped/'* 2>/dev/null")
+            executeShell("lsattr $escaped/* 2>/dev/null")
         } catch (_: Exception) {
             Triple("", "", -1)
         }
@@ -2204,7 +2205,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun applyExtFlags(path: String, desiredFlags: Set<Char>, originalFlags: String): String? {
         if (!isRootEngine) return "需要 Root 权限"
         val realPath = toRealPathForAttr(path)
-        val escaped = realPath.replace("'", "'\\''")
+        val escaped = SevenZipCommand.escape(realPath)
         val originalSet = originalFlags.filter { it == 'i' || it == 'a' }.toSet()
         // 需要添加的标志
         val toAdd = desiredFlags - originalSet
@@ -2212,13 +2213,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val toRemove = originalSet - desiredFlags
         if (toAdd.isNotEmpty()) {
             val (_, err, exit) = try {
-                SpecialPermissionVerifier.executeRootCommandFull("chattr +${toAdd.joinToString("")} '$escaped'")
+                SpecialPermissionVerifier.executeRootCommandFull("chattr +${toAdd.joinToString("")} $escaped")
             } catch (e: Exception) { return "chattr 执行异常: ${e.message}" }
             if (exit != 0) return "chattr +${toAdd.joinToString("")} 失败: $err"
         }
         if (toRemove.isNotEmpty()) {
             val (_, err, exit) = try {
-                SpecialPermissionVerifier.executeRootCommandFull("chattr -${toRemove.joinToString("")} '$escaped'")
+                SpecialPermissionVerifier.executeRootCommandFull("chattr -${toRemove.joinToString("")} $escaped")
             } catch (e: Exception) { return "chattr 执行异常: ${e.message}" }
             if (exit != 0) return "chattr -${toRemove.joinToString("")} 失败: $err"
         }

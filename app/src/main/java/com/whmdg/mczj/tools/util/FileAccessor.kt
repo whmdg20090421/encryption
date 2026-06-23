@@ -73,9 +73,9 @@ private class ShellAccessor(
 
     override fun listChildren(path: String): List<DirEntry>? {
         val normalized = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-        val escaped = normalized.replace("'", "'\\''")
+        val escaped = SevenZipCommand.escape(normalized)
         // -l 长格式；-A 列隐藏文件但排除 . 和 ..；-p 目录加 / 后缀
-        val command = "ls -lAp '$escaped'"
+        val command = "ls -lAp $escaped"
         val (stdout, _, exitCode) = try {
             exec(command)
         } catch (_: Throwable) {
@@ -116,10 +116,10 @@ private class ShellAccessor(
     }
 
     override fun statMtime(path: String): Long? {
-        val escaped = path.replace("'", "'\\''")
+        val escaped = SevenZipCommand.escape(path)
         // -d 显示目录自身条目（而非目录内容）
         val (stdout, _, exit) = try {
-            exec("ls -lapd '$escaped'")
+            exec("ls -lapd $escaped")
         } catch (_: Throwable) { return null }
         if (exit != 0 || stdout.isBlank()) return null
         val line = stdout.lines().firstOrNull { it.isNotBlank() && !it.startsWith("total ") }
