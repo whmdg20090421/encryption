@@ -144,6 +144,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var pendingExternalEntry by mutableStateOf<FileEntry?>(null)
     var pendingApkEntry by mutableStateOf<FileEntry?>(null)
+    var show7zUnsupportedDialog by mutableStateOf(false)
 
     private val recycleBinJson = kotlinx.serialization.json.Json {
         ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true
@@ -1413,6 +1414,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             // 7z 格式不支持浏览（加密检测复杂），仅支持解压
             if (entry.name.endsWith(".7z", ignoreCase = true)) {
                 DiagnosticLog.log("OpenFile", "7z 文件，不支持浏览: ${entry.name}")
+                show7zUnsupportedDialog = true
                 return null
             }
             if (isDebug) {

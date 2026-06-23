@@ -9,5 +9,6 @@ enum class Feature {
     RP_HUB,
     DEBUG_MODE,
     WIFI,
-    DIARY
+    DIARY,
+    ACCOUNTING
 }

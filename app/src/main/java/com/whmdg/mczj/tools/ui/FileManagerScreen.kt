@@ -2359,6 +2359,20 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         )
     }
 
+    // ── 7z 不支持浏览提示弹窗 ──
+    if (vm.show7zUnsupportedDialog) {
+        AlertDialog(
+            onDismissRequest = { vm.show7zUnsupportedDialog = false },
+            title = { Text("暂不支持查看") },
+            text = { Text("当前不支持 7z 压缩包的在线查看，请解压后查看。") },
+            confirmButton = {
+                TextButton(onClick = { vm.show7zUnsupportedDialog = false }) {
+                    Text("我知道了")
+                }
+            }
+        )
+    }
+
     // ── 压缩包 Debug 信息弹窗 ──
     vm.archiveDebugInfo?.let { info ->
         AlertDialog(

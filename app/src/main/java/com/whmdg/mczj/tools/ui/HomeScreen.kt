@@ -111,6 +111,7 @@ fun featureDisplayName(f: Feature): String = when (f) {
     Feature.RP_HUB -> "RP-Hub"
     Feature.WIFI -> "WiFi"
     Feature.DIARY -> "日记"
+    Feature.ACCOUNTING -> "记账本"
 }
 
 sealed class Screen {
@@ -138,6 +139,7 @@ sealed class Screen {
     object Diary : Screen()
     data class DiaryBookDetail(val bookName: String, val createdAt: Long, val lastEditedAt: Long) : Screen()
     object Wifi : Screen()
+    object Accounting : Screen()
     object About : Screen()
     object Changelog : Screen()
     data class TextEditor(val filePath: String) : Screen()
@@ -152,7 +154,8 @@ enum class ModuleId {
     SECURITY,
     RP_HUB,
     WIFI,
-    DIARY
+    DIARY,
+    ACCOUNTING
 }
 
 data class ModuleEntry(
@@ -171,7 +174,8 @@ val MODULE_REGISTRY: Map<ModuleId, ModuleEntry> = mapOf(
     ModuleId.SECURITY to ModuleEntry("安全", "权限设置与特殊权限管理", Icons.Default.Lock, Feature.SECURITY_SETTINGS, Screen.Security),
     ModuleId.RP_HUB to ModuleEntry("RP-Hub", "本地角色扮演对话工具", Icons.Default.SmartToy, Feature.RP_HUB, Screen.RpHub),
     ModuleId.WIFI to ModuleEntry("WiFi", "WiFi 网络扫描与分析", Icons.Default.Wifi, Feature.WIFI, Screen.Wifi),
-    ModuleId.DIARY to ModuleEntry("日记", "记录每日心情与想法", Icons.Default.Edit, Feature.DIARY, Screen.Diary)
+    ModuleId.DIARY to ModuleEntry("日记", "记录每日心情与想法", Icons.Default.Edit, Feature.DIARY, Screen.Diary),
+    ModuleId.ACCOUNTING to ModuleEntry("记账本", "日常收支记录", Icons.Default.AccountBalance, Feature.ACCOUNTING, Screen.Accounting)
 )
 
 /**
@@ -568,6 +572,11 @@ fun MainAppContainer() {
         }
         is Screen.Wifi -> {
             WifiScreen(
+                onBack = { navigateBack() }
+            )
+        }
+        is Screen.Accounting -> {
+            AccountingScreen(
                 onBack = { navigateBack() }
             )
         }
@@ -979,7 +988,7 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
             title = "应用",
             icon = Icons.Default.Apps
         ) {
-            listOf(ModuleId.RP_HUB, ModuleId.DIARY).forEach { moduleId ->
+            listOf(ModuleId.RP_HUB, ModuleId.DIARY, ModuleId.ACCOUNTING).forEach { moduleId ->
                 val entry = MODULE_REGISTRY[moduleId]!!
                 CompactSettingsItem(
                     title = entry.title,
