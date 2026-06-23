@@ -29,6 +29,19 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V2.9",
+        date = "2026-06-23",
+        items = listOf(
+            "文件管理器解压功能：支持 zip/7z/tar 等格式，真实字节级进度条（7zzs l 预获取文件大小 + -bsp1 实时解析），三种权限路径",
+            "压缩包密码检测重构：使用 7zzs l -slt 的 Encrypted 字段直接判断加密状态，替代不可靠的错误信息关键词匹配",
+            "解压完成后自动刷新文件列表：聚焦面板无条件刷新，非聚焦面板在压缩包所在目录或解压目录时刷新",
+            "历史记录优化：按路径去重，上限 100 条 FIFO 淘汰（MAX_HISTORY_SIZE 可配置）",
+            "压缩包浏览功能：点击压缩包直接浏览目录结构（7zzs l -ba 构建目录树），支持密码压缩包，会话状态持久化（后台回收后自动恢复），显示文件/目录的压缩后大小",
+            "文件压缩功能重写：通过 7zzs 静态二进制实现，支持 zip/7z/tar/tar.gz/tar.bz2/tar.xz 格式，ZIP 支持 AES-256 加密开关",
+            "LSPosed 模块框架集成：集成 libxposed API 100，通过系统属性检测 Xposed 状态"
+        )
+    ),
+    ChangelogVersion(
         version = "V2.8",
         date = "2026-06-19",
         items = listOf(
