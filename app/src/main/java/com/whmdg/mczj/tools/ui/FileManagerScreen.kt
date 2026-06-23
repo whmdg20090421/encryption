@@ -3964,8 +3964,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         val currentDir = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPath else vm.rightPath
 
         var extractMode by remember { mutableStateOf(0) }  // 0=压缩包所在文件夹, 1=当前文件夹
-        var extractPasswordVisible by remember { mutableStateOf(false) }
-        var extractPasswordInputLocal by remember { mutableStateOf("") }
 
         LaunchedEffect(extractMode, extractTargetEntries) {
             extractOutputPath = when (extractMode) {
@@ -4029,26 +4027,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             textStyle = MaterialTheme.typography.bodyMedium
                         )
 
-                        // 密码输入（可选）
-                        OutlinedTextField(
-                            value = extractPasswordInputLocal,
-                            onValueChange = { extractPasswordInputLocal = it },
-                            label = { Text("密码（无密码可留空）") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            visualTransformation = if (extractPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            trailingIcon = {
-                                IconButton(onClick = { extractPasswordVisible = !extractPasswordVisible }) {
-                                    Icon(
-                                        if (extractPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                        contentDescription = null
-                                    )
-                                }
-                            },
-                            textStyle = MaterialTheme.typography.bodyMedium
-                        )
-
                         // 按钮
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -4066,7 +4044,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 onClick = {
                                     val entries = extractTargetEntries
                                     val outputDir = extractOutputPath
-                                    val password = extractPasswordInputLocal
                                     showExtractDialog = false
                                     showExtractProgress = true
                                     extractProgress = 0f
@@ -4077,7 +4054,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     vm.extract(
                                         entries = entries,
                                         outputDir = outputDir,
-                                        password = password,
+                                        password = "",
                                         onPasswordRequired = {
                                             showExtractProgress = false
                                             extractPasswordInput = ""
