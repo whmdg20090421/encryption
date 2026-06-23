@@ -656,15 +656,19 @@ object ArchiveBrowser {
     ): Triple<String, String, Int> = withContext(Dispatchers.IO) {
         when (permissionLevel) {
             "ROOT" -> {
-                // Base64 编码：su 不转发 stdin 给子进程，无法用 stdin 管道。
-                // base64 字符集 [A-Za-z0-9+/=] 安全，单引号包裹后 su -c 不会展开。
-                val b64 = Base64.encodeToString(cmd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
-                val safeCmd = "printf '%s' '$b64' | base64 -d | sh -s"
-                Log.d(TAG, "ROOT 执行(b64): $cmd")
-                val process = ProcessBuilder("su", "-c", safeCmd)
-                    .redirectErrorStream(false)
-                    .start()
-                drainProcess(process)
+                // 临时脚本：命令写入文件 → su -c sh /tmp/cmd → 删除。
+                // 绕过 su 的 stdin 不转发和管道不支持问题。
+                val tmpFile = File(context.cacheDir, "cmd_${Thread.currentThread().id}.sh")
+                try {
+                    tmpFile.writeText(cmd, Charsets.UTF_8)
+                    Log.d(TAG, "ROOT 执行(tmp): $cmd")
+                    val process = ProcessBuilder("su", "-c", "sh '${tmpFile.absolutePath}'")
+                        .redirectErrorStream(false)
+                        .start()
+                    drainProcess(process)
+                } finally {
+                    tmpFile.delete()
+                }
             }
             "SHIZUKU" -> {
                 val service = ShizukuAuthorizer.getShellService()
