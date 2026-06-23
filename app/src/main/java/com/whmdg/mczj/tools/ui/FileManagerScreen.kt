@@ -971,7 +971,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         )
                                         onNavigate(screen)
                                     }
-                                    vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
+                                    vm.addHistory(entry.name, entry.path, false)
                                 },
                                 onLongClick = { entry ->
                                     selectedEntry = entry
@@ -1084,7 +1084,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         )
                                         onNavigate(screen)
                                     }
-                                    vm.historyList = listOf(HistoryEntry(entry.name, entry.path, false)) + vm.historyList
+                                    vm.addHistory(entry.name, entry.path, false)
                                 },
                                 onLongClick = { entry ->
                                     selectedEntry = entry
@@ -4059,12 +4059,14 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                             extractCurrentFile = info.currentFile
                                             extractTotalFiles = info.totalFiles
                                         },
-                                        onComplete = { success, _, error ->
+                                        onComplete = { success, outputPath, error ->
                                             showExtractProgress = false
                                             extractProgress = 0f
                                             extractBytesProcessed = 0
                                             extractTotalBytes = 0
-                                            if (!success && error != null) {
+                                            if (success && outputPath != null) {
+                                                vm.refreshAfterExtract(outputPath)
+                                            } else if (!success && error != null) {
                                                 extractError = RuntimeException(error)
                                             }
                                         }
@@ -4167,12 +4169,14 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         extractCurrentFile = info.currentFile
                                         extractTotalFiles = info.totalFiles
                                     },
-                                    onComplete = { success, _, error ->
+                                    onComplete = { success, outputPath, error ->
                                         showExtractProgress = false
                                         extractProgress = 0f
                                         extractBytesProcessed = 0
                                         extractTotalBytes = 0
-                                        if (!success && error != null) {
+                                        if (success && outputPath != null) {
+                                            vm.refreshAfterExtract(outputPath)
+                                        } else if (!success && error != null) {
                                             extractError = RuntimeException(error)
                                         }
                                     }

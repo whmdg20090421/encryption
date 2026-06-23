@@ -596,7 +596,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             listDirEntriesViaShell(displayPath, showHiddenFiles)
             if (lastShellStderr.isBlank()) {
                 navigateToWithScroll(displayPath, scrollToIndex, scrollToOffset)
-                historyList = listOf(HistoryEntry(entry.name, displayPath, true)) + historyList
+                addHistory(entry.name, displayPath, true)
             } else {
                 loadError = RuntimeException("${formatShellError(entry.name, lastShellStderr)}\n路径: $displayPath")
             }
@@ -605,7 +605,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
             if (accessible != null) {
                 navigateToWithScroll(displayPath, scrollToIndex, scrollToOffset)
-                historyList = listOf(HistoryEntry(entry.name, displayPath, true)) + historyList
+                addHistory(entry.name, displayPath, true)
             } else if (!testDir.exists()) {
                 loadError = RuntimeException("文件夹不存在: ${entry.name}\n路径: $displayPath")
             } else {
@@ -1305,6 +1305,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── 持久化历史 & 书签 ──
+
+    /** 添加历史记录：去重（按 path）、上限 100 条 FIFO 淘汰 */
+    fun addHistory(name: String, path: String, isDirectory: Boolean) {
+        val entry = HistoryEntry(name, path, isDirectory)
+        val filtered = historyList.filter { it.path != path }
+        historyList = (listOf(entry) + filtered).take(MAX_HISTORY_SIZE)
+    }
+
     fun saveHistory() {
         try { historyFile.writeText(historyJson.encodeToString(historyList)) } catch (_: Exception) {}
     }
@@ -2409,6 +2417,31 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         extractJob = null
     }
 
+    /** 解压完成后刷新文件列表：聚焦面板必刷，非聚焦面板仅在压缩包所在目录或解压目录时刷新 */
+    fun refreshAfterExtract(outputDir: String) {
+        val focusedPath = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
+        val otherPath = if (focusedPanel == FocusedPanel.LEFT) rightPath else leftPath
+        val otherIsLeft = focusedPanel != FocusedPanel.LEFT
+
+        // 聚焦面板：必刷
+        refreshPanel(isLeft = focusedPanel == FocusedPanel.LEFT)
+
+        // 非聚焦面板：仅当在压缩包所在目录（即聚焦目录）或解压目录时刷新
+        if (otherPath == focusedPath || otherPath == outputDir) {
+            refreshPanel(isLeft = otherIsLeft)
+        }
+    }
+
+    private fun refreshPanel(isLeft: Boolean) {
+        if (isLeft) {
+            leftEntries = listDirectory(leftPath)
+            loadExtFlagsForDir(leftPath, isLeft = true)
+        } else {
+            rightEntries = listDirectory(rightPath)
+            loadExtFlagsForDir(rightPath, isLeft = false)
+        }
+    }
+
     /** 递归展开目录树，获取扁平的文件大小列表（顺序与 7zzs l 一致） */
     private fun flattenFileSizes(node: ArchiveBrowser.ArchiveNode): List<Long> {
         val result = mutableListOf<Long>()
@@ -2587,6 +2620,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
+        var MAX_HISTORY_SIZE = 100
         private val RESTRICTED_ANDROID_PREFIXES = listOf(
             "/storage/emulated/0/Android/data/",
             "/storage/emulated/0/Android/obb/",
