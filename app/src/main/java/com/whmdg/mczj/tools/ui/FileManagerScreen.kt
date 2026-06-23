@@ -2351,9 +2351,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             confirmButton = {
                 Button(
                     onClick = { vm.confirmOpenArchive() },
-                    enabled = info.session != null
+                    enabled = info.session != null || info.passwordRequired
                 ) {
-                    Text("打开")
+                    Text(if (info.passwordRequired) "继续" else "打开")
                 }
             }
         )
