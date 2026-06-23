@@ -2358,7 +2358,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 // 若用户未提供密码，先探测是否需要密码
                 if (password.isEmpty()) {
                     val needsPassword = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
-                    if (needsPassword) {
+                    if (needsPassword == true) {
                         withContext(Dispatchers.Main) { onPasswordRequired() }
                         return@launch
                     }
@@ -2488,7 +2488,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
 
-                if (passwordCheck) {
+                if (passwordCheck == true) {
                     // Encrypted = + → 需要密码
                     withContext(Dispatchers.Main) { archivePasswordRequest = entry }
                     return@launch
