@@ -63,18 +63,17 @@ object ArchiveBrowser {
         permissionLevel: String
     ): Boolean? = withContext(Dispatchers.IO) {
         val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
-        val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
-        val (stdout, stderr, exitCode) = executeCommand(cmd, permissionLevel, context)
-        Log.d(TAG, "密码检测: exitCode=$exitCode, stdout=${stdout.length}字节, stderr=${stderr.take(200)}")
-        val allOutput = "$stdout\n$stderr"
-        if (allOutput.contains("Encrypted = +")) return@withContext true
+        val baseCmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
+        // 用 2>&1 将 stderr 合并到 stdout，防止某些 su 实现吞掉 stderr
+        val cmd = "$baseCmd 2>&1"
+        val (merged, _, exitCode) = executeCommand(cmd, permissionLevel, context)
+        Log.d(TAG, "密码检测: exitCode=$exitCode, output=${merged.length}字节, 前200字=${merged.take(200)}")
+        if (merged.contains("Encrypted = +")) return@withContext true
         if (exitCode == 0) return@withContext false
         // 头部加密的 7Z：exitCode≠0，输出包含密码相关提示
-        // 同时检查 stdout 和 stderr（某些 su 实现会合并两者）
-        if (allOutput.contains("password", ignoreCase = true)) return@withContext true
-        if (allOutput.contains("密码")) return@withContext true
+        if (merged.contains("password", ignoreCase = true)) return@withContext true
+        if (merged.contains("密码")) return@withContext true
         // 7Z 格式：exitCode=2 且无 Encrypted 字段，很可能是头部加密
-        // （损坏的 7Z 通常有具体错误信息，头部加密则无输出或仅有通用错误）
         if (archivePath.endsWith(".7z", ignoreCase = true) && exitCode == 2) return@withContext true
         null
     }
@@ -266,9 +265,13 @@ object ArchiveBrowser {
             val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
 
             // 1. 密码检测（传入哑密码，确保头部加密的 7Z 也能被检测到）
-            val detailCmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
-            val (detStdout, detStderr, detExit) = executeCommand(detailCmd, permissionLevel, context)
-            val passwordRequired = detStdout.contains("Encrypted = +")
+            val detailBaseCmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
+            val detailCmd = "$detailBaseCmd 2>&1"
+            val (detMerged, _, detExit) = executeCommand(detailCmd, permissionLevel, context)
+            val passwordRequired = detMerged.contains("Encrypted = +")
+                    || detMerged.contains("password", ignoreCase = true)
+                    || detMerged.contains("密码")
+                    || (archivePath.endsWith(".7z", ignoreCase = true) && detExit == 2)
 
             // 2. 列表命令
             val listCmd = SevenZipCommand.buildListCommand(binaryPath, archivePath)
