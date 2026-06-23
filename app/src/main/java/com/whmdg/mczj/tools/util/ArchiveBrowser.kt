@@ -154,7 +154,8 @@ object ArchiveBrowser {
         val parsedEntryCount: Int,
         val rootEntries: List<FileEntry>,
         val error: String? = null,
-        val session: ArchiveSession? = null
+        val session: ArchiveSession? = null,
+        val sourceEntry: FileEntry? = null
     )
 
     // ── 缓存序列化 ──
@@ -320,7 +321,19 @@ object ArchiveBrowser {
                     || detMerged.contains("密码")
                     || (archivePath.endsWith(".7z", ignoreCase = true) && detExit == 2)
 
-            // 2. 列表命令
+            // 2. 需要密码时跳过列表命令（无密码会导致 7zzs 阻塞在 stdin 等待输入）
+            if (passwordRequired) {
+                return@withContext ArchiveDebugInfo(
+                    archivePath = archivePath, archiveName = archiveName,
+                    passwordRequired = true,
+                    listCommand = "", listExitCode = 0,
+                    listStdout = "", listStderr = "",
+                    parsedEntryCount = 0, rootEntries = emptyList(),
+                    error = "需要密码"
+                )
+            }
+
+            // 3. 列表命令
             val listCmd = SevenZipCommand.buildListCommand(binaryPath, archivePath)
             val (stdout, stderr, exitCode) = executeCommand(listCmd, permissionLevel, context)
 

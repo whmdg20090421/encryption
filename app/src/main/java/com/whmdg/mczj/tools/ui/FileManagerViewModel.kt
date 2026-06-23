@@ -2540,14 +2540,21 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             )
 
             withContext(Dispatchers.Main) {
-                archiveDebugInfo = info
+                archiveDebugInfo = info.copy(sourceEntry = entry)
             }
         }
     }
 
-    /** Debug 弹窗确认打开：从 debugInfo.session 进入压缩包浏览模式 */
+    /** Debug 弹窗确认打开：从 debugInfo.session 进入压缩包浏览模式，或触发密码对话框 */
     fun confirmOpenArchive() {
         val info = archiveDebugInfo ?: return
+        // 需要密码但无 session → 弹出密码对话框
+        if (info.passwordRequired && info.session == null) {
+            val entry = info.sourceEntry ?: return
+            archiveDebugInfo = null
+            archivePasswordRequest = entry
+            return
+        }
         val session = info.session ?: return
         enterArchiveMode(session)
         archiveDebugInfo = null
