@@ -60,8 +60,11 @@ jobs:
               echo "$line" | grep -q '\.\*$' && continue
               # 提取 import 路径
               imp=$(echo "$line" | sed 's/^import //' | sed 's/`//g')
-              # 获取最后一个标识符
+              # 获取最后一个标识符（处理 Kotlin as 别名）
               name=$(echo "$imp" | awk -F'.' '{print $NF}')
+              if echo "$name" | grep -q ' as '; then
+                name=$(echo "$name" | sed 's/.* as //')
+              fi
               [ -z "$name" ] && continue
               # 在文件中搜索（排除 import 行和 package 行）
               if ! grep -v '^import ' "$file" | grep -v '^package ' | grep -q "$name"; then
