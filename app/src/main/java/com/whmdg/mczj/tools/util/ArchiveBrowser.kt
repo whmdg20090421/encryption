@@ -44,16 +44,17 @@ object ArchiveBrowser {
         return name.substringBeforeLast('.')
     }
 
-    /** 探测压缩包是否需要密码 */
+    /** 探测压缩包是否需要密码（通过 l -slt 检查 Encrypted 字段） */
     suspend fun checkPasswordRequired(
         context: Context,
         archivePath: String,
         permissionLevel: String
     ): Boolean = withContext(Dispatchers.IO) {
         val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
-        val cmd = SevenZipCommand.buildListCommand(binaryPath, archivePath, password = "")
-        val (_, stderr, exitCode) = executeCommand(cmd, permissionLevel, context)
-        detectPasswordError(stderr, exitCode) == "NEED_PASSWORD"
+        val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath)
+        val (stdout, _, exitCode) = executeCommand(cmd, permissionLevel, context)
+        if (exitCode != 0) return@withContext false
+        stdout.contains("Encrypted = +")
     }
 
     /** 压缩包目录树节点 */
@@ -182,7 +183,7 @@ object ArchiveBrowser {
             Log.d(TAG, "执行完毕: exitCode=$exitCode, stdout=${stdout.length}字节, stderr=${stderr.take(200)}")
 
             if (exitCode != 0) {
-                val errMsg = detectPasswordError(stderr, exitCode)
+                val errMsg = stderr.ifBlank { "7zzs 退出码: $exitCode" }
                 Log.w(TAG, "非零退出: $errMsg")
                 return@withContext Result.failure(Exception(errMsg))
             }
@@ -207,22 +208,6 @@ object ArchiveBrowser {
             Log.e(TAG, "打开压缩包失败", e)
             Result.failure(e)
         }
-    }
-
-    /**
-     * 检测是否为密码错误（需要用户输入密码）。
-     * @return 错误消息，若为密码相关则返回特定标记
-     */
-    fun detectPasswordError(stderr: String, exitCode: Int): String {
-        val lower = stderr.lowercase()
-        // 仅当 stderr 明确包含密码/加密相关关键词时才判定为需要密码
-        val isPasswordRelated = "wrong password" in lower
-                || "cannot open encrypted" in lower
-                || "data error" in lower
-                || "unsupported" in lower && "encryption" in lower
-        if (exitCode == 2 && isPasswordRelated) return "NEED_PASSWORD"
-        // 其他所有非零退出码，返回实际错误信息供 UI 显示
-        return stderr.ifBlank { "7zzs 退出码: $exitCode" }
     }
 
     /**

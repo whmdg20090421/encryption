@@ -77,6 +77,22 @@ object SevenZipCommand {
     }
 
     /**
+     * 构建 7zzs 技术详情列表命令（用于检测加密状态）。
+     * 输出格式: `<binary> l -slt [-p'pwd'] <archive>`
+     * 输出包含 `Encrypted = +` 或 `Encrypted = -` 字段。
+     * @param password 空=不带密码
+     */
+    fun buildListDetailCommand(binaryPath: String, archivePath: String, password: String = ""): String {
+        val cmd = StringBuilder(escape(binaryPath))
+        cmd.append(" l -slt")
+        if (password.isNotEmpty()) {
+            cmd.append(" -p${escapePassword(password)}")
+        }
+        cmd.append(" ${escape(archivePath)}")
+        return cmd.toString()
+    }
+
+    /**
      * 构建 7zzs 解压命令。
      * 输出格式: `<binary> x [-p'pwd'] -bsp1 2>&1 <archive> -o<outputDir> -aoa`
      * @param password 空=不带密码

@@ -2358,10 +2358,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (session == null) {
                     val err = sessionResult.exceptionOrNull()
                     val msg = err?.message ?: ""
-                    if (msg == "NEED_PASSWORD") {
-                        withContext(Dispatchers.Main) { onPasswordRequired() }
-                        return@launch
-                    }
                     withContext(Dispatchers.Main) {
                         onComplete(false, null, "读取压缩包信息失败: $msg")
                     }
@@ -2439,6 +2435,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val currentPathVal = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
                 val currentEntriesVal = if (focusedPanel == FocusedPanel.LEFT) leftEntries else rightEntries
 
+                // 先检测是否需要密码
+                if (ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)) {
+                    withContext(Dispatchers.Main) { archivePasswordRequest = entry }
+                    return@launch
+                }
+
                 val result = ArchiveBrowser.openArchive(
                     context = context,
                     archivePath = entry.path,
@@ -2455,13 +2457,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                             enterArchiveMode(session)
                         },
                         onFailure = { error ->
-                            val msg = error.message ?: ""
-                            if (msg == "NEED_PASSWORD") {
-                                // 需要密码，触发弹窗
-                                archivePasswordRequest = entry
-                            } else {
-                                loadError = RuntimeException("打开压缩包失败: $msg")
-                            }
+                            loadError = RuntimeException("打开压缩包失败: ${error.message}")
                         }
                     )
                 }
@@ -2500,17 +2496,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     true
                 },
                 onFailure = { error ->
-                    val msg = error.message ?: ""
-                    if (msg == "NEED_PASSWORD") {
-                        // 密码错误，保持弹窗
-                        false
-                    } else {
-                        withContext(Dispatchers.Main) {
-                            loadError = RuntimeException("打开压缩包失败: $msg")
-                            archivePasswordRequest = null
-                        }
-                        false
-                    }
+                    // 密码错误或其他失败，保持弹窗让用户重试
+                    Log.w("FileMgr", "打开压缩包失败: ${error.message}")
+                    false
                 }
             )
         } catch (e: Exception) {
