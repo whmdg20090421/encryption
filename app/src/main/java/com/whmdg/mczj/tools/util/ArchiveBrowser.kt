@@ -65,10 +65,13 @@ object ArchiveBrowser {
         val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
         val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
         val (stdout, stderr, exitCode) = executeCommand(cmd, permissionLevel, context)
-        if (stdout.contains("Encrypted = +")) return@withContext true
+        val allOutput = "$stdout\n$stderr"
+        if (allOutput.contains("Encrypted = +")) return@withContext true
         if (exitCode == 0) return@withContext false
-        // 头部加密的 7Z：exitCode≠0，stdout 为空，stderr 包含密码相关提示
-        if (stderr.contains("password", ignoreCase = true)) return@withContext true
+        // 头部加密的 7Z：exitCode≠0，输出包含密码相关提示
+        // 同时检查 stdout 和 stderr（某些 su 实现会合并两者）
+        if (allOutput.contains("password", ignoreCase = true)) return@withContext true
+        if (allOutput.contains("密码")) return@withContext true
         null
     }
 
