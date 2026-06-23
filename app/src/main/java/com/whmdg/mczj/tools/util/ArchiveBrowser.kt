@@ -561,9 +561,49 @@ object ArchiveBrowser {
     private const val COMMAND_TIMEOUT_MS = 30_000L
 
     /**
+     * 等待进程结束并收集 stdout/stderr。用于命令已通过 su -c 参数传递的场景。
+     */
+    private fun drainProcess(process: Process): Triple<String, String, Int> {
+        val stdoutBuf = StringBuilder()
+        val stderrBuf = StringBuilder()
+        val tOut = Thread {
+            try {
+                process.inputStream.bufferedReader().use { r ->
+                    val buf = CharArray(8192)
+                    var n: Int
+                    while (r.read(buf).also { n = it } != -1) stdoutBuf.append(buf, 0, n)
+                }
+            } catch (_: Exception) {}
+        }
+        val tErr = Thread {
+            try {
+                process.errorStream.bufferedReader().use { r ->
+                    val buf = CharArray(8192)
+                    var n: Int
+                    while (r.read(buf).also { n = it } != -1) stderrBuf.append(buf, 0, n)
+                }
+            } catch (_: Exception) {}
+        }
+        tOut.start(); tErr.start()
+        val watchdog = Thread {
+            try {
+                Thread.sleep(COMMAND_TIMEOUT_MS)
+                process.destroyForcibly()
+            } catch (_: Exception) {}
+        }
+        watchdog.isDaemon = true
+        watchdog.start()
+        val exitCode = process.waitFor()
+        watchdog.interrupt()
+        tOut.join(5000); tErr.join(5000)
+        return Triple(stdoutBuf.toString().trimEnd(), stderrBuf.toString().trimEnd(), exitCode)
+    }
+
+    /**
      * 通过 stdin 管道执行 shell 命令。
      * 将命令原始字节写入 sh 进程的 stdin，完全绕过所有 shell 参数解析层。
      * SevenZipCommand.escape() 的反斜杠转义（如 `\[` `\*`）原样到达 sh，正确生效。
+     * 仅用于 NORMAL 路径（普通用户进程，stdin 正常转发）。
      */
     private fun executeWithStdin(process: Process, cmd: String): Triple<String, String, Int> {
         // 写入命令后关闭 stdin，sh 读到 EOF 即开始执行
@@ -616,18 +656,20 @@ object ArchiveBrowser {
     ): Triple<String, String, Int> = withContext(Dispatchers.IO) {
         when (permissionLevel) {
             "ROOT" -> {
-                // stdin 管道：su -c sh 启动 shell，命令通过 stdin 传入，不经过任何参数解析
-                Log.d(TAG, "ROOT 执行(stdin): $cmd")
-                val process = ProcessBuilder("su", "-c", "sh")
+                // Base64 编码：su 不转发 stdin 给子进程，无法用 stdin 管道。
+                // base64 字符集 [A-Za-z0-9+/=] 安全，单引号包裹后 su -c 不会展开。
+                val b64 = Base64.encodeToString(cmd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+                val safeCmd = "printf '%s' '$b64' | base64 -d | sh -s"
+                Log.d(TAG, "ROOT 执行(b64): $cmd")
+                val process = ProcessBuilder("su", "-c", safeCmd)
                     .redirectErrorStream(false)
                     .start()
-                executeWithStdin(process, cmd)
+                drainProcess(process)
             }
             "SHIZUKU" -> {
                 val service = ShizukuAuthorizer.getShellService()
                     ?: throw IllegalStateException("Shizuku UserService 未连接")
-                // ShellService 只接受命令字符串，无法直接用 stdin。
-                // Base64 编码绕过所有 shell 解释层：printf 输出原始字节 → sh -s 从 stdin 读取执行。
+                // ShellService 只接受命令字符串，用 Base64 编码绕过所有 shell 解释层。
                 val b64 = Base64.encodeToString(cmd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
                 val safeCmd = "printf '%s' '$b64' | base64 -d | sh -s"
                 Log.d(TAG, "SHIZUKU 执行(b64): $cmd")
@@ -643,7 +685,7 @@ object ArchiveBrowser {
                 Triple(stdout, stderr, exitCode)
             }
             else -> {
-                // stdin 管道：直接 sh，命令通过 stdin 传入
+                // stdin 管道：直接 sh，命令通过 stdin 传入（普通用户进程，stdin 正常转发）
                 Log.d(TAG, "NORMAL 执行(stdin): $cmd")
                 val process = ProcessBuilder("sh")
                     .redirectErrorStream(false)
