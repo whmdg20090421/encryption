@@ -149,17 +149,17 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                 }
             }
         }
-    }
 
-    // 右下角青色加号按钮
-    FloatingActionButton(
-        onClick = { onNavigate(Screen.AddAccounting(currentBookName)) },
-        modifier = Modifier
-            .align(Alignment.BottomEnd)
-            .padding(end = 25.dp, bottom = 25.dp),
-        containerColor = Color(0xFF00BCD4)
-    ) {
-        Icon(Icons.Default.Add, contentDescription = "添加记账", tint = Color.White)
-    }
+            // 右下角青色加号按钮
+            FloatingActionButton(
+                onClick = { onNavigate(Screen.AddAccounting(currentBookName)) },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 25.dp, bottom = 25.dp),
+                containerColor = Color(0xFF00BCD4)
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "添加记账", tint = Color.White)
+            }
+        }
     }
 }
