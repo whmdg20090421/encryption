@@ -83,6 +83,13 @@ object AppDataPaths {
         return dir
     }
 
+    /** 记账本模块目录 */
+    fun accounting(context: Context): File {
+        val dir = File(root(context), "记账本")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     /** 二进制工具目录（7za 等） */
     fun binaries(context: Context): File {
         val dir = File(root(context), "bin")
@@ -171,6 +178,9 @@ object AppDataPaths {
 
     /** WebDAV 服务器配置 SharedPreferences */
     const val PREFS_WEBDAV_SERVERS = "webdav_servers"
+
+    /** 记账本 SharedPreferences */
+    const val PREFS_ACCOUNTING = "accounting_prefs"
 
     /**
      * 将 SAF tree URI 转换为绝对文件路径。

@@ -1,6 +1,7 @@
 package com.whmdg.mczj.tools.ui.accounting
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -20,6 +21,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.ShoppingBag
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,7 +35,9 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -53,6 +61,20 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
     var showDatePicker by remember { mutableStateOf(false) }
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     val infoRowHeight = screenHeight * 0.05f
+    val context = LocalContext.current
+
+    // 从 JSON 动态加载分类数据（跟随选中的记账类型切换）
+    val categoryDb = remember { AccountingCategoryDb.ensureDefault(context) }
+    val currentType = types[selectedType]
+    val categories = remember(selectedType) {
+        categoryDb.getCategories("记账页", currentType)
+    }
+    var selectedCategory by remember { mutableStateOf<String?>(null) }
+
+    // 切换记账类型时重置选中分类
+    LaunchedEffect(selectedType) {
+        selectedCategory = null
+    }
 
     Scaffold { innerPadding ->
         Column(
@@ -94,6 +116,42 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                 )
             }
             } // Surface
+
+            // 一级分类选择行（从 JSON 动态加载）
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                categories.forEach { cat ->
+                    val isSelected = selectedCategory == cat.id
+                    Box(
+                        modifier = Modifier
+                            .size(50.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isSelected) Color(0xFF00BCD4) else Color.White)
+                            .then(
+                                if (!isSelected) Modifier.border(
+                                    BorderStroke(1.dp, Color.Black),
+                                    RoundedCornerShape(8.dp)
+                                ) else Modifier
+                            )
+                            .clickable {
+                                selectedCategory = if (isSelected) null else cat.id
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = categoryIcon(cat.icon),
+                            contentDescription = cat.name,
+                            modifier = Modifier.size(25.dp),
+                            tint = if (isSelected) Color.White else Color(0xFFB8860B)
+                        )
+                    }
+                }
+            }
 
             // 消费类型选择区（暂空）
             Box(modifier = Modifier.weight(1f).fillMaxWidth())
@@ -574,4 +632,14 @@ private fun KeyButton(
             )
         }
     }
+}
+
+/** 图标标识 → Material Icon 映射 */
+private fun categoryIcon(icon: String): ImageVector = when (icon) {
+    "shopping_bag" -> Icons.Filled.ShoppingBag
+    "utensils" -> Icons.Filled.Restaurant
+    "car" -> Icons.Filled.DirectionsCar
+    "gamepad" -> Icons.Filled.SportsEsports
+    "house" -> Icons.Filled.Home
+    else -> Icons.Filled.Home
 }

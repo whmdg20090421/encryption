@@ -74,11 +74,17 @@ app/src/main/java/com/whmdg/mczj/tools/
 │   ├── FileAccessLevel.kt             # 文件访问通道枚举（NORMAL / SHIZUKU / ROOT）
 │   ├── FileAccessor.kt                # 文件访问抽象层（屏蔽普通/Shizuku/Root 差异）
 │   ├── FolderSizeCalculator.kt        # 文件夹大小统计（全量+差异自底向上算法）
-│   ├── RootBinaryManager.kt           # 管理 APK 内嵌 7za 静态二进制
 │   ├── AppIconHelper.kt               # 文件管理器中显示已安装应用图标
-│   └── JxlCoilDecoder.kt             # Coil 图片加载器 JPEG XL 解码器
+│   ├── JxlCoilDecoder.kt             # Coil 图片加载器 JPEG XL 解码器
+│   ├── BinaryExtractor.kt             # 7zzs 二进制提取（nativeLibraryDir → AppDataPaths.binaries()）
+│   ├── SevenZipCommand.kt             # 7zzs 命令行构建器（压缩/列表/解压/单文件提取）
+│   ├── ArchiveBrowser.kt              # 压缩包浏览（7zzs l 解析目录树 + 密码检测 + 会话缓存）
+│   ├── CompressService.kt             # 压缩/解压服务（三条权限路径：Normal/Shizuku/Root + 进度回调）
+│   └── XposedDetector.kt              # Xposed 模块激活检测（反射 + SystemProperties）
+├── xposed/
+│   └── XposedInit.kt                  # Xposed 模块入口（libxposed API，设置 mcjz.xposed.active 属性）
 ├── auth/                              # 认证/授权模块（密钥→功能特性门控）
-│   ├── Feature.kt                     # 功能枚举（ENCRYPTION_VAULT, FILE_MANAGER, BATCH_DOWNLOADER, WIFI, DIARY, RP_HUB 等）
+│   ├── Feature.kt                     # 功能枚举（ENCRYPTION_VAULT, FILE_MANAGER, BATCH_DOWNLOADER, WIFI, DIARY, RP_HUB, ACCOUNTING 等）
 │   ├── NativeAuth.kt                  # JNI 接口，调用 authcore 验证密码（返回派生密钥）
 │   ├── KeyProfile.kt                  # 密钥 ID → Feature 集合映射（3 组预置密钥）
 │   ├── PermissionManager.kt           # 全局认证状态管理（StateFlow<AuthState>）
@@ -109,11 +115,10 @@ app/src/main/java/com/whmdg/mczj/tools/
 │   │   ├── VaultPaths.kt              # 路径解析（内部/外部存储）
 │   │   ├── NameMapping.kt             # 文件名哈希→Hex 映射持久化
 │   │   ├── StorageLocation.kt         # INTERNAL / EXTERNAL 枚举
-│   │   └── CanonicalJson.kt           # Python json.dumps(sort_keys=True) 的 Kotlin 等价
+│   │   ├── CanonicalJson.kt           # Python json.dumps(sort_keys=True) 的 Kotlin 等价
+│   │   └── FolderSizeDb.kt            # 文件夹大小缓存数据库（v1.2 文本格式）
 │   ├── models/
 │   │   └── EncryptionNode.kt          # 加密文件树节点模型
-│   ├── data/
-│   │   └── FolderSizeDb.kt            # 文件夹大小缓存数据库（v1.2 文本格式）
 │   └── services/                      # 业务逻辑层
 │       ├── VaultService.kt            # 保险箱 CRUD（创建/打开/删除/导入/改密）
 │       ├── VaultSession.kt            # 解锁后的在线会话（持有 DEK）
@@ -144,7 +149,13 @@ app/src/main/java/com/whmdg/mczj/tools/
 │       └── client/                    # 底层 HTTP 客户端（OkHttp + dav4jvm）
 │           ├── Client.kt
 │           ├── Authentication.kt
-│           └── Authority.kt
+│           ├── Authority.kt
+│           ├── Authenticator.kt
+│           ├── DavIOException.kt
+│           ├── DavResourceCompat.kt
+│           ├── MemoryCookieJar.kt
+│           ├── Protocol.kt
+│           └── ResponseExtensions.kt
 └── ui/
     ├── HomeScreen.kt                  # 导航容器 + 主页/加密/云盘/设置所有屏幕
     ├── VaultCreateScreen.kt           # 新建保险箱向导（含 Argon2id 基准测试）
@@ -155,6 +166,10 @@ app/src/main/java/com/whmdg/mczj/tools/
     ├── FileManagerViewModel.kt        # 文件管理器 ViewModel（shell 路由 + 大小统计）
     ├── RpHubScreen.kt                 # RP Hub WebView 界面
     ├── RpHubServer.kt                 # RP Hub 本地 NanoHTTPD 服务器
+    ├── RpHubTrafficPanel.kt           # RP Hub 流量统计面板
+    ├── RpHubDownloadPanel.kt          # RP Hub 下载管理面板
+    ├── RpHubDebugPanel.kt             # RP Hub 调试面板
+    ├── WifiScreen.kt                  # WiFi 传输功能界面
     ├── SizeCalcManager.kt             # 大小统计进度管理（全局单例）
     ├── AuthManagementScreen.kt        # 认证管理（切换密钥、清除授权）
     ├── SecurityScreen.kt              # 安全设置入口菜单
@@ -173,6 +188,10 @@ app/src/main/java/com/whmdg/mczj/tools/
     ├── AboutScreen.kt                 # 关于页面
     ├── WebDavEditDialog.kt            # WebDAV 服务器编辑对话框
     ├── FileOperationDialogs.kt        # 文件操作冲突/错误确认弹窗
+    ├── accounting/                    # 记账本模块
+    │   ├── AccountingScreen.kt        # 记账本首页（账本列表 + 底部导航 + 顶部滚动交互）
+    │   ├── AddAccountingScreen.kt     # 记一笔（收支类型 + 金额键盘 + 日期时间齿轮 + 分类选择）
+    │   └── AccountingModels.kt        # 分类数据模型（JSON 持久化 + 首次释放 + 二级分类预留）
     ├── components/
     │   ├── GlowCard.kt               # 青色光晕边框卡片组件
     │   ├── ApkInfoDialog.kt          # APK 信息弹窗
@@ -227,6 +246,8 @@ third_party/argon2/                    # 内嵌 Argon2 实现（供 JNI 直接�
   │     └── 设置 (EncryptionSettingsTab)
   ├── 日记 (Diary)
   │     └── 笔记本详情 (DiaryBookDetail)  ← 日期时间线
+  ├── 记账本 (Accounting)
+  │     └── 记一笔 (AddAccounting)         ← 金额键盘 + 日期时间齿轮选择器
   ├── WiFi (Wifi)
   ├── 批量下载 (BatchDownloader)
   ├── FA 下载 (FADownloader / FALogin)
@@ -365,6 +386,60 @@ CopyJob / MoveJob / DeleteJob
 - 笔记本详情页左侧日期时间线：Canvas 绘制竖线 + 空心圆圈，LazyColumn 前后各 10 年无限滚动
 - 工具栏名称居中：`onSizeChanged` 动态测量按钮宽度，`widthIn(max)` 约束避免重叠
 
+### 压缩包模块
+
+基于 APK 内嵌的 `7zzs` 静态二进制（7-Zip 命令行），支持三条权限路径（Normal/Shizuku/Root）。
+
+```
+BinaryExtractor                         # 7zzs 提取：nativeLibraryDir/lib7zzs.so → AppDataPaths.binaries()/7zzs
+    └── ensureExtracted() → chmod 755，返回目标路径
+
+SevenZipCommand                         # 命令行构建器（纯字符串拼接）
+    ├── escape() / escapePassword()     # 单引号包裹 + '\'' 转义（行业标准 shell 路径转义）
+    ├── build()                         # 压缩命令：a -t<format> -mx=<level> [-p'pwd'] -bsp1
+    ├── buildListCommand()              # 列表命令：l -ba [-p'pwd'] <archive>
+    ├── buildListDetailCommand()        # 技术详情命令：l -slt（检测加密状态）
+    ├── buildExtractCommand()           # 解压命令：x [-p'pwd'] -bsp1 <archive> -o<dir> -aoa
+    └── buildExtractSingleCommand()     # 单文件提取：x -i!'file' <archive> -o<dir> -aoa
+
+ArchiveBrowser                          # 压缩包浏览（只读）
+    ├── isArchiveFile()                 # 识别 zip/7z/rar/tar.gz/tar.bz2/tar.xz/lz4/zst 等
+    ├── checkPasswordRequired()         # 密码探测（7z 二进制头部 0x17 快速检测 + 7zzs l -slt 详细检测）
+    ├── openArchive()                   # 7zzs l -ba → parseListOutput → buildTree → ArchiveSession
+    ├── navigateTo() / navigateUp()     # 目录树导航
+    ├── extractSingleFile()             # 单文件提取（-i! 参数）
+    └── 会话缓存                         # JSON 序列化到 AppDataPaths.fileManager()/archive_session_cache.json
+
+CompressService                         # 压缩/解压服务
+    ├── compress()                      # 压缩入口（ProgressCallback + cancelFlag）
+    ├── extract()                       # 解压入口（基于 fileSizes 的真实字节级进度）
+    └── 进度解析                          # 正则匹配 7zzs -bsp1 输出 "75% 1" 格式
+```
+
+**加密检测策略**（`checkPasswordRequired()`）：
+1. 7z 二进制头部快速检测：偏移 32 == `0x17` (kEncodedHeader) → 头部加密（无需启动进程）
+2. `7zzs l -slt` 输出含 `7zAES` → 内容加密
+3. 输出含 `Encrypted = +` → 加密
+4. exitCode=2 且为 7z 文件 → 头部加密（兜底）
+
+**压缩格式支持**：zip、7z、tar、tar.gz、tar.bz2、tar.xz，支持 AES-256 加密（zip/7z）
+
+### 记账本模块
+
+- 数据持久化：JSON 文件存储于 `AppDataPaths.accounting()`（`AccountingCategoryDb` 模型，参考 `DiaryDb` 模式）
+- 导航：`Screen.Accounting`（首页）→ `Screen.AddAccounting(bookName)`（记一笔）
+- 首页顶部交互：`LazyListState` 控制背景 alpha（顶部=0，滚动=1），按钮层始终可见
+- 金额输入：自定义计算器键盘（含运算自动求值），水平滑动查看完整金额
+- 日期时间选择：`TimeWheel` 无限循环齿轮（`totalItems = size * 10000`），`snapshotFlow` 检测滚动停止自动吸中，点击直接居中
+- 分类系统：首次安装释放默认模板到 JSON → UI 动态读取，支持页面→类型→分类三级结构，`children` 字段预留二级分类
+- 一级分类行：50dp 圆角正方体 + 25dp 金色图标，白底黑框/选中青色，跟随记账类型（支出/收入/转账/债务）动态切换
+
+### Xposed 模块
+
+- `xposed/XposedInit.kt`：继承 `XposedModule`（libxposed API），`onPackageLoaded()` / `onSystemServerLoaded()` 为 hook 入口
+- `util/XposedDetector.kt`：检测模块是否激活（反射检查 `io.github.libxposed.api.XposedContext` + 读取 `mczj.xposed.active` 系统属性）
+- 属性设置：`SystemProperties.set("mczj.xposed.active", timestamp)` 在模块加载时写入
+
 ---
 
 ## CI/CD
@@ -446,6 +521,7 @@ Native 层（`crash_handler.c`）注册信号处理器捕获 SIGSEGV/SIGABRT 等
 - **云盘 (CloudTab)**：加密文件云端存储 / 同步（占位 UI 已存在）
 - `ChaCha20-Poly1305` 算法：UI 已支持选择，但 `FileCodec` 目前仅实现 AES-GCM
 - `AES-128-GCM`：同上，UI 可选但底层固定 32 字节 DEK
+- **Xposed hook 逻辑**：`XposedInit.onPackageLoaded()` 中 TODO 待实现具体 hook
 
 ---
 
