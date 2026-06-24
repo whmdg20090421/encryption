@@ -23,10 +23,14 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import java.util.Calendar
@@ -391,72 +395,75 @@ private fun TimeWheel(
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
     val itemHeight = 36.dp
     val itemSpacing = 4.dp
-    var userScrolled by remember { mutableStateOf(false) }
-    var initialized by remember { mutableStateOf(false) }
+    val totalItemHeight = itemHeight + itemSpacing
+    val density = LocalDensity.current
 
-    // 跳过首次初始滚动，之后标记用户手动滚动
-    LaunchedEffect(listState.isScrollInProgress) {
-        if (!initialized) {
-            if (!listState.isScrollInProgress) initialized = true
-            return@LaunchedEffect
-        }
-        if (listState.isScrollInProgress) userScrolled = true
+    // 滚动停止时自动吸中
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .distinctUntilChanged()
+            .filter { !it }
+            .collect {
+                val info = listState.layoutInfo
+                val items = info.visibleItemsInfo
+                if (items.isEmpty()) return@collect
+                val vpH = info.viewportEndOffset - info.viewportStartOffset
+                val centerY = vpH / 2f
+                // 找离视口中心最近的 item
+                val best = items.minByOrNull {
+                    kotlin.math.abs(it.offset + it.size / 2f - centerY)
+                } ?: return@collect
+                // 让该 item 居中：offset = -(vpH - itemHeight) / 2
+                val scrollOffset = -((vpH - best.size) / 2).toInt()
+                listState.animateScrollToItem(best.index, scrollOffset)
+                onSelect(range.first + (best.index % size + size) % size)
+            }
     }
 
-    // 松手自动吸中（仅用户手动滚动后触发）
-    LaunchedEffect(userScrolled, listState.isScrollInProgress) {
-        if (userScrolled && !listState.isScrollInProgress) {
-            userScrolled = false
-            val layoutInfo = listState.layoutInfo
-            val viewportHeight = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
-            val centerY = viewportHeight / 2f
-            // 找离视口中心最近的 item
-            var bestIndex = listState.firstVisibleItemIndex
-            var bestDist = Float.MAX_VALUE
-            for (vi in layoutInfo.visibleItemsInfo) {
-                val itemCenter = vi.offset + vi.size / 2f
-                val dist = kotlin.math.abs(itemCenter - centerY)
-                if (dist < bestDist) {
-                    bestDist = dist
-                    bestIndex = vi.index
+    val scope = rememberCoroutineScope()
+    Box(modifier = modifier) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            items(totalItems) { index ->
+                val value = range.first + (index % size + size) % size
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(itemHeight)
+                        .padding(vertical = itemSpacing / 2)
+                        .clickable {
+                            onSelect(value)
+                            scope.launch {
+                                val info = listState.layoutInfo
+                                val vpH = info.viewportEndOffset - info.viewportStartOffset
+                                val ih = (itemHeight.value * density.density).toInt()
+                                listState.animateScrollToItem(index, -((vpH - ih) / 2))
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label(value),
+                        style = if (value == selected) MaterialTheme.typography.titleLarge
+                        else MaterialTheme.typography.bodyLarge,
+                        color = if (value == selected) cyan
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
-            // scrollOffset 语义：正值=item 往上滚出视口，负值=item 往下进入视口
-            // 要让 item 顶部对齐 (viewportHeight - itemHeight) / 2 需要负 offset
-            val targetItem = layoutInfo.visibleItemsInfo.find { it.index == bestIndex }
-            val scrollOffset = if (targetItem != null) {
-                -((viewportHeight - targetItem.size) / 2).toInt()
-            } else 0
-            listState.animateScrollToItem(bestIndex, scrollOffset)
-            val value = range.first + (bestIndex % size + size) % size
-            onSelect(value)
         }
-    }
-
-    LazyColumn(
-        state = listState,
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        items(totalItems) { index ->
-            val value = range.first + (index % size + size) % size
-            val isSelected = value == selected
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(itemHeight)
-                    .padding(vertical = itemSpacing / 2),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = label(value),
-                    style = if (isSelected) MaterialTheme.typography.titleLarge
-                    else MaterialTheme.typography.bodyLarge,
-                    color = if (isSelected) cyan
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
+        // 视口中心青色选择条
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.6f)
+                .height(totalItemHeight)
+                .align(Alignment.Center)
+                .clip(RoundedCornerShape(4.dp))
+                .background(cyan.copy(alpha = 0.12f))
+        )
     }
 }
 
