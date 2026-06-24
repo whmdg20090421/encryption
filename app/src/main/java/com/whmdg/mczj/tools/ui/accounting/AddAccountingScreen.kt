@@ -9,6 +9,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -19,16 +20,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Backspace
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Restaurant
-import androidx.compose.material.icons.filled.ShoppingBag
-import androidx.compose.material.icons.filled.SportsEsports
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.foundation.Image
 import androidx.compose.runtime.*
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Alignment
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -36,10 +32,11 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import java.util.Calendar
@@ -118,19 +115,31 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
             }
             } // Surface
 
-            // 一级分类选择行（从 JSON 动态加载）
-            Row(
+            // 一级分类选择行（自适应 FlowRow，每行 5 个，行间距 10dp）
+            val iconSize = 50.dp
+            val itemsPerRow = 5
+            val totalIcons = categories.size.coerceAtLeast(1)
+            val rows = (totalIcons + itemsPerRow - 1) / itemsPerRow
+            val lastRowCount = totalIcons - (rows - 1) * itemsPerRow
+            val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                maxItemsInEachRow = itemsPerRow
             ) {
                 categories.forEach { cat ->
                     val isSelected = selectedCategory == cat.id
+                    val customDrawable = categoryDrawableOrNull(cat.icon)
+                    val iconColor = categoryColor(cat.id)
+
                     Box(
                         modifier = Modifier
-                            .size(50.dp)
+                            .size(iconSize)
                             .clip(RoundedCornerShape(8.dp))
                             .background(if (isSelected) Color(0xFF00BCD4) else Color.White)
                             .then(
@@ -144,12 +153,23 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = categoryIcon(cat.icon),
-                            contentDescription = cat.name,
-                            modifier = Modifier.size(25.dp),
-                            tint = if (isSelected) Color.White else Color(0xFFB8860B)
-                        )
+                        if (customDrawable != null) {
+                            // 自定义彩色 SVG 图标
+                            Image(
+                                painter = painterResource(customDrawable),
+                                contentDescription = cat.name,
+                                modifier = Modifier.size(25.dp),
+                                colorFilter = if (isSelected) ColorFilter.tint(Color.White) else null
+                            )
+                        } else {
+                            // Material Icons（每个分类不同颜色）
+                            Icon(
+                                imageVector = materialIcon(cat.icon),
+                                contentDescription = cat.name,
+                                modifier = Modifier.size(25.dp),
+                                tint = if (isSelected) Color.White else iconColor
+                            )
+                        }
                     }
                 }
             }
@@ -635,12 +655,99 @@ private fun KeyButton(
     }
 }
 
-/** 图标标识 → Material Icon 映射 */
-private fun categoryIcon(icon: String): ImageVector = when (icon) {
-    "shopping_bag" -> Icons.Filled.ShoppingBag
-    "utensils" -> Icons.Filled.Restaurant
-    "car" -> Icons.Filled.DirectionsCar
-    "gamepad" -> Icons.Filled.SportsEsports
-    "house" -> Icons.Filled.Home
-    else -> Icons.Filled.Home
+/** 图标标识 → 自定义彩色矢量图资源映射（仅原始 5 个分类） */
+private fun categoryDrawableOrNull(icon: String): Int? = when (icon) {
+    "shopping_bag" -> R.drawable.accounting_level1_ic_cat_shopping
+    "utensils" -> R.drawable.accounting_level1_ic_cat_food
+    "car" -> R.drawable.accounting_level1_ic_cat_transport
+    "gamepad" -> R.drawable.accounting_level1_ic_cat_leisure
+    "house" -> R.drawable.accounting_level1_ic_cat_home
+    else -> null
 }
+
+/** 图标标识 → Material Icons 映射 */
+private fun materialIcon(icon: String): ImageVector = when (icon) {
+    // 支出分类
+    "restaurant" -> Icons.Filled.Restaurant
+    "fastfood" -> Icons.Filled.Fastfood
+    "eco" -> Icons.Filled.Eco
+    "local_cafe" -> Icons.Filled.LocalCafe
+    "cake" -> Icons.Filled.Cake
+    "kitchen" -> Icons.Filled.Kitchen
+    "shopping_cart" -> Icons.Filled.ShoppingCart
+    "pets" -> Icons.Filled.Pets
+    "directions_car" -> Icons.Filled.DirectionsCar
+    "checkroom" -> Icons.Filled.Checkroom
+    "local_laundry_service" -> Icons.Filled.LocalLaundryService
+    "school" -> Icons.Filled.School
+    "trending_down" -> Icons.Filled.TrendingDown
+    "movie" -> Icons.Filled.Movie
+    "sports_esports" -> Icons.Filled.SportsEsports
+    "medication" -> Icons.Filled.Medication
+    "subscriptions" -> Icons.Filled.Subscriptions
+    "fitness_center" -> Icons.Filled.FitnessCenter
+    "home_work" -> Icons.Filled.HomeWork
+    "home" -> Icons.Filled.Home
+    "face" -> Icons.Filled.Face
+    // 收入分类
+    "work" -> Icons.Filled.Work
+    "account_balance" -> Icons.Filled.AccountBalance
+    "card_giftcard" -> Icons.Filled.CardGiftcard
+    "emoji_events" -> Icons.Filled.EmojiEvents
+    "receipt" -> Icons.Filled.Receipt
+    "schedule" -> Icons.Filled.Schedule
+    "monetization_on" -> Icons.Filled.MonetizationOn
+    "undo" -> Icons.Filled.Undo
+    "trending_up" -> Icons.Filled.TrendingUp
+    "sell" -> Icons.Filled.Sell
+    "health_and_safety" -> Icons.Filled.HealthAndSafety
+    "receipt_long" -> Icons.Filled.ReceiptLong
+    "account_balance_wallet" -> Icons.Filled.AccountBalanceWallet
+    // 兜底
+    else -> Icons.Filled.Category
+}
+
+/** 分类 ID → 主题色（每个分类不同颜色） */
+private fun categoryColor(id: String): Color = when (id) {
+    // 支出分类
+    "dining" -> Color(0xFFFF6B6B)        // 红色 - 餐饮
+    "snacks" -> Color(0xFFFF9F43)        // 橙色 - 零食
+    "fruit" -> Color(0xFF2ED573)         // 绿色 - 水果
+    "beverage" -> Color(0xFF7C4DFF)      // 紫色 - 饮品
+    "pastry" -> Color(0xFFFF6F91)        // 粉色 - 糕点
+    "cooking" -> Color(0xFF4CAF50)       // 深绿 - 做饭食材
+    "shopping" -> Color(0xFF42A5F5)      // 蓝色 - 购物
+    "pets" -> Color(0xFFAB47BC)          // 紫色 - 宠物
+    "transport" -> Color(0xFF5C6BC0)     // 靛蓝 - 交通
+    "car" -> Color(0xFF1E88E5)           // 深蓝 - 汽车
+    "clothing" -> Color(0xFFEC407A)      // 粉红 - 服饰
+    "daily_goods" -> Color(0xFF26A69A)   // 青色 - 日用品
+    "education" -> Color(0xFF42A5F5)     // 蓝色 - 教育
+    "invest_loss" -> Color(0xFFEF5350)   // 红色 - 投资亏损
+    "entertainment" -> Color(0xFFAB47BC) // 紫色 - 娱乐
+    "game" -> Color(0xFF7E57C2)          // 深紫 - 游戏
+    "health_products" -> Color(0xFF66BB6A) // 绿色 - 保健品
+    "subscription" -> Color(0xFF29B6F6)  // 浅蓝 - 订阅服务
+    "sports" -> Color(0xFFEF5350)        // 红色 - 运动
+    "housing" -> Color(0xFF8D6E63)       // 棕色 - 住房
+    "home" -> Color(0xFFFFA726)          // 橙色 - 居家
+    "beauty" -> Color(0xFFEC407A)        // 粉红 - 美容
+    // 收入分类
+    "salary" -> Color(0xFF4CAF50)        // 绿色 - 工资
+    "investment" -> Color(0xFF2196F3)    // 蓝色 - 理财
+    "red_packet" -> Color(0xFFF44336)    // 红色 - 红包
+    "bonus" -> Color(0xFFFF9800)         // 橙色 - 奖金
+    "reimbursement" -> Color(0xFF9C27B0) // 紫色 - 报销
+    "part_time" -> Color(0xFF00BCD4)     // 青色 - 兼职
+    "gift" -> Color(0xFFE91E63)          // 粉红 - 礼物
+    "interest" -> Color(0xFF4CAF50)      // 绿色 - 利息
+    "refund" -> Color(0xFFFF5722)        // 深橙 - 退款
+    "invest_income" -> Color(0xFF2196F3) // 蓝色 - 投资收益
+    "second_hand" -> Color(0xFF795548)   // 棕色 - 二手交易
+    "social_benefit" -> Color(0xFF607D8B) // 灰蓝 - 社会福利
+    "tax_refund" -> Color(0xFF009688)    // 青色 - 退税
+    "provident_fund" -> Color(0xFF3F51B5) // 靛蓝 - 公积金
+    // 兜底
+    else -> Color(0xFF9E9E9E)            // 灰色
+}
+

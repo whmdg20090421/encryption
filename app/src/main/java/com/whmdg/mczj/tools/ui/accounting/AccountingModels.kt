@@ -43,19 +43,52 @@ data class AccountingCategoryDb(
 
         fun empty() = AccountingCategoryDb()
 
-        /** 内置默认分类模板 */
+        /** 内置默认分类模板（参考 BeeCount 二级分类模式的父分类） */
         fun defaultCategories(): AccountingCategoryDb {
             val expenseCategories = listOf(
-                AccountingCategory("shopping", "购物消费", "shopping_bag"),
-                AccountingCategory("food", "食品餐饮", "utensils"),
-                AccountingCategory("transport", "交通出行", "car"),
-                AccountingCategory("leisure", "休闲娱乐", "gamepad"),
-                AccountingCategory("home", "居家生活", "house")
+                AccountingCategory("dining", "餐饮", "restaurant"),
+                AccountingCategory("snacks", "零食", "fastfood"),
+                AccountingCategory("fruit", "水果", "eco"),
+                AccountingCategory("beverage", "饮品", "local_cafe"),
+                AccountingCategory("pastry", "糕点", "cake"),
+                AccountingCategory("cooking", "做饭食材", "kitchen"),
+                AccountingCategory("shopping", "购物", "shopping_cart"),
+                AccountingCategory("pets", "宠物", "pets"),
+                AccountingCategory("transport", "交通", "directions_car"),
+                AccountingCategory("car", "汽车", "directions_car"),
+                AccountingCategory("clothing", "服饰", "checkroom"),
+                AccountingCategory("daily_goods", "日用品", "local_laundry_service"),
+                AccountingCategory("education", "教育", "school"),
+                AccountingCategory("invest_loss", "投资亏损", "trending_down"),
+                AccountingCategory("entertainment", "娱乐", "movie"),
+                AccountingCategory("game", "游戏", "sports_esports"),
+                AccountingCategory("health_products", "保健品", "medication"),
+                AccountingCategory("subscription", "订阅服务", "subscriptions"),
+                AccountingCategory("sports", "运动", "fitness_center"),
+                AccountingCategory("housing", "住房", "home_work"),
+                AccountingCategory("home", "居家", "home"),
+                AccountingCategory("beauty", "美容", "face")
+            )
+            val incomeCategories = listOf(
+                AccountingCategory("salary", "工资", "work"),
+                AccountingCategory("investment", "理财", "account_balance"),
+                AccountingCategory("red_packet", "红包", "card_giftcard"),
+                AccountingCategory("bonus", "奖金", "emoji_events"),
+                AccountingCategory("reimbursement", "报销", "receipt"),
+                AccountingCategory("part_time", "兼职", "schedule"),
+                AccountingCategory("gift", "礼物", "card_giftcard"),
+                AccountingCategory("interest", "利息", "monetization_on"),
+                AccountingCategory("refund", "退款", "undo"),
+                AccountingCategory("invest_income", "投资收益", "trending_up"),
+                AccountingCategory("second_hand", "二手交易", "sell"),
+                AccountingCategory("social_benefit", "社会福利", "health_and_safety"),
+                AccountingCategory("tax_refund", "退税", "receipt_long"),
+                AccountingCategory("provident_fund", "公积金", "account_balance_wallet")
             )
             val pages = mapOf(
                 "记账页" to mapOf(
                     "支出" to expenseCategories,
-                    "收入" to emptyList(),
+                    "收入" to incomeCategories,
                     "转账" to emptyList(),
                     "债务" to emptyList()
                 )

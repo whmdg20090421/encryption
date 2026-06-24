@@ -1,0 +1,44 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 车身 -->
+    <path
+        android:pathData="M2,14 L2,11 Q2,9 4,9 L7.5,4.5 Q8.5,3 10,3 L14,3 Q15.5,3 16.5,4.5 L20,9 Q22,9 22,11 L22,14 Q22,16 20,16 L4,16 Q2,16 2,14 Z"
+        android:fillColor="#1E88E5" />
+    <!-- 车顶 -->
+    <path
+        android:pathData="M7.5,4.5 L16.5,4.5 Q17.5,4.5 18,5.5 L20,9 L4,9 L6,5.5 Q6.5,4.5 7.5,4.5 Z"
+        android:fillColor="#1565C0" />
+    <!-- 左窗 -->
+    <path
+        android:pathData="M5.5,5.5 L8.5,5.5 L7.5,8.5 L4.5,8.5 Z"
+        android:fillColor="#B3E5FC" />
+    <!-- 右窗 -->
+    <path
+        android:pathData="M9.5,5.5 L14.5,5.5 L17,8.5 L7.5,8.5 Z"
+        android:fillColor="#B3E5FC" />
+    <!-- 左轮 -->
+    <path
+        android:pathData="M7,17 A2.5,2.5 0 1,1 7,22 A2.5,2.5 0 1,1 7,17 Z"
+        android:fillColor="#37474F" />
+    <path
+        android:pathData="M7,19.5 A0.8,0.8 0 1,1 7,21.1 A0.8,0.8 0 1,1 7,19.5 Z"
+        android:fillColor="#90A4AE" />
+    <!-- 右轮 -->
+    <path
+        android:pathData="M17,17 A2.5,2.5 0 1,1 17,22 A2.5,2.5 0 1,1 17,17 Z"
+        android:fillColor="#37474F" />
+    <path
+        android:pathData="M17,19.5 A0.8,0.8 0 1,1 17,21.1 A0.8,0.8 0 1,1 17,19.5 Z"
+        android:fillColor="#90A4AE" />
+    <!-- 左车灯 -->
+    <path
+        android:pathData="M3,11.5 L5,11.5 L5,13 L3,13 Z"
+        android:fillColor="#FFEE58" />
+    <!-- 右车灯 -->
+    <path
+        android:pathData="M19,11.5 L21,11.5 L21,13 L19,13 Z"
+        android:fillColor="#EF5350" />
+</vector>
