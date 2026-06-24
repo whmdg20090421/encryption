@@ -40,6 +40,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
 import java.util.Calendar
 
 @Composable
@@ -64,12 +65,81 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
 
     // 从 JSON 动态加载分类数据（跟随选中的记账类型切换）
     val categoryDb = remember { AccountingCategoryDb.ensureDefault(context) }
+
     val currentType = types[selectedType]
     val categories = remember(selectedType) {
         categoryDb.getCategories("记账页", currentType)
     }
     var selectedCategory by remember { mutableStateOf<String?>(null) }
     var expandedCategory by remember { mutableStateOf<String?>(null) }
+
+    // 保存记录的辅助函数
+    fun saveCurrentRecord(): Boolean {
+        if (amount == "0" || amount.isEmpty()) {
+            Toast.makeText(context, "请输入金额", Toast.LENGTH_SHORT).show()
+            return false
+        }
+        if (selectedCategory == null) {
+            Toast.makeText(context, "请选择分类", Toast.LENGTH_SHORT).show()
+            return false
+        }
+        // 计算最终金额（处理运算表达式如 "15+30"）
+        val finalAmount = run {
+            val ops = listOf("+", "-", "*", "÷")
+            val op = ops.firstOrNull { it in amount.drop(1) }
+            if (op != null) {
+                val idx = amount.indexOf(op, 1)
+                val n1 = amount.substring(0, idx).toDoubleOrNull()
+                val n2 = amount.substring(idx + 1).toDoubleOrNull()
+                if (n1 != null && n2 != null) {
+                    val r = when (op) {
+                        "+" -> n1 + n2
+                        "-" -> n1 - n2
+                        "*" -> n1 * n2
+                        "÷" -> if (n2 != 0.0) n1 / n2 else n1
+                        else -> n1
+                    }
+                    if (r == r.toLong().toDouble()) r.toLong().toString() else r.toString()
+                } else amount
+            } else amount
+        }
+        if (finalAmount == "0") {
+            Toast.makeText(context, "请输入有效金额", Toast.LENGTH_SHORT).show()
+            return false
+        }
+        // 查找一级分类 id 和二级分类 id
+        var parentId: String? = null
+        var subId: String? = null
+        for (cat in categories) {
+            if (cat.id == selectedCategory) {
+                parentId = cat.id
+                break
+            }
+            for (child in cat.children) {
+                if (child.id == selectedCategory) {
+                    parentId = cat.id
+                    subId = child.id
+                    break
+                }
+            }
+            if (parentId != null) break
+        }
+        val cal = Calendar.getInstance()
+        cal.set(selectedYear, selectedMonth, selectedDay, selectedHour, selectedMinute, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        val record = AccountingRecord(
+            bookName = bookName,
+            type = currentType,
+            amount = finalAmount,
+            categoryId = parentId ?: selectedCategory!!,
+            subcategoryId = subId,
+            note = note,
+            happenedAt = cal.timeInMillis
+        )
+        val db = AccountingRecordDb.load(context)
+        db.add(record).save(context)
+        return true
+    }
 
     // 读取图标主题色设置
     val iconColorHex = remember { getCategoryIconColor(context) }
@@ -340,8 +410,19 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                     amount = when (key) {
                         "←" -> if (amount.length > 1) amount.dropLast(1) else "0"
                         "." -> if (!amount.contains(".")) "$amount." else amount
-                        "再记" -> { "0" } // TODO: 保存记录
-                        "完成" -> { onBack(); amount }
+                        "再记" -> {
+                            if (saveCurrentRecord()) {
+                                note = ""
+                                "0"
+                            } else amount
+                        }
+                        "完成" -> {
+                            if (amount != "0" && amount.isNotEmpty() && selectedCategory != null) {
+                                saveCurrentRecord()
+                            }
+                            onBack()
+                            amount
+                        }
                         "+", "-", "*", "÷" -> {
                             val ops = listOf("+", "-", "*", "÷")
                             val existingOp = ops.firstOrNull { it in amount.drop(1) }
@@ -740,7 +821,7 @@ private fun KeyButton(
 }
 
 /** 图标标识 → Material Icons 映射（TwoTone 双色调风格） */
-private fun materialIcon(icon: String): ImageVector = when (icon) {
+internal fun materialIcon(icon: String): ImageVector = when (icon) {
     // 餐饮美食
     "restaurant" -> Icons.TwoTone.Restaurant
     "fastfood" -> Icons.TwoTone.Fastfood

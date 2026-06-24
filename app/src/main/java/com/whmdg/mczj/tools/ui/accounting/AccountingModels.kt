@@ -5,6 +5,7 @@ import com.whmdg.mczj.tools.AppDataPaths
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.UUID
 
 /**
  * 单个分类。
@@ -342,4 +343,83 @@ fun getCategoryIconColor(context: Context): String {
 fun setCategoryIconColor(context: Context, colorHex: String) {
     context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
         .edit().putString(AppDataPaths.PREF_KEY_ICON_COLOR, colorHex).apply()
+}
+
+// ── 记账记录数据模型 ──
+
+/**
+ * 单条记账记录。
+ * amount 保留字符串精度，happenedAt 为毫秒时间戳。
+ */
+@Serializable
+data class AccountingRecord(
+    val id: String = UUID.randomUUID().toString(),
+    val bookName: String,
+    val type: String,            // "支出"/"收入"/"转账"/"债务"
+    val amount: String,
+    val categoryId: String,      // 一级分类 id
+    val subcategoryId: String?,  // 二级分类 id（可选）
+    val note: String = "",
+    val happenedAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * 记账记录数据库。
+ * JSON 文件存储，双副本备份，参考 DiaryDb / AccountingCategoryDb 模式。
+ */
+@Serializable
+data class AccountingRecordDb(
+    val records: List<AccountingRecord> = emptyList()
+) {
+    companion object {
+        private const val FILE_NAME = "accounting_records.json"
+        private const val BACKUP_NAME = "accounting_records.backup.json"
+
+        private val json = Json {
+            ignoreUnknownKeys = true
+            prettyPrint = true
+            prettyPrintIndent = "    "
+            encodeDefaults = true
+        }
+
+        fun empty() = AccountingRecordDb()
+
+        /** 加载：主配置 → 备份 → 空 */
+        fun load(context: Context): AccountingRecordDb {
+            val dir = AppDataPaths.accounting(context)
+            val primary = File(dir, FILE_NAME)
+            if (primary.exists()) {
+                try {
+                    return json.decodeFromString<AccountingRecordDb>(primary.readText())
+                } catch (_: Exception) { }
+            }
+            val backup = File(dir, BACKUP_NAME)
+            if (backup.exists()) {
+                try {
+                    return json.decodeFromString<AccountingRecordDb>(backup.readText())
+                } catch (_: Exception) { }
+            }
+            return empty()
+        }
+    }
+
+    /** 添加一条记录 */
+    fun add(record: AccountingRecord): AccountingRecordDb {
+        return copy(records = records + record)
+    }
+
+    /** 删除指定 id 的记录 */
+    fun remove(id: String): AccountingRecordDb {
+        return copy(records = records.filter { it.id != id })
+    }
+
+    /** 双副本保存 */
+    fun save(context: Context) {
+        val dir = AppDataPaths.accounting(context)
+        val text = json.encodeToString(serializer(), this)
+        File(dir, FILE_NAME).writeText(text)
+        try {
+            File(dir, BACKUP_NAME).writeText(text)
+        } catch (_: Exception) { }
+    }
 }
