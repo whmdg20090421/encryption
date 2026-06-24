@@ -1,5 +1,6 @@
 package com.whmdg.mczj.tools.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -12,11 +13,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun AccountingScreen(onBack: () -> Unit) {
+fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
     val listState = rememberLazyListState()
     var showBookMenu by remember { mutableStateOf(false) }
     var currentBookName by remember { mutableStateOf("默认记账本") }
@@ -31,8 +33,36 @@ fun AccountingScreen(onBack: () -> Unit) {
     // 背景 alpha：顶部时 0，非顶部时 1
     val bgAlpha by animateFloatAsState(targetValue = if (isAtTop) 0f else 1f, label = "bgAlpha")
     val barHeight = 75.dp
+    val snackbarHostState = remember { SnackbarHostState() }
+    var lastBackPressTime by remember { mutableLongStateOf(0L) }
 
+    // 返回手势处理：非首页标签→回首页；首页标签→双击退出
+    BackHandler {
+        if (selectedTab != 0) {
+            selectedTab = 0
+        } else {
+            val now = System.currentTimeMillis()
+            if (now - lastBackPressTime < 1500L) {
+                onBack()
+            } else {
+                lastBackPressTime = now
+            }
+        }
+    }
+
+    // 首页标签首次返回时显示提示
+    LaunchedEffect(lastBackPressTime) {
+        if (lastBackPressTime > 0L && selectedTab == 0) {
+            snackbarHostState.showSnackbar(
+                message = "再滑一次退出到主页",
+                duration = SnackbarDuration.Short
+            )
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
@@ -121,4 +151,16 @@ fun AccountingScreen(onBack: () -> Unit) {
             }
         }
     }
+
+    // 右下角青色加号按钮
+    FloatingActionButton(
+        onClick = { onNavigate(Screen.AddAccounting(currentBookName)) },
+        modifier = Modifier
+            .align(Alignment.BottomEnd)
+            .padding(end = 25.dp, bottom = 25.dp),
+        containerColor = Color(0xFF00BCD4)
+    ) {
+        Icon(Icons.Default.Add, contentDescription = "添加记账", tint = Color.White)
+    }
+    } // Box
 }
