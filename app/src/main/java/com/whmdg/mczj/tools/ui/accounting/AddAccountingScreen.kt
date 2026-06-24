@@ -6,11 +6,18 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Backspace
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,7 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import java.util.Calendar
 
 @Composable
 fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
@@ -26,6 +35,16 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
     val types = listOf("支出", "收入", "转账", "债务")
     var amount by remember { mutableStateOf("0") }
     var note by remember { mutableStateOf("") }
+    val now = remember { Calendar.getInstance() }
+    var selectedYear by remember { mutableIntStateOf(now.get(Calendar.YEAR)) }
+    var selectedMonth by remember { mutableIntStateOf(now.get(Calendar.MONTH)) }
+    var selectedDay by remember { mutableIntStateOf(now.get(Calendar.DAY_OF_MONTH)) }
+    var selectedHour by remember { mutableIntStateOf(now.get(Calendar.HOUR_OF_DAY)) }
+    var selectedMinute by remember { mutableIntStateOf(now.get(Calendar.MINUTE)) }
+    val selectedDate = remember(selectedYear, selectedMonth, selectedDay, selectedHour, selectedMinute) {
+        "%04d-%02d-%02d %02d:%02d".format(selectedYear, selectedMonth + 1, selectedDay, selectedHour, selectedMinute)
+    }
+    var showDatePicker by remember { mutableStateOf(false) }
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     val infoRowHeight = screenHeight * 0.03f
 
@@ -69,6 +88,9 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                 )
             }
             } // Surface
+
+            // 消费类型选择区（暂空）
+            Box(modifier = Modifier.weight(1f).fillMaxWidth())
 
             // 第一行：左侧20%空 | 中间60%备注输入 | 右侧20%金额
             Row(
@@ -120,12 +142,19 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                 }
             }
 
-            // 第二行：功能菜单（暂空）
-            Spacer(
+            HorizontalDivider(color = Color(0xFF00BCD4), thickness = 1.dp)
+
+            // 第二行：功能菜单
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(infoRowHeight)
-            )
+                    .height(infoRowHeight),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = { showDatePicker = true }) {
+                    Text(selectedDate, style = MaterialTheme.typography.bodySmall)
+                }
+            }
 
             // 键盘
             Surface(shadowElevation = 2.dp) {
@@ -145,6 +174,216 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
             )
             } // Surface
         }
+
+        // 日期时间选择弹窗
+        if (showDatePicker) {
+            DateTimePickerDialog(
+                initYear = selectedYear,
+                initMonth = selectedMonth,
+                initDay = selectedDay,
+                initHour = selectedHour,
+                initMinute = selectedMinute,
+                onDismiss = { showDatePicker = false },
+                onConfirm = { y, m, d, h, min ->
+                    selectedYear = y
+                    selectedMonth = m
+                    selectedDay = d
+                    selectedHour = h
+                    selectedMinute = min
+                    showDatePicker = false
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun DateTimePickerDialog(
+    initYear: Int, initMonth: Int, initDay: Int,
+    initHour: Int, initMinute: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (year: Int, month: Int, day: Int, hour: Int, minute: Int) -> Unit
+) {
+    val cyan = Color(0xFF00BCD4)
+    var calYear by remember { mutableIntStateOf(initYear) }
+    var calMonth by remember { mutableIntStateOf(initMonth) }
+    var selDay by remember { mutableIntStateOf(initDay) }
+    var selHour by remember { mutableIntStateOf(initHour) }
+    var selMinute by remember { mutableIntStateOf(initMinute) }
+
+    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val daysInMonth = remember(calYear, calMonth) {
+        val cal = Calendar.getInstance()
+        cal.set(calYear, calMonth, 1)
+        cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+    }
+    val firstDayOfWeek = remember(calYear, calMonth) {
+        val cal = Calendar.getInstance()
+        cal.set(calYear, calMonth, 1)
+        (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7 // Monday=0
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        dismissButton = {},
+        text = {
+            Column(
+                modifier = Modifier
+                    .width(screenWidth * 0.7f)
+                    .height(screenHeight * 0.7f)
+            ) {
+                // 上半：日历
+                Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    // 月份导航
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = {
+                            if (calMonth == 0) { calMonth = 11; calYear-- } else calMonth--
+                        }) {
+                            Icon(Icons.Filled.ChevronLeft, "上月", tint = cyan)
+                        }
+                        Text(
+                            text = "%04d-%02d".format(calYear, calMonth + 1),
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        )
+                        IconButton(onClick = {
+                            if (calMonth == 11) { calMonth = 0; calYear++ } else calMonth++
+                        }) {
+                            Icon(Icons.Filled.ChevronRight, "下月", tint = cyan)
+                        }
+                    }
+                    // 星期标题
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        listOf("一", "二", "三", "四", "五", "六", "日").forEach {
+                            Text(
+                                text = it,
+                                modifier = Modifier.weight(1f),
+                                textAlign = TextAlign.Center,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    // 日期网格
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(7),
+                        modifier = Modifier.fillMaxWidth().weight(1f)
+                    ) {
+                        items(firstDayOfWeek) { Spacer(Modifier.aspectRatio(1f)) }
+                        items(daysInMonth) { day ->
+                            val d = day + 1
+                            val isSelected = d == selDay
+                            Box(
+                                modifier = Modifier
+                                    .aspectRatio(1f)
+                                    .padding(2.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(if (isSelected) cyan else Color.Transparent)
+                                    .clickable { selDay = d },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "$d",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isSelected) Color.White
+                                    else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 青色分割线
+                HorizontalDivider(color = cyan, thickness = 1.dp)
+
+                // 下半：时间齿轮
+                Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    // 小时齿轮
+                    TimeWheel(
+                        range = 0..23,
+                        selected = selHour,
+                        onSelect = { selHour = it },
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        label = { "%02d".format(it) }
+                    )
+                    // 分钟齿轮
+                    TimeWheel(
+                        range = 0..59,
+                        selected = selMinute,
+                        onSelect = { selMinute = it },
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        label = { "%02d".format(it) }
+                    )
+                }
+
+                // 确认按钮
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    TextButton(onClick = { onConfirm(calYear, calMonth, selDay, selHour, selMinute) }) {
+                        Text("确定", color = cyan)
+                    }
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun TimeWheel(
+    range: IntRange,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier,
+    label: (Int) -> String
+) {
+    val cyan = Color(0xFF00BCD4)
+    val listState = rememberLazyListState()
+    val items = remember(range) { range.toList() }
+    val initialIndex = remember(selected) { (selected - range.first).coerceIn(0, items.size - 1) }
+
+    // 自动滚到选中项
+    LaunchedEffect(Unit) {
+        listState.scrollToItem(initialIndex)
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // 前后留空让选中项居中
+        item { Spacer(Modifier.height(60.dp)) }
+        items(items.size) { index ->
+            val value = items[index]
+            val isSelected = value == selected
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .clickable { onSelect(value) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = label(value),
+                    style = if (isSelected) MaterialTheme.typography.titleLarge
+                    else MaterialTheme.typography.bodyLarge,
+                    color = if (isSelected) cyan
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        item { Spacer(Modifier.height(60.dp)) }
     }
 }
 
