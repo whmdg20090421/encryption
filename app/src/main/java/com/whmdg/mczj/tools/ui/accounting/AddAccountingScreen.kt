@@ -1,4 +1,4 @@
-package com.whmdg.mczj.tools.ui
+package com.whmdg.mczj.tools.ui.accounting
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -7,6 +7,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Backspace
@@ -17,7 +18,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -25,6 +25,9 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
     var selectedType by remember { mutableIntStateOf(0) }
     val types = listOf("支出", "收入", "转账", "债务")
     var amount by remember { mutableStateOf("0") }
+    var note by remember { mutableStateOf("") }
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val infoRowHeight = screenHeight * 0.03f
 
     Scaffold { innerPadding ->
         Column(
@@ -67,19 +70,62 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
             }
             } // Surface
 
-            // 金额显示区
-            Box(
+            // 第一行：左侧20%空 | 中间60%备注输入 | 右侧20%金额
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
+                    .height(infoRowHeight),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = amount,
-                    style = MaterialTheme.typography.headlineLarge,
-                    textAlign = TextAlign.Center
-                )
+                Spacer(Modifier.fillMaxHeight().weight(0.2f))
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .weight(0.6f)
+                        .padding(horizontal = 4.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    BasicTextField(
+                        value = note,
+                        onValueChange = { note = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        singleLine = true,
+                        decorationBox = { innerTextField ->
+                            if (note.isEmpty()) {
+                                Text(
+                                    "点击输入备注",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            innerTextField()
+                        }
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .weight(0.2f),
+                    contentAlignment = Alignment.CenterEnd
+                ) {
+                    Text(
+                        text = amount,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
             }
+
+            // 第二行：功能菜单（暂空）
+            Spacer(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(infoRowHeight)
+            )
 
             // 键盘
             Surface(shadowElevation = 2.dp) {
@@ -110,7 +156,7 @@ private fun CalculatorKeyboard(onInput: (String) -> Unit) {
     val isDark = isSystemInDarkTheme()
     val cyanText = if (isDark) Color(0xFF00838F) else Color(0xFF00BCD4)
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-    val rowHeight = screenHeight * 0.08f
+    val rowHeight = screenHeight * 0.06f
 
     Column(
         modifier = Modifier

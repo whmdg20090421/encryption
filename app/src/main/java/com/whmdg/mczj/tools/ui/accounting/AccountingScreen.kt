@@ -1,4 +1,4 @@
-package com.whmdg.mczj.tools.ui
+package com.whmdg.mczj.tools.ui.accounting
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
+import com.whmdg.mczj.tools.ui.Screen
 
 @Composable
 fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
