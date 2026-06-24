@@ -391,16 +391,29 @@ private fun TimeWheel(
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
     val itemHeight = 36.dp
     val itemSpacing = 4.dp
-    val itemTotalHeight = itemHeight + itemSpacing
+    var userScrolled by remember { mutableStateOf(false) }
+    var initialized by remember { mutableStateOf(false) }
 
-    // 松手自动吸中
+    // 跳过首次初始滚动，之后标记用户手动滚动
     LaunchedEffect(listState.isScrollInProgress) {
-        if (!listState.isScrollInProgress) {
-            val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
+        if (!initialized) {
+            if (!listState.isScrollInProgress) initialized = true
+            return@LaunchedEffect
+        }
+        if (listState.isScrollInProgress) userScrolled = true
+    }
+
+    // 松手自动吸中（仅用户手动滚动后触发）
+    LaunchedEffect(userScrolled, listState.isScrollInProgress) {
+        if (userScrolled && !listState.isScrollInProgress) {
+            userScrolled = false
+            val layoutInfo = listState.layoutInfo
+            val viewportHeight = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
             val centerY = viewportHeight / 2f
+            // 找离视口中心最近的 item
             var bestIndex = listState.firstVisibleItemIndex
             var bestDist = Float.MAX_VALUE
-            for (vi in listState.layoutInfo.visibleItemsInfo) {
+            for (vi in layoutInfo.visibleItemsInfo) {
                 val itemCenter = vi.offset + vi.size / 2f
                 val dist = kotlin.math.abs(itemCenter - centerY)
                 if (dist < bestDist) {
@@ -408,7 +421,13 @@ private fun TimeWheel(
                     bestIndex = vi.index
                 }
             }
-            listState.animateScrollToItem(bestIndex)
+            // scrollOffset 语义：正值=item 往上滚出视口，负值=item 往下进入视口
+            // 要让 item 顶部对齐 (viewportHeight - itemHeight) / 2 需要负 offset
+            val targetItem = layoutInfo.visibleItemsInfo.find { it.index == bestIndex }
+            val scrollOffset = if (targetItem != null) {
+                -((viewportHeight - targetItem.size) / 2).toInt()
+            } else 0
+            listState.animateScrollToItem(bestIndex, scrollOffset)
             val value = range.first + (bestIndex % size + size) % size
             onSelect(value)
         }
