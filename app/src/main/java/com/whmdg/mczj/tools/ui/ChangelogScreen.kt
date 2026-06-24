@@ -29,6 +29,21 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V3.0",
+        date = "2026-06-24",
+        items = listOf(
+            "记账本模块全新上线：底部导航栏、添加记账页面、自定义计算器键盘（含运算自动求值）、金额水平滑动查看",
+            "记账本分类系统：参考 BeeCount 二级分类模式，22 个支出分类 + 14 个收入分类，FlowRow 自适应布局（每行 5 个，行间距 10dp）",
+            "记账本二级分类数据：每个一级分类下含 3-8 个子分类，JSON 持久化存储，预留二级分类 UI 扩展空间",
+            "日期时间选择器：TimeWheel 无限循环齿轮（totalItems = size * 10000），snapshotFlow 检测滚动停止自动吸中，点击直接居中",
+            "Material Symbols 图标升级：35 个图标从 Material Icons 替换为 Material Symbols (Outlined 风格)，视觉更现代",
+            "压缩包功能增强：点击压缩包直接浏览目录结构（7zzs l -ba），支持密码压缩包，会话状态持久化，显示压缩后大小",
+            "文件压缩功能重写：通过 7zzs 静态二进制实现，支持 zip/7z/tar/tar.gz/tar.bz2/tar.xz，ZIP 支持 AES-256 加密",
+            "LSPosed 模块框架集成：集成 libxposed API 100，通过系统属性检测 Xposed 状态",
+            "数据存储规范统一：所有 SharedPreferences 通过 AppDataPaths 管理，禁止硬编码"
+        )
+    ),
+    ChangelogVersion(
         version = "V2.9",
         date = "2026-06-23",
         items = listOf(
