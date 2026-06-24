@@ -247,6 +247,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                             parentName = expandedInRow.name,
                             children = expandedInRow.children,
                             selectedId = selectedCategory,
+                            themeColor = iconThemeColor,
                             onSelect = { childId ->
                                 selectedCategory = childId
                             }
@@ -945,6 +946,7 @@ private fun SubcategoryCard(
     parentName: String,
     children: List<AccountingCategory>,
     selectedId: String?,
+    themeColor: Color,
     onSelect: (String) -> Unit
 ) {
     val itemsPerRow = 4
@@ -995,7 +997,7 @@ private fun SubcategoryCard(
                                         tint = if (isSelected)
                                             Color(0xFF00BCD4)
                                         else
-                                            iconThemeColor
+                                            themeColor
                                     )
                                 }
                                 Spacer(Modifier.height(4.dp))
