@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.util.Calendar
 
 @Composable
@@ -66,10 +67,12 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
         categoryDb.getCategories("记账页", currentType)
     }
     var selectedCategory by remember { mutableStateOf<String?>(null) }
+    var expandedCategory by remember { mutableStateOf<String?>(null) }
 
-    // 切换记账类型时重置选中分类
+    // 切换记账类型时重置选中和展开
     LaunchedEffect(selectedType) {
         selectedCategory = null
+        expandedCategory = null
     }
 
     Scaffold { innerPadding ->
@@ -113,50 +116,134 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
             }
             } // Surface
 
-            // 一级分类选择行（自适应 FlowRow，每行 5 个，行间距 10dp）
-            val iconSize = 50.dp
-            val itemsPerRow = 5
-            val totalIcons = categories.size.coerceAtLeast(1)
-            val rows = (totalIcons + itemsPerRow - 1) / itemsPerRow
-            val lastRowCount = totalIcons - (rows - 1) * itemsPerRow
-            val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+            // 分类选择区（参考 BeeCount：4列网格 + 二级分类原地展开）
+            val itemsPerRow = 4
+            val primaryIconSize = 56.dp
+            val subIconSize = 48.dp
 
-            @OptIn(ExperimentalLayoutApi::class)
-            FlowRow(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                maxItemsInEachRow = itemsPerRow
+                    .padding(vertical = 8.dp, horizontal = 12.dp)
             ) {
-                categories.forEach { cat ->
-                    val isSelected = selectedCategory == cat.id
-                    val iconColor = categoryColor(cat.id)
+                // 按每行4个分组显示一级分类
+                var i = 0
+                while (i < categories.size) {
+                    val rowEnd = (i + itemsPerRow).coerceAtMost(categories.size)
+                    val rowItems = categories.subList(i, rowEnd)
 
-                    Box(
-                        modifier = Modifier
-                            .size(iconSize)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (isSelected) Color(0xFF00BCD4) else Color.White)
-                            .then(
-                                if (!isSelected) Modifier.border(
-                                    BorderStroke(1.dp, Color.Black),
-                                    RoundedCornerShape(8.dp)
-                                ) else Modifier
-                            )
-                            .clickable {
-                                selectedCategory = if (isSelected) null else cat.id
-                            },
-                        contentAlignment = Alignment.Center
+                    // 一级分类行
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
                     ) {
-                        Icon(
-                            imageVector = materialIcon(cat.icon),
-                            contentDescription = cat.name,
-                            modifier = Modifier.size(25.dp),
-                            tint = if (isSelected) Color.White else iconColor
-                        )
+                        rowItems.forEach { cat ->
+                            val isSelected = selectedCategory == cat.id
+                            val isExpanded = expandedCategory == cat.id
+                            val hasChildren = cat.children.isNotEmpty()
+                            val iconColor = categoryColor(cat.id)
+
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .clickable {
+                                        if (hasChildren) {
+                                            expandedCategory = if (isExpanded) null else cat.id
+                                        } else {
+                                            selectedCategory = if (isSelected) null else cat.id
+                                            expandedCategory = null
+                                        }
+                                    }
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    // 图标容器
+                                    Box(
+                                        modifier = Modifier
+                                            .size(primaryIconSize)
+                                            .clip(RoundedCornerShape(28.dp))
+                                            .background(
+                                                if (isSelected || isExpanded)
+                                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                                else
+                                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = materialIcon(cat.icon),
+                                            contentDescription = cat.name,
+                                            modifier = Modifier.size(24.dp),
+                                            tint = if (isSelected || isExpanded)
+                                                MaterialTheme.colorScheme.primary
+                                            else
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    // 有子分类标记：右下角三个点
+                                    if (hasChildren) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .offset(x = 4.dp, y = 4.dp)
+                                                .size(18.dp)
+                                                .clip(RoundedCornerShape(9.dp))
+                                                .background(
+                                                    if (isExpanded)
+                                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                                    else
+                                                        MaterialTheme.colorScheme.surfaceVariant
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.MoreHoriz,
+                                                contentDescription = "展开",
+                                                modifier = Modifier.size(12.dp),
+                                                tint = if (isExpanded)
+                                                    MaterialTheme.colorScheme.primary
+                                                else
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = cat.name,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    color = if (isSelected || isExpanded)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        // 补齐空位（保持对齐）
+                        repeat(itemsPerRow - rowItems.size) {
+                            Spacer(Modifier.weight(1f))
+                        }
                     }
+
+                    // 检查这一行中是否有展开的分类，显示二级分类卡片
+                    val expandedInRow = rowItems.find { it.id == expandedCategory && it.children.isNotEmpty() }
+                    if (expandedInRow != null) {
+                        Spacer(Modifier.height(8.dp))
+                        SubcategoryCard(
+                            parentName = expandedInRow.name,
+                            children = expandedInRow.children,
+                            selectedId = selectedCategory,
+                            onSelect = { childId ->
+                                selectedCategory = childId
+                            }
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    } else {
+                        Spacer(Modifier.height(12.dp))
+                    }
+
+                    i = rowEnd
                 }
             }
 
@@ -643,43 +730,162 @@ private fun KeyButton(
 
 /** 图标标识 → Material Symbols 映射（Outlined 风格） */
 private fun materialIcon(icon: String): ImageVector = when (icon) {
-    // 支出分类 - 完全匹配
+    // 餐饮美食
     "restaurant" -> Icons.Outlined.Restaurant
     "fastfood" -> Icons.Outlined.Fastfood
-    "eco" -> Icons.Outlined.Eco
     "local_cafe" -> Icons.Outlined.LocalCafe
+    "local_bar" -> Icons.Outlined.LocalBar
     "cake" -> Icons.Outlined.Cake
+    "coffee" -> Icons.Outlined.Coffee
+    "free_breakfast" -> Icons.Outlined.FreeBreakfast
+    "lunch_dining" -> Icons.Outlined.LunchDining
+    "dinner_dining" -> Icons.Outlined.DinnerDining
+    "icecream" -> Icons.Outlined.Icecream
+    "bakery_dining" -> Icons.Outlined.BakeryDining
+    "liquor" -> Icons.Outlined.Liquor
+    "set_meal" -> Icons.Outlined.SetMeal
+    "ramen_dining" -> Icons.Outlined.RamenDining
+    "delivery_dining" -> Icons.Outlined.DeliveryDining
+    "dining" -> Icons.Outlined.Restaurant
+
+    // 水果零食
+    "eco" -> Icons.Outlined.Eco
+    "apple" -> Icons.Outlined.Apple
+    "sports_cricket" -> Icons.Outlined.SportsCricket
+    "circle" -> Icons.Outlined.Circle
+    "bubble_chart" -> Icons.Outlined.BubbleChart
+    "pie_chart" -> Icons.Outlined.PieChart
+    "cookie" -> Icons.Outlined.Cookie
+    "candy" -> Icons.Outlined.Candy
+    "chocolate" -> Icons.Outlined.Chocolate
+    "grain" -> Icons.Outlined.Grain
+
+    // 饮品
+    "juice" -> Icons.Outlined.Juice
+    "water_drop" -> Icons.Outlined.WaterDrop
+
+    // 食材
     "kitchen" -> Icons.Outlined.Kitchen
+    "yard" -> Icons.Outlined.Yard
+    "blender" -> Icons.Outlined.Blender
+
+    // 购物
     "shopping_cart" -> Icons.Outlined.ShoppingCart
+    "shopping_bag" -> Icons.Outlined.ShoppingBag
+    "storefront" -> Icons.Outlined.Storefront
+    "watch" -> Icons.Outlined.Watch
+    "accessibility" -> Icons.Outlined.Accessibility
+
+    // 宠物
     "pets" -> Icons.Outlined.Pets
+    "pet_supplies" -> Icons.Outlined.PetSupplies
+    "inventory_2" -> Icons.Outlined.Inventory2
+    "medical_services" -> Icons.Outlined.MedicalServices
+    "shower" -> Icons.Outlined.Shower
+
+    // 交通出行
     "directions_car" -> Icons.Outlined.DirectionsCar
+    "directions_bus" -> Icons.Outlined.DirectionsBus
+    "directions_subway" -> Icons.Outlined.DirectionsSubway
+    "directions_bike" -> Icons.Outlined.DirectionsBike
+    "local_taxi" -> Icons.Outlined.LocalTaxi
+    "local_parking" -> Icons.Outlined.LocalParking
+    "local_gas_station" -> Icons.Outlined.LocalGasStation
+
+    // 汽车
+    "build" -> Icons.Outlined.Build
+    "handyman" -> Icons.Outlined.Handyman
+    "security" -> Icons.Outlined.Security
+    "local_car_wash" -> Icons.Outlined.LocalCarWash
+    "report_problem" -> Icons.Outlined.ReportProblem
+
+    // 服饰
     "checkroom" -> Icons.Outlined.Checkroom
+    "diamond" -> Icons.Outlined.Diamond
+    "auto_awesome" -> Icons.Outlined.AutoAwesome
+    "hiking" -> Icons.Outlined.Hiking
+
+    // 日用品
     "local_laundry_service" -> Icons.Outlined.LocalLaundryService
+    "receipt" -> Icons.Outlined.Receipt
+    "cleaning_services" -> Icons.Outlined.CleaningServices
+
+    // 教育
     "school" -> Icons.Outlined.School
+    "model_training" -> Icons.Outlined.ModelTraining
+    "menu_book" -> Icons.Outlined.MenuBook
+    "edit" -> Icons.Outlined.Edit
+    "business_center" -> Icons.Outlined.BusinessCenter
+
+    // 投资
     "trending_down" -> Icons.Outlined.TrendingDown
+    "show_chart" -> Icons.Outlined.ShowChart
+    "money_off" -> Icons.Outlined.MoneyOff
+
+    // 娱乐
     "movie" -> Icons.Outlined.Movie
+    "mic" -> Icons.Outlined.Mic
+    "attractions" -> Icons.Outlined.Attractions
+    "celebration" -> Icons.Outlined.Celebration
+
+    // 游戏
     "sports_esports" -> Icons.Outlined.SportsEsports
+    "payments" -> Icons.Outlined.Payments
+    "workspace_premium" -> Icons.Outlined.WorkspacePremium
+
+    // 保健
     "medication" -> Icons.Outlined.Medication
+    "biotech" -> Icons.Outlined.Biotech
+    "health_and_safety" -> Icons.Outlined.HealthAndSafety
+
+    // 订阅
     "subscriptions" -> Icons.Outlined.Subscriptions
+    "play_circle" -> Icons.Outlined.PlayCircle
+    "music_note" -> Icons.Outlined.MusicNote
+    "cloud" -> Icons.Outlined.Cloud
+
+    // 运动
     "fitness_center" -> Icons.Outlined.FitnessCenter
+    "sports" -> Icons.Outlined.Sports
+    "sports_martial_arts" -> Icons.Outlined.SportsMartialArts
+
+    // 住房居家
     "home_work" -> Icons.Outlined.HomeWork
     "home" -> Icons.Outlined.Home
+    "construction" -> Icons.Outlined.Construction
+    "weekend" -> Icons.Outlined.Weekend
+    "devices" -> Icons.Outlined.Devices
+    "palette" -> Icons.Outlined.Palette
+    "bed" -> Icons.Outlined.Bed
+
+    // 美容
     "face" -> Icons.Outlined.Face
-    // 收入分类 - 完全匹配
+    "face_retouching_natural" -> Icons.Outlined.FaceRetouchingNatural
+    "content_cut" -> Icons.Outlined.ContentCut
+    "back_hand" -> Icons.Outlined.BackHand
+
+    // 收入分类
     "work" -> Icons.Outlined.Work
     "account_balance" -> Icons.Outlined.AccountBalance
     "card_giftcard" -> Icons.Outlined.CardGiftcard
     "emoji_events" -> Icons.Outlined.EmojiEvents
-    "receipt" -> Icons.Outlined.Receipt
+    "star" -> Icons.Outlined.Star
     "schedule" -> Icons.Outlined.Schedule
+    "access_time" -> Icons.Outlined.AccessTime
     "monetization_on" -> Icons.Outlined.MonetizationOn
+    "savings" -> Icons.Outlined.Savings
+    "military_tech" -> Icons.Outlined.MilitaryTech
+    "flight" -> Icons.Outlined.Flight
+    "attach_money" -> Icons.Outlined.AttachMoney
     "undo" -> Icons.Outlined.Undo
     "trending_up" -> Icons.Outlined.TrendingUp
     "sell" -> Icons.Outlined.Sell
-    "health_and_safety" -> Icons.Outlined.HealthAndSafety
+    "favorite" -> Icons.Outlined.Favorite
+    "child_care" -> Icons.Outlined.ChildCare
     "receipt_long" -> Icons.Outlined.ReceiptLong
+    "description" -> Icons.Outlined.Description
     "account_balance_wallet" -> Icons.Outlined.AccountBalanceWallet
-    "dining" -> Icons.Outlined.Restaurant
+
     // 兜底
     else -> Icons.Outlined.Category
 }
@@ -726,5 +932,89 @@ private fun categoryColor(id: String): Color = when (id) {
     "provident_fund" -> Color(0xFF3F51B5) // 靛蓝 - 公积金
     // 兜底
     else -> Color(0xFF9E9E9E)            // 灰色
+}
+
+/** 二级分类选择卡片（参考 BeeCount _SubcategorySelectorCard） */
+@Composable
+private fun SubcategoryCard(
+    parentName: String,
+    children: List<AccountingCategory>,
+    selectedId: String?,
+    onSelect: (String) -> Unit
+) {
+    val itemsPerRow = 4
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        shadowElevation = 0.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            var i = 0
+            while (i < children.size) {
+                val rowEnd = (i + itemsPerRow).coerceAtMost(children.size)
+                val rowItems = children.subList(i, rowEnd)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    rowItems.forEach { child ->
+                        val isSelected = selectedId == child.id
+
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clickable { onSelect(child.id) }
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(RoundedCornerShape(24.dp))
+                                    .background(
+                                        if (isSelected)
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                        else
+                                            MaterialTheme.colorScheme.surfaceVariant
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = materialIcon(child.icon),
+                                    contentDescription = child.name,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = if (isSelected)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = child.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                color = if (isSelected)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    repeat(itemsPerRow - rowItems.size) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+
+                if (rowEnd < children.size) {
+                    Spacer(Modifier.height(8.dp))
+                }
+                i = rowEnd
+            }
+        }
+    }
 }
 

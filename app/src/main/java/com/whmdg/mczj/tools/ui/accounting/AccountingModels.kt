@@ -33,6 +33,9 @@ data class AccountingCategoryDb(
         private const val FILE_NAME = "accounting_categories.json"
         private const val BACKUP_NAME = "accounting_categories.backup.json"
         private const val PREF_KEY_RELEASED = "categories_released"
+        private const val PREF_KEY_VERSION = "categories_version"
+        /** 当前默认数据版本，递增此值触发重新释放 */
+        private const val CURRENT_VERSION = 2
 
         private val json = Json {
             ignoreUnknownKeys = true
@@ -293,14 +296,20 @@ data class AccountingCategoryDb(
 
         /**
          * 首次释放：检查 SharedPreferences 标记，未释放则写入默认数据。
+         * 版本升级时重新释放默认数据（用户手动修改的 JSON 会被覆盖）。
          * 后续调用直接 load()，用户修改 JSON 后 UI 自动反映。
          */
         fun ensureDefault(context: Context): AccountingCategoryDb {
             val prefs = context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
-            if (!prefs.getBoolean(PREF_KEY_RELEASED, false)) {
+            val released = prefs.getBoolean(PREF_KEY_RELEASED, false)
+            val savedVersion = prefs.getInt(PREF_KEY_VERSION, 0)
+            if (!released || savedVersion < CURRENT_VERSION) {
                 val db = defaultCategories()
                 db.save(context)
-                prefs.edit().putBoolean(PREF_KEY_RELEASED, true).apply()
+                prefs.edit()
+                    .putBoolean(PREF_KEY_RELEASED, true)
+                    .putInt(PREF_KEY_VERSION, CURRENT_VERSION)
+                    .apply()
                 return db
             }
             return load(context)
