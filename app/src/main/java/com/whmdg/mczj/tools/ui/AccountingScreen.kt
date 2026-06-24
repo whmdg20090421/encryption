@@ -148,7 +148,6 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                     Icon(Icons.Default.Home, contentDescription = "返回主页")
                 }
             }
-        }
 
             // 右下角青色加号按钮
             FloatingActionButton(
