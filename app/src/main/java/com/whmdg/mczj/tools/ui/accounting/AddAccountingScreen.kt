@@ -658,11 +658,11 @@ private fun KeyButton(
 
 /** 图标标识 → 自定义彩色矢量图资源映射（仅原始 5 个分类） */
 private fun categoryDrawableOrNull(icon: String): Int? = when (icon) {
-    "shopping_bag" -> R.drawable.accounting_level1_ic_cat_shopping
-    "utensils" -> R.drawable.accounting_level1_ic_cat_food
-    "car" -> R.drawable.accounting_level1_ic_cat_transport
-    "gamepad" -> R.drawable.accounting_level1_ic_cat_leisure
-    "house" -> R.drawable.accounting_level1_ic_cat_home
+    "shopping_bag" -> R.drawable.accounting_ic_cat_shopping
+    "utensils" -> R.drawable.accounting_ic_cat_food
+    "car" -> R.drawable.accounting_ic_cat_transport
+    "gamepad" -> R.drawable.accounting_ic_cat_leisure
+    "house" -> R.drawable.accounting_ic_cat_home
     else -> null
 }
 
