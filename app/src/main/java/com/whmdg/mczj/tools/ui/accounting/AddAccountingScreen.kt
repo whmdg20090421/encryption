@@ -8,6 +8,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.rememberScrollState
@@ -69,6 +70,13 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
     var selectedCategory by remember { mutableStateOf<String?>(null) }
     var expandedCategory by remember { mutableStateOf<String?>(null) }
 
+    // 读取图标主题色设置
+    val iconColorHex = remember { getCategoryIconColor(context) }
+    val iconThemeColor = remember(iconColorHex) {
+        try { Color(android.graphics.Color.parseColor(iconColorHex)) }
+        catch (_: Exception) { Color(0xFF00BCD4) }
+    }
+
     // 切换记账类型时重置选中和展开
     LaunchedEffect(selectedType) {
         selectedCategory = null
@@ -120,10 +128,15 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
             val itemsPerRow = 4
             val primaryIconSize = 56.dp
             val subIconSize = 48.dp
+            val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+            val itemWidth = screenWidth / itemsPerRow
+            val scrollState = rememberScrollState()
 
             Column(
                 modifier = Modifier
+                    .weight(1f)
                     .fillMaxWidth()
+                    .verticalScroll(scrollState)
                     .padding(vertical = 8.dp, horizontal = 12.dp)
             ) {
                 // 按每行4个分组显示一级分类
@@ -135,17 +148,17 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                     // 一级分类行
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly
+                        horizontalArrangement = Arrangement.Start
                     ) {
                         rowItems.forEach { cat ->
                             val isSelected = selectedCategory == cat.id
                             val isExpanded = expandedCategory == cat.id
                             val hasChildren = cat.children.isNotEmpty()
-                            val iconColor = categoryColor(cat.id)
 
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier
+                                    .width(itemWidth)
                                     .clickable {
                                         if (hasChildren) {
                                             expandedCategory = if (isExpanded) null else cat.id
@@ -170,14 +183,13 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                                             ),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Icon(
-                                            imageVector = materialIcon(cat.icon),
-                                            contentDescription = cat.name,
-                                            modifier = Modifier.size(24.dp),
+                                        CategoryIcon(
+                                            icon = cat.icon,
+                                            size = 24.dp,
                                             tint = if (isSelected || isExpanded)
-                                                MaterialTheme.colorScheme.primary
+                                                Color(0xFF00BCD4)
                                             else
-                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                                iconThemeColor
                                         )
                                     }
                                     // 有子分类标记：右下角三个点
@@ -222,7 +234,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                         }
                         // 补齐空位（保持对齐）
                         repeat(itemsPerRow - rowItems.size) {
-                            Spacer(Modifier.weight(1f))
+                            Spacer(Modifier.width(itemWidth))
                         }
                     }
 
@@ -246,9 +258,6 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                     i = rowEnd
                 }
             }
-
-            // 消费类型选择区（暂空）
-            Box(modifier = Modifier.weight(1f).fillMaxWidth())
 
             // 第一行：左侧20%空 | 中间60%备注输入 | 右侧20%金额
             Row(
@@ -728,166 +737,146 @@ private fun KeyButton(
     }
 }
 
-/** 图标标识 → Material Symbols 映射（Outlined 风格） */
+/** 图标标识 → Material Icons 映射（TwoTone 双色调风格） */
 private fun materialIcon(icon: String): ImageVector = when (icon) {
     // 餐饮美食
-    "restaurant" -> Icons.Outlined.Restaurant
-    "fastfood" -> Icons.Outlined.Fastfood
-    "local_cafe" -> Icons.Outlined.LocalCafe
-    "local_bar" -> Icons.Outlined.LocalBar
-    "cake" -> Icons.Outlined.Cake
-    "coffee" -> Icons.Outlined.Coffee
-    "free_breakfast" -> Icons.Outlined.FreeBreakfast
-    "lunch_dining" -> Icons.Outlined.LunchDining
-    "dinner_dining" -> Icons.Outlined.DinnerDining
-    "icecream" -> Icons.Outlined.Icecream
-    "bakery_dining" -> Icons.Outlined.BakeryDining
-    "liquor" -> Icons.Outlined.Liquor
-    "set_meal" -> Icons.Outlined.SetMeal
-    "ramen_dining" -> Icons.Outlined.RamenDining
-    "delivery_dining" -> Icons.Outlined.DeliveryDining
-    "dining" -> Icons.Outlined.Restaurant
-
+    "restaurant" -> Icons.TwoTone.Restaurant
+    "fastfood" -> Icons.TwoTone.Fastfood
+    "local_cafe" -> Icons.TwoTone.LocalCafe
+    "local_bar" -> Icons.TwoTone.LocalBar
+    "cake" -> Icons.TwoTone.Cake
+    "coffee" -> Icons.TwoTone.Coffee
+    "free_breakfast" -> Icons.TwoTone.FreeBreakfast
+    "lunch_dining" -> Icons.TwoTone.LunchDining
+    "dinner_dining" -> Icons.TwoTone.DinnerDining
+    "icecream" -> Icons.TwoTone.Icecream
+    "bakery_dining" -> Icons.TwoTone.BakeryDining
+    "liquor" -> Icons.TwoTone.Liquor
+    "set_meal" -> Icons.TwoTone.SetMeal
+    "ramen_dining" -> Icons.TwoTone.RamenDining
+    "delivery_dining" -> Icons.TwoTone.DeliveryDining
+    "dining" -> Icons.TwoTone.Restaurant
     // 水果零食
-    "eco" -> Icons.Outlined.Eco
-    "apple" -> Icons.Outlined.Eco  // Apple 不存在，用 Eco 替代
-    "sports_cricket" -> Icons.Outlined.SportsCricket
-    "circle" -> Icons.Outlined.Circle
-    "bubble_chart" -> Icons.Outlined.BubbleChart
-    "pie_chart" -> Icons.Outlined.PieChart
-    "cookie" -> Icons.Outlined.Cookie
-    "candy" -> Icons.Outlined.Icecream  // Candy 不存在，用 Icecream 替代
-    "chocolate" -> Icons.Outlined.Cake  // Chocolate 不存在，用 Cake 替代
-    "grain" -> Icons.Outlined.Grain
-
+    "eco" -> Icons.TwoTone.Eco
+    "apple" -> Icons.TwoTone.Eco
+    "sports_cricket" -> Icons.TwoTone.SportsCricket
+    "circle" -> Icons.TwoTone.Circle
+    "bubble_chart" -> Icons.TwoTone.BubbleChart
+    "pie_chart" -> Icons.TwoTone.PieChart
+    "cookie" -> Icons.TwoTone.Cookie
+    "candy" -> Icons.TwoTone.Icecream
+    "chocolate" -> Icons.TwoTone.Cake
+    "grain" -> Icons.TwoTone.Grain
     // 饮品
-    "juice" -> Icons.Outlined.LocalCafe  // Juice 不存在，用 LocalCafe 替代
-    "water_drop" -> Icons.Outlined.WaterDrop
-
+    "juice" -> Icons.TwoTone.LocalCafe
+    "water_drop" -> Icons.TwoTone.WaterDrop
     // 食材
-    "kitchen" -> Icons.Outlined.Kitchen
-    "yard" -> Icons.Outlined.Yard
-    "blender" -> Icons.Outlined.Blender
-
+    "kitchen" -> Icons.TwoTone.Kitchen
+    "yard" -> Icons.TwoTone.Yard
+    "blender" -> Icons.TwoTone.Blender
     // 购物
-    "shopping_cart" -> Icons.Outlined.ShoppingCart
-    "shopping_bag" -> Icons.Outlined.ShoppingBag
-    "storefront" -> Icons.Outlined.Storefront
-    "watch" -> Icons.Outlined.Watch
-    "accessibility" -> Icons.Outlined.Accessibility
-
+    "shopping_cart" -> Icons.TwoTone.ShoppingCart
+    "shopping_bag" -> Icons.TwoTone.ShoppingBag
+    "storefront" -> Icons.TwoTone.Storefront
+    "watch" -> Icons.TwoTone.Watch
+    "accessibility" -> Icons.TwoTone.Accessibility
     // 宠物
-    "pets" -> Icons.Outlined.Pets
-    "pet_supplies" -> Icons.Outlined.Pets  // PetSupplies 不存在，用 Pets 替代
-    "inventory_2" -> Icons.Outlined.Inventory2
-    "medical_services" -> Icons.Outlined.MedicalServices
-    "shower" -> Icons.Outlined.Shower
-
+    "pets" -> Icons.TwoTone.Pets
+    "pet_supplies" -> Icons.TwoTone.Pets
+    "inventory_2" -> Icons.TwoTone.Inventory2
+    "medical_services" -> Icons.TwoTone.MedicalServices
+    "shower" -> Icons.TwoTone.Shower
     // 交通出行
-    "directions_car" -> Icons.Outlined.DirectionsCar
-    "directions_bus" -> Icons.Outlined.DirectionsBus
-    "directions_subway" -> Icons.Outlined.DirectionsSubway
-    "directions_bike" -> Icons.Outlined.DirectionsBike
-    "local_taxi" -> Icons.Outlined.LocalTaxi
-    "local_parking" -> Icons.Outlined.LocalParking
-    "local_gas_station" -> Icons.Outlined.LocalGasStation
-
+    "directions_car" -> Icons.TwoTone.DirectionsCar
+    "directions_bus" -> Icons.TwoTone.DirectionsBus
+    "directions_subway" -> Icons.TwoTone.DirectionsSubway
+    "directions_bike" -> Icons.TwoTone.DirectionsBike
+    "local_taxi" -> Icons.TwoTone.LocalTaxi
+    "local_parking" -> Icons.TwoTone.LocalParking
+    "local_gas_station" -> Icons.TwoTone.LocalGasStation
     // 汽车
-    "build" -> Icons.Outlined.Build
-    "handyman" -> Icons.Outlined.Handyman
-    "security" -> Icons.Outlined.Security
-    "local_car_wash" -> Icons.Outlined.LocalCarWash
-    "report_problem" -> Icons.Outlined.ReportProblem
-
+    "build" -> Icons.TwoTone.Build
+    "handyman" -> Icons.TwoTone.Handyman
+    "security" -> Icons.TwoTone.Security
+    "local_car_wash" -> Icons.TwoTone.LocalCarWash
+    "report_problem" -> Icons.TwoTone.ReportProblem
     // 服饰
-    "checkroom" -> Icons.Outlined.Checkroom
-    "diamond" -> Icons.Outlined.Diamond
-    "auto_awesome" -> Icons.Outlined.AutoAwesome
-    "hiking" -> Icons.Outlined.Hiking
-
+    "checkroom" -> Icons.TwoTone.Checkroom
+    "diamond" -> Icons.TwoTone.Diamond
+    "auto_awesome" -> Icons.TwoTone.AutoAwesome
+    "hiking" -> Icons.TwoTone.Hiking
     // 日用品
-    "local_laundry_service" -> Icons.Outlined.LocalLaundryService
-    "receipt" -> Icons.Outlined.Receipt
-    "cleaning_services" -> Icons.Outlined.CleaningServices
-
+    "local_laundry_service" -> Icons.TwoTone.LocalLaundryService
+    "receipt" -> Icons.TwoTone.Receipt
+    "cleaning_services" -> Icons.TwoTone.CleaningServices
     // 教育
-    "school" -> Icons.Outlined.School
-    "model_training" -> Icons.Outlined.ModelTraining
-    "menu_book" -> Icons.Outlined.MenuBook
-    "edit" -> Icons.Outlined.Edit
-    "business_center" -> Icons.Outlined.BusinessCenter
-
+    "school" -> Icons.TwoTone.School
+    "model_training" -> Icons.TwoTone.ModelTraining
+    "menu_book" -> Icons.TwoTone.MenuBook
+    "edit" -> Icons.TwoTone.Edit
+    "business_center" -> Icons.TwoTone.BusinessCenter
     // 投资
-    "trending_down" -> Icons.Outlined.TrendingDown
-    "show_chart" -> Icons.Outlined.ShowChart
-    "money_off" -> Icons.Outlined.MoneyOff
-
+    "trending_down" -> Icons.TwoTone.TrendingDown
+    "show_chart" -> Icons.TwoTone.ShowChart
+    "money_off" -> Icons.TwoTone.MoneyOff
     // 娱乐
-    "movie" -> Icons.Outlined.Movie
-    "mic" -> Icons.Outlined.Mic
-    "attractions" -> Icons.Outlined.Attractions
-    "celebration" -> Icons.Outlined.Celebration
-
+    "movie" -> Icons.TwoTone.Movie
+    "mic" -> Icons.TwoTone.Mic
+    "attractions" -> Icons.TwoTone.Attractions
+    "celebration" -> Icons.TwoTone.Celebration
     // 游戏
-    "sports_esports" -> Icons.Outlined.SportsEsports
-    "payments" -> Icons.Outlined.Payments
-    "workspace_premium" -> Icons.Outlined.WorkspacePremium
-
+    "sports_esports" -> Icons.TwoTone.SportsEsports
+    "payments" -> Icons.TwoTone.Payments
+    "workspace_premium" -> Icons.TwoTone.WorkspacePremium
     // 保健
-    "medication" -> Icons.Outlined.Medication
-    "biotech" -> Icons.Outlined.Biotech
-    "health_and_safety" -> Icons.Outlined.HealthAndSafety
-
+    "medication" -> Icons.TwoTone.Medication
+    "biotech" -> Icons.TwoTone.Biotech
+    "health_and_safety" -> Icons.TwoTone.HealthAndSafety
     // 订阅
-    "subscriptions" -> Icons.Outlined.Subscriptions
-    "play_circle" -> Icons.Outlined.PlayCircle
-    "music_note" -> Icons.Outlined.MusicNote
-    "cloud" -> Icons.Outlined.Cloud
-
+    "subscriptions" -> Icons.TwoTone.Subscriptions
+    "play_circle" -> Icons.TwoTone.PlayCircle
+    "music_note" -> Icons.TwoTone.MusicNote
+    "cloud" -> Icons.TwoTone.Cloud
     // 运动
-    "fitness_center" -> Icons.Outlined.FitnessCenter
-    "sports" -> Icons.Outlined.Sports
-    "sports_martial_arts" -> Icons.Outlined.SportsMartialArts
-
+    "fitness_center" -> Icons.TwoTone.FitnessCenter
+    "sports" -> Icons.TwoTone.Sports
+    "sports_martial_arts" -> Icons.TwoTone.SportsMartialArts
     // 住房居家
-    "home_work" -> Icons.Outlined.HomeWork
-    "home" -> Icons.Outlined.Home
-    "construction" -> Icons.Outlined.Construction
-    "weekend" -> Icons.Outlined.Weekend
-    "devices" -> Icons.Outlined.Devices
-    "palette" -> Icons.Outlined.Palette
-    "bed" -> Icons.Outlined.Bed
-
+    "home_work" -> Icons.TwoTone.HomeWork
+    "home" -> Icons.TwoTone.Home
+    "construction" -> Icons.TwoTone.Construction
+    "weekend" -> Icons.TwoTone.Weekend
+    "devices" -> Icons.TwoTone.Devices
+    "palette" -> Icons.TwoTone.Palette
+    "bed" -> Icons.TwoTone.Bed
     // 美容
-    "face" -> Icons.Outlined.Face
-    "face_retouching_natural" -> Icons.Outlined.FaceRetouchingNatural
-    "content_cut" -> Icons.Outlined.ContentCut
-    "back_hand" -> Icons.Outlined.BackHand
-
+    "face" -> Icons.TwoTone.Face
+    "face_retouching_natural" -> Icons.TwoTone.FaceRetouchingNatural
+    "content_cut" -> Icons.TwoTone.ContentCut
+    "back_hand" -> Icons.TwoTone.BackHand
     // 收入分类
-    "work" -> Icons.Outlined.Work
-    "account_balance" -> Icons.Outlined.AccountBalance
-    "card_giftcard" -> Icons.Outlined.CardGiftcard
-    "emoji_events" -> Icons.Outlined.EmojiEvents
-    "star" -> Icons.Outlined.Star
-    "schedule" -> Icons.Outlined.Schedule
-    "access_time" -> Icons.Outlined.AccessTime
-    "monetization_on" -> Icons.Outlined.MonetizationOn
-    "savings" -> Icons.Outlined.Savings
-    "military_tech" -> Icons.Outlined.MilitaryTech
-    "flight" -> Icons.Outlined.Flight
-    "attach_money" -> Icons.Outlined.AttachMoney
-    "undo" -> Icons.Outlined.Undo
-    "trending_up" -> Icons.Outlined.TrendingUp
-    "sell" -> Icons.Outlined.Sell
-    "favorite" -> Icons.Outlined.Favorite
-    "child_care" -> Icons.Outlined.ChildCare
-    "receipt_long" -> Icons.Outlined.ReceiptLong
-    "description" -> Icons.Outlined.Description
-    "account_balance_wallet" -> Icons.Outlined.AccountBalanceWallet
-
+    "work" -> Icons.TwoTone.Work
+    "account_balance" -> Icons.TwoTone.AccountBalance
+    "card_giftcard" -> Icons.TwoTone.CardGiftcard
+    "emoji_events" -> Icons.TwoTone.EmojiEvents
+    "star" -> Icons.TwoTone.Star
+    "schedule" -> Icons.TwoTone.Schedule
+    "access_time" -> Icons.TwoTone.AccessTime
+    "monetization_on" -> Icons.TwoTone.MonetizationOn
+    "savings" -> Icons.TwoTone.Savings
+    "military_tech" -> Icons.TwoTone.MilitaryTech
+    "flight" -> Icons.TwoTone.Flight
+    "attach_money" -> Icons.TwoTone.AttachMoney
+    "undo" -> Icons.TwoTone.Undo
+    "trending_up" -> Icons.TwoTone.TrendingUp
+    "sell" -> Icons.TwoTone.Sell
+    "favorite" -> Icons.TwoTone.Favorite
+    "child_care" -> Icons.TwoTone.ChildCare
+    "receipt_long" -> Icons.TwoTone.ReceiptLong
+    "description" -> Icons.TwoTone.Description
+    "account_balance_wallet" -> Icons.TwoTone.AccountBalanceWallet
     // 兜底
-    else -> Icons.Outlined.Category
+    else -> Icons.TwoTone.Category
 }
 
 /** 分类 ID → 主题色（每个分类不同颜色） */
@@ -934,6 +923,21 @@ private fun categoryColor(id: String): Color = when (id) {
     else -> Color(0xFF9E9E9E)            // 灰色
 }
 
+/** 分类图标渲染（TwoTone 双色调风格） */
+@Composable
+private fun CategoryIcon(
+    icon: String,
+    size: androidx.compose.ui.unit.Dp,
+    tint: Color
+) {
+    Icon(
+        imageVector = materialIcon(icon),
+        contentDescription = null,
+        modifier = Modifier.size(size),
+        tint = tint
+    )
+}
+
 /** 二级分类选择卡片（参考 BeeCount _SubcategorySelectorCard） */
 @Composable
 private fun SubcategoryCard(
@@ -950,69 +954,72 @@ private fun SubcategoryCard(
         shadowElevation = 0.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            var i = 0
-            while (i < children.size) {
-                val rowEnd = (i + itemsPerRow).coerceAtMost(children.size)
-                val rowItems = children.subList(i, rowEnd)
+        BoxWithConstraints(modifier = Modifier.padding(12.dp)) {
+            val subItemWidth = maxWidth / itemsPerRow
+            Column {
+                var i = 0
+                while (i < children.size) {
+                    val rowEnd = (i + itemsPerRow).coerceAtMost(children.size)
+                    val rowItems = children.subList(i, rowEnd)
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    rowItems.forEach { child ->
-                        val isSelected = selectedId == child.id
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Start
+                    ) {
+                        rowItems.forEach { child ->
+                            val isSelected = selectedId == child.id
 
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier
-                                .clickable { onSelect(child.id) }
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Box(
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(RoundedCornerShape(24.dp))
-                                    .background(
-                                        if (isSelected)
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
-                                        else
-                                            MaterialTheme.colorScheme.surfaceVariant
-                                    ),
-                                contentAlignment = Alignment.Center
+                                    .width(subItemWidth)
+                                    .clickable { onSelect(child.id) }
+                                    .padding(vertical = 4.dp)
                             ) {
-                                Icon(
-                                    imageVector = materialIcon(child.icon),
-                                    contentDescription = child.name,
-                                    modifier = Modifier.size(20.dp),
-                                    tint = if (isSelected)
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(RoundedCornerShape(24.dp))
+                                        .background(
+                                            if (isSelected)
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                            else
+                                                MaterialTheme.colorScheme.surfaceVariant
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CategoryIcon(
+                                        icon = child.icon,
+                                        size = 20.dp,
+                                        tint = if (isSelected)
+                                            Color(0xFF00BCD4)
+                                        else
+                                            iconThemeColor
+                                    )
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = child.name,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    color = if (isSelected)
                                         MaterialTheme.colorScheme.primary
                                     else
                                         MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = child.name,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                color = if (isSelected)
-                                    MaterialTheme.colorScheme.primary
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        }
+                        repeat(itemsPerRow - rowItems.size) {
+                            Spacer(Modifier.width(subItemWidth))
                         }
                     }
-                    repeat(itemsPerRow - rowItems.size) {
-                        Spacer(Modifier.weight(1f))
-                    }
-                }
 
-                if (rowEnd < children.size) {
-                    Spacer(Modifier.height(8.dp))
+                    if (rowEnd < children.size) {
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    i = rowEnd
                 }
-                i = rowEnd
             }
         }
     }

@@ -3,18 +3,24 @@ package com.whmdg.mczj.tools.ui.accounting
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.ui.Screen
 
@@ -103,13 +109,18 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // 内容区（空白，留待后续实现）
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize()
-            ) {
-                // 顶部留白，给按钮区域让位
-                item { Spacer(Modifier.height(barHeight)) }
+            // 内容区：根据 selectedTab 显示不同内容
+            if (selectedTab == 4) {
+                // "我的"页面
+                MinePageContent()
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    // 顶部留白，给按钮区域让位
+                    item { Spacer(Modifier.height(barHeight)) }
+                }
             }
 
             // 状态栏背景层（独立控制显隐）
@@ -159,6 +170,208 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                 containerColor = Color(0xFF00BCD4)
             ) {
                 Icon(Icons.Default.Add, contentDescription = "添加记账", tint = Color.White)
+            }
+        }
+    }
+}
+
+/** "我的"页面内容：个性化设置 → 分类管理 → 分类图标 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MinePageContent() {
+    // 页面栈：emptyList = 主页面，listOf("个性化设置") = 个性化页面，listOf("个性化设置","分类管理") = 分类管理页
+    var pageStack by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    when {
+        pageStack.isEmpty() -> {
+            // "我的"主页
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                item { Spacer(Modifier.height(16.dp)) }
+                item {
+                    SettingCard(
+                        icon = Icons.Outlined.Palette,
+                        title = "个性化设置",
+                        subtitle = "图标风格、主题等",
+                        onClick = { pageStack = listOf("个性化设置") }
+                    )
+                }
+            }
+        }
+        pageStack == listOf("个性化设置") -> {
+            // 个性化设置页
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                item { Spacer(Modifier.height(16.dp)) }
+                item {
+                    SettingCard(
+                        icon = Icons.Outlined.Category,
+                        title = "分类管理",
+                        subtitle = "分类图标风格",
+                        onClick = { pageStack = listOf("个性化设置", "分类管理") }
+                    )
+                }
+            }
+        }
+        pageStack == listOf("个性化设置", "分类管理") -> {
+            // 分类管理页：分类图标开关
+            CategoryIconStylePage()
+        }
+    }
+}
+
+/** 设置卡片组件（参考 BeeCount SectionCard + AppListTile 风格） */
+@Composable
+private fun SettingCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = title,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier
+                    .size(20.dp)
+                    .graphicsLayer { rotationZ = 180f }
+            )
+        }
+    }
+}
+
+/** 图标主题色设置页：点击颜色圆圈弹出调色板 */
+@Composable
+private fun CategoryIconStylePage() {
+    val context = LocalContext.current
+    var currentColorHex by remember { mutableStateOf(getCategoryIconColor(context)) }
+    var showColorPicker by remember { mutableStateOf(false) }
+
+    val presetColors = listOf(
+        "#5C6BC0" to "靛蓝",
+        "#00BCD4" to "青色",
+        "#26A69A" to "青绿",
+        "#42A5F5" to "蓝色",
+        "#7E57C2" to "紫色",
+        "#EC407A" to "粉色",
+        "#EF5350" to "红色",
+        "#FF7043" to "深橙",
+        "#FFA726" to "橙色",
+        "#66BB6A" to "绿色",
+        "#78909C" to "蓝灰",
+        "#8D6E63" to "棕色",
+    )
+
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        item { Spacer(Modifier.height(16.dp)) }
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ColorLens,
+                        contentDescription = "图标主题色",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Text(
+                        text = "图标主题色",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    // 颜色圆圈按钮
+                    Box {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color(android.graphics.Color.parseColor(currentColorHex)))
+                                .clickable { showColorPicker = true }
+                        )
+                        // 弹出调色板
+                        DropdownMenu(
+                            expanded = showColorPicker,
+                            onDismissRequest = { showColorPicker = false }
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                // 4行3列
+                                for (row in presetColors.chunked(3)) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        for ((hex, _) in row) {
+                                            val isSelected = hex == currentColorHex
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(36.dp)
+                                                    .clip(RoundedCornerShape(18.dp))
+                                                    .then(
+                                                        if (isSelected) Modifier.border(
+                                                            2.dp,
+                                                            MaterialTheme.colorScheme.onSurface,
+                                                            RoundedCornerShape(18.dp)
+                                                        ) else Modifier
+                                                    )
+                                                    .background(Color(android.graphics.Color.parseColor(hex)))
+                                                    .clickable {
+                                                        currentColorHex = hex
+                                                        setCategoryIconColor(context, hex)
+                                                        showColorPicker = false
+                                                    }
+                                            )
+                                        }
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

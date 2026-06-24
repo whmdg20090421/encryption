@@ -182,6 +182,9 @@ object AppDataPaths {
     /** 记账本 SharedPreferences */
     const val PREFS_ACCOUNTING = "accounting_prefs"
 
+    /** 分类图标主题色 SharedPreferences Key（十六进制颜色值，如 "#00BCD4"） */
+    const val PREF_KEY_ICON_COLOR = "category_icon_color"
+
     /**
      * 将 SAF tree URI 转换为绝对文件路径。
      * 解析 content://com.android.externalstorage.documents/tree/primary:加密/TF图

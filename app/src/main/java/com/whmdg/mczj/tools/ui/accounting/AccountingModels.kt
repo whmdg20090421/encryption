@@ -331,3 +331,15 @@ data class AccountingCategoryDb(
         return pages[page]?.get(type) ?: emptyList()
     }
 }
+
+/** 读取分类图标主题色（十六进制颜色值，默认青色 #00BCD4） */
+fun getCategoryIconColor(context: Context): String {
+    val prefs = context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
+    return prefs.getString(AppDataPaths.PREF_KEY_ICON_COLOR, "#5C6BC0") ?: "#5C6BC0"
+}
+
+/** 写入分类图标主题色 */
+fun setCategoryIconColor(context: Context, colorHex: String) {
+    context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
+        .edit().putString(AppDataPaths.PREF_KEY_ICON_COLOR, colorHex).apply()
+}
