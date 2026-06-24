@@ -750,18 +750,18 @@ private fun materialIcon(icon: String): ImageVector = when (icon) {
 
     // 水果零食
     "eco" -> Icons.Outlined.Eco
-    "apple" -> Icons.Outlined.Apple
+    "apple" -> Icons.Outlined.Eco  // Apple 不存在，用 Eco 替代
     "sports_cricket" -> Icons.Outlined.SportsCricket
     "circle" -> Icons.Outlined.Circle
     "bubble_chart" -> Icons.Outlined.BubbleChart
     "pie_chart" -> Icons.Outlined.PieChart
     "cookie" -> Icons.Outlined.Cookie
-    "candy" -> Icons.Outlined.Candy
-    "chocolate" -> Icons.Outlined.Chocolate
+    "candy" -> Icons.Outlined.Icecream  // Candy 不存在，用 Icecream 替代
+    "chocolate" -> Icons.Outlined.Cake  // Chocolate 不存在，用 Cake 替代
     "grain" -> Icons.Outlined.Grain
 
     // 饮品
-    "juice" -> Icons.Outlined.Juice
+    "juice" -> Icons.Outlined.LocalCafe  // Juice 不存在，用 LocalCafe 替代
     "water_drop" -> Icons.Outlined.WaterDrop
 
     // 食材
@@ -778,7 +778,7 @@ private fun materialIcon(icon: String): ImageVector = when (icon) {
 
     // 宠物
     "pets" -> Icons.Outlined.Pets
-    "pet_supplies" -> Icons.Outlined.PetSupplies
+    "pet_supplies" -> Icons.Outlined.Pets  // PetSupplies 不存在，用 Pets 替代
     "inventory_2" -> Icons.Outlined.Inventory2
     "medical_services" -> Icons.Outlined.MedicalServices
     "shower" -> Icons.Outlined.Shower
