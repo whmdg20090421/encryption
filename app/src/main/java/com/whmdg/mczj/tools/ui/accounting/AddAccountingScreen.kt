@@ -352,7 +352,7 @@ private fun DateTimePickerDialog(
                         IconButton(onClick = {
                             if (calMonth == 0) { calMonth = 11; calYear-- } else calMonth--
                         }) {
-                            Icon(Icons.Filled.ChevronLeft, "上月", tint = cyan)
+                            Icon(Icons.Outlined.ChevronLeft, "上月", tint = cyan)
                         }
                         Text(
                             text = "%04d-%02d".format(calYear, calMonth + 1),
@@ -362,7 +362,7 @@ private fun DateTimePickerDialog(
                         IconButton(onClick = {
                             if (calMonth == 11) { calMonth = 0; calYear++ } else calMonth++
                         }) {
-                            Icon(Icons.Filled.ChevronRight, "下月", tint = cyan)
+                            Icon(Icons.Outlined.ChevronRight, "下月", tint = cyan)
                         }
                     }
                     // 星期标题
@@ -626,7 +626,7 @@ private fun KeyButton(
     ) {
         if (icon) {
             Icon(
-                Icons.Filled.Backspace,
+                Icons.Outlined.Backspace,
                 contentDescription = "退格",
                 tint = textColor
             )
@@ -640,46 +640,47 @@ private fun KeyButton(
     }
 }
 
-/** 图标标识 → Material Icons 映射 */
+/** 图标标识 → Material Symbols 映射（Outlined 风格） */
 private fun materialIcon(icon: String): ImageVector = when (icon) {
-    // 支出分类
-    "restaurant" -> Icons.Filled.Restaurant
-    "fastfood" -> Icons.Filled.Fastfood
-    "eco" -> Icons.Filled.Eco
-    "local_cafe" -> Icons.Filled.LocalCafe
-    "cake" -> Icons.Filled.Cake
-    "kitchen" -> Icons.Filled.Kitchen
-    "shopping_cart" -> Icons.Filled.ShoppingCart
-    "pets" -> Icons.Filled.Pets
-    "directions_car" -> Icons.Filled.DirectionsCar
-    "checkroom" -> Icons.Filled.Checkroom
-    "local_laundry_service" -> Icons.Filled.LocalLaundryService
-    "school" -> Icons.Filled.School
-    "trending_down" -> Icons.Filled.TrendingDown
-    "movie" -> Icons.Filled.Movie
-    "sports_esports" -> Icons.Filled.SportsEsports
-    "medication" -> Icons.Filled.Medication
-    "subscriptions" -> Icons.Filled.Subscriptions
-    "fitness_center" -> Icons.Filled.FitnessCenter
-    "home_work" -> Icons.Filled.HomeWork
-    "home" -> Icons.Filled.Home
-    "face" -> Icons.Filled.Face
-    // 收入分类
-    "work" -> Icons.Filled.Work
-    "account_balance" -> Icons.Filled.AccountBalance
-    "card_giftcard" -> Icons.Filled.CardGiftcard
-    "emoji_events" -> Icons.Filled.EmojiEvents
-    "receipt" -> Icons.Filled.Receipt
-    "schedule" -> Icons.Filled.Schedule
-    "monetization_on" -> Icons.Filled.MonetizationOn
-    "undo" -> Icons.Filled.Undo
-    "trending_up" -> Icons.Filled.TrendingUp
-    "sell" -> Icons.Filled.Sell
-    "health_and_safety" -> Icons.Filled.HealthAndSafety
-    "receipt_long" -> Icons.Filled.ReceiptLong
-    "account_balance_wallet" -> Icons.Filled.AccountBalanceWallet
+    // 支出分类 - 完全匹配
+    "restaurant" -> Icons.Outlined.Restaurant
+    "fastfood" -> Icons.Outlined.Fastfood
+    "eco" -> Icons.Outlined.Eco
+    "local_cafe" -> Icons.Outlined.LocalCafe
+    "cake" -> Icons.Outlined.Cake
+    "kitchen" -> Icons.Outlined.Kitchen
+    "shopping_cart" -> Icons.Outlined.ShoppingCart
+    "pets" -> Icons.Outlined.Pets
+    "directions_car" -> Icons.Outlined.DirectionsCar
+    "checkroom" -> Icons.Outlined.Checkroom
+    "local_laundry_service" -> Icons.Outlined.LocalLaundryService
+    "school" -> Icons.Outlined.School
+    "trending_down" -> Icons.Outlined.TrendingDown
+    "movie" -> Icons.Outlined.Movie
+    "sports_esports" -> Icons.Outlined.SportsEsports
+    "medication" -> Icons.Outlined.Medication
+    "subscriptions" -> Icons.Outlined.Subscriptions
+    "fitness_center" -> Icons.Outlined.FitnessCenter
+    "home_work" -> Icons.Outlined.HomeWork
+    "home" -> Icons.Outlined.Home
+    "face" -> Icons.Outlined.Face
+    // 收入分类 - 完全匹配
+    "work" -> Icons.Outlined.Work
+    "account_balance" -> Icons.Outlined.AccountBalance
+    "card_giftcard" -> Icons.Outlined.CardGiftcard
+    "emoji_events" -> Icons.Outlined.EmojiEvents
+    "receipt" -> Icons.Outlined.Receipt
+    "schedule" -> Icons.Outlined.Schedule
+    "monetization_on" -> Icons.Outlined.MonetizationOn
+    "undo" -> Icons.Outlined.Undo
+    "trending_up" -> Icons.Outlined.TrendingUp
+    "sell" -> Icons.Outlined.Sell
+    "health_and_safety" -> Icons.Outlined.HealthAndSafety
+    "receipt_long" -> Icons.Outlined.ReceiptLong
+    "account_balance_wallet" -> Icons.Outlined.AccountBalanceWallet
+    "dining" -> Icons.Outlined.Restaurant
     // 兜底
-    else -> Icons.Filled.Category
+    else -> Icons.Outlined.Category
 }
 
 /** 分类 ID → 主题色（每个分类不同颜色） */
