@@ -60,7 +60,6 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
@@ -162,5 +161,5 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
     ) {
         Icon(Icons.Default.Add, contentDescription = "添加记账", tint = Color.White)
     }
-    } // Box
+    }
 }
