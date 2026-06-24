@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
@@ -108,6 +109,8 @@ private fun CalculatorKeyboard(onInput: (String) -> Unit) {
     val keyColor = MaterialTheme.colorScheme.surfaceVariant
     val isDark = isSystemInDarkTheme()
     val cyanText = if (isDark) Color(0xFF00838F) else Color(0xFF00BCD4)
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val rowHeight = screenHeight * 0.08f
 
     Column(
         modifier = Modifier
@@ -118,7 +121,7 @@ private fun CalculatorKeyboard(onInput: (String) -> Unit) {
     ) {
         // 第1行: 1 2 3 ←
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(rowHeight),
             horizontalArrangement = Arrangement.spacedBy(keySpacing)
         ) {
             KeyButton("1", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
@@ -128,35 +131,35 @@ private fun CalculatorKeyboard(onInput: (String) -> Unit) {
         }
         // 第2行: 4 5 6 [-|*]
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(rowHeight),
             horizontalArrangement = Arrangement.spacedBy(keySpacing)
         ) {
             KeyButton("4", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
             KeyButton("5", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
             KeyButton("6", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
             // 左右分：- 和 *
-            Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(keySpacing)) {
+            Row(modifier = Modifier.weight(1f).fillMaxHeight(), horizontalArrangement = Arrangement.spacedBy(keySpacing)) {
                 KeyButton("-", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
                 KeyButton("*", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
             }
         }
         // 第3行: 7 8 9 [+|÷]
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(rowHeight),
             horizontalArrangement = Arrangement.spacedBy(keySpacing)
         ) {
             KeyButton("7", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
             KeyButton("8", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
             KeyButton("9", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
             // 左右分：+ 和 ÷
-            Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(keySpacing)) {
+            Row(modifier = Modifier.weight(1f).fillMaxHeight(), horizontalArrangement = Arrangement.spacedBy(keySpacing)) {
                 KeyButton("+", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
                 KeyButton("÷", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
             }
         }
         // 第4行: 再记 0 . 完成
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(rowHeight),
             horizontalArrangement = Arrangement.spacedBy(keySpacing)
         ) {
             KeyButton("再记", Modifier.weight(1f), keyShape, MaterialTheme.colorScheme.primaryContainer, cyanText, onInput)
@@ -186,7 +189,7 @@ private fun KeyButton(
 
     Box(
         modifier = modifier
-            .aspectRatio(1f)
+            .fillMaxSize()
             .clip(shape)
             .background(bgColor)
             .clickable(interactionSource = interactionSource, indication = null) { onInput(label) },
