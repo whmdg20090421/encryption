@@ -22,7 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.foundation.Image
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Alignment
@@ -32,14 +31,11 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.whmdg.mczj.tools.R
 import java.util.Calendar
 
 @Composable
@@ -135,7 +131,6 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
             ) {
                 categories.forEach { cat ->
                     val isSelected = selectedCategory == cat.id
-                    val customDrawable = categoryDrawableOrNull(cat.icon)
                     val iconColor = categoryColor(cat.id)
 
                     Box(
@@ -154,23 +149,12 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        if (customDrawable != null) {
-                            // 自定义彩色 SVG 图标
-                            Image(
-                                painter = painterResource(customDrawable),
-                                contentDescription = cat.name,
-                                modifier = Modifier.size(25.dp),
-                                colorFilter = if (isSelected) ColorFilter.tint(Color.White) else null
-                            )
-                        } else {
-                            // Material Icons（每个分类不同颜色）
-                            Icon(
-                                imageVector = materialIcon(cat.icon),
-                                contentDescription = cat.name,
-                                modifier = Modifier.size(25.dp),
-                                tint = if (isSelected) Color.White else iconColor
-                            )
-                        }
+                        Icon(
+                            imageVector = materialIcon(cat.icon),
+                            contentDescription = cat.name,
+                            modifier = Modifier.size(25.dp),
+                            tint = if (isSelected) Color.White else iconColor
+                        )
                     }
                 }
             }
@@ -654,16 +638,6 @@ private fun KeyButton(
             )
         }
     }
-}
-
-/** 图标标识 → 自定义彩色矢量图资源映射（仅原始 5 个分类） */
-private fun categoryDrawableOrNull(icon: String): Int? = when (icon) {
-    "shopping_bag" -> R.drawable.accounting_ic_cat_shopping
-    "utensils" -> R.drawable.accounting_ic_cat_food
-    "car" -> R.drawable.accounting_ic_cat_transport
-    "gamepad" -> R.drawable.accounting_ic_cat_leisure
-    "house" -> R.drawable.accounting_ic_cat_home
-    else -> null
 }
 
 /** 图标标识 → Material Icons 映射 */
