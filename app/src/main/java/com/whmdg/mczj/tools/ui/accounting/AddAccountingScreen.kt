@@ -6,6 +6,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -46,7 +47,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
     }
     var showDatePicker by remember { mutableStateOf(false) }
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-    val infoRowHeight = screenHeight * 0.03f
+    val infoRowHeight = screenHeight * 0.05f
 
     Scaffold { innerPadding ->
         Column(
@@ -133,11 +134,19 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                         .weight(0.2f),
                     contentAlignment = Alignment.CenterEnd
                 ) {
+                    val scrollState = rememberScrollState()
+                    // 金额变化时自动滚到最右
+                    LaunchedEffect(amount) {
+                        scrollState.animateScrollTo(scrollState.maxValue)
+                    }
                     Text(
                         text = amount,
                         style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(end = 8.dp)
+                        maxLines = 1,
+                        modifier = Modifier
+                            .horizontalScroll(scrollState)
+                            .padding(end = 8.dp)
                     )
                 }
             }
@@ -165,10 +174,36 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
                         "." -> if (!amount.contains(".")) "$amount." else amount
                         "再记" -> { "0" } // TODO: 保存记录
                         "完成" -> { onBack(); amount }
-                        else -> if (amount == "0" && key !in listOf("+", "-", "*", "÷"))
-                            key
-                        else
-                            amount + key
+                        "+", "-", "*", "÷" -> {
+                            val ops = listOf("+", "-", "*", "÷")
+                            val existingOp = ops.firstOrNull { it in amount.drop(1) }
+                            if (existingOp != null) {
+                                val idx = amount.indexOf(existingOp, 1)
+                                val num1 = amount.substring(0, idx).toDoubleOrNull()
+                                val num2 = amount.substring(idx + 1).toDoubleOrNull()
+                                if (num1 != null && num2 != null) {
+                                    val result = when (existingOp) {
+                                        "+" -> num1 + num2
+                                        "-" -> num1 - num2
+                                        "*" -> num1 * num2
+                                        "÷" -> if (num2 != 0.0) {
+                                            val r = num1 / num2
+                                            if (r == r.toLong().toDouble()) r.toLong().toDouble() else
+                                                "%.1f".format(r).toDouble()
+                                        } else num1
+                                        else -> num1
+                                    }
+                                    val display = if (result == result.toLong().toDouble())
+                                        result.toLong().toString() else result.toString()
+                                    "$display$key"
+                                } else {
+                                    amount + key
+                                }
+                            } else {
+                                amount + key
+                            }
+                        }
+                        else -> if (amount == "0") key else amount + key
                     }
                 }
             )
@@ -224,6 +259,9 @@ private fun DateTimePickerDialog(
         (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7 // Monday=0
     }
 
+    val dialogWidth = screenWidth * 0.80f
+    val dialogHeight = screenHeight * 0.7f
+
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {},
@@ -231,10 +269,10 @@ private fun DateTimePickerDialog(
         text = {
             Column(
                 modifier = Modifier
-                    .width(screenWidth * 0.7f)
-                    .height(screenHeight * 0.7f)
+                    .width(dialogWidth)
+                    .height(dialogHeight)
             ) {
-                // 上半：日历
+                // 上半：日历（weight均分）
                 Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     // 月份导航
                     Row(
@@ -302,9 +340,8 @@ private fun DateTimePickerDialog(
                 // 青色分割线
                 HorizontalDivider(color = cyan, thickness = 1.dp)
 
-                // 下半：时间齿轮
+                // 下半：时间齿轮（weight均分）
                 Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    // 小时齿轮
                     TimeWheel(
                         range = 0..23,
                         selected = selHour,
@@ -312,7 +349,6 @@ private fun DateTimePickerDialog(
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         label = { "%02d".format(it) }
                     )
-                    // 分钟齿轮
                     TimeWheel(
                         range = 0..59,
                         selected = selMinute,
@@ -348,13 +384,33 @@ private fun TimeWheel(
     label: (Int) -> String
 ) {
     val cyan = Color(0xFF00BCD4)
-    val listState = rememberLazyListState()
-    val items = remember(range) { range.toList() }
-    val initialIndex = remember(selected) { (selected - range.first).coerceIn(0, items.size - 1) }
+    val size = range.last - range.first + 1
+    val totalItems = size * 10000
+    val initialIndex = totalItems / 2 + (selected - range.first)
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
+    val itemHeight = 36.dp
+    val itemSpacing = 4.dp
+    val itemTotalHeight = itemHeight + itemSpacing
 
-    // 自动滚到选中项
-    LaunchedEffect(Unit) {
-        listState.scrollToItem(initialIndex)
+    // 松手自动吸中
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (!listState.isScrollInProgress) {
+            val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
+            val centerY = viewportHeight / 2f
+            var bestIndex = listState.firstVisibleItemIndex
+            var bestDist = Float.MAX_VALUE
+            for (vi in listState.layoutInfo.visibleItemsInfo) {
+                val itemCenter = vi.offset + vi.size / 2f
+                val dist = kotlin.math.abs(itemCenter - centerY)
+                if (dist < bestDist) {
+                    bestDist = dist
+                    bestIndex = vi.index
+                }
+            }
+            listState.animateScrollToItem(bestIndex)
+            val value = range.first + (bestIndex % size + size) % size
+            onSelect(value)
+        }
     }
 
     LazyColumn(
@@ -362,16 +418,14 @@ private fun TimeWheel(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 前后留空让选中项居中
-        item { Spacer(Modifier.height(60.dp)) }
-        items(items.size) { index ->
-            val value = items[index]
+        items(totalItems) { index ->
+            val value = range.first + (index % size + size) % size
             val isSelected = value == selected
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(36.dp)
-                    .clickable { onSelect(value) },
+                    .height(itemHeight)
+                    .padding(vertical = itemSpacing / 2),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -383,7 +437,6 @@ private fun TimeWheel(
                 )
             }
         }
-        item { Spacer(Modifier.height(60.dp)) }
     }
 }
 
