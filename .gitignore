@@ -20,3 +20,4 @@ app/src/main/cpp/hashes.inc
 apk_output/
 artifact.zip
 AUTH_SYSTEM_REVIEW.md
+*.apk
