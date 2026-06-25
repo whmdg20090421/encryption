@@ -86,9 +86,15 @@ object AccountingRepository {
         return getDb(context).getRecordsByBook(bookName)
     }
 
-    /** 插入一条记录 */
+    /** 插入一条记录（增量维护记账天数） */
     fun insertRecord(context: Context, record: AccountingRecord) {
-        getDb(context).insertRecord(record)
+        val db = getDb(context)
+        // 检查当天是否已有记录（插入前）
+        if (!isDateHasRecords(context, record.bookName, record.happenedAt)) {
+            // 新的一天，天数 +1
+            setSetting(context, KEY_DAY_COUNT, (getDayCount(context) + 1).toString())
+        }
+        db.insertRecord(record)
     }
 
     /** 更新一条记录 */
@@ -96,9 +102,47 @@ object AccountingRepository {
         getDb(context).updateRecord(record)
     }
 
-    /** 删除一条记录 */
+    /** 删除一条记录（增量维护记账天数） */
     fun deleteRecord(context: Context, id: String) {
-        getDb(context).deleteRecord(id)
+        val db = getDb(context)
+        // 先查出被删记录的信息
+        val record = getRecordById(context, id)
+        if (record != null) {
+            // 检查是否为当天最后一笔（排除自身）
+            if (!isDateHasOtherRecords(context, record.bookName, record.happenedAt, id)) {
+                // 当天最后一笔，天数 -1
+                val newCount = maxOf(getDayCount(context) - 1, 0)
+                setSetting(context, KEY_DAY_COUNT, newCount.toString())
+            }
+        }
+        db.deleteRecord(id)
+    }
+
+    /** 按 ID 查单条记录 */
+    private fun getRecordById(context: Context, id: String): AccountingRecord? {
+        val sqlDb = getDb(context).readableDatabase
+        val cursor = sqlDb.rawQuery(
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before FROM records WHERE id = ?",
+            arrayOf(id)
+        )
+        return try {
+            if (cursor.moveToFirst()) {
+                AccountingRecord(
+                    id = cursor.getString(0),
+                    bookName = cursor.getString(1),
+                    type = cursor.getString(2),
+                    amount = cursor.getString(3),
+                    categoryId = cursor.getString(4),
+                    subcategoryId = cursor.getString(5),
+                    note = cursor.getString(6),
+                    happenedAt = cursor.getLong(7),
+                    accountId = cursor.getString(8),
+                    discountBefore = cursor.getString(9)
+                )
+            } else null
+        } finally {
+            cursor.close()
+        }
     }
 
     /**
@@ -143,6 +187,85 @@ object AccountingRepository {
         } finally {
             sqlDb.endTransaction()
         }
+    }
+
+    // ─────────────────────────────────────────────
+    // 记账天数 (Day Count — 增量维护)
+    // ─────────────────────────────────────────────
+
+    private const val KEY_DAY_COUNT = "accounting_day_count"
+
+    /** 获取记账天数（首次调用时全量计算并缓存） */
+    fun getDayCount(context: Context): Int {
+        val cached = getSetting(context, KEY_DAY_COUNT)
+        if (cached != null) return cached.toIntOrNull() ?: 0
+        // 首次：全量计算
+        val count = calcDayCountAll(context)
+        setSetting(context, KEY_DAY_COUNT, count.toString())
+        return count
+    }
+
+    /** 全量计算所有记录的记账天数（按自然日去重） */
+    private fun calcDayCountAll(context: Context): Int {
+        val db = getDb(context)
+        val sqlDb = db.readableDatabase
+        val cursor = sqlDb.rawQuery("SELECT happened_at FROM records ORDER BY happened_at ASC", null)
+        val cal = java.util.Calendar.getInstance()
+        var count = 0
+        var lastDay = -1
+        try {
+            while (cursor.moveToNext()) {
+                val ts = cursor.getLong(0)
+                cal.timeInMillis = ts
+                val day = cal.get(java.util.Calendar.YEAR) * 10000 +
+                        cal.get(java.util.Calendar.MONTH) * 100 +
+                        cal.get(java.util.Calendar.DAY_OF_MONTH)
+                if (day != lastDay) {
+                    count++
+                    lastDay = day
+                }
+            }
+        } finally {
+            cursor.close()
+        }
+        return count
+    }
+
+    /** 指定账本指定日期是否已有记录 */
+    private fun isDateHasRecords(context: Context, bookName: String, happenedAt: Long): Boolean {
+        val (start, end) = dayRange(happenedAt)
+        val sqlDb = getDb(context).readableDatabase
+        val cursor = sqlDb.rawQuery(
+            "SELECT 1 FROM records WHERE book_name = ? AND happened_at BETWEEN ? AND ? LIMIT 1",
+            arrayOf(bookName, start.toString(), end.toString())
+        )
+        return try { cursor.moveToFirst() } finally { cursor.close() }
+    }
+
+    /** 指定账本指定日期是否存在除 excludeId 以外的记录 */
+    private fun isDateHasOtherRecords(context: Context, bookName: String, happenedAt: Long, excludeId: String): Boolean {
+        val (start, end) = dayRange(happenedAt)
+        val sqlDb = getDb(context).readableDatabase
+        val cursor = sqlDb.rawQuery(
+            "SELECT 1 FROM records WHERE book_name = ? AND happened_at BETWEEN ? AND ? AND id != ? LIMIT 1",
+            arrayOf(bookName, start.toString(), end.toString(), excludeId)
+        )
+        return try { cursor.moveToFirst() } finally { cursor.close() }
+    }
+
+    /** 将时间戳拆为当天 00:00:00.000 ~ 23:59:59.999 的毫秒范围 */
+    private fun dayRange(happenedAt: Long): Pair<Long, Long> {
+        val cal = java.util.Calendar.getInstance().apply { timeInMillis = happenedAt }
+        val year = cal.get(java.util.Calendar.YEAR)
+        val month = cal.get(java.util.Calendar.MONTH)
+        val day = cal.get(java.util.Calendar.DAY_OF_MONTH)
+        val start = java.util.Calendar.getInstance().apply {
+            set(year, month, day, 0, 0, 0); set(java.util.Calendar.MILLISECOND, 0)
+        }
+        val end = java.util.Calendar.getInstance().apply {
+            set(year, month, day, 23, 59, 59); set(java.util.Calendar.MILLISECOND, 999)
+        }
+        return start.timeInMillis to end.timeInMillis
     }
 
     // ─────────────────────────────────────────────
@@ -240,6 +363,9 @@ object AccountingRepository {
 
     private const val KEY_AVATAR_PATH = "mine_avatar_path"
     private const val KEY_NICKNAME = "mine_nickname"
+    private const val KEY_USERNAME = "mine_username"
+    private const val DEFAULT_USERNAME = "默认用户名"
+    private const val DEFAULT_NICKNAME = "记一笔流水账，守一份岁月长"
 
     /** 获取头像绝对路径（验证文件存在才返回） */
     fun getAvatarPath(context: Context): String? {
@@ -285,14 +411,24 @@ object AccountingRepository {
         setSetting(context, KEY_AVATAR_PATH, "")
     }
 
-    /** 获取用户签名 */
+    /** 获取用户签名（默认诗意短句） */
     fun getNickname(context: Context): String {
-        return getSetting(context, KEY_NICKNAME) ?: ""
+        return getSetting(context, KEY_NICKNAME) ?: DEFAULT_NICKNAME
     }
 
     /** 设置用户签名 */
     fun setNickname(context: Context, name: String) {
         setSetting(context, KEY_NICKNAME, name)
+    }
+
+    /** 获取用户名（默认 "默认用户名"） */
+    fun getUsername(context: Context): String {
+        return getSetting(context, KEY_USERNAME) ?: DEFAULT_USERNAME
+    }
+
+    /** 设置用户名 */
+    fun setUsername(context: Context, name: String) {
+        setSetting(context, KEY_USERNAME, name)
     }
 
     /** 从 URI 推断文件扩展名 */

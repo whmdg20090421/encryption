@@ -101,37 +101,67 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { onTabSelect(0) },
-                    icon = { Icon(if (selectedTab == 0) Icons.Filled.Home else Icons.Outlined.Home, contentDescription = "首页") },
-                    label = { Text("首页") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 1,
-                    onClick = { onTabSelect(1) },
-                    icon = { Icon(if (selectedTab == 1) Icons.Filled.AccountBalanceWallet else Icons.Outlined.AccountBalanceWallet, contentDescription = "资产") },
-                    label = { Text("资产") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { onTabSelect(2) },
-                    icon = { Icon(if (selectedTab == 2) Icons.Filled.BarChart else Icons.Outlined.BarChart, contentDescription = "统计") },
-                    label = { Text("统计") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 3,
-                    onClick = { onTabSelect(3) },
-                    icon = { Icon(if (selectedTab == 3) Icons.Filled.CalendarMonth else Icons.Outlined.CalendarMonth, contentDescription = "日历") },
-                    label = { Text("日历") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 4,
-                    onClick = { onTabSelect(4) },
-                    icon = { Icon(if (selectedTab == 4) Icons.Filled.Person else Icons.Outlined.Person, contentDescription = "我的") },
-                    label = { Text("我的") }
-                )
+            val navItems = listOf(
+                Triple("首页", Icons.Filled.Home to Icons.Outlined.Home),
+                Triple("资产", Icons.Filled.AccountBalanceWallet to Icons.Outlined.AccountBalanceWallet),
+                Triple("统计", Icons.Filled.BarChart to Icons.Outlined.BarChart),
+                Triple("日历", Icons.Filled.CalendarMonth to Icons.Outlined.CalendarMonth),
+                Triple("我的", Icons.Filled.Person to Icons.Outlined.Person),
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(28.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                    shadowElevation = 8.dp
+                ) {
+                    Row(modifier = Modifier.height(56.dp)) {
+                        navItems.forEachIndexed { index, (label, icons) ->
+                            val isActive = selectedTab == index
+                            val iconColor = if (isActive) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .clickable { onTabSelect(index) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(22.dp))
+                                        .background(
+                                            if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                            else Color.Transparent
+                                        )
+                                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isActive) icons.first else icons.second,
+                                        contentDescription = label,
+                                        tint = iconColor,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                    Spacer(Modifier.height(1.dp))
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 10.sp,
+                                            fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal
+                                        ),
+                                        color = iconColor,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     ) { innerPadding ->
@@ -948,6 +978,10 @@ private fun MineHeaderCard(bookName: String) {
     var showNicknameDialog by remember { mutableStateOf(false) }
     var nicknameInput by remember { mutableStateOf("") }
 
+    var username by remember { mutableStateOf(AccountingRepository.getUsername(context)) }
+    var showUsernameDialog by remember { mutableStateOf(false) }
+    var usernameInput by remember { mutableStateOf("") }
+
     // 图片选择器
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = PickVisualMedia()
@@ -961,11 +995,7 @@ private fun MineHeaderCard(bookName: String) {
     // 统计数据
     val records = remember(bookName) { AccountingRepository.getRecordsByBook(context, bookName) }
     val totalRecords = records.size
-    val dayCount = if (records.isEmpty()) 0 else {
-        val earliest = records.minOf { it.happenedAt }
-        val days = ((System.currentTimeMillis() - earliest) / (1000 * 60 * 60 * 24)).toInt()
-        maxOf(days, 1)
-    }
+    val dayCount = remember { AccountingRepository.getDayCount(context) }
 
     // 签名编辑弹窗
     if (showNicknameDialog) {
@@ -994,7 +1024,32 @@ private fun MineHeaderCard(bookName: String) {
         )
     }
 
-    val iconTint = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
+    // 用户名编辑弹窗
+    if (showUsernameDialog) {
+        AlertDialog(
+            onDismissRequest = { showUsernameDialog = false },
+            title = { Text("编辑用户名") },
+            text = {
+                OutlinedTextField(
+                    value = usernameInput,
+                    onValueChange = { usernameInput = it },
+                    placeholder = { Text("输入用户名...") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    username = usernameInput.trim()
+                    AccountingRepository.setUsername(context, username)
+                    showUsernameDialog = false
+                }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUsernameDialog = false }) { Text("取消") }
+            }
+        )
+    }
 
     Card(
         modifier = Modifier
@@ -1011,32 +1066,64 @@ private fun MineHeaderCard(bookName: String) {
                 .padding(vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 头像（80dp 圆形，点击选择图片）
-            Box(contentAlignment = Alignment.TopEnd) {
-                Box(
-                    modifier = Modifier
-                        .size(80.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
-                        .border(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), CircleShape)
-                        .clickable {
-                            photoPickerLauncher.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly))
-                        },
-                    contentAlignment = Alignment.Center
+            // 统计 + 头像行：[记账天数] [头像] [总笔数]
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                // 左侧：记账天数
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    if (avatarPath != null) {
-                        val bitmap = remember(avatarPath) {
-                            try {
-                                BitmapFactory.decodeFile(avatarPath)
-                            } catch (_: Exception) { null }
-                        }
-                        if (bitmap != null) {
-                            Image(
-                                bitmap = bitmap.asImageBitmap(),
-                                contentDescription = "头像",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
+                    Text(
+                        text = "$dayCount",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "记账天数",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // 中间：头像（80dp 圆形，点击选择图片）
+                Box(contentAlignment = Alignment.TopEnd) {
+                    Box(
+                        modifier = Modifier
+                            .size(80.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
+                            .border(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), CircleShape)
+                            .clickable {
+                                photoPickerLauncher.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly))
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (avatarPath != null) {
+                            val bitmap = remember(avatarPath) {
+                                try {
+                                    BitmapFactory.decodeFile(avatarPath)
+                                } catch (_: Exception) { null }
+                            }
+                            if (bitmap != null) {
+                                Image(
+                                    bitmap = bitmap.asImageBitmap(),
+                                    contentDescription = "头像",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.Person,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(40.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         } else {
                             Icon(
                                 Icons.Default.Person,
@@ -1045,107 +1132,79 @@ private fun MineHeaderCard(bookName: String) {
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
-                    } else {
+                    }
+                    // 编辑小图标（右上角 45° 切线位置）
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .offset(x = 4.dp, y = (-4).dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary),
+                        contentAlignment = Alignment.Center
+                    ) {
                         Icon(
-                            Icons.Default.Person,
-                            contentDescription = null,
-                            modifier = Modifier.size(40.dp),
-                            tint = MaterialTheme.colorScheme.primary
+                            Icons.Default.Edit,
+                            contentDescription = "更换头像",
+                            modifier = Modifier.size(14.dp),
+                            tint = Color.White
                         )
                     }
                 }
-                // 编辑小图标（右上角 45° 切线位置）
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
-                        .offset(x = 4.dp, y = (-4).dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary),
-                    contentAlignment = Alignment.Center
+
+                // 右侧：总笔数
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Icon(
-                        Icons.Default.Edit,
-                        contentDescription = "更换头像",
-                        modifier = Modifier.size(14.dp),
-                        tint = Color.White
+                    Text(
+                        text = "$totalRecords",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "总笔数",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
             Spacer(Modifier.height(16.dp))
 
-            // 诗意短句（居中，最宽 60%）
+            // 用户名（点击可编辑）
             Text(
-                text = "记一笔流水账，守一份岁月长",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth(0.6f)
+                text = username,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .clickable {
+                        usernameInput = username
+                        showUsernameDialog = true
+                    }
+                    .padding(horizontal = 16.dp)
             )
 
             Spacer(Modifier.height(8.dp))
 
-            // 签名行（可编辑）
-            Row(
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.Center,
+            // 签名（默认诗意短句，点击可编辑）
+            Text(
+                text = nickname,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .clickable {
                         nicknameInput = nickname
                         showNicknameDialog = true
                     }
-                    .padding(horizontal = 16.dp)
-            ) {
-                if (nickname.isNotEmpty()) {
-                    Text(
-                        text = nickname,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(Modifier.width(4.dp))
-                }
-                Icon(
-                    Icons.Default.Edit,
-                    contentDescription = "编辑签名",
-                    modifier = Modifier.size(14.dp),
-                    tint = iconTint
-                )
-            }
+                    .fillMaxWidth(0.6f)
+            )
 
-            Spacer(Modifier.height(20.dp))
-
-            // 统计行：记账天数 | 总笔数
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "$dayCount",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "记账天数",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "$totalRecords",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "总笔数",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
         }
     }
 }

@@ -476,6 +476,7 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 - **数值兼容性**：规定 UI 数值时，优先使用兼容性变量（如 `circleRadius * 2`）或百分比方案（如 `screenWidthDp * 0.4f`），避免硬编码固定 dp 数值。这样在不同屏幕密度和尺寸下具有更好的适配性。
 - **禁止主动使用 dp 限制尺寸**：UI 组件的尺寸约束必须使用百分比（`weight`、`fillMaxWidth`、`fillMaxHeight`）或相对于屏幕/父容器的方案，禁止使用 `Modifier.size(Xdp)`、`Modifier.width(Xdp)`、`Modifier.height(Xdp)` 等硬编码 dp 限制组件大小。除非用户明确指定"用 XX dp"，才能使用 dp 值。间距（`Spacer`、`padding`、`spacedBy`）不受此限制。
 - **使用官方接口**：涉及日期、时间、数学、格式化等计算时，优先使用平台/语言官方 API（如 `Calendar.isLeapYear(year)`），不要自己写算法判断，避免边界情况遗漏。
+- **Card 内边距**：卡片默认使用 `padding(horizontal = 16.dp, vertical = 12.dp)`，不要用过大的内边距（如 24dp），避免文字离卡片边缘太远显得空旷。
 
 ### 认证安全
 - `NativeAuth` 的 JNI 层使用内嵌 Argon2 验证密码，派生密钥仅在内存中短暂存在
