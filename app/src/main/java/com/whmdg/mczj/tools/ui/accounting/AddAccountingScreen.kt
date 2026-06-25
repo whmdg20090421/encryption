@@ -43,6 +43,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.widget.Toast
+import androidx.compose.ui.text.input.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import coil3.compose.AsyncImage
 import java.util.Calendar
 
@@ -77,8 +79,16 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
         "%04d-%02d-%02d %02d:%02d".format(selectedYear, selectedMonth + 1, selectedDay, selectedHour, selectedMinute)
     }
     var showDatePicker by remember { mutableStateOf(false) }
+    var showDiscountDialog by remember { mutableStateOf(false) }
+    // 优惠数据：null 表示未设置
+    var discountBefore by remember { mutableStateOf<String?>(null) }
+    var discountOff by remember { mutableStateOf<String?>(null) }
+    var discountAfter by remember { mutableStateOf<String?>(null) }
+    val hasDiscount = discountAfter != null
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     val infoRowHeight = screenHeight * 0.05f
+    // 元素间距（统一调整用）
+    val elementSpacing = 10.dp
 
     // 账户选择
     val accounts = remember { AccountingRepository.getAllAccounts(context) }
@@ -412,7 +422,32 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     .height(infoRowHeight),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Spacer(Modifier.fillMaxHeight().weight(0.2f))
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .weight(0.2f),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .clickable { showDiscountDialog = true }
+                            .padding(start = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Discount,
+                            contentDescription = "优惠",
+                            modifier = Modifier.size(16.dp),
+                            tint = iconThemeColor
+                        )
+                        Spacer(Modifier.width(2.dp))
+                        Text(
+                            text = if (hasDiscount) "-${discountOff}" else "优惠",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = iconThemeColor
+                        )
+                    }
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
@@ -499,7 +534,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     }
                 }
 
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(elementSpacing))
 
                 // 支付账户
                 Row(
@@ -660,6 +695,88 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 confirmButton = {},
                 dismissButton = {
                     TextButton(onClick = { showAccountDialog = false }) {
+                        Text("取消")
+                    }
+                }
+            )
+        }
+
+        // 优惠弹窗
+        if (showDiscountDialog) {
+            val inputBefore = remember { mutableStateOf(discountBefore ?: "") }
+            val inputOff = remember { mutableStateOf(discountOff ?: "") }
+            val inputAfter = remember { mutableStateOf(discountAfter ?: (if (amount != "0" && amount.isNotEmpty()) amount else "")) }
+
+            // 自动计算第三个字段
+            fun recalc(changed: String) {
+                val b = inputBefore.value.toDoubleOrNull()
+                val o = inputOff.value.toDoubleOrNull()
+                val a = inputAfter.value.toDoubleOrNull()
+                when (changed) {
+                    "before" -> {
+                        if (b != null && o != null) inputAfter.value = String.format("%.2f", b - o)
+                        else if (b != null && a != null) inputOff.value = String.format("%.2f", b - a)
+                    }
+                    "off" -> {
+                        if (b != null && o != null) inputAfter.value = String.format("%.2f", b - o)
+                        else if (o != null && a != null) inputBefore.value = String.format("%.2f", o + a)
+                    }
+                    "after" -> {
+                        if (b != null && a != null) inputOff.value = String.format("%.2f", b - a)
+                        else if (o != null && a != null) inputBefore.value = String.format("%.2f", o + a)
+                    }
+                }
+            }
+
+            AlertDialog(
+                onDismissRequest = { showDiscountDialog = false },
+                title = { Text("优惠计算") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            value = inputBefore.value,
+                            onValueChange = { inputBefore.value = it; recalc("before") },
+                            label = { Text("优惠前金额") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = inputOff.value,
+                            onValueChange = { inputOff.value = it; recalc("off") },
+                            label = { Text("优惠金额") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = inputAfter.value,
+                            onValueChange = { inputAfter.value = it; recalc("after") },
+                            label = { Text("优惠后金额") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        discountBefore = inputBefore.value.ifEmpty { null }
+                        discountOff = inputOff.value.ifEmpty { null }
+                        discountAfter = inputAfter.value.ifEmpty { null }
+                        if (discountAfter != null) {
+                            amount = discountAfter!!
+                        }
+                        showDiscountDialog = false
+                    }) {
+                        Text("确认")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        // 取消：不生效，关闭弹窗
+                        showDiscountDialog = false
+                    }) {
                         Text("取消")
                     }
                 }
