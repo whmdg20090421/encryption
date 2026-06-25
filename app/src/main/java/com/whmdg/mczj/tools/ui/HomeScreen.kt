@@ -89,6 +89,7 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 
+import com.whmdg.mczj.tools.ui.accounting.AccountingDetailScreen
 import com.whmdg.mczj.tools.ui.accounting.AccountingScreen
 import com.whmdg.mczj.tools.ui.accounting.AddAccountingScreen
 import com.whmdg.mczj.tools.ui.components.GlowCard
@@ -142,6 +143,7 @@ sealed class Screen {
     data class DiaryBookDetail(val bookName: String, val createdAt: Long, val lastEditedAt: Long) : Screen()
     object Wifi : Screen()
     object Accounting : Screen()
+    data class AccountingDetail(val bookName: String, val recordId: String) : Screen()
     data class AddAccounting(val bookName: String, val recordId: String? = null) : Screen()
     object About : Screen()
     object Changelog : Screen()
@@ -582,6 +584,14 @@ fun MainAppContainer() {
             AccountingScreen(
                 onBack = { navigateBack() },
                 onNavigate = { navigateTo(it) }
+            )
+        }
+        is Screen.AccountingDetail -> {
+            AccountingDetailScreen(
+                onBack = { navigateBack() },
+                onNavigate = { navigateTo(it) },
+                bookName = currentScreen.bookName,
+                recordId = currentScreen.recordId
             )
         }
         is Screen.AddAccounting -> {
