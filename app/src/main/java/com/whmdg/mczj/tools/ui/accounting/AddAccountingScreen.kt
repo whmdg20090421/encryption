@@ -706,8 +706,9 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             val inputBefore = remember { mutableStateOf(discountBefore ?: "") }
             val inputOff = remember { mutableStateOf(discountOff ?: "") }
             val inputAfter = remember { mutableStateOf(discountAfter ?: (if (amount != "0" && amount.isNotEmpty()) amount else "")) }
-            val autoCalc = remember { mutableStateOf(true) }
-            val percentMode = remember { mutableStateOf(false) }
+            // 从 Repository 读取持久化的开关状态
+            val autoCalc = remember { mutableStateOf(AccountingRepository.getSetting(context, "discount_auto_calc") != "false") }
+            val percentMode = remember { mutableStateOf(AccountingRepository.getSetting(context, "discount_percent_mode") == "true") }
 
             /** 限制金额输入：最多两位小数 */
             fun filterAmount(raw: String): String {
@@ -839,6 +840,9 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         if (discountAfter != null) {
                             amount = discountAfter!!
                         }
+                        // 持久化开关状态到 Repository
+                        AccountingRepository.setSetting(context, "discount_auto_calc", autoCalc.value.toString())
+                        AccountingRepository.setSetting(context, "discount_percent_mode", percentMode.value.toString())
                         showDiscountDialog = false
                     }) {
                         Text("确认")
