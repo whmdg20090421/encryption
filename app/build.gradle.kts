@@ -165,3 +165,29 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
+
+// ── 编译时检查：禁止非 Repository 文件直接访问 AccountingDatabase ──
+tasks.register("checkAccountingDbAccess") {
+    description = "检查记账模块中是否有代码直接访问 AccountingDatabase（应通过 Repository）"
+    group = "verification"
+    doLast {
+        val accountingDir = file("src/main/java/com/whmdg/mczj/tools/ui/accounting")
+        val allowedFiles = setOf("AccountingDatabase.kt", "AccountingRepository.kt")
+        val violations = mutableListOf<String>()
+        accountingDir.listFiles()?.filter { it.extension == "kt" }?.forEach { file ->
+            if (file.name !in allowedFiles) {
+                val content = file.readText()
+                if (content.contains("AccountingDatabase")) {
+                    violations.add("  ${file.name}: 直接引用了 AccountingDatabase，应使用 AccountingRepository")
+                }
+            }
+        }
+        if (violations.isNotEmpty()) {
+            throw GradleException(
+                "记账模块数据库访问违规:\n${violations.joinToString("\n")}\n" +
+                "所有对 AccountingDatabase 的访问必须通过 AccountingRepository 进行。"
+            )
+        }
+    }
+}
+tasks.named("compileKotlin") { dependsOn("checkAccountingDbAccess") }

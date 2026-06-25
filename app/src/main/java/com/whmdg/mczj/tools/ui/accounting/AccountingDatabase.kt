@@ -34,6 +34,16 @@ internal class AccountingDatabase private constructor(context: Context) :
         /** DB 文件存储在 AppDataPaths.accounting() 目录下 */
         private fun dbPath(context: Context): String {
             val dir = AppDataPaths.accounting(context)
+            if (!dir.exists()) dir.mkdirs()
+            // 清理默认 databases/ 目录下的旧 DB 文件（迁移前的残留）
+            val legacyDb = context.getDatabasePath(DB_NAME)
+            if (legacyDb.exists()) legacyDb.delete()
+            val legacyJournal = File(legacyDb.parent, "$DB_NAME-journal")
+            if (legacyJournal.exists()) legacyJournal.delete()
+            val legacyWal = File(legacyDb.parent, "$DB_NAME-wal")
+            if (legacyWal.exists()) legacyWal.delete()
+            val legacyShm = File(legacyDb.parent, "$DB_NAME-shm")
+            if (legacyShm.exists()) legacyShm.delete()
             return File(dir, DB_NAME).absolutePath
         }
     }
