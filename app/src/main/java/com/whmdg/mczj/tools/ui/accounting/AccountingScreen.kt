@@ -30,7 +30,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
 import com.whmdg.mczj.tools.ui.Screen
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -223,8 +222,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                 // label → typeId 映射
                 val labelToTypeId = mapOf(
                     "现金" to "cash", "支付宝" to "alipay", "微信钱包" to "wechat",
-                    "银行卡" to "bank_card", "QQ钱包" to "qq_wallet", "京东金融" to "jd_finance",
-                    "自定义" to "custom",
+                    "银行卡" to "bank_card", "自定义" to "custom",
                     "不动产" to "real_estate", "车辆" to "vehicle", "投资" to "investment",
                     "保险" to "insurance", "公积金" to "provident_fund", "贷款" to "loan"
                 )
@@ -234,8 +232,6 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                     "file:///android_asset/icons/alipay.svg" to "支付宝",
                     "file:///android_asset/icons/wechat.svg" to "微信钱包",
                     "file:///android_asset/icons/bank_card.svg" to "银行卡",
-                    "file:///android_asset/icons/other_account.svg" to "QQ钱包",
-                    "file:///android_asset/icons/other_account.svg" to "京东金融",
                     "file:///android_asset/icons/other_account.svg" to "自定义",
                 )
                 val valuationTypes = listOf(
@@ -446,8 +442,6 @@ private val accountTypeConfigs = mapOf(
     "alipay" to AccountTypeConfig("file:///android_asset/icons/alipay.svg", "支付宝", "tradable"),
     "wechat" to AccountTypeConfig("file:///android_asset/icons/wechat.svg", "微信钱包", "tradable"),
     "bank_card" to AccountTypeConfig("file:///android_asset/icons/bank_card.svg", "银行卡", "tradable"),
-    "qq_wallet" to AccountTypeConfig("file:///android_asset/icons/other_account.svg", "QQ钱包", "tradable"),
-    "jd_finance" to AccountTypeConfig("file:///android_asset/icons/other_account.svg", "京东金融", "tradable"),
     "custom" to AccountTypeConfig("file:///android_asset/icons/other_account.svg", "自定义", "tradable"),
     "real_estate" to AccountTypeConfig("file:///android_asset/icons/real_estate.svg", "不动产", "valuation"),
     "vehicle" to AccountTypeConfig("file:///android_asset/icons/vehicle.svg", "车辆", "valuation"),
