@@ -38,7 +38,7 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
+fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedTab: Int = 0, onTabSelect: (Int) -> Unit = {}) {
     val context = LocalContext.current
     val listState = rememberLazyListState()
     var showBookMenu by remember { mutableStateOf(false) }
@@ -47,7 +47,6 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
     // 从 DB 加载账本列表和上次使用的账本
     var bookList by remember { mutableStateOf(AccountingRepository.getBookList(context)) }
     var currentBookName by remember { mutableStateOf(AccountingRepository.getLastBookName(context)) }
-    var selectedTab by remember { mutableIntStateOf(0) }
     var accountRefreshTrigger by remember { mutableIntStateOf(0) }
 
     // 判断是否在顶部：第一个 item 可见且 offset 为 0
@@ -66,7 +65,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
     // 返回手势处理：非首页标签→回首页；首页标签→双击退出
     BackHandler {
         if (selectedTab != 0) {
-            selectedTab = 0
+            onTabSelect(0)
         } else {
             val now = System.currentTimeMillis()
             if (now - lastBackPressTime < 1500L) {
@@ -93,31 +92,31 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
             NavigationBar {
                 NavigationBarItem(
                     selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
+                    onClick = { onTabSelect(0) },
                     icon = { Icon(if (selectedTab == 0) Icons.Filled.Home else Icons.Outlined.Home, contentDescription = "首页") },
                     label = { Text("首页") }
                 )
                 NavigationBarItem(
                     selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
+                    onClick = { onTabSelect(1) },
                     icon = { Icon(if (selectedTab == 1) Icons.Filled.AccountBalanceWallet else Icons.Outlined.AccountBalanceWallet, contentDescription = "资产") },
                     label = { Text("资产") }
                 )
                 NavigationBarItem(
                     selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
+                    onClick = { onTabSelect(2) },
                     icon = { Icon(if (selectedTab == 2) Icons.Filled.BarChart else Icons.Outlined.BarChart, contentDescription = "统计") },
                     label = { Text("统计") }
                 )
                 NavigationBarItem(
                     selected = selectedTab == 3,
-                    onClick = { selectedTab = 3 },
+                    onClick = { onTabSelect(3) },
                     icon = { Icon(if (selectedTab == 3) Icons.Filled.CalendarMonth else Icons.Outlined.CalendarMonth, contentDescription = "日历") },
                     label = { Text("日历") }
                 )
                 NavigationBarItem(
                     selected = selectedTab == 4,
-                    onClick = { selectedTab = 4 },
+                    onClick = { onTabSelect(4) },
                     icon = { Icon(if (selectedTab == 4) Icons.Filled.Person else Icons.Outlined.Person, contentDescription = "我的") },
                     label = { Text("我的") }
                 )

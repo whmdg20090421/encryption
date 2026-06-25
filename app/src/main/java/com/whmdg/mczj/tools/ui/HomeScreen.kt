@@ -316,6 +316,7 @@ fun MainAppContainer() {
     val context = LocalContext.current
     val backStack = remember { mutableStateListOf<Screen>(Screen.Dashboard) }
     var selectedTab by remember { mutableIntStateOf(0) }
+    var accountingSelectedTab by remember { mutableIntStateOf(0) }
 
     val vaultService = remember { VaultService(context).apply { load() } }
     val encryptionSettings = remember { EncryptionSettings(context) }
@@ -585,7 +586,9 @@ fun MainAppContainer() {
         is Screen.Accounting -> {
             AccountingScreen(
                 onBack = { navigateBack() },
-                onNavigate = { navigateTo(it) }
+                onNavigate = { navigateTo(it) },
+                selectedTab = accountingSelectedTab,
+                onTabSelect = { accountingSelectedTab = it }
             )
         }
         is Screen.AccountingDetail -> {
