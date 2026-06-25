@@ -79,7 +79,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     var showDatePicker by remember { mutableStateOf(false) }
     var showDiscountDialog by remember { mutableStateOf(false) }
     // 优惠数据：null 表示未设置
-    var discountBefore by remember { mutableStateOf<String?>(null) }
+    var discountBefore by remember { mutableStateOf<String?>(editingRecord?.discountBefore) }
     var discountOff by remember { mutableStateOf<String?>(null) }
     var discountAfter by remember { mutableStateOf<String?>(null) }
     val hasDiscount = discountAfter != null
@@ -186,7 +186,8 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             subcategoryId = subId,
             note = note,
             happenedAt = cal.timeInMillis,
-            accountId = selectedAccountId
+            accountId = selectedAccountId,
+            discountBefore = discountBefore
         )
         val db = AccountingRecordDb.load(context)
         if (editingRecord != null) {

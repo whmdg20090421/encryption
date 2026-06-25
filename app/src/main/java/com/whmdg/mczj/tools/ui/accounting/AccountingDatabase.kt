@@ -19,7 +19,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 3
+        private const val DB_VERSION = 4
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -76,15 +76,16 @@ internal class AccountingDatabase private constructor(context: Context) :
 
         db.execSQL("""
             CREATE TABLE records (
-                id             TEXT PRIMARY KEY,
-                book_name      TEXT NOT NULL,
-                type           TEXT NOT NULL,
-                amount         TEXT NOT NULL,
-                category_id    TEXT NOT NULL,
-                subcategory_id TEXT,
-                note           TEXT DEFAULT '',
-                happened_at    INTEGER NOT NULL,
-                account_id     TEXT
+                id               TEXT PRIMARY KEY,
+                book_name        TEXT NOT NULL,
+                type             TEXT NOT NULL,
+                amount           TEXT NOT NULL,
+                category_id      TEXT NOT NULL,
+                subcategory_id   TEXT,
+                note             TEXT DEFAULT '',
+                happened_at      INTEGER NOT NULL,
+                account_id       TEXT,
+                discount_before  TEXT
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX idx_rec_book ON records(book_name)")
@@ -127,6 +128,9 @@ internal class AccountingDatabase private constructor(context: Context) :
         }
         if (oldVersion < 3) {
             db.execSQL("ALTER TABLE records ADD COLUMN account_id TEXT")
+        }
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE records ADD COLUMN discount_before TEXT")
         }
     }
 
@@ -284,7 +288,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAllRecords(): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id FROM records ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before FROM records ORDER BY happened_at DESC",
             null
         )
         try {
@@ -300,7 +304,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByBook(bookName: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id FROM records WHERE book_name = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before FROM records WHERE book_name = ? ORDER BY happened_at DESC",
             arrayOf(bookName)
         )
         try {
@@ -324,6 +328,7 @@ internal class AccountingDatabase private constructor(context: Context) :
             put("note", r.note)
             put("happened_at", r.happenedAt)
             if (r.accountId != null) put("account_id", r.accountId) else putNull("account_id")
+            if (r.discountBefore != null) put("discount_before", r.discountBefore) else putNull("discount_before")
         }
     }
 
@@ -337,7 +342,8 @@ internal class AccountingDatabase private constructor(context: Context) :
             subcategoryId = c.getString(5),  // 可能为 null
             note = c.getString(6) ?: "",
             happenedAt = c.getLong(7),
-            accountId = c.getString(8)  // 可能为 null
+            accountId = c.getString(8),  // 可能为 null
+            discountBefore = c.getString(9)  // 可能为 null
         )
     }
 

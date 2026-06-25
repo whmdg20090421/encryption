@@ -321,7 +321,8 @@ data class AccountingRecord(
     val subcategoryId: String?,  // 二级分类 id（可选）
     val note: String = "",
     val happenedAt: Long = System.currentTimeMillis(),
-    val accountId: String? = null  // 关联账户 id（可选）
+    val accountId: String? = null,  // 关联账户 id（可选）
+    val discountBefore: String? = null  // 优惠前金额（可选）
 )
 
 /**

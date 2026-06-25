@@ -4,6 +4,8 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import com.whmdg.mczj.tools.AppDataPaths
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
 
 /**
  * 记账模块统一数据访问层（Repository 模式）。
@@ -130,6 +132,7 @@ object AccountingRepository {
                     put("note", record.note)
                     put("happened_at", record.happenedAt)
                     if (record.accountId != null) put("account_id", record.accountId) else putNull("account_id")
+                    if (record.discountBefore != null) put("discount_before", record.discountBefore) else putNull("discount_before")
                 }
                 sqlDb.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -182,6 +185,50 @@ object AccountingRepository {
     fun setLastAccountId(context: Context, accountId: String) {
         context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
             .edit().putString(KEY_LAST_ACCOUNT_ID, accountId).apply()
+    }
+
+    // ─────────────────────────────────────────────
+    // 记账本管理（存储在 settings 表）
+    // ─────────────────────────────────────────────
+
+    private const val KEY_BOOK_LIST = "accounting_books"
+    private const val KEY_LAST_BOOK = "last_book_name"
+    private const val DEFAULT_BOOK = "默认记账本"
+
+    /** 获取所有记账本名称列表（至少包含默认记账本） */
+    fun getBookList(context: Context): List<String> {
+        val json = getSetting(context, KEY_BOOK_LIST)
+        if (json != null) {
+            try {
+                val list = Json.decodeFromString<List<String>>(json)
+                if (list.isNotEmpty()) return list
+            } catch (_: Exception) {}
+        }
+        return listOf(DEFAULT_BOOK)
+    }
+
+    /** 保存记账本名称列表 */
+    fun setBookList(context: Context, books: List<String>) {
+        setSetting(context, KEY_BOOK_LIST, Json.encodeToString(books))
+    }
+
+    /** 添加一个新记账本（如果不存在） */
+    fun addBook(context: Context, bookName: String): Boolean {
+        val books = getBookList(context).toMutableList()
+        if (books.contains(bookName)) return false
+        books.add(bookName)
+        setBookList(context, books)
+        return true
+    }
+
+    /** 获取上次使用的记账本名称 */
+    fun getLastBookName(context: Context): String {
+        return getSetting(context, KEY_LAST_BOOK) ?: DEFAULT_BOOK
+    }
+
+    /** 保存上次使用的记账本名称 */
+    fun setLastBookName(context: Context, bookName: String) {
+        setSetting(context, KEY_LAST_BOOK, bookName)
     }
 
     // ─────────────────────────────────────────────

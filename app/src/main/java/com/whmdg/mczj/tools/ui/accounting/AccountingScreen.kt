@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
@@ -38,10 +39,14 @@ import java.util.Locale
 
 @Composable
 fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
+    val context = LocalContext.current
     val listState = rememberLazyListState()
     var showBookMenu by remember { mutableStateOf(false) }
     var showAccountTypeDialog by remember { mutableStateOf(false) }
-    var currentBookName by remember { mutableStateOf("默认记账本") }
+    var showAddBookDialog by remember { mutableStateOf(false) }
+    // 从 DB 加载账本列表和上次使用的账本
+    var bookList by remember { mutableStateOf(AccountingRepository.getBookList(context)) }
+    var currentBookName by remember { mutableStateOf(AccountingRepository.getLastBookName(context)) }
     var selectedTab by remember { mutableIntStateOf(0) }
     var accountRefreshTrigger by remember { mutableIntStateOf(0) }
 
@@ -56,7 +61,6 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
     val barHeight = 75.dp
     val snackbarHostState = remember { SnackbarHostState() }
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
-    val context = LocalContext.current
     val fabThemeColor = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
 
     // 返回手势处理：非首页标签→回首页；首页标签→双击退出
@@ -154,20 +158,63 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                         .padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+                    val menuWidth = screenWidth * 0.4f
                     Box {
                         TextButton(onClick = { showBookMenu = true }) {
-                            Text("记账本", style = MaterialTheme.typography.titleMedium)
+                            Text(currentBookName, style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Spacer(Modifier.width(2.dp))
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = null,
+                                modifier = Modifier.size(20.dp))
                         }
                         DropdownMenu(
                             expanded = showBookMenu,
-                            onDismissRequest = { showBookMenu = false }
+                            onDismissRequest = { showBookMenu = false },
+                            modifier = Modifier.width(menuWidth)
                         ) {
+                            // 第一行：添加记账本
                             DropdownMenuItem(
-                                text = { Text(currentBookName) },
-                                onClick = { showBookMenu = false }
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Add, contentDescription = null,
+                                            modifier = Modifier.size(18.dp),
+                                            tint = fabThemeColor)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("添加记账本", style = MaterialTheme.typography.bodyMedium,
+                                            color = fabThemeColor)
+                                    }
+                                },
+                                onClick = {
+                                    showBookMenu = false
+                                    showAddBookDialog = true
+                                }
                             )
+                            HorizontalDivider()
+                            // 已有账本列表
+                            bookList.forEach { book ->
+                                val isCurrent = book == currentBookName
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(book, style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isCurrent) fabThemeColor else MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    },
+                                    onClick = {
+                                        if (isCurrent) {
+                                            showBookMenu = false
+                                        } else {
+                                            currentBookName = book
+                                            AccountingRepository.setLastBookName(context, book)
+                                            showBookMenu = false
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
+                    Spacer(Modifier.weight(1f))
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.Home, contentDescription = "返回主页")
                     }
@@ -211,9 +258,44 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                 }
             }
 
+            // 添加记账本对话框
+            if (showAddBookDialog) {
+                var newBookName by remember { mutableStateOf("") }
+                AlertDialog(
+                    onDismissRequest = { showAddBookDialog = false },
+                    title = { Text("添加记账本") },
+                    text = {
+                        OutlinedTextField(
+                            value = newBookName,
+                            onValueChange = { newBookName = it },
+                            label = { Text("记账本名称") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            val name = newBookName.trim()
+                            if (name.isNotEmpty()) {
+                                val added = AccountingRepository.addBook(context, name)
+                                if (added) {
+                                    bookList = AccountingRepository.getBookList(context)
+                                    currentBookName = name
+                                    AccountingRepository.setLastBookName(context, name)
+                                }
+                            }
+                            showAddBookDialog = false
+                        }) { Text("确认") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showAddBookDialog = false }) { Text("取消") }
+                    }
+                )
+            }
+
             // 资金账户类型选择弹窗
             if (showAccountTypeDialog) {
-                val context = LocalContext.current
                 var accountTypeTab by remember { mutableIntStateOf(0) }
                 var selectedTypeLabel by remember { mutableStateOf("现金") }
                 var accountName by remember { mutableStateOf("") }
@@ -1090,6 +1172,7 @@ private fun RecordListContent(
                                 val amountPrefix = if (isExpense) "-" else "+"
                                 val amountColor = if (isExpense) Color(0xFFEF5350) else Color(0xFF4CAF50)
                                 val amountDisplay = String.format("%.2f", record.amount.toDoubleOrNull() ?: 0.0)
+                                val discountBeforeDisplay = record.discountBefore?.toDoubleOrNull()?.let { String.format("%.2f", it) }
                                 val timeStr = timeFormat.format(Date(record.happenedAt))
                                 // 账户信息
                                 val account = record.accountId?.let { accountMap[it] }
@@ -1130,6 +1213,16 @@ private fun RecordListContent(
                                                 maxLines = 1,
                                                 modifier = Modifier.weight(1f)
                                             )
+                                            // 优惠原价（灰色删除线）
+                                            if (discountBeforeDisplay != null) {
+                                                Text(
+                                                    text = "$amountPrefix$discountBeforeDisplay",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = Color.Gray,
+                                                    textDecoration = TextDecoration.LineThrough
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                            }
                                             Text(
                                                 text = "$amountPrefix$amountDisplay",
                                                 style = MaterialTheme.typography.titleMedium,
