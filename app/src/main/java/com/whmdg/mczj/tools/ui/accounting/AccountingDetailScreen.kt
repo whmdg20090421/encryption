@@ -194,7 +194,7 @@ fun AccountingDetailScreen(
                     )
                     // 金额
                     Text(
-                        text = "$amountPrefix¥${record.amount}",
+                        text = "$amountPrefix${record.amount}",
                         style = MaterialTheme.typography.headlineSmall,
                         color = amountColor
                     )

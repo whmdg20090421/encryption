@@ -223,6 +223,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                 // 资产标签页
                 AssetTabContent(
                     onAddAccount = { showAccountTypeDialog = true },
+                    onNavigate = onNavigate,
                     refreshTrigger = accountRefreshTrigger
                 )
             } else {
@@ -516,7 +517,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
 // ── 资产标签页 ──
 
 @Composable
-private fun AssetTabContent(onAddAccount: () -> Unit, refreshTrigger: Int = 0) {
+private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Unit, refreshTrigger: Int = 0) {
     val context = LocalContext.current
     var accounts by remember { mutableStateOf(AccountingRepository.getAllAccounts(context)) }
 
@@ -559,10 +560,98 @@ private fun AssetTabContent(onAddAccount: () -> Unit, refreshTrigger: Int = 0) {
             }
         }
     } else {
+        val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+        val totalAssets = remember(accounts) { accounts.sumOf { it.initialAmount } }
+
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 80.dp)
         ) {
+            // 总资产卡片
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "总资产",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            String.format("%.2f", totalAssets),
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                            color = themeColor
+                        )
+                    }
+                }
+            }
+
+            // 20% 屏幕高度空白
+            item { Spacer(Modifier.height(screenHeight * 0.2f)) }
+
+            // 三个功能卡片：报销 / 债务 / 理财
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    listOf("报销", "债务", "理财").forEach { title ->
+                        Card(
+                            modifier = Modifier.weight(1f)
+                                .then(if (title == "报销") Modifier.clickable { onNavigate(Screen.ReimbursementAccount) } else Modifier),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    title,
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = themeColor
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                when (title) {
+                                    "报销" -> {
+                                        Text("可报销: —", style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text("已报销: —", style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    "债务" -> {
+                                        Text("待还款: —", style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text("已还款: —", style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    "理财" -> {
+                                        Text("投入: —", style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text("收益: —", style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // 资金账户分组
             val tradableAccounts = accounts.filter { it.category == "tradable" }
             if (tradableAccounts.isNotEmpty()) {
@@ -656,7 +745,7 @@ private fun AccountGroupSection(
             Spacer(Modifier.weight(1f))
             if (showStats) {
                 Text(
-                    "¥${String.format("%.2f", subtotal)}",
+                    "${String.format("%.2f", subtotal)}",
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                     color = iconColor
                 )
@@ -764,7 +853,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("余额", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
                             Text(
-                                "¥${String.format("%.2f", account.initialAmount)}",
+                                "${String.format("%.2f", account.initialAmount)}",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White
                             )
@@ -772,7 +861,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("收入", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
                             Text(
-                                "¥0.00",
+                                "0.00",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White
                             )
@@ -780,7 +869,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("支出", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
                             Text(
-                                "¥0.00",
+                                "0.00",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White
                             )
@@ -800,7 +889,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                         verticalAlignment = Alignment.Bottom
                     ) {
                         Text(
-                            "¥${String.format("%.2f", account.initialAmount)}",
+                            "${String.format("%.2f", account.initialAmount)}",
                             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                             color = Color.White
                         )
@@ -1036,7 +1125,7 @@ private fun RecordListContent(
                             Text("本月支出", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "¥${String.format("%.2f", monthlyExpense)}",
+                                "${String.format("%.2f", monthlyExpense)}",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = Color(0xFFEF5350)
                             )
@@ -1045,7 +1134,7 @@ private fun RecordListContent(
                             Text("本月收入", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "¥${String.format("%.2f", monthlyIncome)}",
+                                "${String.format("%.2f", monthlyIncome)}",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = Color(0xFF4CAF50)
                             )
@@ -1054,7 +1143,7 @@ private fun RecordListContent(
                             Text("本月结余", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "¥${String.format("%.2f", monthlyBalance)}",
+                                "${String.format("%.2f", monthlyBalance)}",
                                 style = MaterialTheme.typography.titleSmall,
                                 color = themeColor
                             )
@@ -1073,7 +1162,7 @@ private fun RecordListContent(
                         Text("余剩预算", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "¥${String.format("%.2f", budgetRemaining)}",
+                            "${String.format("%.2f", budgetRemaining)}",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = themeColor
@@ -1122,8 +1211,8 @@ private fun RecordListContent(
                 val weekday = weekdays[cal.get(Calendar.DAY_OF_WEEK) - 1]
 
                 val summaryParts = mutableListOf<String>()
-                if (dayExpense > 0) summaryParts.add("支 ¥%.0f".format(dayExpense))
-                if (dayIncome > 0) summaryParts.add("收 ¥%.0f".format(dayIncome))
+                if (dayExpense > 0) summaryParts.add("支 %.0f".format(dayExpense))
+                if (dayIncome > 0) summaryParts.add("收 %.0f".format(dayIncome))
                 val summary = summaryParts.joinToString("  ")
 
                 Column {

@@ -519,15 +519,13 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         AsyncImage(
                             model = selectedAccountSvg,
                             contentDescription = null,
-                            modifier = Modifier.fillMaxHeight().aspectRatio(1f)
+                            modifier = Modifier.size(15.dp)
                         )
-                    } else {
-                        Spacer(Modifier.fillMaxHeight().aspectRatio(1f))
+                        Spacer(Modifier.width(4.dp))
                     }
-                    Spacer(Modifier.width(4.dp))
                     Text(
                         text = selectedAccountName,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 15.sp),
                         color = if (selectedAccount != null) MaterialTheme.colorScheme.onSurface
                                else MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -680,7 +678,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                 )
                                 // 余额
                                 Text(
-                                    text = "¥${String.format("%.2f", account.initialAmount)}",
+                                    text = "${String.format("%.2f", account.initialAmount)}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

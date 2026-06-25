@@ -92,6 +92,7 @@ import androidx.compose.ui.graphics.toArgb
 import com.whmdg.mczj.tools.ui.accounting.AccountingDetailScreen
 import com.whmdg.mczj.tools.ui.accounting.AccountingScreen
 import com.whmdg.mczj.tools.ui.accounting.AddAccountingScreen
+import com.whmdg.mczj.tools.ui.accounting.ReimbursementAccountScreen
 import com.whmdg.mczj.tools.ui.components.GlowCard
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.components.GlowSection
@@ -145,6 +146,7 @@ sealed class Screen {
     object Accounting : Screen()
     data class AccountingDetail(val bookName: String, val recordId: String) : Screen()
     data class AddAccounting(val bookName: String, val recordId: String? = null) : Screen()
+    object ReimbursementAccount : Screen()
     object About : Screen()
     object Changelog : Screen()
     data class TextEditor(val filePath: String) : Screen()
@@ -599,6 +601,11 @@ fun MainAppContainer() {
                 onBack = { navigateBack() },
                 bookName = currentScreen.bookName,
                 recordId = currentScreen.recordId
+            )
+        }
+        is Screen.ReimbursementAccount -> {
+            ReimbursementAccountScreen(
+                onBack = { navigateBack() }
             )
         }
         is Screen.FunctionalTest -> {
