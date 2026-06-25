@@ -152,8 +152,7 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = if (isSystemInDarkTheme()) Color(0xFF2A2A2A) else Color(0xFFF5F5F5)
-                ),
-                tonalElevation = 3.dp
+                )
             )
         }
     ) { innerPadding ->
