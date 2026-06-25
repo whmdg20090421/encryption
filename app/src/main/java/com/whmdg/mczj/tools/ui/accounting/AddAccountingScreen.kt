@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -44,6 +45,21 @@ import androidx.compose.ui.unit.sp
 import android.widget.Toast
 import java.util.Calendar
 
+// 账户类型 SVG 映射（与 AccountingScreen 保持一致）
+private val accountTypeSvgMap = mapOf(
+    "cash" to "file:///android_asset/icons/cash.svg",
+    "alipay" to "file:///android_asset/icons/alipay.svg",
+    "wechat" to "file:///android_asset/icons/wechat.svg",
+    "bank_card" to "file:///android_asset/icons/bank_card.svg",
+    "custom" to "file:///android_asset/icons/other_account.svg",
+    "real_estate" to "file:///android_asset/icons/real_estate.svg",
+    "vehicle" to "file:///android_asset/icons/vehicle.svg",
+    "investment" to "file:///android_asset/icons/investment.svg",
+    "insurance" to "file:///android_asset/icons/insurance.svg",
+    "provident_fund" to "file:///android_asset/icons/social_fund.svg",
+    "loan" to "file:///android_asset/icons/loan.svg",
+)
+
 @Composable
 fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? = null) {
     val types = listOf("支出", "收入", "转账", "债务")
@@ -77,6 +93,21 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     var showDatePicker by remember { mutableStateOf(false) }
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     val infoRowHeight = screenHeight * 0.05f
+
+    // 账户选择
+    val accounts = remember { AccountingDatabase.getInstance(context).getAllAccounts() }
+    val accountMap = remember(accounts) { accounts.associateBy { it.id } }
+    // 上次使用的账户（从 SharedPreferences 读取）
+    val prefs = context.getSharedPreferences("accounting_prefs", android.content.Context.MODE_PRIVATE)
+    val lastAccountId = prefs.getString("last_account_id", null)
+    var selectedAccountId by remember {
+        mutableStateOf(editingRecord?.accountId ?: lastAccountId)
+    }
+    var showAccountDialog by remember { mutableStateOf(false) }
+    // 当前选中的账户名称和图标
+    val selectedAccount = selectedAccountId?.let { accountMap[it] }
+    val selectedAccountName = selectedAccount?.name ?: "账户"
+    val selectedAccountSvg = selectedAccount?.let { accountTypeConfigs[it.type]?.svgPath }
 
     // 从 JSON 动态加载分类数据（跟随选中的记账类型切换）
     val categoryDb = remember { AccountingCategoryDb.ensureDefault(context) }
@@ -161,13 +192,18 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             categoryId = parentId ?: selectedCategory!!,
             subcategoryId = subId,
             note = note,
-            happenedAt = cal.timeInMillis
+            happenedAt = cal.timeInMillis,
+            accountId = selectedAccountId
         )
         val db = AccountingRecordDb.load(context)
         if (editingRecord != null) {
             db.update(record).save(context)
         } else {
             db.add(record).save(context)
+        }
+        // 保存本次使用的账户 id
+        if (selectedAccountId != null) {
+            prefs.edit().putString("last_account_id", selectedAccountId).apply()
         }
         return true
     }
@@ -447,19 +483,56 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
 
             HorizontalDivider(color = Color(0xFF00BCD4), thickness = 1.dp)
 
-            // 第二行：功能菜单
+            // 第二行：日期时间 + 支付账户
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(infoRowHeight),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = { showDatePicker = true }) {
-                    Text(selectedDate, style = MaterialTheme.typography.bodySmall)
+                // 日期时间（上下两行）
+                Column(
+                    modifier = Modifier.clickable { showDatePicker = true },
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "%02d/%02d".format(selectedMonth + 1, selectedDay),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "%02d:%02d".format(selectedHour, selectedMinute),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(Modifier.width(16.dp))
+
+                // 支付账户
+                Row(
+                    modifier = Modifier.clickable { showAccountDialog = true },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (selectedAccountSvg != null) {
+                        AsyncImage(
+                            model = selectedAccountSvg,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxHeight().aspectRatio(1f)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Text(
+                        text = selectedAccountName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selectedAccount != null) MaterialTheme.colorScheme.onSurface
+                               else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
             // 键盘
+            val canFinish = selectedAccountId != null && amount != "0" && amount.isNotEmpty() && selectedCategory != null
             Surface(shadowElevation = 2.dp) {
             CalculatorKeyboard(
                 onInput = { key ->
@@ -510,7 +583,8 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         }
                         else -> if (amount == "0") key else amount + key
                     }
-                }
+                },
+                finishEnabled = canFinish
             )
             } // Surface
         }
@@ -531,6 +605,77 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     selectedHour = h
                     selectedMinute = min
                     showDatePicker = false
+                }
+            )
+        }
+
+        // 账户选择弹窗
+        if (showAccountDialog) {
+            var tempSelectedId by remember { mutableStateOf(selectedAccountId) }
+            AlertDialog(
+                onDismissRequest = { showAccountDialog = false },
+                title = { Text("选择账户") },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = screenHeight * 0.4f)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        accounts.forEach { account ->
+                            val isSelected = tempSelectedId == account.id
+                            val svgPath = accountTypeSvgMap[account.type]
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { tempSelectedId = account.id }
+                                    .background(
+                                        if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                                        else Color.Transparent
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // 账户图标
+                                if (svgPath != null) {
+                                    AsyncImage(
+                                        model = svgPath,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                }
+                                // 账户名称
+                                Text(
+                                    text = account.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                // 余额
+                                Text(
+                                    text = "¥${String.format("%.2f", account.initialAmount)}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            selectedAccountId = tempSelectedId
+                            showAccountDialog = false
+                        },
+                        enabled = tempSelectedId != null
+                    ) {
+                        Text("确认")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAccountDialog = false }) {
+                        Text("取消")
+                    }
                 }
             )
         }
@@ -768,7 +913,7 @@ private fun TimeWheel(
 }
 
 @Composable
-private fun CalculatorKeyboard(onInput: (String) -> Unit) {
+private fun CalculatorKeyboard(onInput: (String) -> Unit, finishEnabled: Boolean = true) {
     val keySpacing = 2.dp
     val keyShape = RoundedCornerShape(6.dp)
     val keyColor = MaterialTheme.colorScheme.surfaceVariant
@@ -830,7 +975,10 @@ private fun CalculatorKeyboard(onInput: (String) -> Unit) {
             KeyButton("再记", Modifier.weight(1f), keyShape, MaterialTheme.colorScheme.primaryContainer, cyanText, onInput)
             KeyButton("0", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
             KeyButton(".", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
-            KeyButton("完成", Modifier.weight(1f), keyShape, MaterialTheme.colorScheme.primaryContainer, cyanText, onInput)
+            KeyButton("完成", Modifier.weight(1f), keyShape,
+                if (finishEnabled) MaterialTheme.colorScheme.primaryContainer else keyColor,
+                if (finishEnabled) cyanText else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                if (finishEnabled) onInput else { _ -> })
         }
     }
 }
