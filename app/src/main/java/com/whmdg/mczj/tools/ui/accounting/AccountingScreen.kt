@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.ui.accounting
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -12,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -22,8 +24,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -43,6 +50,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
     var showAccountTypeDialog by remember { mutableStateOf(false) }
     var currentBookName by remember { mutableStateOf("默认记账本") }
     var selectedTab by remember { mutableIntStateOf(0) }
+    var accountRefreshTrigger by remember { mutableIntStateOf(0) }
 
     // 判断是否在顶部：第一个 item 可见且 offset 为 0
     val isAtTop by remember {
@@ -169,6 +177,12 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                         Icon(Icons.Default.Home, contentDescription = "返回主页")
                     }
                 }
+            } else if (selectedTab == 1) {
+                // 资产标签页
+                AssetTabContent(
+                    onAddAccount = { showAccountTypeDialog = true },
+                    refreshTrigger = accountRefreshTrigger
+                )
             } else {
                 // 其他 tab：简单占位
                 LazyColumn(
@@ -204,12 +218,22 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
 
             // 资金账户类型选择弹窗
             if (showAccountTypeDialog) {
+                val context = LocalContext.current
                 var accountTypeTab by remember { mutableIntStateOf(0) }
-                var selectedType by remember { mutableStateOf("现金") }
+                var selectedTypeLabelLabel by remember { mutableStateOf("现金") }
                 var accountName by remember { mutableStateOf("") }
                 var initialAmount by remember { mutableStateOf("") }
                 var accountNote by remember { mutableStateOf("") }
                 val scrollState = rememberScrollState()
+
+                // label → typeId 映射
+                val labelToTypeId = mapOf(
+                    "现金" to "cash", "支付宝" to "alipay", "微信钱包" to "wechat",
+                    "银行卡" to "bank_card", "QQ钱包" to "qq_wallet", "京东金融" to "jd_finance",
+                    "自定义" to "custom",
+                    "不动产" to "real_estate", "车辆" to "vehicle", "投资" to "investment",
+                    "保险" to "insurance", "公积金" to "provident_fund", "贷款" to "loan"
+                )
 
                 val tradableTypes = listOf(
                     Triple(Icons.Outlined.Payments, "现金", Color(0xFFFF9800)),
@@ -288,13 +312,13 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                                     horizontalArrangement = Arrangement.SpaceEvenly
                                 ) {
                                     rowItems.forEach { (icon, label, color) ->
-                                        val isSelected = selectedType == label
+                                        val isSelected = selectedTypeLabel == label
                                         Column(
                                             horizontalAlignment = Alignment.CenterHorizontally,
                                             modifier = Modifier
                                                 .width(itemWidth)
                                                 .padding(vertical = 8.dp)
-                                                .clickable { selectedType = label }
+                                                .clickable { selectedTypeLabel = label }
                                         ) {
                                             Box(
                                                 modifier = Modifier
@@ -378,7 +402,27 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                         }
                     },
                     confirmButton = {
-                        TextButton(onClick = { showAccountTypeDialog = false }) {
+                        TextButton(onClick = {
+                            val typeId = labelToTypeId[selectedTypeLabel] ?: "custom"
+                            val category = if (accountTypeTab == 0) "tradable" else "valuation"
+                            val amount = initialAmount.toDoubleOrNull() ?: 0.0
+                            val account = AccountingAccount(
+                                name = accountName.ifEmpty { selectedTypeLabel },
+                                type = typeId,
+                                category = category,
+                                initialAmount = amount,
+                                note = accountNote
+                            )
+                            AccountingDatabase.getInstance(context).insertAccount(account)
+                            accountRefreshTrigger++
+                            showAccountTypeDialog = false
+                            // 重置表单
+                            accountName = ""
+                            initialAmount = ""
+                            accountNote = ""
+                            selectedTypeLabel = "现金"
+                            accountTypeTab = 0
+                        }) {
                             Text("确认")
                         }
                     },
@@ -388,6 +432,511 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                         }
                     }
                 )
+            }
+        }
+    }
+}
+
+// ── 账户类型配置 ──
+
+private data class AccountTypeConfig(
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val label: String,
+    val color: Color,
+    val category: String
+)
+
+private val accountTypeConfigs = mapOf(
+    "cash" to AccountTypeConfig(Icons.Outlined.Payments, "现金", Color(0xFFFF9800), "tradable"),
+    "alipay" to AccountTypeConfig(Icons.Outlined.CurrencyYuan, "支付宝", Color(0xFF1677FF), "tradable"),
+    "wechat" to AccountTypeConfig(Icons.Outlined.Chat, "微信钱包", Color(0xFF07C160), "tradable"),
+    "bank_card" to AccountTypeConfig(Icons.Outlined.CreditCard, "银行卡", Color(0xFF1890FF), "tradable"),
+    "qq_wallet" to AccountTypeConfig(Icons.Outlined.Wallet, "QQ钱包", Color(0xFF12B7F5), "tradable"),
+    "jd_finance" to AccountTypeConfig(Icons.Outlined.ShoppingCart, "京东金融", Color(0xFFE53935), "tradable"),
+    "custom" to AccountTypeConfig(Icons.Outlined.Edit, "自定义", Color(0xFF5C6BC0), "tradable"),
+    "real_estate" to AccountTypeConfig(Icons.Outlined.Home, "不动产", Color(0xFF795548), "valuation"),
+    "vehicle" to AccountTypeConfig(Icons.Outlined.DirectionsCar, "车辆", Color(0xFF607D8B), "valuation"),
+    "investment" to AccountTypeConfig(Icons.Outlined.TrendingUp, "投资", Color(0xFFFF9800), "valuation"),
+    "insurance" to AccountTypeConfig(Icons.Outlined.HealthAndSafety, "保险", Color(0xFF4CAF50), "valuation"),
+    "provident_fund" to AccountTypeConfig(Icons.Outlined.AccountBalance, "公积金", Color(0xFF3F51B5), "valuation"),
+    "loan" to AccountTypeConfig(Icons.Outlined.House, "贷款", Color(0xFFE91E63), "valuation"),
+)
+
+// ── 资产标签页 ──
+
+@Composable
+private fun AssetTabContent(onAddAccount: () -> Unit, refreshTrigger: Int = 0) {
+    val context = LocalContext.current
+    var accounts by remember { mutableStateOf(AccountingDatabase.getInstance(context).getAllAccounts()) }
+
+    // 刷新触发器变化时重新加载
+    LaunchedEffect(refreshTrigger) {
+        accounts = AccountingDatabase.getInstance(context).getAllAccounts()
+    }
+
+    if (accounts.isEmpty()) {
+        // 空状态
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.Outlined.AccountBalanceWallet,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                )
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "暂无账户",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onAddAccount) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("添加账户")
+                }
+            }
+        }
+    } else {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 80.dp)
+        ) {
+            // 资产构成饼图
+            item {
+                AssetPieChart(accounts = accounts)
+            }
+
+            // 资金账户分组
+            val tradableAccounts = accounts.filter { it.category == "tradable" }
+            if (tradableAccounts.isNotEmpty()) {
+                item {
+                    AccountGroupSection(
+                        title = "资金账户",
+                        icon = Icons.Outlined.AccountBalanceWallet,
+                        iconColor = Color(0xFF4CAF50),
+                        accounts = tradableAccounts,
+                        showStats = true
+                    )
+                }
+            }
+
+            // 估值账户分组
+            val valuationAccounts = accounts.filter { it.category == "valuation" }
+            if (valuationAccounts.isNotEmpty()) {
+                item {
+                    AccountGroupSection(
+                        title = "估值账户",
+                        icon = Icons.Outlined.TrendingUp,
+                        iconColor = Color(0xFFFF9800),
+                        accounts = valuationAccounts,
+                        showStats = false
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── 资产构成饼图 ──
+
+@Composable
+private fun AssetPieChart(accounts: List<AccountingAccount>) {
+    // 按类型分组汇总余额
+    val typeBalances = accounts
+        .groupBy { it.type }
+        .mapValues { (_, accs) -> accs.sumOf { it.initialAmount } }
+        .filter { it.value > 0 }
+        .toList()
+        .sortedByDescending { it.second }
+
+    if (typeBalances.isEmpty()) return
+
+    val totalBalance = typeBalances.sumOf { it.second }
+    val maxSlices = 8
+    val slices = mutableListOf<Triple<String, Double, Color>>()
+    var otherTotal = 0.0
+
+    for ((type, balance) in typeBalances) {
+        if (slices.size < maxSlices) {
+            val config = accountTypeConfigs[type]
+            slices.add(Triple(config?.label ?: type, balance, config?.color ?: Color.Gray))
+        } else {
+            otherTotal += balance
+        }
+    }
+    if (otherTotal > 0) {
+        slices.add(Triple("其他", otherTotal, Color(0xFF9E9E9E)))
+    }
+
+    var touchedIndex by remember { mutableIntStateOf(-1) }
+    val selectedSlice = if (touchedIndex in slices.indices) slices[touchedIndex] else null
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // 饼图
+            Box(
+                modifier = Modifier
+                    .size(180.dp)
+                    .pointerInput(slices) {
+                        detectTapGestures { offset ->
+                            val center = Offset(size.width / 2f, size.height / 2f)
+                            val dx = offset.x - center.x
+                            val dy = offset.y - center.y
+                            val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+                            val outerRadius = size.width / 2f
+                            val innerRadius = outerRadius * 0.47f
+                            if (distance in innerRadius..outerRadius) {
+                                var angle = Math.toDegrees(
+                                    kotlin.math.atan2(dy.toDouble(), dx.toDouble())
+                                ).toFloat()
+                                if (angle < 0) angle += 360f
+                                // 计算每个扇区的角度
+                                var startAngle = -90f
+                                for (i in slices.indices) {
+                                    val sweep = (slices[i].second / totalBalance * 360f).toFloat()
+                                    if (angle in startAngle..(startAngle + sweep)) {
+                                        touchedIndex = if (touchedIndex == i) -1 else i
+                                        break
+                                    }
+                                    startAngle += sweep
+                                }
+                            } else {
+                                touchedIndex = -1
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val outerRadius = size.minDimension / 2f
+                    val innerRadius = outerRadius * 0.47f
+                    val arcSize = Size(outerRadius * 2, outerRadius * 2)
+                    val topLeft = Offset(0f, 0f)
+                    var startAngle = -90f
+
+                    for (i in slices.indices) {
+                        val sweep = (slices[i].second / totalBalance * 360f).toFloat()
+                        val isTouched = i == touchedIndex
+                        val radius = if (isTouched) outerRadius * 1.06f else outerRadius
+                        val arcSz = Size(radius * 2, radius * 2)
+                        val tl = Offset(
+                            (size.width - radius * 2) / 2f,
+                            (size.height - radius * 2) / 2f
+                        )
+                        // 扇区
+                        drawArc(
+                            color = slices[i].third,
+                            startAngle = startAngle,
+                            sweepAngle = sweep - 1.5f,
+                            useCenter = false,
+                            topLeft = tl,
+                            size = arcSz,
+                            style = Stroke(width = radius - innerRadius)
+                        )
+                        startAngle += sweep
+                    }
+                }
+                // 中心文字
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = selectedSlice?.first ?: "资产构成",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "¥${String.format("%.0f", selectedSlice?.second ?: totalBalance)}",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // 图例
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                slices.forEach { (label, balance, color) ->
+                    val pct = (balance / totalBalance * 100)
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(color)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "$label ${String.format("%.1f", pct)}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── 账户分组 ──
+
+@Composable
+private fun AccountGroupSection(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconColor: Color,
+    accounts: List<AccountingAccount>,
+    showStats: Boolean
+) {
+    var expanded by remember { mutableStateOf(true) }
+    val subtotal = accounts.sumOf { it.initialAmount }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+    ) {
+        // 分组标题
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(iconColor.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = iconColor
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.width(6.dp))
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+                    .padding(horizontal = 5.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    "${accounts.size}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            if (showStats) {
+                Text(
+                    "¥${String.format("%.2f", subtotal)}",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = iconColor
+                )
+                Spacer(Modifier.width(4.dp))
+            }
+            Icon(
+                Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(18.dp)
+                    .graphicsLayer { rotationZ = if (expanded) 0f else -90f },
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        // 账户卡片列表
+        if (expanded) {
+            accounts.forEach { account ->
+                AccountCard(account = account, showStats = showStats)
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+// ── 账户卡片 ──
+
+@Composable
+private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
+    val config = accountTypeConfigs[account.type]
+    val typeColor = config?.color ?: Color(0xFF5C6BC0)
+    val typeLabel = config?.label ?: account.type
+    val typeIcon = config?.icon ?: Icons.Outlined.AccountBalance
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+    ) {
+        // 渐变背景
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                        colors = listOf(typeColor, typeColor.copy(alpha = 0.8f))
+                    )
+                )
+        ) {
+            // 装饰圆圈
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .offset(x = (-20).dp, y = (-20).dp)
+                    .align(Alignment.TopEnd)
+                    .background(
+                        Color.White.copy(alpha = 0.1f),
+                        shape = androidx.compose.foundation.shape.CircleShape
+                    )
+            )
+
+            Column(
+                modifier = Modifier.padding(14.dp)
+            ) {
+                // 顶部行：图标 + 名称
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(
+                                Color.White.copy(alpha = 0.2f),
+                                shape = androidx.compose.foundation.shape.CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            typeIcon,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = Color.White
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        account.name,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        ),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                if (showStats) {
+                    // 资金账户：余额 / 收入 / 支出
+                    Row {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("余额", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
+                            Text(
+                                "¥${String.format("%.2f", account.initialAmount)}",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("收入", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
+                            Text(
+                                "¥0.00",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("支出", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
+                            Text(
+                                "¥0.00",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White
+                            )
+                        }
+                    }
+                } else {
+                    // 估值账户：当前估值
+                    Text(
+                        "当前估值",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.8f)
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        Text(
+                            "¥${String.format("%.2f", account.initialAmount)}",
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                            color = Color.White
+                        )
+                        // 更新日期
+                        val dateStr = SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date(account.updatedAt))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Outlined.Update,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = Color.White.copy(alpha = 0.7f)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                dateStr,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
+                }
+
+                // 备注
+                if (account.note.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        account.note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
     }

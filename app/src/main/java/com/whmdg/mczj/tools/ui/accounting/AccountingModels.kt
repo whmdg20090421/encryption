@@ -397,3 +397,22 @@ data class AccountingRecordDb(
         }
     }
 }
+
+// ── 账户数据模型 ──
+
+/**
+ * 资产账户。
+ * category: "tradable"（资金账户）或 "valuation"（估值账户）
+ * type: 账户类型标识（cash/alipay/wechat/bank_card/real_estate 等）
+ */
+@Serializable
+data class AccountingAccount(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val type: String,
+    val category: String,        // "tradable" 或 "valuation"
+    val initialAmount: Double = 0.0,
+    val note: String = "",
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)

@@ -19,7 +19,7 @@ class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 2
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -73,14 +73,41 @@ class AccountingDatabase private constructor(context: Context) :
         db.execSQL("CREATE INDEX idx_rec_book ON records(book_name)")
         db.execSQL("CREATE INDEX idx_rec_time ON records(happened_at)")
 
+        db.execSQL("""
+            CREATE TABLE accounts (
+                id             TEXT PRIMARY KEY,
+                name           TEXT NOT NULL,
+                type           TEXT NOT NULL,
+                category       TEXT NOT NULL DEFAULT 'tradable',
+                initial_amount REAL NOT NULL DEFAULT 0,
+                note           TEXT DEFAULT '',
+                created_at     INTEGER NOT NULL,
+                updated_at     INTEGER NOT NULL
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX idx_acc_category ON accounts(category)")
+
         // 写入默认数据
         insertDefaultCategoriesToDb(db)
         insertDefaultSettingsToDb(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // 未来版本升级：参考 BeeCount 累积式 if (oldVersion < N) 模式
-        // if (oldVersion < 2) { ... }
+        if (oldVersion < 2) {
+            db.execSQL("""
+                CREATE TABLE accounts (
+                    id             TEXT PRIMARY KEY,
+                    name           TEXT NOT NULL,
+                    type           TEXT NOT NULL,
+                    category       TEXT NOT NULL DEFAULT 'tradable',
+                    initial_amount REAL NOT NULL DEFAULT 0,
+                    note           TEXT DEFAULT '',
+                    created_at     INTEGER NOT NULL,
+                    updated_at     INTEGER NOT NULL
+                )
+            """.trimIndent())
+            db.execSQL("CREATE INDEX idx_acc_category ON accounts(category)")
+        }
     }
 
     // ─────────────────────────────────────────────
@@ -289,6 +316,82 @@ class AccountingDatabase private constructor(context: Context) :
             subcategoryId = c.getString(5),  // 可能为 null
             note = c.getString(6) ?: "",
             happenedAt = c.getLong(7)
+        )
+    }
+
+    // ─────────────────────────────────────────────
+    // 账户表
+    // ─────────────────────────────────────────────
+
+    fun insertAccount(account: AccountingAccount) {
+        val cv = accountToContentValues(account)
+        writableDatabase.insertWithOnConflict("accounts", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun updateAccount(account: AccountingAccount) {
+        val cv = accountToContentValues(account)
+        writableDatabase.update("accounts", cv, "id = ?", arrayOf(account.id))
+    }
+
+    fun deleteAccount(id: String) {
+        writableDatabase.delete("accounts", "id = ?", arrayOf(id))
+    }
+
+    fun getAllAccounts(): List<AccountingAccount> {
+        val accounts = mutableListOf<AccountingAccount>()
+        val cursor = readableDatabase.rawQuery(
+            "SELECT id, name, type, category, initial_amount, note, created_at, updated_at FROM accounts ORDER BY created_at DESC",
+            null
+        )
+        try {
+            while (cursor.moveToNext()) {
+                accounts.add(cursorToAccount(cursor))
+            }
+        } finally {
+            cursor.close()
+        }
+        return accounts
+    }
+
+    fun getAccountsByCategory(category: String): List<AccountingAccount> {
+        val accounts = mutableListOf<AccountingAccount>()
+        val cursor = readableDatabase.rawQuery(
+            "SELECT id, name, type, category, initial_amount, note, created_at, updated_at FROM accounts WHERE category = ? ORDER BY created_at DESC",
+            arrayOf(category)
+        )
+        try {
+            while (cursor.moveToNext()) {
+                accounts.add(cursorToAccount(cursor))
+            }
+        } finally {
+            cursor.close()
+        }
+        return accounts
+    }
+
+    private fun accountToContentValues(a: AccountingAccount): ContentValues {
+        return ContentValues().apply {
+            put("id", a.id)
+            put("name", a.name)
+            put("type", a.type)
+            put("category", a.category)
+            put("initial_amount", a.initialAmount)
+            put("note", a.note)
+            put("created_at", a.createdAt)
+            put("updated_at", a.updatedAt)
+        }
+    }
+
+    private fun cursorToAccount(c: android.database.Cursor): AccountingAccount {
+        return AccountingAccount(
+            id = c.getString(0),
+            name = c.getString(1),
+            type = c.getString(2),
+            category = c.getString(3),
+            initialAmount = c.getDouble(4),
+            note = c.getString(5) ?: "",
+            createdAt = c.getLong(6),
+            updatedAt = c.getLong(7)
         )
     }
 
