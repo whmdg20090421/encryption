@@ -19,7 +19,7 @@ class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 2
+        private const val DB_VERSION = 3
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -67,7 +67,8 @@ class AccountingDatabase private constructor(context: Context) :
                 category_id    TEXT NOT NULL,
                 subcategory_id TEXT,
                 note           TEXT DEFAULT '',
-                happened_at    INTEGER NOT NULL
+                happened_at    INTEGER NOT NULL,
+                account_id     TEXT
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX idx_rec_book ON records(book_name)")
@@ -107,6 +108,9 @@ class AccountingDatabase private constructor(context: Context) :
                 )
             """.trimIndent())
             db.execSQL("CREATE INDEX idx_acc_category ON accounts(category)")
+        }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE records ADD COLUMN account_id TEXT")
         }
     }
 
@@ -264,7 +268,7 @@ class AccountingDatabase private constructor(context: Context) :
     fun getAllRecords(): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at FROM records ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id FROM records ORDER BY happened_at DESC",
             null
         )
         try {
@@ -280,7 +284,7 @@ class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByBook(bookName: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at FROM records WHERE book_name = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id FROM records WHERE book_name = ? ORDER BY happened_at DESC",
             arrayOf(bookName)
         )
         try {
@@ -303,6 +307,7 @@ class AccountingDatabase private constructor(context: Context) :
             if (r.subcategoryId != null) put("subcategory_id", r.subcategoryId) else putNull("subcategory_id")
             put("note", r.note)
             put("happened_at", r.happenedAt)
+            if (r.accountId != null) put("account_id", r.accountId) else putNull("account_id")
         }
     }
 
@@ -315,7 +320,8 @@ class AccountingDatabase private constructor(context: Context) :
             categoryId = c.getString(4),
             subcategoryId = c.getString(5),  // 可能为 null
             note = c.getString(6) ?: "",
-            happenedAt = c.getLong(7)
+            happenedAt = c.getLong(7),
+            accountId = c.getString(8)  // 可能为 null
         )
     }
 

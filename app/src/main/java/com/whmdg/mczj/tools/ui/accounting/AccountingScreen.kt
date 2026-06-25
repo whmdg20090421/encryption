@@ -892,6 +892,10 @@ private fun RecordListContent(
         Color(android.graphics.Color.parseColor(getCategoryIconColor(context)))
     }
 
+    // 账户列表（用于查找账户信息）
+    val accounts = remember { AccountingDatabase.getInstance(context).getAllAccounts() }
+    val accountMap = remember(accounts) { accounts.associateBy { it.id } }
+
     // 按账本筛选、按时间降序排列、按日期分组
     val groupedRecords = remember(recordDb, bookName) {
         val filtered = recordDb.records
@@ -1105,6 +1109,8 @@ private fun RecordListContent(
                                 val amountColor = if (isExpense) Color(0xFFEF5350) else Color(0xFF4CAF50)
                                 val amountDisplay = String.format("%.2f", record.amount.toDoubleOrNull() ?: 0.0)
                                 val timeStr = timeFormat.format(Date(record.happenedAt))
+                                // 账户信息
+                                val account = record.accountId?.let { accountMap[it] }
 
                                 Row(
                                     modifier = Modifier
@@ -1147,13 +1153,6 @@ private fun RecordListContent(
                                                 style = MaterialTheme.typography.titleMedium,
                                                 color = amountColor
                                             )
-                                            Spacer(Modifier.width(8.dp))
-                                            Icon(
-                                                imageVector = Icons.Outlined.Payment,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(18.dp),
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                                            )
                                         }
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
@@ -1173,6 +1172,25 @@ private fun RecordListContent(
                                                     maxLines = 1,
                                                     overflow = TextOverflow.Ellipsis,
                                                     modifier = Modifier.weight(1f)
+                                                )
+                                            } else if (account != null) {
+                                                Spacer(Modifier.weight(1f))
+                                            }
+                                            // 账户信息（如果有）
+                                            if (account != null) {
+                                                val accountSvg = accountTypeConfigs[account.type]?.svgPath
+                                                if (accountSvg != null) {
+                                                    AsyncImage(
+                                                        model = accountSvg,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Spacer(Modifier.width(4.dp))
+                                                }
+                                                Text(
+                                                    text = account.name,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             }
                                         }
