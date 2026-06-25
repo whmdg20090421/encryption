@@ -56,6 +56,8 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
     val barHeight = 75.dp
     val snackbarHostState = remember { SnackbarHostState() }
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
+    val context = LocalContext.current
+    val fabThemeColor = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
 
     // 返回手势处理：非首页标签→回首页；首页标签→双击退出
     BackHandler {
@@ -193,7 +195,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(end = 25.dp, bottom = 25.dp),
-                    containerColor = Color(0xFF00BCD4)
+                    containerColor = fabThemeColor
                 ) {
                     Icon(Icons.Default.NoteAdd, contentDescription = "记一笔", tint = Color.White)
                 }
@@ -203,7 +205,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(end = 25.dp, bottom = 25.dp),
-                    containerColor = Color(0xFF00BCD4)
+                    containerColor = fabThemeColor
                 ) {
                     Icon(Icons.Default.Add, contentDescription = "添加账户", tint = Color.White)
                 }
@@ -288,7 +290,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                                                 style = MaterialTheme.typography.labelLarge.copy(
                                                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
                                                 ),
-                                                color = if (selected) MaterialTheme.colorScheme.primary
+                                                color = if (selected) dialogThemeColor
                                                     else MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
@@ -320,7 +322,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                                                     .then(
                                                         if (isSelected) Modifier.border(
                                                             2.dp,
-                                                            MaterialTheme.colorScheme.primary,
+                                                            dialogThemeColor,
                                                             RoundedCornerShape(12.dp)
                                                         ) else Modifier
                                                     )
@@ -337,7 +339,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                                             Text(
                                                 text = label,
                                                 style = MaterialTheme.typography.labelSmall,
-                                                color = if (isSelected) MaterialTheme.colorScheme.primary
+                                                color = if (isSelected) dialogThemeColor
                                                     else MaterialTheme.colorScheme.onSurface
                                             )
                                         }
@@ -806,6 +808,8 @@ private fun SettingCard(
     subtitle: String,
     onClick: () -> Unit
 ) {
+    val context = LocalContext.current
+    val iconTint = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -825,7 +829,7 @@ private fun SettingCard(
             Icon(
                 imageVector = icon,
                 contentDescription = title,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = iconTint,
                 modifier = Modifier.size(24.dp)
             )
             Spacer(Modifier.width(16.dp))
@@ -970,7 +974,7 @@ private fun RecordListContent(
                             Text(
                                 "¥${String.format("%.2f", monthlyBalance)}",
                                 style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.primary
+                                color = themeColor
                             )
                         }
                     }
@@ -990,7 +994,7 @@ private fun RecordListContent(
                             "¥${String.format("%.2f", budgetRemaining)}",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
-                            color = if (budgetRemaining >= 0) MaterialTheme.colorScheme.primary else Color(0xFFEF5350)
+                            color = themeColor
                         )
                     }
                 }
@@ -1109,7 +1113,7 @@ private fun RecordListContent(
                                             imageVector = materialIcon(icon),
                                             contentDescription = null,
                                             modifier = Modifier.size(24.dp),
-                                            tint = MaterialTheme.colorScheme.primary
+                                            tint = themeColor
                                         )
                                     }
                                     Spacer(Modifier.width(12.dp))
@@ -1238,7 +1242,7 @@ private fun CategoryIconStylePage() {
                     Icon(
                         imageVector = Icons.Outlined.ColorLens,
                         contentDescription = "图标主题色",
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = Color(android.graphics.Color.parseColor(currentColorHex)),
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(16.dp))

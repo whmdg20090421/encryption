@@ -235,7 +235,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         Text(
                             text = type,
                             color = if (selectedType == index)
-                                MaterialTheme.colorScheme.primary
+                                iconThemeColor
                             else
                                 MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -325,7 +325,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                             .clip(RoundedCornerShape(28.dp))
                                             .background(
                                                 if (isSelected || isExpanded)
-                                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                                    iconThemeColor.copy(alpha = 0.25f)
                                                 else
                                                     MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                                             ),
@@ -334,10 +334,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                         CategoryIcon(
                                             icon = cat.icon,
                                             size = 24.dp,
-                                            tint = if (isSelected || isExpanded)
-                                                Color(0xFF00BCD4)
-                                            else
-                                                iconThemeColor
+                                            tint = iconThemeColor
                                         )
                                     }
                                     // 有子分类标记：右下角三个点
@@ -350,7 +347,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                                 .clip(RoundedCornerShape(9.dp))
                                                 .background(
                                                     if (isExpanded)
-                                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                                        iconThemeColor.copy(alpha = 0.25f)
                                                     else
                                                         MaterialTheme.colorScheme.surfaceVariant
                                                 ),
@@ -361,7 +358,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                                 contentDescription = "展开",
                                                 modifier = Modifier.size(12.dp),
                                                 tint = if (isExpanded)
-                                                    MaterialTheme.colorScheme.primary
+                                                    iconThemeColor
                                                 else
                                                     MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -374,7 +371,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                     style = MaterialTheme.typography.labelSmall,
                                     maxLines = 1,
                                     color = if (isSelected || isExpanded)
-                                        MaterialTheme.colorScheme.primary
+                                        iconThemeColor
                                     else
                                         MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -466,33 +463,43 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 }
             }
 
-            HorizontalDivider(color = Color(0xFF00BCD4), thickness = 1.dp)
+            HorizontalDivider(color = iconThemeColor, thickness = 1.dp)
 
             // 第二行：日期时间 + 支付账户
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(infoRowHeight),
+                    .height(infoRowHeight)
+                    .padding(start = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 日期时间（上下两行）
-                Column(
+                // 日期时间（日历图标 + 上下两行）
+                Row(
                     modifier = Modifier.clickable { showDatePicker = true },
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "%02d/%02d".format(selectedMonth + 1, selectedDay),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface
+                    Icon(
+                        imageVector = Icons.Outlined.CalendarMonth,
+                        contentDescription = "选择日期",
+                        modifier = Modifier.size(16.dp),
+                        tint = iconThemeColor
                     )
-                    Text(
-                        text = "%02d:%02d".format(selectedHour, selectedMinute),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Spacer(Modifier.width(4.dp))
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "%02d/%02d".format(selectedMonth + 1, selectedDay),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "%02d:%02d".format(selectedHour, selectedMinute),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
 
-                Spacer(Modifier.width(16.dp))
+                Spacer(Modifier.width(5.dp))
 
                 // 支付账户
                 Row(
@@ -505,8 +512,10 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                             contentDescription = null,
                             modifier = Modifier.fillMaxHeight().aspectRatio(1f)
                         )
-                        Spacer(Modifier.width(4.dp))
+                    } else {
+                        Spacer(Modifier.fillMaxHeight().aspectRatio(1f))
                     }
+                    Spacer(Modifier.width(4.dp))
                     Text(
                         text = selectedAccountName,
                         style = MaterialTheme.typography.labelSmall,
@@ -615,7 +624,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                     .fillMaxWidth()
                                     .clickable { tempSelectedId = account.id }
                                     .background(
-                                        if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                                        if (isSelected) iconThemeColor.copy(alpha = 0.3f)
                                         else Color.Transparent
                                     )
                                     .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -674,7 +683,8 @@ private fun DateTimePickerDialog(
     onDismiss: () -> Unit,
     onConfirm: (year: Int, month: Int, day: Int, hour: Int, minute: Int) -> Unit
 ) {
-    val cyan = Color(0xFF00BCD4)
+    val context = LocalContext.current
+    val cyan = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
     var calYear by remember { mutableIntStateOf(initYear) }
     var calMonth by remember { mutableIntStateOf(initMonth) }
     var selDay by remember { mutableIntStateOf(initDay) }
@@ -818,7 +828,8 @@ private fun TimeWheel(
     modifier: Modifier,
     label: (Int) -> String
 ) {
-    val cyan = Color(0xFF00BCD4)
+    val context = LocalContext.current
+    val cyan = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
     val size = range.last - range.first + 1
     val totalItems = size * 10000
     val initialIndex = totalItems / 2 + (selected - range.first)
@@ -900,10 +911,10 @@ private fun TimeWheel(
 @Composable
 private fun CalculatorKeyboard(onInput: (String) -> Unit, finishEnabled: Boolean = true) {
     val keySpacing = 2.dp
+    val context = LocalContext.current
     val keyShape = RoundedCornerShape(6.dp)
     val keyColor = MaterialTheme.colorScheme.surfaceVariant
-    val isDark = isSystemInDarkTheme()
-    val cyanText = if (isDark) Color(0xFF00838F) else Color(0xFF00BCD4)
+    val themeColor = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     val rowHeight = screenHeight * 0.06f
 
@@ -919,23 +930,23 @@ private fun CalculatorKeyboard(onInput: (String) -> Unit, finishEnabled: Boolean
             modifier = Modifier.fillMaxWidth().height(rowHeight),
             horizontalArrangement = Arrangement.spacedBy(keySpacing)
         ) {
-            KeyButton("1", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
-            KeyButton("2", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
-            KeyButton("3", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
-            KeyButton("←", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput, icon = true)
+            KeyButton("1", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
+            KeyButton("2", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
+            KeyButton("3", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
+            KeyButton("←", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput, icon = true)
         }
         // 第2行: 4 5 6 [-|*]
         Row(
             modifier = Modifier.fillMaxWidth().height(rowHeight),
             horizontalArrangement = Arrangement.spacedBy(keySpacing)
         ) {
-            KeyButton("4", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
-            KeyButton("5", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
-            KeyButton("6", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
+            KeyButton("4", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
+            KeyButton("5", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
+            KeyButton("6", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
             // 左右分：- 和 *
             Row(modifier = Modifier.weight(1f).fillMaxHeight(), horizontalArrangement = Arrangement.spacedBy(keySpacing)) {
-                KeyButton("-", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
-                KeyButton("*", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
+                KeyButton("-", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
+                KeyButton("*", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
             }
         }
         // 第3行: 7 8 9 [+|÷]
@@ -943,13 +954,13 @@ private fun CalculatorKeyboard(onInput: (String) -> Unit, finishEnabled: Boolean
             modifier = Modifier.fillMaxWidth().height(rowHeight),
             horizontalArrangement = Arrangement.spacedBy(keySpacing)
         ) {
-            KeyButton("7", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
-            KeyButton("8", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
-            KeyButton("9", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
+            KeyButton("7", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
+            KeyButton("8", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
+            KeyButton("9", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
             // 左右分：+ 和 ÷
             Row(modifier = Modifier.weight(1f).fillMaxHeight(), horizontalArrangement = Arrangement.spacedBy(keySpacing)) {
-                KeyButton("+", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
-                KeyButton("÷", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
+                KeyButton("+", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
+                KeyButton("÷", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
             }
         }
         // 第4行: 再记 0 . 完成
@@ -957,12 +968,12 @@ private fun CalculatorKeyboard(onInput: (String) -> Unit, finishEnabled: Boolean
             modifier = Modifier.fillMaxWidth().height(rowHeight),
             horizontalArrangement = Arrangement.spacedBy(keySpacing)
         ) {
-            KeyButton("再记", Modifier.weight(1f), keyShape, MaterialTheme.colorScheme.primaryContainer, cyanText, onInput)
-            KeyButton("0", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
-            KeyButton(".", Modifier.weight(1f), keyShape, keyColor, cyanText, onInput)
+            KeyButton("再记", Modifier.weight(1f), keyShape, themeColor.copy(alpha = 0.15f), themeColor, onInput)
+            KeyButton("0", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
+            KeyButton(".", Modifier.weight(1f), keyShape, keyColor, themeColor, onInput)
             KeyButton("完成", Modifier.weight(1f), keyShape,
-                if (finishEnabled) MaterialTheme.colorScheme.primaryContainer else keyColor,
-                if (finishEnabled) cyanText else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                if (finishEnabled) themeColor.copy(alpha = 0.15f) else keyColor,
+                if (finishEnabled) themeColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                 if (finishEnabled) onInput else { _ -> })
         }
     }
@@ -978,12 +989,11 @@ private fun KeyButton(
     onInput: (String) -> Unit,
     icon: Boolean = false
 ) {
+    val context = LocalContext.current
+    val pressColor = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))).copy(alpha = 0.12f) }
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
-    val bgColor = if (isPressed)
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-    else
-        containerColor
+    val bgColor = if (isPressed) pressColor else containerColor
 
     Box(
         modifier = modifier
@@ -1255,7 +1265,7 @@ private fun SubcategoryCard(
                                         .clip(RoundedCornerShape(24.dp))
                                         .background(
                                             if (isSelected)
-                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                                themeColor.copy(alpha = 0.25f)
                                             else
                                                 MaterialTheme.colorScheme.surfaceVariant
                                         ),
@@ -1264,10 +1274,7 @@ private fun SubcategoryCard(
                                     CategoryIcon(
                                         icon = child.icon,
                                         size = 20.dp,
-                                        tint = if (isSelected)
-                                            Color(0xFF00BCD4)
-                                        else
-                                            themeColor
+                                        tint = themeColor
                                     )
                                 }
                                 Spacer(Modifier.height(4.dp))
@@ -1277,7 +1284,7 @@ private fun SubcategoryCard(
                                     fontSize = 11.sp,
                                     maxLines = 1,
                                     color = if (isSelected)
-                                        MaterialTheme.colorScheme.primary
+                                        themeColor
                                     else
                                         MaterialTheme.colorScheme.onSurfaceVariant
                                 )
