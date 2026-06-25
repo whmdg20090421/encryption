@@ -124,7 +124,8 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                 RecordListContent(
                     bookName = currentBookName,
                     listState = listState,
-                    barHeight = barHeight
+                    barHeight = barHeight,
+                    onNavigate = onNavigate
                 )
             } else {
                 LazyColumn(
@@ -290,7 +291,8 @@ private fun SettingCard(
 private fun RecordListContent(
     bookName: String,
     listState: androidx.compose.foundation.lazy.LazyListState,
-    barHeight: androidx.compose.ui.unit.Dp
+    barHeight: androidx.compose.ui.unit.Dp,
+    onNavigate: (Screen) -> Unit
 ) {
     val context = LocalContext.current
     val recordDb = remember { AccountingRecordDb.load(context) }
@@ -409,7 +411,7 @@ private fun RecordListContent(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { }
+                        .clickable { onNavigate(Screen.AddAccounting(bookName, record.id)) }
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

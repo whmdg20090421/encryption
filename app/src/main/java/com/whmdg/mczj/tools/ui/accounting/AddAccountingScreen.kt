@@ -44,24 +44,38 @@ import android.widget.Toast
 import java.util.Calendar
 
 @Composable
-fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
-    var selectedType by remember { mutableIntStateOf(0) }
+fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? = null) {
     val types = listOf("支出", "收入", "转账", "债务")
-    var amount by remember { mutableStateOf("0") }
-    var note by remember { mutableStateOf("") }
-    val now = remember { Calendar.getInstance() }
-    var selectedYear by remember { mutableIntStateOf(now.get(Calendar.YEAR)) }
-    var selectedMonth by remember { mutableIntStateOf(now.get(Calendar.MONTH)) }
-    var selectedDay by remember { mutableIntStateOf(now.get(Calendar.DAY_OF_MONTH)) }
-    var selectedHour by remember { mutableIntStateOf(now.get(Calendar.HOUR_OF_DAY)) }
-    var selectedMinute by remember { mutableIntStateOf(now.get(Calendar.MINUTE)) }
+    val context = LocalContext.current
+
+    // 编辑模式：加载已有记录
+    val editingRecord = remember(recordId) {
+        if (recordId != null) {
+            AccountingRecordDb.load(context).records.find { it.id == recordId }
+        } else null
+    }
+
+    var selectedType by remember { mutableIntStateOf(
+        editingRecord?.let { types.indexOf(it.type).coerceAtLeast(0) } ?: 0
+    ) }
+    var amount by remember { mutableStateOf(editingRecord?.amount ?: "0") }
+    var note by remember { mutableStateOf(editingRecord?.note ?: "") }
+    val initCal = remember(editingRecord) {
+        Calendar.getInstance().apply {
+            if (editingRecord != null) timeInMillis = editingRecord.happenedAt
+        }
+    }
+    var selectedYear by remember { mutableIntStateOf(initCal.get(Calendar.YEAR)) }
+    var selectedMonth by remember { mutableIntStateOf(initCal.get(Calendar.MONTH)) }
+    var selectedDay by remember { mutableIntStateOf(initCal.get(Calendar.DAY_OF_MONTH)) }
+    var selectedHour by remember { mutableIntStateOf(initCal.get(Calendar.HOUR_OF_DAY)) }
+    var selectedMinute by remember { mutableIntStateOf(initCal.get(Calendar.MINUTE)) }
     val selectedDate = remember(selectedYear, selectedMonth, selectedDay, selectedHour, selectedMinute) {
         "%04d-%02d-%02d %02d:%02d".format(selectedYear, selectedMonth + 1, selectedDay, selectedHour, selectedMinute)
     }
     var showDatePicker by remember { mutableStateOf(false) }
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     val infoRowHeight = screenHeight * 0.05f
-    val context = LocalContext.current
 
     // 从 JSON 动态加载分类数据（跟随选中的记账类型切换）
     val categoryDb = remember { AccountingCategoryDb.ensureDefault(context) }
@@ -70,8 +84,19 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
     val categories = remember(selectedType) {
         categoryDb.getCategories("记账页", currentType)
     }
-    var selectedCategory by remember { mutableStateOf<String?>(null) }
-    var expandedCategory by remember { mutableStateOf<String?>(null) }
+    // 编辑模式：预选分类（优先二级分类 id）
+    var selectedCategory by remember {
+        mutableStateOf<String?>(
+            editingRecord?.subcategoryId ?: editingRecord?.categoryId
+        )
+    }
+    var expandedCategory by remember {
+        // 如果有二级分类，展开其父分类
+        val initRecord = editingRecord
+        mutableStateOf<String?>(
+            if (initRecord != null && initRecord.subcategoryId != null) initRecord.categoryId else null
+        )
+    }
 
     // 保存记录的辅助函数
     fun saveCurrentRecord(): Boolean {
@@ -128,6 +153,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
         cal.set(selectedYear, selectedMonth, selectedDay, selectedHour, selectedMinute, 0)
         cal.set(Calendar.MILLISECOND, 0)
         val record = AccountingRecord(
+            id = editingRecord?.id ?: java.util.UUID.randomUUID().toString(),
             bookName = bookName,
             type = currentType,
             amount = finalAmount,
@@ -137,7 +163,11 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
             happenedAt = cal.timeInMillis
         )
         val db = AccountingRecordDb.load(context)
-        db.add(record).save(context)
+        if (editingRecord != null) {
+            db.update(record).save(context)
+        } else {
+            db.add(record).save(context)
+        }
         return true
     }
 
@@ -148,10 +178,14 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String) {
         catch (_: Exception) { Color(0xFF00BCD4) }
     }
 
-    // 切换记账类型时重置选中和展开
+    // 切换记账类型时重置选中和展开（跳过首次，保留编辑模式预选值）
+    var typeChanged by remember { mutableStateOf(false) }
     LaunchedEffect(selectedType) {
-        selectedCategory = null
-        expandedCategory = null
+        if (typeChanged) {
+            selectedCategory = null
+            expandedCategory = null
+        }
+        typeChanged = true
     }
 
     Scaffold { innerPadding ->

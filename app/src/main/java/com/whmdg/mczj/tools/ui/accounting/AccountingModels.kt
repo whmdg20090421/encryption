@@ -1,10 +1,7 @@
 package com.whmdg.mczj.tools.ui.accounting
 
 import android.content.Context
-import com.whmdg.mczj.tools.AppDataPaths
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import java.io.File
 import java.util.UUID
 
 /**
@@ -20,10 +17,8 @@ data class AccountingCategory(
 )
 
 /**
- * 分类数据库。
+ * 分类数据库（内存表示，底层存储已迁移至 SQLite）。
  * 结构：pages → 页面名 → 记账类型 → 分类列表。
- * 首次安装时释放默认模板到 JSON 文件，后续 UI 动态读取该文件。
- * 用户修改 JSON 后，UI 自动反映变更。
  */
 @Serializable
 data class AccountingCategoryDb(
@@ -31,19 +26,8 @@ data class AccountingCategoryDb(
     val pages: Map<String, Map<String, List<AccountingCategory>>> = emptyMap()
 ) {
     companion object {
-        private const val FILE_NAME = "accounting_categories.json"
-        private const val BACKUP_NAME = "accounting_categories.backup.json"
-        private const val PREF_KEY_RELEASED = "categories_released"
-        private const val PREF_KEY_VERSION = "categories_version"
         /** 当前默认数据版本，递增此值触发重新释放 */
         private const val CURRENT_VERSION = 2
-
-        private val json = Json {
-            ignoreUnknownKeys = true
-            prettyPrint = true
-            prettyPrintIndent = "    "
-            encodeDefaults = true
-        }
 
         fun empty() = AccountingCategoryDb()
 
@@ -277,54 +261,34 @@ data class AccountingCategoryDb(
             return AccountingCategoryDb(version = 1, pages = pages)
         }
 
-        /** 加载：主配置 → 备份 → 空 */
+        /** 从 SQLite 加载分类数据 */
         fun load(context: Context): AccountingCategoryDb {
-            val dir = AppDataPaths.accounting(context)
-            val primary = File(dir, FILE_NAME)
-            if (primary.exists()) {
-                try {
-                    return json.decodeFromString<AccountingCategoryDb>(primary.readText())
-                } catch (_: Exception) { }
+            val db = AccountingDatabase.getInstance(context)
+            val page = "记账页"
+            val types = listOf("支出", "收入", "转账", "债务")
+            val pages = mutableMapOf<String, Map<String, List<AccountingCategory>>>()
+            val typeMap = mutableMapOf<String, List<AccountingCategory>>()
+            for (type in types) {
+                typeMap[type] = db.getCategories(page, type)
             }
-            val backup = File(dir, BACKUP_NAME)
-            if (backup.exists()) {
-                try {
-                    return json.decodeFromString<AccountingCategoryDb>(backup.readText())
-                } catch (_: Exception) { }
-            }
-            return empty()
+            pages[page] = typeMap
+            return AccountingCategoryDb(version = db.getCategoryVersion(), pages = pages)
         }
 
         /**
-         * 首次释放：检查 SharedPreferences 标记，未释放则写入默认数据。
-         * 版本升级时重新释放默认数据（用户手动修改的 JSON 会被覆盖）。
-         * 后续调用直接 load()，用户修改 JSON 后 UI 自动反映。
+         * 首次释放：检查 SQLite 中的版本号，版本不足则重新写入默认分类。
          */
         fun ensureDefault(context: Context): AccountingCategoryDb {
-            val prefs = context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
-            val released = prefs.getBoolean(PREF_KEY_RELEASED, false)
-            val savedVersion = prefs.getInt(PREF_KEY_VERSION, 0)
-            if (!released || savedVersion < CURRENT_VERSION) {
-                val db = defaultCategories()
-                db.save(context)
-                prefs.edit()
-                    .putBoolean(PREF_KEY_RELEASED, true)
-                    .putInt(PREF_KEY_VERSION, CURRENT_VERSION)
-                    .apply()
-                return db
+            val db = AccountingDatabase.getInstance(context)
+            // 执行数据迁移（JSON + SharedPreferences → SQLite）
+            db.migrateFromLegacy(context)
+            val savedVersion = db.getCategoryVersion()
+            if (savedVersion < CURRENT_VERSION) {
+                db.insertDefaultCategories()
+                db.setCategoryVersion(CURRENT_VERSION)
             }
             return load(context)
         }
-    }
-
-    /** 双副本保存：主配置 + 备份 */
-    fun save(context: Context) {
-        val dir = AppDataPaths.accounting(context)
-        val text = json.encodeToString(serializer(), this)
-        File(dir, FILE_NAME).writeText(text)
-        try {
-            File(dir, BACKUP_NAME).writeText(text)
-        } catch (_: Exception) { }
     }
 
     /** 获取指定页面、指定类型的分类列表 */
@@ -333,16 +297,16 @@ data class AccountingCategoryDb(
     }
 }
 
-/** 读取分类图标主题色（十六进制颜色值，默认青色 #00BCD4） */
+/** 读取分类图标主题色（十六进制颜色值，默认靛蓝 #5C6BC0） */
 fun getCategoryIconColor(context: Context): String {
-    val prefs = context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
-    return prefs.getString(AppDataPaths.PREF_KEY_ICON_COLOR, "#5C6BC0") ?: "#5C6BC0"
+    val db = AccountingDatabase.getInstance(context)
+    return db.getSetting("category_icon_color") ?: "#5C6BC0"
 }
 
 /** 写入分类图标主题色 */
 fun setCategoryIconColor(context: Context, colorHex: String) {
-    context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
-        .edit().putString(AppDataPaths.PREF_KEY_ICON_COLOR, colorHex).apply()
+    val db = AccountingDatabase.getInstance(context)
+    db.setSetting("category_icon_color", colorHex)
 }
 
 // ── 记账记录数据模型 ──
@@ -364,42 +328,19 @@ data class AccountingRecord(
 )
 
 /**
- * 记账记录数据库。
- * JSON 文件存储，双副本备份，参考 DiaryDb / AccountingCategoryDb 模式。
+ * 记账记录数据库（内存表示，底层存储已迁移至 SQLite）。
+ * 保持不可变副本模式：add/update/remove 返回新副本，save() 写入 SQLite。
  */
-@Serializable
 data class AccountingRecordDb(
     val records: List<AccountingRecord> = emptyList()
 ) {
     companion object {
-        private const val FILE_NAME = "accounting_records.json"
-        private const val BACKUP_NAME = "accounting_records.backup.json"
-
-        private val json = Json {
-            ignoreUnknownKeys = true
-            prettyPrint = true
-            prettyPrintIndent = "    "
-            encodeDefaults = true
-        }
-
         fun empty() = AccountingRecordDb()
 
-        /** 加载：主配置 → 备份 → 空 */
+        /** 从 SQLite 加载所有记录 */
         fun load(context: Context): AccountingRecordDb {
-            val dir = AppDataPaths.accounting(context)
-            val primary = File(dir, FILE_NAME)
-            if (primary.exists()) {
-                try {
-                    return json.decodeFromString<AccountingRecordDb>(primary.readText())
-                } catch (_: Exception) { }
-            }
-            val backup = File(dir, BACKUP_NAME)
-            if (backup.exists()) {
-                try {
-                    return json.decodeFromString<AccountingRecordDb>(backup.readText())
-                } catch (_: Exception) { }
-            }
-            return empty()
+            val db = AccountingDatabase.getInstance(context)
+            return AccountingRecordDb(records = db.getAllRecords())
         }
     }
 
@@ -413,13 +354,46 @@ data class AccountingRecordDb(
         return copy(records = records.filter { it.id != id })
     }
 
-    /** 双副本保存 */
+    /** 更新指定 id 的记录 */
+    fun update(record: AccountingRecord): AccountingRecordDb {
+        return copy(records = records.map { if (it.id == record.id) record else it })
+    }
+
+    /** 保存到 SQLite：REPLACE 存在的 + DELETE 多余的 */
     fun save(context: Context) {
-        val dir = AppDataPaths.accounting(context)
-        val text = json.encodeToString(serializer(), this)
-        File(dir, FILE_NAME).writeText(text)
+        val db = AccountingDatabase.getInstance(context)
+        val sqlDb = db.writableDatabase
+        sqlDb.beginTransaction()
         try {
-            File(dir, BACKUP_NAME).writeText(text)
-        } catch (_: Exception) { }
+            val currentIds = records.map { it.id }.toSet()
+            // 删除当前列表中不存在的记录
+            val existingIds = mutableSetOf<String>()
+            val cursor = sqlDb.rawQuery("SELECT id FROM records", null)
+            try {
+                while (cursor.moveToNext()) existingIds.add(cursor.getString(0))
+            } finally {
+                cursor.close()
+            }
+            for (id in existingIds - currentIds) {
+                sqlDb.delete("records", "id = ?", arrayOf(id))
+            }
+            // 插入或更新所有记录
+            for (record in records) {
+                val cv = android.content.ContentValues().apply {
+                    put("id", record.id)
+                    put("book_name", record.bookName)
+                    put("type", record.type)
+                    put("amount", record.amount)
+                    put("category_id", record.categoryId)
+                    if (record.subcategoryId != null) put("subcategory_id", record.subcategoryId) else putNull("subcategory_id")
+                    put("note", record.note)
+                    put("happened_at", record.happenedAt)
+                }
+                sqlDb.insertWithOnConflict("records", null, cv, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            sqlDb.setTransactionSuccessful()
+        } finally {
+            sqlDb.endTransaction()
+        }
     }
 }

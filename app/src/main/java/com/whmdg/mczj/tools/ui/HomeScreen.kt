@@ -142,7 +142,7 @@ sealed class Screen {
     data class DiaryBookDetail(val bookName: String, val createdAt: Long, val lastEditedAt: Long) : Screen()
     object Wifi : Screen()
     object Accounting : Screen()
-    data class AddAccounting(val bookName: String) : Screen()
+    data class AddAccounting(val bookName: String, val recordId: String? = null) : Screen()
     object About : Screen()
     object Changelog : Screen()
     data class TextEditor(val filePath: String) : Screen()
@@ -587,7 +587,8 @@ fun MainAppContainer() {
         is Screen.AddAccounting -> {
             AddAccountingScreen(
                 onBack = { navigateBack() },
-                bookName = currentScreen.bookName
+                bookName = currentScreen.bookName,
+                recordId = currentScreen.recordId
             )
         }
         is Screen.FunctionalTest -> {
