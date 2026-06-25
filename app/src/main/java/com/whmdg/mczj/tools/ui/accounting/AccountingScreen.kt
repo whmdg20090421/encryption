@@ -10,7 +10,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -29,7 +28,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -220,7 +218,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
             if (showAccountTypeDialog) {
                 val context = LocalContext.current
                 var accountTypeTab by remember { mutableIntStateOf(0) }
-                var selectedTypeLabelLabel by remember { mutableStateOf("现金") }
+                var selectedTypeLabel by remember { mutableStateOf("现金") }
                 var accountName by remember { mutableStateOf("") }
                 var initialAmount by remember { mutableStateOf("") }
                 var accountNote by remember { mutableStateOf("") }
