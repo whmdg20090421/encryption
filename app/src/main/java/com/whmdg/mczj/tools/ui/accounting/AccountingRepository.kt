@@ -282,7 +282,7 @@ object AccountingRepository {
         if (path != null) {
             File(path).delete()
         }
-        setSetting(context, KEY_AVATAR_PATH, null)
+        setSetting(context, KEY_AVATAR_PATH, "")
     }
 
     /** 获取用户签名 */
