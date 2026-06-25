@@ -3,9 +3,12 @@ package com.whmdg.mczj.tools.ui.accounting
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import android.net.Uri
 import com.whmdg.mczj.tools.AppDataPaths
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
+import java.io.File
+import java.io.FileOutputStream
 
 /**
  * 记账模块统一数据访问层（Repository 模式）。
@@ -229,6 +232,78 @@ object AccountingRepository {
     /** 保存上次使用的记账本名称 */
     fun setLastBookName(context: Context, bookName: String) {
         setSetting(context, KEY_LAST_BOOK, bookName)
+    }
+
+    // ─────────────────────────────────────────────
+    // 头像 & 签名 (Mine Page)
+    // ─────────────────────────────────────────────
+
+    private const val KEY_AVATAR_PATH = "mine_avatar_path"
+    private const val KEY_NICKNAME = "mine_nickname"
+
+    /** 获取头像绝对路径（验证文件存在才返回） */
+    fun getAvatarPath(context: Context): String? {
+        val relative = getSetting(context, KEY_AVATAR_PATH) ?: return null
+        val absolute = File(AppDataPaths.accounting(context), relative)
+        return if (absolute.exists()) absolute.absolutePath else null
+    }
+
+    /** 从 URI 保存头像到 avatars/ 目录，返回绝对路径 */
+    fun saveAvatar(context: Context, uri: Uri): String? {
+        val avatarDir = File(AppDataPaths.accounting(context), "avatars")
+        if (!avatarDir.exists()) avatarDir.mkdirs()
+
+        // 删除旧头像
+        deleteAvatar(context)
+
+        val timestamp = System.currentTimeMillis()
+        val ext = getExtensionFromUri(context, uri) ?: "jpg"
+        val fileName = "avatar_${timestamp}.$ext"
+        val target = File(avatarDir, fileName)
+
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(target).use { output ->
+                    input.copyTo(output)
+                }
+            }
+        } catch (_: Exception) {
+            return null
+        }
+
+        val relative = "avatars/$fileName"
+        setSetting(context, KEY_AVATAR_PATH, relative)
+        return target.absolutePath
+    }
+
+    /** 删除头像文件和 SP 记录 */
+    fun deleteAvatar(context: Context) {
+        val path = getAvatarPath(context)
+        if (path != null) {
+            File(path).delete()
+        }
+        setSetting(context, KEY_AVATAR_PATH, null)
+    }
+
+    /** 获取用户签名 */
+    fun getNickname(context: Context): String {
+        return getSetting(context, KEY_NICKNAME) ?: ""
+    }
+
+    /** 设置用户签名 */
+    fun setNickname(context: Context, name: String) {
+        setSetting(context, KEY_NICKNAME, name)
+    }
+
+    /** 从 URI 推断文件扩展名 */
+    private fun getExtensionFromUri(context: Context, uri: Uri): String? {
+        val mimeType = context.contentResolver.getType(uri)
+        return when {
+            mimeType?.contains("png") == true -> "png"
+            mimeType?.contains("webp") == true -> "webp"
+            mimeType?.contains("gif") == true -> "gif"
+            else -> "jpg"
+        }
     }
 
     // ─────────────────────────────────────────────

@@ -1,11 +1,18 @@
 package com.whmdg.mczj.tools.ui.accounting
 
+import android.graphics.BitmapFactory
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,16 +29,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.whmdg.mczj.tools.ui.Screen
+import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -130,7 +143,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
         ) {
             // 内容区：根据 selectedTab 显示不同内容
             if (selectedTab == 4) {
-                MinePageContent()
+                MinePageContent(bookName = currentBookName)
             } else if (selectedTab == 0) {
                 // 首页：记录列表
                 RecordListContent(
@@ -927,10 +940,221 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
     }
 }
 
+/** "我的"页面头部卡片：头像 + 诗意短句 + 签名 + 统计 */
+@Composable
+private fun MineHeaderCard(bookName: String) {
+    val context = LocalContext.current
+    var avatarPath by remember { mutableStateOf(AccountingRepository.getAvatarPath(context)) }
+    var nickname by remember { mutableStateOf(AccountingRepository.getNickname(context)) }
+    var showNicknameDialog by remember { mutableStateOf(false) }
+    var nicknameInput by remember { mutableStateOf("") }
+
+    // 图片选择器
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val saved = AccountingRepository.saveAvatar(context, uri)
+            if (saved != null) avatarPath = saved
+        }
+    }
+
+    // 统计数据
+    val records = remember(bookName) { AccountingRepository.getRecordsByBook(context, bookName) }
+    val totalRecords = records.size
+    val dayCount = if (records.isEmpty()) 0 else {
+        val earliest = records.minOf { it.happenedAt }
+        val days = ((System.currentTimeMillis() - earliest) / (1000 * 60 * 60 * 24)).toInt()
+        maxOf(days, 1)
+    }
+
+    // 签名编辑弹窗
+    if (showNicknameDialog) {
+        AlertDialog(
+            onDismissRequest = { showNicknameDialog = false },
+            title = { Text("编辑签名") },
+            text = {
+                OutlinedTextField(
+                    value = nicknameInput,
+                    onValueChange = { nicknameInput = it },
+                    placeholder = { Text("写点什么吧...") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    nickname = nicknameInput.trim()
+                    AccountingRepository.setNickname(context, nickname)
+                    showNicknameDialog = false
+                }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNicknameDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    val iconTint = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // 头像（80dp 圆形，点击选择图片）
+            Box(contentAlignment = Alignment.TopEnd) {
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
+                        .border(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), CircleShape)
+                        .clickable {
+                            photoPickerLauncher.launch(PickVisualMediaRequest(PickVisualMedia.ImageOnly))
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (avatarPath != null) {
+                        val bitmap = remember(avatarPath) {
+                            try {
+                                BitmapFactory.decodeFile(avatarPath)
+                            } catch (_: Exception) { null }
+                        }
+                        if (bitmap != null) {
+                            Image(
+                                bitmap = bitmap.asImageBitmap(),
+                                contentDescription = "头像",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(40.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    } else {
+                        Icon(
+                            Icons.Default.Person,
+                            contentDescription = null,
+                            modifier = Modifier.size(40.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                // 编辑小图标（右上角 45° 切线位置）
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .offset(x = 4.dp, y = (-4).dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Edit,
+                        contentDescription = "更换头像",
+                        modifier = Modifier.size(14.dp),
+                        tint = Color.White
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // 诗意短句（居中，最宽 60%）
+            Text(
+                text = "记一笔流水账，守一份岁月长",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(0.6f)
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            // 签名行（可编辑）
+            Row(
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .clickable {
+                        nicknameInput = nickname
+                        showNicknameDialog = true
+                    }
+                    .padding(horizontal = 16.dp)
+            ) {
+                if (nickname.isNotEmpty()) {
+                    Text(
+                        text = nickname,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.width(4.dp))
+                }
+                Icon(
+                    Icons.Default.Edit,
+                    contentDescription = "编辑签名",
+                    modifier = Modifier.size(14.dp),
+                    tint = iconTint
+                )
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // 统计行：记账天数 | 总笔数
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "$dayCount",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "记账天数",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "$totalRecords",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "总笔数",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
 /** "我的"页面内容：个性化设置 → 分类管理 → 分类图标 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MinePageContent() {
+private fun MinePageContent(bookName: String = "") {
     // 页面栈：emptyList = 主页面，listOf("个性化设置") = 个性化页面，listOf("个性化设置","分类管理") = 分类管理页
     var pageStack by remember { mutableStateOf<List<String>>(emptyList()) }
 
@@ -939,6 +1163,8 @@ private fun MinePageContent() {
             // "我的"主页
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 item { Spacer(Modifier.height(16.dp)) }
+                item { MineHeaderCard(bookName = bookName) }
+                item { Spacer(Modifier.height(8.dp)) }
                 item {
                     SettingCard(
                         icon = Icons.Outlined.Palette,
