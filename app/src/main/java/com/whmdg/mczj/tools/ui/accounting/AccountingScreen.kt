@@ -405,7 +405,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                                 initialAmount = amount,
                                 note = accountNote
                             )
-                            AccountingDatabase.getInstance(context).insertAccount(account)
+                            AccountingRepository.insertAccount(context, account)
                             accountRefreshTrigger++
                             showAccountTypeDialog = false
                             // 重置表单
@@ -429,38 +429,16 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
     }
 }
 
-// ── 账户类型配置 ──
-
-private data class AccountTypeConfig(
-    val svgPath: String,
-    val label: String,
-    val category: String
-)
-
-private val accountTypeConfigs = mapOf(
-    "cash" to AccountTypeConfig("file:///android_asset/icons/cash.svg", "现金", "tradable"),
-    "alipay" to AccountTypeConfig("file:///android_asset/icons/alipay.svg", "支付宝", "tradable"),
-    "wechat" to AccountTypeConfig("file:///android_asset/icons/wechat.svg", "微信钱包", "tradable"),
-    "bank_card" to AccountTypeConfig("file:///android_asset/icons/bank_card.svg", "银行卡", "tradable"),
-    "custom" to AccountTypeConfig("file:///android_asset/icons/other_account.svg", "自定义", "tradable"),
-    "real_estate" to AccountTypeConfig("file:///android_asset/icons/real_estate.svg", "不动产", "valuation"),
-    "vehicle" to AccountTypeConfig("file:///android_asset/icons/vehicle.svg", "车辆", "valuation"),
-    "investment" to AccountTypeConfig("file:///android_asset/icons/investment.svg", "投资", "valuation"),
-    "insurance" to AccountTypeConfig("file:///android_asset/icons/insurance.svg", "保险", "valuation"),
-    "provident_fund" to AccountTypeConfig("file:///android_asset/icons/social_fund.svg", "公积金", "valuation"),
-    "loan" to AccountTypeConfig("file:///android_asset/icons/loan.svg", "贷款", "valuation"),
-)
-
 // ── 资产标签页 ──
 
 @Composable
 private fun AssetTabContent(onAddAccount: () -> Unit, refreshTrigger: Int = 0) {
     val context = LocalContext.current
-    var accounts by remember { mutableStateOf(AccountingDatabase.getInstance(context).getAllAccounts()) }
+    var accounts by remember { mutableStateOf(AccountingRepository.getAllAccounts(context)) }
 
     // 刷新触发器变化时重新加载
     LaunchedEffect(refreshTrigger) {
-        accounts = AccountingDatabase.getInstance(context).getAllAccounts()
+        accounts = AccountingRepository.getAllAccounts(context)
     }
 
     // 应用主题色
@@ -893,7 +871,7 @@ private fun RecordListContent(
     }
 
     // 账户列表（用于查找账户信息）
-    val accounts = remember { AccountingDatabase.getInstance(context).getAllAccounts() }
+    val accounts = remember { AccountingRepository.getAllAccounts(context) }
     val accountMap = remember(accounts) { accounts.associateBy { it.id } }
 
     // 按账本筛选、按时间降序排列、按日期分组

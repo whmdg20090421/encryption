@@ -263,29 +263,27 @@ data class AccountingCategoryDb(
 
         /** 从 SQLite 加载分类数据 */
         fun load(context: Context): AccountingCategoryDb {
-            val db = AccountingDatabase.getInstance(context)
             val page = "记账页"
             val types = listOf("支出", "收入", "转账", "债务")
             val pages = mutableMapOf<String, Map<String, List<AccountingCategory>>>()
             val typeMap = mutableMapOf<String, List<AccountingCategory>>()
             for (type in types) {
-                typeMap[type] = db.getCategories(page, type)
+                typeMap[type] = AccountingRepository.loadCategories(context, page, type)
             }
             pages[page] = typeMap
-            return AccountingCategoryDb(version = db.getCategoryVersion(), pages = pages)
+            return AccountingCategoryDb(version = AccountingRepository.getCategoryVersion(context), pages = pages)
         }
 
         /**
          * 首次释放：检查 SQLite 中的版本号，版本不足则重新写入默认分类。
          */
         fun ensureDefault(context: Context): AccountingCategoryDb {
-            val db = AccountingDatabase.getInstance(context)
             // 执行数据迁移（JSON + SharedPreferences → SQLite）
-            db.migrateFromLegacy(context)
-            val savedVersion = db.getCategoryVersion()
+            AccountingRepository.migrateFromLegacy(context)
+            val savedVersion = AccountingRepository.getCategoryVersion(context)
             if (savedVersion < CURRENT_VERSION) {
-                db.insertDefaultCategories()
-                db.setCategoryVersion(CURRENT_VERSION)
+                AccountingRepository.insertDefaultCategories(context)
+                AccountingRepository.setCategoryVersion(context, CURRENT_VERSION)
             }
             return load(context)
         }
@@ -299,14 +297,12 @@ data class AccountingCategoryDb(
 
 /** 读取分类图标主题色（十六进制颜色值，默认靛蓝 #5C6BC0） */
 fun getCategoryIconColor(context: Context): String {
-    val db = AccountingDatabase.getInstance(context)
-    return db.getSetting("category_icon_color") ?: "#5C6BC0"
+    return AccountingRepository.getCategoryIconColor(context)
 }
 
 /** 写入分类图标主题色 */
 fun setCategoryIconColor(context: Context, colorHex: String) {
-    val db = AccountingDatabase.getInstance(context)
-    db.setSetting("category_icon_color", colorHex)
+    AccountingRepository.setCategoryIconColor(context, colorHex)
 }
 
 // ── 记账记录数据模型 ──
@@ -340,8 +336,7 @@ data class AccountingRecordDb(
 
         /** 从 SQLite 加载所有记录 */
         fun load(context: Context): AccountingRecordDb {
-            val db = AccountingDatabase.getInstance(context)
-            return AccountingRecordDb(records = db.getAllRecords())
+            return AccountingRecordDb(records = AccountingRepository.getAllRecords(context))
         }
     }
 
@@ -362,40 +357,7 @@ data class AccountingRecordDb(
 
     /** 保存到 SQLite：REPLACE 存在的 + DELETE 多余的 */
     fun save(context: Context) {
-        val db = AccountingDatabase.getInstance(context)
-        val sqlDb = db.writableDatabase
-        sqlDb.beginTransaction()
-        try {
-            val currentIds = records.map { it.id }.toSet()
-            // 删除当前列表中不存在的记录
-            val existingIds = mutableSetOf<String>()
-            val cursor = sqlDb.rawQuery("SELECT id FROM records", null)
-            try {
-                while (cursor.moveToNext()) existingIds.add(cursor.getString(0))
-            } finally {
-                cursor.close()
-            }
-            for (id in existingIds - currentIds) {
-                sqlDb.delete("records", "id = ?", arrayOf(id))
-            }
-            // 插入或更新所有记录
-            for (record in records) {
-                val cv = android.content.ContentValues().apply {
-                    put("id", record.id)
-                    put("book_name", record.bookName)
-                    put("type", record.type)
-                    put("amount", record.amount)
-                    put("category_id", record.categoryId)
-                    if (record.subcategoryId != null) put("subcategory_id", record.subcategoryId) else putNull("subcategory_id")
-                    put("note", record.note)
-                    put("happened_at", record.happenedAt)
-                }
-                sqlDb.insertWithOnConflict("records", null, cv, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
-            }
-            sqlDb.setTransactionSuccessful()
-        } finally {
-            sqlDb.endTransaction()
-        }
+        AccountingRepository.replaceAllRecords(context, records)
     }
 }
 
@@ -416,4 +378,26 @@ data class AccountingAccount(
     val note: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
+)
+
+// ── 账户类型配置 ──
+
+data class AccountTypeConfig(
+    val svgPath: String,
+    val label: String,
+    val category: String
+)
+
+val accountTypeConfigs = mapOf(
+    "cash" to AccountTypeConfig("file:///android_asset/icons/cash.svg", "现金", "tradable"),
+    "alipay" to AccountTypeConfig("file:///android_asset/icons/alipay.svg", "支付宝", "tradable"),
+    "wechat" to AccountTypeConfig("file:///android_asset/icons/wechat.svg", "微信钱包", "tradable"),
+    "bank_card" to AccountTypeConfig("file:///android_asset/icons/bank_card.svg", "银行卡", "tradable"),
+    "custom" to AccountTypeConfig("file:///android_asset/icons/other_account.svg", "自定义", "tradable"),
+    "real_estate" to AccountTypeConfig("file:///android_asset/icons/real_estate.svg", "不动产", "valuation"),
+    "vehicle" to AccountTypeConfig("file:///android_asset/icons/vehicle.svg", "车辆", "valuation"),
+    "investment" to AccountTypeConfig("file:///android_asset/icons/investment.svg", "投资", "valuation"),
+    "insurance" to AccountTypeConfig("file:///android_asset/icons/insurance.svg", "保险", "valuation"),
+    "provident_fund" to AccountTypeConfig("file:///android_asset/icons/social_fund.svg", "公积金", "valuation"),
+    "loan" to AccountTypeConfig("file:///android_asset/icons/loan.svg", "贷款", "valuation"),
 )

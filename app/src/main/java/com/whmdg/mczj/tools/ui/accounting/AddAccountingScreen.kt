@@ -45,21 +45,6 @@ import androidx.compose.ui.unit.sp
 import android.widget.Toast
 import java.util.Calendar
 
-// 账户类型 SVG 映射（与 AccountingScreen 保持一致）
-private val accountTypeSvgMap = mapOf(
-    "cash" to "file:///android_asset/icons/cash.svg",
-    "alipay" to "file:///android_asset/icons/alipay.svg",
-    "wechat" to "file:///android_asset/icons/wechat.svg",
-    "bank_card" to "file:///android_asset/icons/bank_card.svg",
-    "custom" to "file:///android_asset/icons/other_account.svg",
-    "real_estate" to "file:///android_asset/icons/real_estate.svg",
-    "vehicle" to "file:///android_asset/icons/vehicle.svg",
-    "investment" to "file:///android_asset/icons/investment.svg",
-    "insurance" to "file:///android_asset/icons/insurance.svg",
-    "provident_fund" to "file:///android_asset/icons/social_fund.svg",
-    "loan" to "file:///android_asset/icons/loan.svg",
-)
-
 @Composable
 fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? = null) {
     val types = listOf("支出", "收入", "转账", "债务")
@@ -95,11 +80,10 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     val infoRowHeight = screenHeight * 0.05f
 
     // 账户选择
-    val accounts = remember { AccountingDatabase.getInstance(context).getAllAccounts() }
+    val accounts = remember { AccountingRepository.getAllAccounts(context) }
     val accountMap = remember(accounts) { accounts.associateBy { it.id } }
-    // 上次使用的账户（从 SharedPreferences 读取）
-    val prefs = context.getSharedPreferences("accounting_prefs", android.content.Context.MODE_PRIVATE)
-    val lastAccountId = prefs.getString("last_account_id", null)
+    // 上次使用的账户
+    val lastAccountId = AccountingRepository.getLastAccountId(context)
     var selectedAccountId by remember {
         mutableStateOf(editingRecord?.accountId ?: lastAccountId)
     }
@@ -203,7 +187,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
         }
         // 保存本次使用的账户 id
         if (selectedAccountId != null) {
-            prefs.edit().putString("last_account_id", selectedAccountId).apply()
+            AccountingRepository.setLastAccountId(context, selectedAccountId!!)
         }
         return true
     }
@@ -624,7 +608,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     ) {
                         accounts.forEach { account ->
                             val isSelected = tempSelectedId == account.id
-                            val svgPath = accountTypeSvgMap[account.type]
+                            val svgPath = accountTypeConfigs[account.type]?.svgPath
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()

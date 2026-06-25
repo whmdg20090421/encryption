@@ -15,7 +15,7 @@ import java.io.File
  * 一个 .db 文件 = 完整备份（除附件外）。
  */
 class AccountingDatabase private constructor(context: Context) :
-    SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
+    SQLiteOpenHelper(context, dbPath(context), null, DB_VERSION) {
 
     companion object {
         private const val DB_NAME = "accounting.db"
@@ -29,6 +29,12 @@ class AccountingDatabase private constructor(context: Context) :
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: AccountingDatabase(context.applicationContext).also { INSTANCE = it }
             }
+        }
+
+        /** DB 文件存储在 AppDataPaths.accounting() 目录下 */
+        private fun dbPath(context: Context): String {
+            val dir = AppDataPaths.accounting(context)
+            return File(dir, DB_NAME).absolutePath
         }
     }
 
