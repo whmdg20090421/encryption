@@ -28,6 +28,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Alignment
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
@@ -236,6 +237,27 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             val screenWidth = LocalConfiguration.current.screenWidthDp.dp
             val itemWidth = screenWidth / itemsPerRow
             val scrollState = rememberScrollState()
+
+            // 展开/折叠二级分类时自动滚动，保证内容不被裁剪、不留空白
+            var prevMaxValue by remember { mutableIntStateOf(0) }
+            LaunchedEffect(scrollState) {
+                snapshotFlow { scrollState.maxValue }
+                    .collect { newMax ->
+                        val oldMax = prevMaxValue
+                        prevMaxValue = newMax
+                        if (oldMax == 0) return@collect  // 跳过首次布局
+                        if (newMax < oldMax) {
+                            // 折叠：如果当前滚动超出新内容，滚到底部
+                            if (scrollState.value > newMax) {
+                                scrollState.animateScrollTo(newMax)
+                            }
+                        } else {
+                            // 展开：等布局更新后，滚到旧底部位置
+                            delay(150)
+                            scrollState.animateScrollTo(oldMax)
+                        }
+                    }
+            }
 
             Column(
                 modifier = Modifier

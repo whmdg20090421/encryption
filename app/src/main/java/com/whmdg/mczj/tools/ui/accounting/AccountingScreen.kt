@@ -117,7 +117,6 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
         ) {
             // 内容区：根据 selectedTab 显示不同内容
             if (selectedTab == 4) {
-                // "我的"页面
                 MinePageContent()
             } else if (selectedTab == 0) {
                 // 首页：记录列表
@@ -127,50 +126,49 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                     barHeight = barHeight,
                     onNavigate = onNavigate
                 )
+
+                // 状态栏背景层（首页专属，滚动时渐显）
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(barHeight)
+                        .graphicsLayer { alpha = bgAlpha }
+                        .background(MaterialTheme.colorScheme.surface)
+                )
+
+                // 顶部功能按钮层（首页专属，始终可见）
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(barHeight)
+                        .padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box {
+                        TextButton(onClick = { showBookMenu = true }) {
+                            Text("记账本", style = MaterialTheme.typography.titleMedium)
+                        }
+                        DropdownMenu(
+                            expanded = showBookMenu,
+                            onDismissRequest = { showBookMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(currentBookName) },
+                                onClick = { showBookMenu = false }
+                            )
+                        }
+                    }
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.Home, contentDescription = "返回主页")
+                    }
+                }
             } else {
+                // 其他 tab：简单占位
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    item { Spacer(Modifier.height(barHeight)) }
-                }
-            }
-
-            // 状态栏背景层（独立控制显隐）
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(barHeight)
-                    .graphicsLayer { alpha = bgAlpha }
-                    .background(MaterialTheme.colorScheme.surface)
-            )
-
-            // 顶部功能按钮层（始终可见）
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(barHeight)
-                    .padding(horizontal = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 记账本按钮 + 下拉菜单
-                Box {
-                    TextButton(onClick = { showBookMenu = true }) {
-                        Text("记账本", style = MaterialTheme.typography.titleMedium)
-                    }
-                    DropdownMenu(
-                        expanded = showBookMenu,
-                        onDismissRequest = { showBookMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text(currentBookName) },
-                            onClick = { showBookMenu = false }
-                        )
-                    }
-                }
-                // 房子按钮（返回主页）
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Default.Home, contentDescription = "返回主页")
+                    item { Spacer(Modifier.height(16.dp)) }
                 }
             }
 
@@ -399,14 +397,18 @@ private fun RecordListContent(
             }
 
             // 记录行
+            val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
             items(records, key = { it.id }) { record ->
                 val catInfo = categoryLookup[record.categoryId]
                 val subInfo = record.subcategoryId?.let { categoryLookup[it] }
-                val displayName = subInfo?.first ?: catInfo?.first ?: record.categoryId
+                val parentName = catInfo?.first ?: record.categoryId
+                val childName = subInfo?.first
+                val displayName = if (childName != null) "$parentName-$childName" else parentName
                 val icon = subInfo?.second ?: catInfo?.second ?: "category"
                 val isExpense = record.type == "支出" || record.type == "债务"
                 val amountPrefix = if (isExpense) "-" else "+"
                 val amountColor = if (isExpense) Color(0xFFEF5350) else Color(0xFF4CAF50)
+                val timeStr = timeFormat.format(Date(record.happenedAt))
 
                 Row(
                     modifier = Modifier
@@ -415,47 +417,80 @@ private fun RecordListContent(
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 分类图标
+                    // 左侧图标框：圆角正方形，高度跨两行
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(20.dp))
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(12.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = materialIcon(icon),
                             contentDescription = null,
-                            modifier = Modifier.size(20.dp),
+                            modifier = Modifier.size(24.dp),
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
                     Spacer(Modifier.width(12.dp))
-                    // 分类名 + 备注
+                    // 右侧内容
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = displayName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1
-                        )
-                        if (record.note.isNotEmpty()) {
+                        // 上行：分类名 | 金额 + 支付方式
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text(
-                                text = record.note,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                text = displayName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "$amountPrefix¥${record.amount}",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = amountColor
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            // 支付方式占位
+                            Icon(
+                                imageVector = Icons.Outlined.Payment,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                             )
                         }
+                        // 下行：时间 + 备注
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = timeStr,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (record.note.isNotEmpty()) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = record.note,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
                     }
-                    // 金额
-                    Text(
-                        text = "$amountPrefix¥${record.amount}",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = amountColor
-                    )
                 }
+                // 记录间分隔线
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = 76.dp, end = 16.dp),
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                )
             }
 
             // 分组间隔
