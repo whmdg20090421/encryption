@@ -29,6 +29,18 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V3.1",
+        date = "2026-06-25",
+        items = listOf(
+            "记账模块 Repository 模式重构：统一数据访问层（AccountingRepository），AccountingDatabase 标记 internal，编译时强制检查 DB 访问规范",
+            "记账模块全面跟随主题色：所有非背景颜色统一使用记账设置中的主题色（category_icon_color），支出/收入保持红绿不变",
+            "记账首页资产标签页：账户管理（新增/编辑/删除）、资产构成饼图、分组卡片、月度统计卡片",
+            "记一笔优惠计算功能：优惠前金额、优惠金额、优惠后金额自动计算，支持百分比优惠模式，开关状态持久化存储",
+            "记一笔布局优化：日期添加日历图标、统一间距变量（elementSpacing）、账户选择即点即选（移除确认按钮）",
+            "数据迁移优化：迁移完成后自动清理旧 JSON 文件和 SharedPreferences，启动时清理 databases/ 目录残留 DB"
+        )
+    ),
+    ChangelogVersion(
         version = "V3.0",
         date = "2026-06-24",
         items = listOf(

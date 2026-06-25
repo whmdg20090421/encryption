@@ -420,32 +420,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     .height(infoRowHeight),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .weight(0.2f),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .clickable { showDiscountDialog = true }
-                            .padding(start = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Discount,
-                            contentDescription = "优惠",
-                            modifier = Modifier.size(16.dp),
-                            tint = iconThemeColor
-                        )
-                        Spacer(Modifier.width(2.dp))
-                        Text(
-                            text = if (hasDiscount) "-${discountOff}" else "优惠",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = iconThemeColor
-                        )
-                    }
-                }
+                Spacer(Modifier.fillMaxHeight().weight(0.2f))
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
@@ -554,6 +529,28 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         style = MaterialTheme.typography.labelSmall,
                         color = if (selectedAccount != null) MaterialTheme.colorScheme.onSurface
                                else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(Modifier.width(elementSpacing))
+
+                // 优惠
+                Row(
+                    modifier = Modifier
+                        .clickable { showDiscountDialog = true },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Discount,
+                        contentDescription = "优惠",
+                        modifier = Modifier.size(16.dp),
+                        tint = iconThemeColor
+                    )
+                    Spacer(Modifier.width(2.dp))
+                    Text(
+                        text = if (hasDiscount) "-${discountOff}" else "优惠",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = iconThemeColor
                     )
                 }
             }
@@ -799,10 +796,8 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         )
 
                         // 两个开关：自动计算 / 百分比优惠
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            // 左半：自动计算
                             Row(
                                 modifier = Modifier.weight(1f),
                                 verticalAlignment = Alignment.CenterVertically
@@ -810,11 +805,15 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                 Switch(
                                     checked = autoCalc.value,
                                     onCheckedChange = { autoCalc.value = it },
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.weight(0.3f)
                                 )
-                                Spacer(Modifier.width(4.dp))
-                                Text("自动计算", style = MaterialTheme.typography.labelSmall)
+                                Text(
+                                    "自动计算",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.weight(0.7f)
+                                )
                             }
+                            // 右半：百分比优惠
                             Row(
                                 modifier = Modifier.weight(1f),
                                 verticalAlignment = Alignment.CenterVertically
@@ -822,10 +821,13 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                 Switch(
                                     checked = percentMode.value,
                                     onCheckedChange = { percentMode.value = it },
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.weight(0.3f)
                                 )
-                                Spacer(Modifier.width(4.dp))
-                                Text("百分比优惠", style = MaterialTheme.typography.labelSmall)
+                                Text(
+                                    "百分比优惠",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.weight(0.7f)
+                                )
                             }
                         }
                     }

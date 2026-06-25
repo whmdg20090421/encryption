@@ -474,6 +474,7 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 ### 开发原则
 - **禁止兜底式修复**：遇到 bug 时，先追根溯源理解为什么会出错，而不是急着加 `coerce`、`coerceAtMost`、`?: fallback` 等兜底逻辑。例如 `Int.MAX_VALUE` 作为哨兵值导致下游计算产生极端数值，应改用合理的数据结构（如 `Int? = null` 表示"不存在"），而非在消费端加 `coerceAtMost` 压制症状。兜底掩盖了真实问题，让代码更难理解和维护。
 - **数值兼容性**：规定 UI 数值时，优先使用兼容性变量（如 `circleRadius * 2`）或百分比方案（如 `screenWidthDp * 0.4f`），避免硬编码固定 dp 数值。这样在不同屏幕密度和尺寸下具有更好的适配性。
+- **禁止主动使用 dp 限制尺寸**：UI 组件的尺寸约束必须使用百分比（`weight`、`fillMaxWidth`、`fillMaxHeight`）或相对于屏幕/父容器的方案，禁止使用 `Modifier.size(Xdp)`、`Modifier.width(Xdp)`、`Modifier.height(Xdp)` 等硬编码 dp 限制组件大小。除非用户明确指定"用 XX dp"，才能使用 dp 值。间距（`Spacer`、`padding`、`spacedBy`）不受此限制。
 - **使用官方接口**：涉及日期、时间、数学、格式化等计算时，优先使用平台/语言官方 API（如 `Calendar.isLeapYear(year)`），不要自己写算法判断，避免边界情况遗漏。
 
 ### 认证安全
