@@ -706,24 +706,60 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             val inputBefore = remember { mutableStateOf(discountBefore ?: "") }
             val inputOff = remember { mutableStateOf(discountOff ?: "") }
             val inputAfter = remember { mutableStateOf(discountAfter ?: (if (amount != "0" && amount.isNotEmpty()) amount else "")) }
+            val autoCalc = remember { mutableStateOf(true) }
+            val percentMode = remember { mutableStateOf(false) }
+
+            /** 限制金额输入：最多两位小数 */
+            fun filterAmount(raw: String): String {
+                val filtered = raw.filter { it.isDigit() || it == '.' }
+                val dotIdx = filtered.indexOf('.')
+                return if (dotIdx >= 0) filtered.substring(0, minOf(dotIdx + 3, filtered.length))
+                else filtered
+            }
+
+            /** 限制百分比输入：仅整数 */
+            fun filterPercent(raw: String): String {
+                return raw.filter { it.isDigit() }
+            }
 
             // 自动计算第三个字段
             fun recalc(changed: String) {
+                if (!autoCalc.value) return
                 val b = inputBefore.value.toDoubleOrNull()
                 val o = inputOff.value.toDoubleOrNull()
                 val a = inputAfter.value.toDoubleOrNull()
-                when (changed) {
-                    "before" -> {
-                        if (b != null && o != null) inputAfter.value = String.format("%.2f", b - o)
-                        else if (b != null && a != null) inputOff.value = String.format("%.2f", b - a)
+                if (percentMode.value) {
+                    // 百分比模式：优惠前 × 折扣% = 优惠后
+                    val pct = inputOff.value.toDoubleOrNull()  // 百分比值，如 80 表示打八折
+                    when (changed) {
+                        "before" -> {
+                            if (b != null && pct != null) inputAfter.value = String.format("%.2f", b * pct / 100)
+                            else if (b != null && a != null && pct == null) inputOff.value = if (b != 0.0) String.format("%.0f", a / b * 100) else ""
+                        }
+                        "off" -> {
+                            if (b != null && pct != null) inputAfter.value = String.format("%.2f", b * pct / 100)
+                            else if (pct != null && a != null && b == null) inputBefore.value = String.format("%.2f", a * 100 / pct)
+                        }
+                        "after" -> {
+                            if (b != null && a != null) inputOff.value = if (b != 0.0) String.format("%.0f", a / b * 100) else ""
+                            else if (pct != null && a != null) inputBefore.value = String.format("%.2f", a * 100 / pct)
+                        }
                     }
-                    "off" -> {
-                        if (b != null && o != null) inputAfter.value = String.format("%.2f", b - o)
-                        else if (o != null && a != null) inputBefore.value = String.format("%.2f", o + a)
-                    }
-                    "after" -> {
-                        if (b != null && a != null) inputOff.value = String.format("%.2f", b - a)
-                        else if (o != null && a != null) inputBefore.value = String.format("%.2f", o + a)
+                } else {
+                    // 金额模式：优惠前 - 优惠 = 优惠后
+                    when (changed) {
+                        "before" -> {
+                            if (b != null && o != null) inputAfter.value = String.format("%.2f", b - o)
+                            else if (b != null && a != null) inputOff.value = String.format("%.2f", b - a)
+                        }
+                        "off" -> {
+                            if (b != null && o != null) inputAfter.value = String.format("%.2f", b - o)
+                            else if (o != null && a != null) inputBefore.value = String.format("%.2f", o + a)
+                        }
+                        "after" -> {
+                            if (b != null && a != null) inputOff.value = String.format("%.2f", b - a)
+                            else if (o != null && a != null) inputBefore.value = String.format("%.2f", o + a)
+                        }
                     }
                 }
             }
@@ -735,7 +771,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedTextField(
                             value = inputBefore.value,
-                            onValueChange = { inputBefore.value = it; recalc("before") },
+                            onValueChange = { inputBefore.value = filterAmount(it); recalc("before") },
                             label = { Text("优惠前金额") },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
@@ -743,20 +779,56 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         )
                         OutlinedTextField(
                             value = inputOff.value,
-                            onValueChange = { inputOff.value = it; recalc("off") },
-                            label = { Text("优惠金额") },
+                            onValueChange = {
+                                inputOff.value = if (percentMode.value) filterPercent(it) else filterAmount(it)
+                                recalc("off")
+                            },
+                            label = { Text(if (percentMode.value) "打折百分比" else "优惠金额") },
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = if (percentMode.value) KeyboardType.Number else KeyboardType.Decimal
+                            ),
                             modifier = Modifier.fillMaxWidth()
                         )
                         OutlinedTextField(
                             value = inputAfter.value,
-                            onValueChange = { inputAfter.value = it; recalc("after") },
+                            onValueChange = { inputAfter.value = filterAmount(it); recalc("after") },
                             label = { Text("优惠后金额") },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             modifier = Modifier.fillMaxWidth()
                         )
+
+                        // 两个开关：自动计算 / 百分比优惠
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Switch(
+                                    checked = autoCalc.value,
+                                    onCheckedChange = { autoCalc.value = it },
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text("自动计算", style = MaterialTheme.typography.labelSmall)
+                            }
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Switch(
+                                    checked = percentMode.value,
+                                    onCheckedChange = { percentMode.value = it },
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text("百分比优惠", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
                     }
                 },
                 confirmButton = {
@@ -774,7 +846,6 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 },
                 dismissButton = {
                     TextButton(onClick = {
-                        // 取消：不生效，关闭弹窗
                         showDiscountDialog = false
                     }) {
                         Text("取消")
