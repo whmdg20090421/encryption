@@ -1102,7 +1102,7 @@ private fun RecordListContent(
         state = listState,
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.background)
     ) {
         // 顶部留白
         item { Spacer(Modifier.height(barHeight)) }
