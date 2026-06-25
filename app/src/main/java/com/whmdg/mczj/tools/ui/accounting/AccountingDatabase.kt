@@ -335,5 +335,20 @@ class AccountingDatabase private constructor(context: Context) :
         } finally {
             db.endTransaction()
         }
+
+        // 4. 删除旧 JSON 文件和 SharedPreferences 数据
+        val dir = AppDataPaths.accounting(context)
+        for (name in listOf(
+            "accounting_records.json", "accounting_records.backup.json",
+            "accounting_categories.json", "accounting_categories.backup.json"
+        )) {
+            val f = File(dir, name)
+            if (f.exists()) {
+                f.delete()
+                Log.i(TAG, "已删除旧文件: $name")
+            }
+        }
+        context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
+            .edit().clear().apply()
     }
 }
