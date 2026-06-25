@@ -14,7 +14,7 @@ import java.io.File
  * 三张表：settings（键值设置）、categories（分类）、records（记账记录）。
  * 一个 .db 文件 = 完整备份（除附件外）。
  */
-class AccountingDatabase private constructor(context: Context) :
+internal class AccountingDatabase private constructor(context: Context) :
     SQLiteOpenHelper(context, dbPath(context), null, DB_VERSION) {
 
     companion object {
@@ -25,7 +25,7 @@ class AccountingDatabase private constructor(context: Context) :
         @Volatile
         private var INSTANCE: AccountingDatabase? = null
 
-        fun getInstance(context: Context): AccountingDatabase {
+        internal fun getInstance(context: Context): AccountingDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: AccountingDatabase(context.applicationContext).also { INSTANCE = it }
             }
