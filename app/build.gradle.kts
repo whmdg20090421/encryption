@@ -190,4 +190,8 @@ tasks.register("checkAccountingDbAccess") {
         }
     }
 }
-tasks.named("compileKotlin") { dependsOn("checkAccountingDbAccess") }
+plugins.withId("org.jetbrains.kotlin.android") {
+    tasks.matching { it.name.startsWith("compileKotlin") }.configureEach {
+        dependsOn("checkAccountingDbAccess")
+    }
+}
