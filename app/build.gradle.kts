@@ -121,6 +121,7 @@ dependencies {
     implementation(libs.sora.language.java)
     implementation(libs.telephoto.zoomable)
     implementation(libs.coil.compose)
+    implementation(libs.coil.svg)
     implementation(libs.libsu.core)
     implementation(libs.androidx.appcompat)
 

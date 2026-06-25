@@ -53,6 +53,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
             }
             .components {
                 add(com.whmdg.mczj.tools.util.JxlDecoderFactory())
+                add(coil3.svg.SvgDecoder.Factory())
             }
             .build()
     }

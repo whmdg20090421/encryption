@@ -2,7 +2,6 @@ package com.whmdg.mczj.tools.ui.accounting
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -12,7 +11,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -23,18 +21,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
 import com.whmdg.mczj.tools.ui.Screen
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -234,25 +230,28 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                 )
 
                 val tradableTypes = listOf(
-                    Triple(Icons.Outlined.Payments, "现金", Color(0xFFFF9800)),
-                    Triple(Icons.Outlined.CurrencyYuan, "支付宝", Color(0xFF1677FF)),
-                    Triple(Icons.Outlined.Chat, "微信钱包", Color(0xFF07C160)),
-                    Triple(Icons.Outlined.CreditCard, "银行卡", Color(0xFF1890FF)),
-                    Triple(Icons.Outlined.Wallet, "QQ钱包", Color(0xFF12B7F5)),
-                    Triple(Icons.Outlined.ShoppingCart, "京东金融", Color(0xFFE53935)),
-                    Triple(Icons.Outlined.Edit, "自定义", MaterialTheme.colorScheme.primary),
+                    "file:///android_asset/icons/cash.svg" to "现金",
+                    "file:///android_asset/icons/alipay.svg" to "支付宝",
+                    "file:///android_asset/icons/wechat.svg" to "微信钱包",
+                    "file:///android_asset/icons/bank_card.svg" to "银行卡",
+                    "file:///android_asset/icons/other_account.svg" to "QQ钱包",
+                    "file:///android_asset/icons/other_account.svg" to "京东金融",
+                    "file:///android_asset/icons/other_account.svg" to "自定义",
                 )
                 val valuationTypes = listOf(
-                    Triple(Icons.Outlined.Home, "不动产", Color(0xFF795548)),
-                    Triple(Icons.Outlined.DirectionsCar, "车辆", Color(0xFF607D8B)),
-                    Triple(Icons.Outlined.TrendingUp, "投资", Color(0xFFFF9800)),
-                    Triple(Icons.Outlined.HealthAndSafety, "保险", Color(0xFF4CAF50)),
-                    Triple(Icons.Outlined.AccountBalance, "公积金", Color(0xFF3F51B5)),
-                    Triple(Icons.Outlined.House, "贷款", Color(0xFFE91E63)),
+                    "file:///android_asset/icons/real_estate.svg" to "不动产",
+                    "file:///android_asset/icons/vehicle.svg" to "车辆",
+                    "file:///android_asset/icons/investment.svg" to "投资",
+                    "file:///android_asset/icons/insurance.svg" to "保险",
+                    "file:///android_asset/icons/social_fund.svg" to "公积金",
+                    "file:///android_asset/icons/loan.svg" to "贷款",
                 )
                 val currentTypes = if (accountTypeTab == 0) tradableTypes else valuationTypes
                 val screenWidth = LocalConfiguration.current.screenWidthDp.dp
                 val itemWidth = (screenWidth * 0.85f - 48.dp) / 4
+                val dialogThemeColor = remember {
+                    Color(android.graphics.Color.parseColor(getCategoryIconColor(context)))
+                }
 
                 AlertDialog(
                     onDismissRequest = { showAccountTypeDialog = false },
@@ -309,7 +308,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceEvenly
                                 ) {
-                                    rowItems.forEach { (icon, label, color) ->
+                                    rowItems.forEach { (svgPath, label) ->
                                         val isSelected = selectedTypeLabel == label
                                         Column(
                                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -329,14 +328,13 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                                                             RoundedCornerShape(12.dp)
                                                         ) else Modifier
                                                     )
-                                                    .background(color.copy(alpha = if (isSelected) 0.3f else 0.15f)),
+                                                    .background(dialogThemeColor.copy(alpha = if (isSelected) 0.3f else 0.15f)),
                                                 contentAlignment = Alignment.Center
                                             ) {
-                                                Icon(
-                                                    imageVector = icon,
+                                                AsyncImage(
+                                                    model = svgPath,
                                                     contentDescription = label,
-                                                    modifier = Modifier.size(28.dp),
-                                                    tint = color
+                                                    modifier = Modifier.size(28.dp)
                                                 )
                                             }
                                             Spacer(Modifier.height(6.dp))
@@ -438,26 +436,25 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
 // ── 账户类型配置 ──
 
 private data class AccountTypeConfig(
-    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val svgPath: String,
     val label: String,
-    val color: Color,
     val category: String
 )
 
 private val accountTypeConfigs = mapOf(
-    "cash" to AccountTypeConfig(Icons.Outlined.Payments, "现金", Color(0xFFFF9800), "tradable"),
-    "alipay" to AccountTypeConfig(Icons.Outlined.CurrencyYuan, "支付宝", Color(0xFF1677FF), "tradable"),
-    "wechat" to AccountTypeConfig(Icons.Outlined.Chat, "微信钱包", Color(0xFF07C160), "tradable"),
-    "bank_card" to AccountTypeConfig(Icons.Outlined.CreditCard, "银行卡", Color(0xFF1890FF), "tradable"),
-    "qq_wallet" to AccountTypeConfig(Icons.Outlined.Wallet, "QQ钱包", Color(0xFF12B7F5), "tradable"),
-    "jd_finance" to AccountTypeConfig(Icons.Outlined.ShoppingCart, "京东金融", Color(0xFFE53935), "tradable"),
-    "custom" to AccountTypeConfig(Icons.Outlined.Edit, "自定义", Color(0xFF5C6BC0), "tradable"),
-    "real_estate" to AccountTypeConfig(Icons.Outlined.Home, "不动产", Color(0xFF795548), "valuation"),
-    "vehicle" to AccountTypeConfig(Icons.Outlined.DirectionsCar, "车辆", Color(0xFF607D8B), "valuation"),
-    "investment" to AccountTypeConfig(Icons.Outlined.TrendingUp, "投资", Color(0xFFFF9800), "valuation"),
-    "insurance" to AccountTypeConfig(Icons.Outlined.HealthAndSafety, "保险", Color(0xFF4CAF50), "valuation"),
-    "provident_fund" to AccountTypeConfig(Icons.Outlined.AccountBalance, "公积金", Color(0xFF3F51B5), "valuation"),
-    "loan" to AccountTypeConfig(Icons.Outlined.House, "贷款", Color(0xFFE91E63), "valuation"),
+    "cash" to AccountTypeConfig("file:///android_asset/icons/cash.svg", "现金", "tradable"),
+    "alipay" to AccountTypeConfig("file:///android_asset/icons/alipay.svg", "支付宝", "tradable"),
+    "wechat" to AccountTypeConfig("file:///android_asset/icons/wechat.svg", "微信钱包", "tradable"),
+    "bank_card" to AccountTypeConfig("file:///android_asset/icons/bank_card.svg", "银行卡", "tradable"),
+    "qq_wallet" to AccountTypeConfig("file:///android_asset/icons/other_account.svg", "QQ钱包", "tradable"),
+    "jd_finance" to AccountTypeConfig("file:///android_asset/icons/other_account.svg", "京东金融", "tradable"),
+    "custom" to AccountTypeConfig("file:///android_asset/icons/other_account.svg", "自定义", "tradable"),
+    "real_estate" to AccountTypeConfig("file:///android_asset/icons/real_estate.svg", "不动产", "valuation"),
+    "vehicle" to AccountTypeConfig("file:///android_asset/icons/vehicle.svg", "车辆", "valuation"),
+    "investment" to AccountTypeConfig("file:///android_asset/icons/investment.svg", "投资", "valuation"),
+    "insurance" to AccountTypeConfig("file:///android_asset/icons/insurance.svg", "保险", "valuation"),
+    "provident_fund" to AccountTypeConfig("file:///android_asset/icons/social_fund.svg", "公积金", "valuation"),
+    "loan" to AccountTypeConfig("file:///android_asset/icons/loan.svg", "贷款", "valuation"),
 )
 
 // ── 资产标签页 ──
@@ -470,6 +467,12 @@ private fun AssetTabContent(onAddAccount: () -> Unit, refreshTrigger: Int = 0) {
     // 刷新触发器变化时重新加载
     LaunchedEffect(refreshTrigger) {
         accounts = AccountingDatabase.getInstance(context).getAllAccounts()
+    }
+
+    // 应用主题色
+    val themeColorHex = remember { getCategoryIconColor(context) }
+    val themeColor = remember(themeColorHex) {
+        Color(android.graphics.Color.parseColor(themeColorHex))
     }
 
     if (accounts.isEmpty()) {
@@ -504,11 +507,6 @@ private fun AssetTabContent(onAddAccount: () -> Unit, refreshTrigger: Int = 0) {
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 80.dp)
         ) {
-            // 资产构成饼图
-            item {
-                AssetPieChart(accounts = accounts)
-            }
-
             // 资金账户分组
             val tradableAccounts = accounts.filter { it.category == "tradable" }
             if (tradableAccounts.isNotEmpty()) {
@@ -516,7 +514,7 @@ private fun AssetTabContent(onAddAccount: () -> Unit, refreshTrigger: Int = 0) {
                     AccountGroupSection(
                         title = "资金账户",
                         icon = Icons.Outlined.AccountBalanceWallet,
-                        iconColor = Color(0xFF4CAF50),
+                        iconColor = themeColor,
                         accounts = tradableAccounts,
                         showStats = true
                     )
@@ -530,167 +528,10 @@ private fun AssetTabContent(onAddAccount: () -> Unit, refreshTrigger: Int = 0) {
                     AccountGroupSection(
                         title = "估值账户",
                         icon = Icons.Outlined.TrendingUp,
-                        iconColor = Color(0xFFFF9800),
+                        iconColor = themeColor,
                         accounts = valuationAccounts,
                         showStats = false
                     )
-                }
-            }
-        }
-    }
-}
-
-// ── 资产构成饼图 ──
-
-@Composable
-private fun AssetPieChart(accounts: List<AccountingAccount>) {
-    // 按类型分组汇总余额
-    val typeBalances = accounts
-        .groupBy { it.type }
-        .mapValues { (_, accs) -> accs.sumOf { it.initialAmount } }
-        .filter { it.value > 0 }
-        .toList()
-        .sortedByDescending { it.second }
-
-    if (typeBalances.isEmpty()) return
-
-    val totalBalance = typeBalances.sumOf { it.second }
-    val maxSlices = 8
-    val slices = mutableListOf<Triple<String, Double, Color>>()
-    var otherTotal = 0.0
-
-    for ((type, balance) in typeBalances) {
-        if (slices.size < maxSlices) {
-            val config = accountTypeConfigs[type]
-            slices.add(Triple(config?.label ?: type, balance, config?.color ?: Color.Gray))
-        } else {
-            otherTotal += balance
-        }
-    }
-    if (otherTotal > 0) {
-        slices.add(Triple("其他", otherTotal, Color(0xFF9E9E9E)))
-    }
-
-    var touchedIndex by remember { mutableIntStateOf(-1) }
-    val selectedSlice = if (touchedIndex in slices.indices) slices[touchedIndex] else null
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // 饼图
-            Box(
-                modifier = Modifier
-                    .size(180.dp)
-                    .pointerInput(slices) {
-                        detectTapGestures { offset ->
-                            val center = Offset(size.width / 2f, size.height / 2f)
-                            val dx = offset.x - center.x
-                            val dy = offset.y - center.y
-                            val distance = kotlin.math.sqrt(dx * dx + dy * dy)
-                            val outerRadius = size.width / 2f
-                            val innerRadius = outerRadius * 0.47f
-                            if (distance in innerRadius..outerRadius) {
-                                var angle = Math.toDegrees(
-                                    kotlin.math.atan2(dy.toDouble(), dx.toDouble())
-                                ).toFloat()
-                                if (angle < 0) angle += 360f
-                                // 计算每个扇区的角度
-                                var startAngle = -90f
-                                for (i in slices.indices) {
-                                    val sweep = (slices[i].second / totalBalance * 360f).toFloat()
-                                    if (angle in startAngle..(startAngle + sweep)) {
-                                        touchedIndex = if (touchedIndex == i) -1 else i
-                                        break
-                                    }
-                                    startAngle += sweep
-                                }
-                            } else {
-                                touchedIndex = -1
-                            }
-                        }
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val outerRadius = size.minDimension / 2f
-                    val innerRadius = outerRadius * 0.47f
-                    val arcSize = Size(outerRadius * 2, outerRadius * 2)
-                    val topLeft = Offset(0f, 0f)
-                    var startAngle = -90f
-
-                    for (i in slices.indices) {
-                        val sweep = (slices[i].second / totalBalance * 360f).toFloat()
-                        val isTouched = i == touchedIndex
-                        val radius = if (isTouched) outerRadius * 1.06f else outerRadius
-                        val arcSz = Size(radius * 2, radius * 2)
-                        val tl = Offset(
-                            (size.width - radius * 2) / 2f,
-                            (size.height - radius * 2) / 2f
-                        )
-                        // 扇区
-                        drawArc(
-                            color = slices[i].third,
-                            startAngle = startAngle,
-                            sweepAngle = sweep - 1.5f,
-                            useCenter = false,
-                            topLeft = tl,
-                            size = arcSz,
-                            style = Stroke(width = radius - innerRadius)
-                        )
-                        startAngle += sweep
-                    }
-                }
-                // 中心文字
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = selectedSlice?.first ?: "资产构成",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = "¥${String.format("%.0f", selectedSlice?.second ?: totalBalance)}",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            // 图例
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                slices.forEach { (label, balance, color) ->
-                    val pct = (balance / totalBalance * 100)
-                    Row(
-                        modifier = Modifier.padding(horizontal = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(color)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            "$label ${String.format("%.1f", pct)}%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                 }
             }
         }
@@ -790,10 +631,13 @@ private fun AccountGroupSection(
 
 @Composable
 private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
+    val context = LocalContext.current
     val config = accountTypeConfigs[account.type]
-    val typeColor = config?.color ?: Color(0xFF5C6BC0)
+    val themeColor = remember {
+        Color(android.graphics.Color.parseColor(getCategoryIconColor(context)))
+    }
     val typeLabel = config?.label ?: account.type
-    val typeIcon = config?.icon ?: Icons.Outlined.AccountBalance
+    val typeSvg = config?.svgPath ?: "file:///android_asset/icons/other_account.svg"
 
     Box(
         modifier = Modifier
@@ -807,7 +651,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                 .fillMaxWidth()
                 .background(
                     brush = androidx.compose.ui.graphics.Brush.linearGradient(
-                        colors = listOf(typeColor, typeColor.copy(alpha = 0.8f))
+                        colors = listOf(themeColor, themeColor.copy(alpha = 0.8f))
                     )
                 )
         ) {
@@ -837,11 +681,10 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                             ),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            typeIcon,
+                        AsyncImage(
+                            model = typeSvg,
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                            tint = Color.White
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                     Spacer(Modifier.width(10.dp))
