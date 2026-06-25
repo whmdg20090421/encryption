@@ -5,6 +5,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -23,6 +26,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.ui.Screen
@@ -199,44 +204,110 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
 
             // 资金账户类型选择弹窗
             if (showAccountTypeDialog) {
+                var accountTypeTab by remember { mutableIntStateOf(0) }
+                var selectedType by remember { mutableStateOf("现金") }
+                var accountName by remember { mutableStateOf("") }
+                var initialAmount by remember { mutableStateOf("") }
+                var accountNote by remember { mutableStateOf("") }
+                val scrollState = rememberScrollState()
+
+                val tradableTypes = listOf(
+                    Triple(Icons.Outlined.Payments, "现金", Color(0xFFFF9800)),
+                    Triple(Icons.Outlined.CurrencyYuan, "支付宝", Color(0xFF1677FF)),
+                    Triple(Icons.Outlined.Chat, "微信钱包", Color(0xFF07C160)),
+                    Triple(Icons.Outlined.CreditCard, "银行卡", Color(0xFF1890FF)),
+                    Triple(Icons.Outlined.Wallet, "QQ钱包", Color(0xFF12B7F5)),
+                    Triple(Icons.Outlined.ShoppingCart, "京东金融", Color(0xFFE53935)),
+                    Triple(Icons.Outlined.Edit, "自定义", MaterialTheme.colorScheme.primary),
+                )
+                val valuationTypes = listOf(
+                    Triple(Icons.Outlined.Home, "不动产", Color(0xFF795548)),
+                    Triple(Icons.Outlined.DirectionsCar, "车辆", Color(0xFF607D8B)),
+                    Triple(Icons.Outlined.TrendingUp, "投资", Color(0xFFFF9800)),
+                    Triple(Icons.Outlined.HealthAndSafety, "保险", Color(0xFF4CAF50)),
+                    Triple(Icons.Outlined.AccountBalance, "公积金", Color(0xFF3F51B5)),
+                    Triple(Icons.Outlined.House, "贷款", Color(0xFFE91E63)),
+                )
+                val currentTypes = if (accountTypeTab == 0) tradableTypes else valuationTypes
+                val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+                val itemWidth = (screenWidth * 0.85f - 48.dp) / 4
+
                 AlertDialog(
                     onDismissRequest = { showAccountTypeDialog = false },
-                    title = { Text("资金账户") },
+                    title = {
+                        Text("添加资产", style = MaterialTheme.typography.headlineSmall)
+                    },
                     text = {
-                        val accountTypes = listOf(
-                            Triple(Icons.Outlined.Payments, "现金", Color(0xFFFF9800)),
-                            Triple(Icons.Outlined.CurrencyYuan, "支付宝", Color(0xFF1677FF)),
-                            Triple(Icons.Outlined.Chat, "微信钱包", Color(0xFF07C160)),
-                            Triple(Icons.Outlined.CreditCard, "银行卡", Color(0xFF1890FF)),
-                            Triple(Icons.Outlined.Wallet, "QQ钱包", Color(0xFF12B7F5)),
-                            Triple(Icons.Outlined.ShoppingCart, "京东金融", Color(0xFFE53935)),
-                            Triple(Icons.Outlined.Edit, "自定义", MaterialTheme.colorScheme.primary),
-                        )
-                        val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-                        val itemWidth = (screenWidth * 0.85f - 48.dp) / 4  // 4列，减去弹窗内边距
+                        Column(
+                            modifier = Modifier.verticalScroll(scrollState)
+                        ) {
+                            // ── 分段切换标签 ──
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                    .padding(4.dp)
+                            ) {
+                                Row {
+                                    listOf("资金账户", "估值账户").forEachIndexed { index, label ->
+                                        val selected = accountTypeTab == index
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .then(
+                                                    if (selected) Modifier.background(
+                                                        MaterialTheme.colorScheme.surface,
+                                                        RoundedCornerShape(8.dp)
+                                                    ) else Modifier
+                                                )
+                                                .clickable { accountTypeTab = index }
+                                                .padding(vertical = 8.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                style = MaterialTheme.typography.labelLarge.copy(
+                                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                                ),
+                                                color = if (selected) MaterialTheme.colorScheme.primary
+                                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
 
-                        Column {
-                            accountTypes.chunked(4).forEach { rowItems ->
+                            Spacer(Modifier.height(16.dp))
+
+                            // ── 图标网格 ──
+                            currentTypes.chunked(4).forEach { rowItems ->
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceEvenly
                                 ) {
                                     rowItems.forEach { (icon, label, color) ->
+                                        val isSelected = selectedType == label
                                         Column(
                                             horizontalAlignment = Alignment.CenterHorizontally,
                                             modifier = Modifier
                                                 .width(itemWidth)
                                                 .padding(vertical = 8.dp)
-                                                .clickable {
-                                                    showAccountTypeDialog = false
-                                                    // TODO: 跳转到对应账户创建页
-                                                }
+                                                .clickable { selectedType = label }
                                         ) {
                                             Box(
                                                 modifier = Modifier
                                                     .size(48.dp)
                                                     .clip(RoundedCornerShape(12.dp))
-                                                    .background(color.copy(alpha = 0.15f)),
+                                                    .then(
+                                                        if (isSelected) Modifier.border(
+                                                            2.dp,
+                                                            MaterialTheme.colorScheme.primary,
+                                                            RoundedCornerShape(12.dp)
+                                                        ) else Modifier
+                                                    )
+                                                    .background(color.copy(alpha = if (isSelected) 0.3f else 0.15f)),
                                                 contentAlignment = Alignment.Center
                                             ) {
                                                 Icon(
@@ -250,20 +321,72 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
                                             Text(
                                                 text = label,
                                                 style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurface
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary
+                                                    else MaterialTheme.colorScheme.onSurface
                                             )
                                         }
                                     }
-                                    // 补齐空位
                                     repeat(4 - rowItems.size) {
                                         Spacer(Modifier.width(itemWidth))
                                     }
                                 }
                             }
+
+                            Spacer(Modifier.height(16.dp))
+                            HorizontalDivider()
+                            Spacer(Modifier.height(12.dp))
+
+                            // ── 账户设定表单 ──
+                            Text(
+                                text = "账户设定",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 12.dp)
+                            )
+                            OutlinedTextField(
+                                value = accountName,
+                                onValueChange = { accountName = it },
+                                label = { Text("账户名称") },
+                                placeholder = { Text("如：我的支付宝") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = initialAmount,
+                                onValueChange = { initialAmount = it },
+                                label = { Text("初始金额") },
+                                placeholder = { Text("0.00") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Decimal
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = accountNote,
+                                onValueChange = { accountNote = it },
+                                label = { Text("备注") },
+                                placeholder = { Text("可选") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp)
+                            )
                         }
                     },
-                    confirmButton = {},
-                    dismissButton = {}
+                    confirmButton = {
+                        TextButton(onClick = { showAccountTypeDialog = false }) {
+                            Text("确认")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showAccountTypeDialog = false }) {
+                            Text("取消")
+                        }
+                    }
                 )
             }
         }
