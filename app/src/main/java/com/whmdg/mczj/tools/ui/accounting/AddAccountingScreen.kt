@@ -470,7 +470,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(infoRowHeight)
-                    .padding(start = 10.dp),
+                    .padding(start = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // 日期时间（日历图标 + 上下两行）
@@ -499,7 +499,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     }
                 }
 
-                Spacer(Modifier.width(5.dp))
+                Spacer(Modifier.width(10.dp))
 
                 // 支付账户
                 Row(
@@ -605,7 +605,6 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
 
         // 账户选择弹窗
         if (showAccountDialog) {
-            var tempSelectedId by remember { mutableStateOf(selectedAccountId) }
             AlertDialog(
                 onDismissRequest = { showAccountDialog = false },
                 title = { Text("选择账户") },
@@ -617,12 +616,15 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                             .verticalScroll(rememberScrollState())
                     ) {
                         accounts.forEach { account ->
-                            val isSelected = tempSelectedId == account.id
+                            val isSelected = selectedAccountId == account.id
                             val svgPath = accountTypeConfigs[account.type]?.svgPath
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { tempSelectedId = account.id }
+                                    .clickable {
+                                        selectedAccountId = account.id
+                                        showAccountDialog = false
+                                    }
                                     .background(
                                         if (isSelected) iconThemeColor.copy(alpha = 0.3f)
                                         else Color.Transparent
@@ -655,17 +657,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         }
                     }
                 },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            selectedAccountId = tempSelectedId
-                            showAccountDialog = false
-                        },
-                        enabled = tempSelectedId != null
-                    ) {
-                        Text("确认")
-                    }
-                },
+                confirmButton = {},
                 dismissButton = {
                     TextButton(onClick = { showAccountDialog = false }) {
                         Text("取消")
