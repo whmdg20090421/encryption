@@ -43,8 +43,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.widget.Toast
-import androidx.compose.ui.text.input.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
 import coil3.compose.AsyncImage
 import java.util.Calendar
 
@@ -775,7 +773,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                             onValueChange = { inputBefore.value = filterAmount(it); recalc("before") },
                             label = { Text("优惠前金额") },
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
                             modifier = Modifier.fillMaxWidth()
                         )
                         OutlinedTextField(
@@ -786,8 +784,8 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                             },
                             label = { Text(if (percentMode.value) "打折百分比" else "优惠金额") },
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = if (percentMode.value) KeyboardType.Number else KeyboardType.Decimal
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                keyboardType = if (percentMode.value) androidx.compose.ui.text.input.KeyboardType.Number else androidx.compose.ui.text.input.KeyboardType.Decimal
                             ),
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -796,7 +794,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                             onValueChange = { inputAfter.value = filterAmount(it); recalc("after") },
                             label = { Text("优惠后金额") },
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
                             modifier = Modifier.fillMaxWidth()
                         )
 
