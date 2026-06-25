@@ -102,11 +102,11 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             val navItems = listOf(
-                Triple("首页", Icons.Filled.Home to Icons.Outlined.Home),
-                Triple("资产", Icons.Filled.AccountBalanceWallet to Icons.Outlined.AccountBalanceWallet),
-                Triple("统计", Icons.Filled.BarChart to Icons.Outlined.BarChart),
-                Triple("日历", Icons.Filled.CalendarMonth to Icons.Outlined.CalendarMonth),
-                Triple("我的", Icons.Filled.Person to Icons.Outlined.Person),
+                "首页" to (Icons.Filled.Home to Icons.Outlined.Home),
+                "资产" to (Icons.Filled.AccountBalanceWallet to Icons.Outlined.AccountBalanceWallet),
+                "统计" to (Icons.Filled.BarChart to Icons.Outlined.BarChart),
+                "日历" to (Icons.Filled.CalendarMonth to Icons.Outlined.CalendarMonth),
+                "我的" to (Icons.Filled.Person to Icons.Outlined.Person),
             )
             Box(
                 modifier = Modifier
@@ -120,7 +120,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                     shadowElevation = 8.dp
                 ) {
                     Row(modifier = Modifier.height(56.dp)) {
-                        navItems.forEachIndexed { index, (label, icons) ->
+                        navItems.forEachIndexed { index, (label, iconPair) ->
                             val isActive = selectedTab == index
                             val iconColor = if (isActive) MaterialTheme.colorScheme.primary
                                             else MaterialTheme.colorScheme.onSurfaceVariant
@@ -142,7 +142,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                                         .padding(horizontal = 12.dp, vertical = 6.dp)
                                 ) {
                                     Icon(
-                                        imageVector = if (isActive) icons.first else icons.second,
+                                        imageVector = if (isActive) iconPair.first else iconPair.second,
                                         contentDescription = label,
                                         tint = iconColor,
                                         modifier = Modifier.size(22.dp)
