@@ -33,7 +33,6 @@ jobs:
       - name: Code check (brace balance + unused imports)
         run: |
           echo "=== 代码检查 ==="
-          # 获取上次提交修改的 .kt 文件
           FILES=$(git diff --name-only HEAD~1 -- '*.kt' 2>/dev/null || true)
           if [ -z "$FILES" ]; then
             echo "没有修改的 .kt 文件，跳过检查"
@@ -44,37 +43,35 @@ jobs:
 
           for file in $FILES; do
             [ -f "$file" ] || continue
-            echo "检查: $file"
+            echo "--- 检查: $file ---"
 
             # 1. 大括号平衡检测
             OPEN=$(grep -o '{' "$file" | wc -l)
             CLOSE=$(grep -o '}' "$file" | wc -l)
             if [ "$OPEN" -ne "$CLOSE" ]; then
-              echo "::error file=$file::大括号不平衡: { = $OPEN, } = $CLOSE"
+              echo "FAIL: $file 大括号不平衡 {=$OPEN }=$CLOSE"
               ERROR=1
+            else
+              echo "OK: $file 大括号平衡 {=$OPEN }=$CLOSE"
             fi
 
             # 2. 未使用 import 检测
             while IFS= read -r line; do
-              # 跳过 wildcard import (import xxx.*)
               echo "$line" | grep -q '\.\*$' && continue
-              # 提取 import 路径
               imp=$(echo "$line" | sed 's/^import //' | sed 's/`//g')
-              # 获取最后一个标识符（处理 Kotlin as 别名）
               name=$(echo "$imp" | awk -F'.' '{print $NF}')
               if echo "$name" | grep -q ' as '; then
                 name=$(echo "$name" | sed 's/.* as //')
               fi
               [ -z "$name" ] && continue
-              # 在文件中搜索（排除 import 行和 package 行）
               if ! grep -v '^import ' "$file" | grep -v '^package ' | grep -q "$name"; then
-                echo "::warning file=$file::可能未使用的 import: $line"
+                echo "WARN: $file 未使用 import: $line"
               fi
             done < <(grep '^import ' "$file")
           done
 
           if [ "$ERROR" -eq 1 ]; then
-            echo "::error::代码检查失败，请修复上述问题"
+            echo "::error::代码检查失败，请查看上方 FAIL 行"
             exit 1
           fi
           echo "=== 检查通过 ==="
