@@ -16,6 +16,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -37,6 +39,8 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
     var note by remember { mutableStateOf("") }
     var showNameField by remember { mutableStateOf(false) }
     var showNoteField by remember { mutableStateOf(false) }
+    val nameFocusRequester = remember { FocusRequester() }
+    val noteFocusRequester = remember { FocusRequester() }
     var iconUri by remember { mutableStateOf<Uri?>(null) }
     var showIconMenu by remember { mutableStateOf(false) }
 
@@ -145,6 +149,14 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                 TextButton(onClick = { showAddGroupDialog = false; addGroupName = "" }) { Text("取消") }
             }
         )
+    }
+
+    // 输入框自动请求焦点
+    if (showNameField) {
+        LaunchedEffect(showNameField) { nameFocusRequester.requestFocus() }
+    }
+    if (showNoteField) {
+        LaunchedEffect(showNoteField) { noteFocusRequester.requestFocus() }
     }
 
     // 图片选择器
@@ -292,9 +304,10 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                             BasicTextField(
                                 value = name,
                                 onValueChange = { name = it },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).focusRequester(nameFocusRequester),
                                 singleLine = true,
                                 textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                    fontSize = 15.sp,
                                     color = MaterialTheme.colorScheme.onSurface
                                 ),
                                 decorationBox = { innerTextField ->
@@ -302,7 +315,7 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                                         if (name.isEmpty()) {
                                             Text(
                                                 "添加报销账户的名称",
-                                                style = MaterialTheme.typography.bodyLarge,
+                                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
@@ -343,9 +356,10 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                             BasicTextField(
                                 value = note,
                                 onValueChange = { note = it },
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.weight(1f).focusRequester(noteFocusRequester),
                                 singleLine = true,
                                 textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                    fontSize = 15.sp,
                                     color = MaterialTheme.colorScheme.onSurface
                                 ),
                                 decorationBox = { innerTextField ->
@@ -353,7 +367,7 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                                         if (note.isEmpty()) {
                                             Text(
                                                 "请输入备注",
-                                                style = MaterialTheme.typography.bodyLarge,
+                                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
