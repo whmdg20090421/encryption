@@ -48,7 +48,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.toDp
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.widget.Toast
@@ -515,6 +514,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 var noteSuggestions by remember { mutableStateOf<List<NotePredictor.Prediction>>(emptyList()) }
                 var showSuggestions by remember { mutableStateOf(false) }
                 var noteBoxWidthPx by remember { mutableIntStateOf(0) }
+                val noteDensity = LocalDensity.current
                 LaunchedEffect(note) {
                     if (note.isEmpty()) {
                         noteSuggestions = emptyList()
@@ -584,7 +584,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                 shadowElevation = 8.dp,
                                 color = MaterialTheme.colorScheme.surface,
                                 modifier = Modifier
-                                    .width(noteBoxWidthPx.toDp())
+                                    .width(with(noteDensity) { noteBoxWidthPx.toDp() })
                                     .heightIn(max = screenHeight * 0.3f)
                             ) {
                                 LazyColumn(
