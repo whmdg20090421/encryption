@@ -275,6 +275,32 @@ object NotePredictor {
         val isAiGenerated: Boolean
     )
 
+    /**
+     * 当 embedding 数量不足 MIN_RECORDS 时，直接从 DB 最近记录中按文本匹配度返回最近 10 条备注。
+     * 不参与 AI 决策，纯文本匹配。
+     */
+    fun predictFromRecent(context: Context, partialNote: String): List<Prediction> {
+        if (partialNote.isEmpty()) return emptyList()
+        val records = AccountingRepository.getAllRecords(context)
+        val recentNotes = records
+            .filter { it.note.isNotEmpty() }
+            .sortedByDescending { it.happenedAt }
+            .distinctBy { it.note }
+            .take(50)
+        if (recentNotes.isEmpty()) return emptyList()
+        val scored = recentNotes.map { r ->
+            val sim = textSimilarity(partialNote, r.note)
+            Prediction(r.note, (sim * 100).toInt().coerceIn(0, 100), false)
+        }
+        return scored
+            .filter { it.score > 0 }
+            .sortedByDescending { it.score }
+            .take(10)
+    }
+
+    /** embedding 数量是否达到 AI 预测门槛 */
+    fun hasEnoughData(): Boolean = initialized && embeddings.size >= MIN_RECORDS
+
     fun predict(cat1: String, cat2: String, amount: Float, hour: Int, partialNote: String): List<Prediction> {
         if (!initialized || embeddings.size < MIN_RECORDS || partialNote.isEmpty()) return emptyList()
         val features = getFeatures(cat1, cat2, amount, hour, partialNote)

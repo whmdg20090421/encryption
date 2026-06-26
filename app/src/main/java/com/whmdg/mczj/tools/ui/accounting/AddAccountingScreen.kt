@@ -517,21 +517,27 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         showSuggestions = false
                         return@LaunchedEffect
                     }
-                    val currentHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-                    val currentAmount = amount.toFloatOrNull() ?: 0f
-                    val predictions = NotePredictor.predict(
-                        types[selectedType], selectedCategory ?: "",
-                        currentAmount, currentHour, note
-                    ).toMutableList()
-                    // AI 创建新备注
-                    if (predictions.isEmpty() || predictions.first().score < 50) {
-                        val aiNote = NotePredictor.createAiNote(
+                    val predictions = if (NotePredictor.hasEnoughData()) {
+                        val currentHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                        val currentAmount = amount.toFloatOrNull() ?: 0f
+                        val list = NotePredictor.predict(
                             types[selectedType], selectedCategory ?: "",
                             currentAmount, currentHour, note
-                        )
-                        if (aiNote != null) {
-                            predictions.add(0, NotePredictor.Prediction(aiNote, 50, true))
+                        ).toMutableList()
+                        // AI 创建新备注
+                        if (list.isEmpty() || list.first().score < 50) {
+                            val aiNote = NotePredictor.createAiNote(
+                                types[selectedType], selectedCategory ?: "",
+                                currentAmount, currentHour, note
+                            )
+                            if (aiNote != null) {
+                                list.add(0, NotePredictor.Prediction(aiNote, 50, true))
+                            }
                         }
+                        list
+                    } else {
+                        // 数据不足，直接从最近记录中文本匹配
+                        NotePredictor.predictFromRecent(context, note)
                     }
                     noteSuggestions = predictions.take(10)
                     showSuggestions = noteSuggestions.isNotEmpty()
