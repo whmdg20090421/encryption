@@ -251,7 +251,7 @@ fun ReimbursementAccountScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit)
 }
 
 /** 格式化金额：整数不显示小数，否则保留两位 */
-private fun formatAmount(value: Double): String {
+internal fun formatAmount(value: Double): String {
     return if (value == value.toLong().toDouble()) {
         value.toLong().toString()
     } else {

@@ -484,6 +484,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             HorizontalDivider(color = iconThemeColor, thickness = 1.dp)
 
             // 第二行：日期时间 + 支付账户
+            val dividerHeight = infoRowHeight * 0.8f
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -517,7 +518,14 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     }
                 }
 
-                Spacer(Modifier.width(elementSpacing))
+                Spacer(Modifier.width(10.dp))
+                Box(
+                    modifier = Modifier
+                        .width(0.6.dp)
+                        .height(dividerHeight)
+                        .background(iconThemeColor.copy(alpha = 0.3f))
+                )
+                Spacer(Modifier.width(10.dp))
 
                 // 支付账户
                 Row(
@@ -540,7 +548,14 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     )
                 }
 
-                Spacer(Modifier.width(elementSpacing))
+                Spacer(Modifier.width(10.dp))
+                Box(
+                    modifier = Modifier
+                        .width(0.6.dp)
+                        .height(dividerHeight)
+                        .background(iconThemeColor.copy(alpha = 0.3f))
+                )
+                Spacer(Modifier.width(10.dp))
 
                 // 优惠
                 Row(
@@ -562,7 +577,14 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     )
                 }
 
-                Spacer(Modifier.width(elementSpacing))
+                Spacer(Modifier.width(10.dp))
+                Box(
+                    modifier = Modifier
+                        .width(0.6.dp)
+                        .height(dividerHeight)
+                        .background(iconThemeColor.copy(alpha = 0.3f))
+                )
+                Spacer(Modifier.width(10.dp))
 
                 // 报销账户
                 val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
@@ -791,40 +813,98 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 }
             }
 
+            val focusBefore = remember { androidx.compose.ui.focus.FocusRequester() }
+            val focusOff = remember { androidx.compose.ui.focus.FocusRequester() }
+            val focusAfter = remember { androidx.compose.ui.focus.FocusRequester() }
+
             AlertDialog(
                 onDismissRequest = { showDiscountDialog = false },
                 title = { Text("优惠计算") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedTextField(
-                            value = inputBefore.value,
-                            onValueChange = { inputBefore.value = filterAmount(it); recalc("before") },
-                            label = { Text("优惠前金额") },
-                            singleLine = true,
-                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                        // 三个金额输入卡片
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                             modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = inputOff.value,
-                            onValueChange = {
-                                inputOff.value = if (percentMode.value) filterPercent(it) else filterAmount(it)
-                                recalc("off")
-                            },
-                            label = { Text(if (percentMode.value) "打折百分比" else "优惠金额") },
-                            singleLine = true,
-                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                keyboardType = if (percentMode.value) androidx.compose.ui.text.input.KeyboardType.Number else androidx.compose.ui.text.input.KeyboardType.Decimal
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = inputAfter.value,
-                            onValueChange = { inputAfter.value = filterAmount(it); recalc("after") },
-                            label = { Text("优惠后金额") },
-                            singleLine = true,
-                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                // 优惠前
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { focusBefore.requestFocus() },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("优惠前", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(64.dp))
+                                    BasicTextField(
+                                        value = inputBefore.value,
+                                        onValueChange = { inputBefore.value = filterAmount(it); recalc("before") },
+                                        modifier = Modifier.weight(1f).focusRequester(focusBefore),
+                                        singleLine = true,
+                                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                                        decorationBox = { inner ->
+                                            if (inputBefore.value.isEmpty()) Text("0", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            inner()
+                                        }
+                                    )
+                                }
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                                // 优惠
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { focusOff.requestFocus() },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        if (percentMode.value) "打折%" else "优惠",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.width(64.dp)
+                                    )
+                                    BasicTextField(
+                                        value = inputOff.value,
+                                        onValueChange = {
+                                            inputOff.value = if (percentMode.value) filterPercent(it) else filterAmount(it)
+                                            recalc("off")
+                                        },
+                                        modifier = Modifier.weight(1f).focusRequester(focusOff),
+                                        singleLine = true,
+                                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                            keyboardType = if (percentMode.value) androidx.compose.ui.text.input.KeyboardType.Number else androidx.compose.ui.text.input.KeyboardType.Decimal
+                                        ),
+                                        decorationBox = { inner ->
+                                            if (inputOff.value.isEmpty()) Text("0", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            inner()
+                                        }
+                                    )
+                                }
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                                // 优惠后
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { focusAfter.requestFocus() },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("优惠后", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(64.dp))
+                                    BasicTextField(
+                                        value = inputAfter.value,
+                                        onValueChange = { inputAfter.value = filterAmount(it); recalc("after") },
+                                        modifier = Modifier.weight(1f).focusRequester(focusAfter),
+                                        singleLine = true,
+                                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                                        decorationBox = { inner ->
+                                            if (inputAfter.value.isEmpty()) Text("0", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            inner()
+                                        }
+                                    )
+                                }
+                            }
+                        }
 
                         // 两个开关：自动计算 / 百分比优惠
                         Row(modifier = Modifier.fillMaxWidth()) {

@@ -645,6 +645,12 @@ private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Un
             item { Spacer(Modifier.height(screenHeight * 0.2f)) }
 
             // 三个功能卡片：报销 / 债务 / 理财
+            // 计算报销金额
+            val allRecordsForReimb = remember { AccountingRepository.getAllRecords(context) }
+            val reimbPending = remember(allRecordsForReimb) {
+                allRecordsForReimb.filter { it.reimbursementAccountId != null }
+                    .sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
+            }
             item {
                 Row(
                     modifier = Modifier
@@ -670,9 +676,9 @@ private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Un
                                 Spacer(Modifier.height(8.dp))
                                 when (title) {
                                     "报销" -> {
-                                        Text("可报销: —", style = MaterialTheme.typography.bodySmall,
+                                        Text("可报销: ${formatAmount(reimbPending)}", style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        Text("已报销: —", style = MaterialTheme.typography.bodySmall,
+                                        Text("已报销: 0", style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                     "债务" -> {
