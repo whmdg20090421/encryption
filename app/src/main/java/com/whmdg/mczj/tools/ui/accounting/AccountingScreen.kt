@@ -645,13 +645,14 @@ private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Un
             item { Spacer(Modifier.height(screenHeight * 0.2f)) }
 
             // 三个功能卡片：报销 / 债务 / 理财
-            // 计算报销金额
-            val allRecordsForReimb = remember { AccountingRepository.getAllRecords(context) }
-            val reimbPending = remember(allRecordsForReimb) {
-                allRecordsForReimb.filter { it.reimbursementAccountId != null }
-                    .sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
-            }
             item {
+                // 计算报销金额
+                val allRecordsForReimb = remember { AccountingRepository.getAllRecords(context) }
+                val reimbPending = remember(allRecordsForReimb) {
+                    allRecordsForReimb.filter { it.reimbursementAccountId != null }
+                        .sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
+                }
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
