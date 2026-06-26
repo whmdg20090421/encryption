@@ -141,10 +141,11 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     ) { granted ->
         if (granted) {
             val tmpFile = File(context.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
-            cameraPhotoUri = androidx.core.content.FileProvider.getUriForFile(
+            val uri = androidx.core.content.FileProvider.getUriForFile(
                 context, "${context.packageName}.fileprovider", tmpFile
             )
-            cameraLauncher.launch(cameraPhotoUri)
+            cameraPhotoUri = uri
+            cameraLauncher.launch(uri)
         } else {
             Toast.makeText(context, "相机权限被拒绝，无法拍照", Toast.LENGTH_SHORT).show()
         }
