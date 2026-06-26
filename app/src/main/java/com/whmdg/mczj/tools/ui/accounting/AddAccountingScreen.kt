@@ -332,7 +332,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
         val imeHeightPx = WindowInsets.ime.getBottom(density)
         val navBarPx = WindowInsets.navigationBars.getBottom(density)
         // 第一行下边缘在窗口中的位置（px）
-        var firstRowBottomPx by remember { mutableIntStateOf(0) }
+        var firstRowBottomPx by remember { mutableFloatStateOf(0f) }
         // 键盘顶到第一行下边缘时才开始顶起
         val keyboardTopPx = screenHeightPx - imeHeightPx
         val neededPaddingPx = (firstRowBottomPx - keyboardTopPx).coerceAtLeast(0f)
