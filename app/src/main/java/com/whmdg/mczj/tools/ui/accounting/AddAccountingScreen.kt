@@ -55,6 +55,7 @@ import coil3.compose.AsyncImage
 import java.io.File
 import java.util.Calendar
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? = null) {
     val types = listOf("支出", "收入", "转账", "债务")
@@ -125,12 +126,20 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     // 拍照临时 URI
     var cameraPhotoUri by remember { mutableStateOf<Uri?>(null) }
 
+    // 拍照启动器（先定义，供权限回调引用）
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success && cameraPhotoUri != null) {
+            val info = AccountingRepository.storeAttachmentFromCamera(context, cameraPhotoUri!!)
+            attachments = attachments + info
+        }
+    }
     // 相机权限启动器
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            // 权限通过，创建临时文件并启动相机
             val tmpFile = File(context.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
             cameraPhotoUri = androidx.core.content.FileProvider.getUriForFile(
                 context, "${context.packageName}.fileprovider", tmpFile
@@ -138,15 +147,6 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             cameraLauncher.launch(cameraPhotoUri)
         } else {
             Toast.makeText(context, "相机权限被拒绝，无法拍照", Toast.LENGTH_SHORT).show()
-        }
-    }
-    // 拍照启动器
-    val cameraLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.TakePicture()
-    ) { success ->
-        if (success && cameraPhotoUri != null) {
-            val info = AccountingRepository.storeAttachmentFromCamera(context, cameraPhotoUri!!)
-            attachments = attachments + info
         }
     }
     // 相册多选启动器
