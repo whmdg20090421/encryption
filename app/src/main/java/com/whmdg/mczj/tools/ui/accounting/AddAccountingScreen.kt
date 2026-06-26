@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.focus.focusRequester
@@ -387,6 +388,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             val scrollState = rememberScrollState()
 
             // 点击建议后自动展开并滚动到目标分类
+            val densityForScroll = LocalDensity.current
             LaunchedEffect(scrollTarget) {
                 val target = scrollTarget ?: return@LaunchedEffect
                 scrollTarget = null
@@ -395,7 +397,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     cat.id == target || cat.children.any { it.id == target }
                 }
                 if (idx < 0) return@LaunchedEffect
-                val d = LocalDensity.current
+                val d = densityForScroll
                 val rowIdx = idx / itemsPerRow
                 val iconSizePx = with(d) { primaryIconSize.roundToPx() }
                 val labelPx = with(d) { 16.dp.roundToPx() }
@@ -557,9 +559,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     .fillMaxWidth()
                     .height(infoRowHeight)
                     .onGloballyPositioned { coords ->
-                        val rowBottom = coords.size.height.toFloat()
-                        val posInParent = coords.positionInParent()
-                        firstRowBottomPx = posInParent.y + rowBottom
+                        firstRowBottomPx = coords.localToWindow(Offset.Zero).y + coords.size.height.toFloat()
                     },
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -567,26 +567,22 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 // 备注建议（包含关联分类）
                 var noteSuggestions by remember { mutableStateOf<List<NoteSuggestion>>(emptyList()) }
                 var showSuggestions by remember { mutableStateOf(false) }
-                // 已选中的备注（选择后跳过一次计算，删除字时重新激活）
-                var suppressedNotes by remember { mutableStateOf<Set<String>>(emptySet()) }
+                // 用户点击建议后置 true，跳过下一次计算
+                var justSelected by remember { mutableStateOf(false) }
                 var noteBoxWidthPx by remember { mutableIntStateOf(0) }
                 val noteDensity = LocalDensity.current
                 LaunchedEffect(note) {
-                    // 备注为空时清空并跳过
                     if (note.isEmpty()) {
                         noteSuggestions = emptyList()
                         showSuggestions = false
-                        suppressedNotes = emptySet()
                         return@LaunchedEffect
                     }
-                    // 已选中的备注跳过计算（选择后不再弹出）
-                    if (note in suppressedNotes) {
-                        suppressedNotes = suppressedNotes - note
+                    if (justSelected) {
+                        justSelected = false
                         showSuggestions = false
                         return@LaunchedEffect
                     }
-                    // 防抖：等待用户停止输入
-                    delay(150)
+                    delay(100)
                     val predictions = if (NotePredictor.hasEnoughData()) {
                         val currentHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
                         val currentAmount = amount.toFloatOrNull() ?: 0f
@@ -678,7 +674,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                                 .fillMaxWidth()
                                                 .clickable {
                                                     NotePredictor.recordHit(s.note)
-                                                    suppressedNotes = suppressedNotes + s.note
+                                                    justSelected = true
                                                     showSuggestions = false
                                                     note = s.note
                                                     selectedCategory = s.subId ?: s.catId

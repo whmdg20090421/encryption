@@ -277,19 +277,10 @@ object NotePredictor {
 
     /**
      * 当 embedding 数量不足 MIN_RECORDS 时，直接从 DB 最近记录中按文本匹配度返回最近 10 条备注。
-     * 同时构建 noteCategories 映射。
      */
     fun predictFromRecent(context: Context, partialNote: String): List<Prediction> {
         if (partialNote.isEmpty()) return emptyList()
         val records = AccountingRepository.getAllRecords(context)
-        // 构建备注→分类映射（每个备注保留所有使用过的分类组合）
-        noteCategories.clear()
-        for (r in records) {
-            if (r.note.isNotEmpty()) {
-                val list = noteCategories.getOrPut(r.note) { mutableListOf() }
-                list.add(r.categoryId to r.subcategoryId)
-            }
-        }
         val recentNotes = records
             .filter { it.note.isNotEmpty() }
             .sortedByDescending { it.happenedAt }
