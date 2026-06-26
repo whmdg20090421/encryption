@@ -1224,16 +1224,19 @@ private fun MinePageContent(bookName: String = "") {
     var showImportDone by remember { mutableStateOf(false) }
     var countdownSeconds by remember { mutableStateOf(5) }
     // 格式切换：false = JSON, true = CSV
-    var useCsv by remember { mutableStateOf(false) }
+    var importUseCsv by remember { mutableStateOf(false) }
+    var showExportConfirm by remember { mutableStateOf(false) }
+    var exportUseCsv by remember { mutableStateOf(false) }
+    var exportResult by remember { mutableStateOf<String?>(null) }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             try {
-                if (useCsv) AccountingRepository.validateImportCsv(context, uri)
+                if (importUseCsv) AccountingRepository.validateImportCsv(context, uri)
                 else AccountingRepository.validateImportData(context, uri)
                 importUri = uri
                 showImportConfirm = true
             } catch (_: Exception) {
-                importError = if (useCsv) "该CSV文件数据格式不正确或已损坏。"
+                importError = if (importUseCsv) "该CSV文件数据格式不正确或已损坏。"
                               else "该JSON文件数据格式不正确或已损坏。"
             }
         }
@@ -1266,7 +1269,29 @@ private fun MinePageContent(bookName: String = "") {
             }
         }
         pageStack == listOf("数据管理") -> {
-            // 数据管理页
+            // 数据管理页 — 两个入口卡片
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                item { Spacer(Modifier.height(16.dp)) }
+                item {
+                    SettingCard(
+                        icon = Icons.Outlined.FileUpload,
+                        title = "导出数据",
+                        subtitle = "将记账数据导出为文件",
+                        onClick = { pageStack = listOf("数据管理", "导出数据") }
+                    )
+                }
+                item {
+                    SettingCard(
+                        icon = Icons.Outlined.FileDownload,
+                        title = "导入数据",
+                        subtitle = "从文件导入记账数据",
+                        onClick = { pageStack = listOf("数据管理", "导入数据") }
+                    )
+                }
+            }
+        }
+        pageStack == listOf("数据管理", "导出数据") -> {
+            // 导出数据页
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 item { Spacer(Modifier.height(16.dp)) }
                 // 格式切换胶囊
@@ -1284,9 +1309,9 @@ private fun MinePageContent(bookName: String = "") {
                         ) {
                             Row(modifier = Modifier.padding(3.dp)) {
                                 listOf(false to "JSON", true to "CSV").forEach { (value, label) ->
-                                    val selected = useCsv == value
+                                    val selected = exportUseCsv == value
                                     Surface(
-                                        onClick = { useCsv = value },
+                                        onClick = { exportUseCsv = value },
                                         shape = RoundedCornerShape(50),
                                         color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
                                         modifier = Modifier.padding(horizontal = 2.dp)
@@ -1304,7 +1329,8 @@ private fun MinePageContent(bookName: String = "") {
                         }
                     }
                 }
-                item { Spacer(Modifier.height(12.dp)) }
+                item { Spacer(Modifier.height(16.dp)) }
+                // 数据说明卡片
                 item {
                     Card(
                         modifier = Modifier
@@ -1315,103 +1341,167 @@ private fun MinePageContent(bookName: String = "") {
                             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                         )
                     ) {
-                        Column {
-                            // 导出数据
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        try {
-                                            val path = if (useCsv) AccountingRepository.exportCsv(context)
-                                                       else AccountingRepository.exportData(context)
-                                            android.widget.Toast.makeText(
-                                                context, "已导出到: $path", android.widget.Toast.LENGTH_LONG
-                                            ).show()
-                                        } catch (e: Exception) {
-                                            android.widget.Toast.makeText(
-                                                context, "导出失败: ${e.message}", android.widget.Toast.LENGTH_LONG
-                                            ).show()
-                                        }
-                                    }
-                                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.FileUpload,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Spacer(Modifier.width(16.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "导出数据",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = if (useCsv) "将记账记录导出为 CSV（可用 Excel 打开）"
-                                               else "将全部记账数据导出为 JSON",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .graphicsLayer { rotationZ = 180f }
-                                )
-                            }
-                            HorizontalDivider(
-                                color = MaterialTheme.colorScheme.outlineVariant,
-                                thickness = 0.5.dp,
-                                modifier = Modifier.padding(horizontal = 16.dp)
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)) {
+                            Text(
+                                text = if (exportUseCsv) "导出内容说明" else "导出内容说明",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
-                            // 导入数据
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        val mime = if (useCsv) "text/comma-separated-values" else "application/json"
-                                        importLauncher.launch(arrayOf(mime))
-                                    }
-                                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.FileDownload,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(24.dp)
+                            Spacer(Modifier.height(8.dp))
+                            if (exportUseCsv) {
+                                Text(
+                                    text = "将记账记录导出为 CSV 文件，可用 Excel 直接打开编辑。\n\n导出字段：\n• 类型（支出/收入/转账/债务）\n• 分类、二级分类\n• 金额\n• 账本、账户\n• 备注\n• 时间\n• 优惠前金额\n• 报销账户",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                Spacer(Modifier.width(16.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "导入数据",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = if (useCsv) "从 CSV 文件导入记账记录"
-                                               else "从 JSON 文件导入全部数据",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .graphicsLayer { rotationZ = 180f }
+                            } else {
+                                Text(
+                                    text = "将全部记账数据导出为 JSON 文件，可在另一台设备导入恢复。\n\n包含数据：\n• 所有记账记录（含金额、分类、备注等）\n• 全部账本和账户信息\n• 分类设置（含自定义分类）\n• 个性化设置（图标颜色等）",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
                     }
+                }
+                item { Spacer(Modifier.height(16.dp)) }
+                // 导出按钮
+                item {
+                    Button(
+                        onClick = { showExportConfirm = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.FileUpload,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (exportUseCsv) "导出 CSV 文件" else "导出 JSON 文件")
+                    }
+                }
+                // 导出结果
+                if (exportResult != null) {
+                    item { Spacer(Modifier.height(12.dp)) }
+                    item {
+                        Text(
+                            text = "已保存到: $exportResult",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
+                }
+            }
+        }
+        pageStack == listOf("数据管理", "导入数据") -> {
+            // 导入数据页
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                item { Spacer(Modifier.height(16.dp)) }
+                // 格式切换胶囊
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(3.dp)
+                        ) {
+                            Row(modifier = Modifier.padding(3.dp)) {
+                                listOf(false to "JSON", true to "CSV").forEach { (value, label) ->
+                                    val selected = importUseCsv == value
+                                    Surface(
+                                        onClick = { importUseCsv = value },
+                                        shape = RoundedCornerShape(50),
+                                        color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        modifier = Modifier.padding(horizontal = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (selected) MaterialTheme.colorScheme.onPrimary
+                                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                item { Spacer(Modifier.height(16.dp)) }
+                // 数据说明卡片
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)) {
+                            Text(
+                                text = "导入说明",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            if (importUseCsv) {
+                                Text(
+                                    text = "从 CSV 文件导入记账记录，将替换现有记录数据。\n\n要求：\n• 文件需为 UTF-8 编码\n• 第一行为表头\n• 列顺序：类型、分类、二级分类、金额、账本、账户、备注、时间、优惠前金额、报销账户\n• 分类和账户名称需与当前数据一致",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                Text(
+                                    text = "从 JSON 文件导入全部数据，将完全覆盖当前所有记账数据。\n\n包含：\n• 所有记账记录\n• 账本和账户\n• 分类设置\n• 个性化设置\n\n⚠ 导入前请确认已备份当前数据",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+                item { Spacer(Modifier.height(16.dp)) }
+                // 选择文件按钮
+                item {
+                    Button(
+                        onClick = {
+                            val mime = if (importUseCsv) "text/comma-separated-values" else "application/json"
+                            importLauncher.launch(arrayOf(mime))
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.FolderOpen,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (importUseCsv) "选择 CSV 文件" else "选择 JSON 文件")
+                    }
+                }
+                // 提示
+                item { Spacer(Modifier.height(12.dp)) }
+                item {
+                    Text(
+                        text = "导入前建议先导出备份当前数据",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
                 }
             }
         }
@@ -1433,6 +1523,40 @@ private fun MinePageContent(bookName: String = "") {
             // 分类管理页：分类图标开关
             CategoryIconStylePage()
         }
+    }
+
+    // 导出确认弹窗
+    if (showExportConfirm) {
+        AlertDialog(
+            onDismissRequest = { showExportConfirm = false },
+            title = { Text("确认导出") },
+            text = {
+                Text(if (exportUseCsv)
+                    "即将导出全部记账记录为 CSV 文件，保存到 Downloads 目录。"
+                else
+                    "即将导出全部记账数据为 JSON 文件，保存到 Downloads 目录。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showExportConfirm = false
+                    try {
+                        val path = if (exportUseCsv) AccountingRepository.exportCsv(context)
+                                   else AccountingRepository.exportData(context)
+                        exportResult = path
+                        android.widget.Toast.makeText(
+                            context, "已导出到: $path", android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    } catch (e: Exception) {
+                        android.widget.Toast.makeText(
+                            context, "导出失败: ${e.message}", android.widget.Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }) { Text("确认导出") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExportConfirm = false }) { Text("取消") }
+            }
+        )
     }
 
     // 导入错误弹窗
@@ -1459,11 +1583,11 @@ private fun MinePageContent(bookName: String = "") {
                 TextButton(onClick = {
                     showImportConfirm = false
                     try {
-                        if (useCsv) AccountingRepository.importCsv(context, importUri!!)
+                        if (importUseCsv) AccountingRepository.importCsv(context, importUri!!)
                         else AccountingRepository.importData(context, importUri!!)
                         showImportDone = true
                     } catch (_: Exception) {
-                        importError = if (useCsv) "该CSV文件数据格式不正确或已损坏。"
+                        importError = if (importUseCsv) "该CSV文件数据格式不正确或已损坏。"
                                       else "该JSON文件数据格式不正确或已损坏。"
                     }
                     importUri = null
