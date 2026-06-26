@@ -6,6 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.util.Log
 import com.whmdg.mczj.tools.AppDataPaths
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
 
@@ -508,4 +509,427 @@ internal class AccountingDatabase private constructor(context: Context) :
         context.getSharedPreferences(AppDataPaths.PREFS_ACCOUNTING, Context.MODE_PRIVATE)
             .edit().clear().apply()
     }
+
+    // ─────────────────────────────────────────────
+    // 数据导出
+    // ─────────────────────────────────────────────
+
+    fun exportToJson(): String {
+        val db = readableDatabase
+
+        // settings
+        val settings = mutableListOf<ExportSetting>()
+        val settingsCursor = db.rawQuery("SELECT key, value FROM settings", null)
+        try {
+            while (settingsCursor.moveToNext()) {
+                settings.add(ExportSetting(
+                    key = settingsCursor.getString(0),
+                    value = settingsCursor.getString(1)
+                ))
+            }
+        } finally {
+            settingsCursor.close()
+        }
+
+        // categories
+        val categories = mutableListOf<ExportCategory>()
+        val catCursor = db.rawQuery(
+            "SELECT id, name, icon, page, type, parent_id, sort_order FROM categories", null
+        )
+        try {
+            while (catCursor.moveToNext()) {
+                categories.add(ExportCategory(
+                    id = catCursor.getString(0),
+                    name = catCursor.getString(1),
+                    icon = catCursor.getString(2),
+                    page = catCursor.getString(3),
+                    type = catCursor.getString(4),
+                    parentId = catCursor.getString(5),
+                    sortOrder = catCursor.getInt(6)
+                ))
+            }
+        } finally {
+            catCursor.close()
+        }
+
+        // records
+        val records = mutableListOf<ExportRecord>()
+        val recCursor = db.rawQuery(
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id FROM records",
+            null
+        )
+        try {
+            while (recCursor.moveToNext()) {
+                records.add(ExportRecord(
+                    id = recCursor.getString(0),
+                    bookName = recCursor.getString(1),
+                    type = recCursor.getString(2),
+                    amount = recCursor.getString(3),
+                    categoryId = recCursor.getString(4),
+                    subcategoryId = recCursor.getString(5),
+                    note = recCursor.getString(6) ?: "",
+                    happenedAt = recCursor.getLong(7),
+                    accountId = recCursor.getString(8),
+                    discountBefore = recCursor.getString(9),
+                    reimbursementAccountId = recCursor.getString(10)
+                ))
+            }
+        } finally {
+            recCursor.close()
+        }
+
+        // accounts
+        val accounts = mutableListOf<ExportAccount>()
+        val accCursor = db.rawQuery(
+            "SELECT id, name, type, category, initial_amount, note, created_at, updated_at FROM accounts", null
+        )
+        try {
+            while (accCursor.moveToNext()) {
+                accounts.add(ExportAccount(
+                    id = accCursor.getString(0),
+                    name = accCursor.getString(1),
+                    type = accCursor.getString(2),
+                    category = accCursor.getString(3),
+                    initialAmount = accCursor.getDouble(4),
+                    note = accCursor.getString(5) ?: "",
+                    createdAt = accCursor.getLong(6),
+                    updatedAt = accCursor.getLong(7)
+                ))
+            }
+        } finally {
+            accCursor.close()
+        }
+
+        val exportData = ExportData(
+            settings = settings,
+            categories = categories,
+            records = records,
+            accounts = accounts
+        )
+
+        val json = Json { prettyPrint = true; encodeDefaults = true }
+        return json.encodeToString(ExportData.serializer(), exportData)
+    }
+
+    // ─────────────────────────────────────────────
+    // CSV 导出
+    // ─────────────────────────────────────────────
+
+    fun exportToCsv(): String {
+        val db = readableDatabase
+
+        // 构建 id→name 映射
+        val catMap = mutableMapOf<String, String>()
+        val catCursor = db.rawQuery("SELECT id, name FROM categories", null)
+        try { while (catCursor.moveToNext()) catMap[catCursor.getString(0)] = catCursor.getString(1) }
+        finally { catCursor.close() }
+
+        val accMap = mutableMapOf<String, String>()
+        val accCursor = db.rawQuery("SELECT id, name FROM accounts", null)
+        try { while (accCursor.moveToNext()) accMap[accCursor.getString(0)] = accCursor.getString(1) }
+        finally { accCursor.close() }
+
+        val reimbMap = mutableMapOf<String, String>()
+        // 报销账户名存在 settings 表的 JSON 中，从 ReimbursementAccountEntity 解析
+        try {
+            val json = getSetting("reimbursement_accounts")
+            if (json != null) {
+                val entities = kotlinx.serialization.json.Json.decodeFromString<List<ReimbursementAccountEntity>>(json)
+                entities.forEach { reimbMap[it.id] = it.name }
+            }
+        } catch (_: Exception) {}
+
+        val sb = StringBuilder()
+        sb.appendLine("﻿类型,分类,二级分类,金额,账本,账户,备注,时间,优惠前金额,报销账户")
+
+        val recCursor = db.rawQuery(
+            "SELECT type, amount, category_id, subcategory_id, book_name, account_id, note, happened_at, discount_before, reimbursement_account_id FROM records ORDER BY happened_at ASC",
+            null
+        )
+        try {
+            while (recCursor.moveToNext()) {
+                val type = recCursor.getString(0) ?: ""
+                val amount = recCursor.getString(1) ?: ""
+                val catName = catMap[recCursor.getString(2)] ?: recCursor.getString(2) ?: ""
+                val subCatName = catMap[recCursor.getString(3)] ?: recCursor.getString(3) ?: ""
+                val book = recCursor.getString(4) ?: ""
+                val accName = accMap[recCursor.getString(5)] ?: recCursor.getString(5) ?: ""
+                val note = recCursor.getString(6) ?: ""
+                val ts = recCursor.getLong(7)
+                val discountBefore = recCursor.getString(8) ?: ""
+                val reimbName = reimbMap[recCursor.getString(9)] ?: recCursor.getString(9) ?: ""
+
+                val dateStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+                    .format(java.util.Date(ts))
+
+                sb.appendLine("${csvEscape(type)},${csvEscape(catName)},${csvEscape(subCatName)},${csvEscape(amount)},${csvEscape(book)},${csvEscape(accName)},${csvEscape(note)},${csvEscape(dateStr)},${csvEscape(discountBefore)},${csvEscape(reimbName)}")
+            }
+        } finally {
+            recCursor.close()
+        }
+        return sb.toString()
+    }
+
+    private fun csvEscape(value: String): String {
+        return if (value.contains(',') || value.contains('"') || value.contains('\n')) {
+            "\"${value.replace("\"", "\"\"")}\""
+        } else {
+            value
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // CSV 导入
+    // ─────────────────────────────────────────────
+
+    fun validateImportCsv(csvString: String) {
+        try {
+            val lines = csvString.lines().filter { it.isNotBlank() }
+            if (lines.size < 2) throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
+            val header = parseCsvLine(lines[0])
+            val required = listOf("类型", "金额", "时间")
+            for (r in required) {
+                if (header.none { it.trim() == r }) throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
+            }
+        } catch (e: IllegalArgumentException) {
+            throw e
+        } catch (_: Exception) {
+            throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
+        }
+    }
+
+    fun importFromCsv(csvString: String) {
+        val lines = csvString.lines().filter { it.isNotBlank() }
+        if (lines.size < 2) throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
+
+        val header = parseCsvLine(lines[0]).map { it.trim() }
+        val typeIdx = header.indexOf("类型")
+        val catIdx = header.indexOf("分类")
+        val subCatIdx = header.indexOf("二级分类")
+        val amountIdx = header.indexOf("金额")
+        val bookIdx = header.indexOf("账本")
+        val accIdx = header.indexOf("账户")
+        val noteIdx = header.indexOf("备注")
+        val timeIdx = header.indexOf("时间")
+        val discountIdx = header.indexOf("优惠前金额")
+        val reimbIdx = header.indexOf("报销账户")
+
+        if (typeIdx < 0 || amountIdx < 0 || timeIdx < 0) {
+            throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
+        }
+
+        // 构建 name→id 映射
+        val db = writableDatabase
+        val catNameToId = mutableMapOf<String, String>()
+        val catCursor = db.rawQuery("SELECT id, name FROM categories", null)
+        try { while (catCursor.moveToNext()) catNameToId[catCursor.getString(1)] = catCursor.getString(0) }
+        finally { catCursor.close() }
+
+        val accNameToId = mutableMapOf<String, String>()
+        val accCursor = db.rawQuery("SELECT id, name FROM accounts", null)
+        try { while (accCursor.moveToNext()) accNameToId[accCursor.getString(1)] = accCursor.getString(0) }
+        finally { accCursor.close() }
+
+        val reimbNameToId = mutableMapOf<String, String>()
+        try {
+            val json = getSetting("reimbursement_accounts")
+            if (json != null) {
+                val entities = kotlinx.serialization.json.Json.decodeFromString<List<ReimbursementAccountEntity>>(json)
+                entities.forEach { reimbNameToId[it.name] = it.id }
+            }
+        } catch (_: Exception) {}
+
+        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+
+        db.beginTransaction()
+        try {
+            db.delete("records", null, null)
+
+            for (i in 1 until lines.size) {
+                val cols = parseCsvLine(lines[i])
+                if (cols.size < 3) continue
+
+                val type = cols.getOrNull(typeIdx)?.trim() ?: continue
+                val amount = cols.getOrNull(amountIdx)?.trim() ?: continue
+                val timeStr = cols.getOrNull(timeIdx)?.trim() ?: continue
+
+                val happenedAt = try { dateFormat.parse(timeStr)?.time ?: 0L } catch (_: Exception) { 0L }
+                val catName = cols.getOrNull(catIdx)?.trim() ?: ""
+                val subCatName = cols.getOrNull(subCatIdx)?.trim() ?: ""
+                val book = cols.getOrNull(bookIdx)?.trim() ?: "默认记账本"
+                val accName = cols.getOrNull(accIdx)?.trim() ?: ""
+                val note = cols.getOrNull(noteIdx)?.trim() ?: ""
+                val discountBefore = cols.getOrNull(discountIdx)?.trim()?.ifEmpty { null }
+                val reimbName = cols.getOrNull(reimbIdx)?.trim() ?: ""
+
+                val cv = ContentValues().apply {
+                    put("id", java.util.UUID.randomUUID().toString())
+                    put("book_name", book)
+                    put("type", type)
+                    put("amount", amount)
+                    put("category_id", catNameToId[catName] ?: catName)
+                    val subId = catNameToId[subCatName] ?: subCatName
+                    if (subId.isNotEmpty()) put("subcategory_id", subId) else putNull("subcategory_id")
+                    put("note", note)
+                    put("happened_at", happenedAt)
+                    val aId = accNameToId[accName]
+                    if (aId != null) put("account_id", aId) else if (accName.isNotEmpty()) put("account_id", accName) else putNull("account_id")
+                    if (discountBefore != null) put("discount_before", discountBefore) else putNull("discount_before")
+                    val rId = reimbNameToId[reimbName]
+                    if (rId != null) put("reimbursement_account_id", rId) else if (reimbName.isNotEmpty()) put("reimbursement_account_id", reimbName) else putNull("reimbursement_account_id")
+                }
+                db.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+
+            db.setTransactionSuccessful()
+        } catch (e: IllegalArgumentException) {
+            throw e
+        } catch (_: Exception) {
+            throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    private fun parseCsvLine(line: String): List<String> {
+        val result = mutableListOf<String>()
+        val current = StringBuilder()
+        var inQuotes = false
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            when {
+                c == '"' && !inQuotes -> inQuotes = true
+                c == '"' && inQuotes -> {
+                    if (i + 1 < line.length && line[i + 1] == '"') { current.append('"'); i++ }
+                    else inQuotes = false
+                }
+                c == ',' && !inQuotes -> { result.add(current.toString()); current.clear() }
+                else -> current.append(c)
+            }
+            i++
+        }
+        result.add(current.toString())
+        return result
+    }
+
+    fun validateImportData(jsonString: String) {
+        try {
+            val json = Json { ignoreUnknownKeys = true }
+            json.decodeFromString(ExportData.serializer(), jsonString)
+        } catch (_: Exception) {
+            throw IllegalArgumentException("该JSON文件数据格式不正确或已损坏。")
+        }
+    }
+
+    fun importFromJson(jsonString: String) {
+        val data = try {
+            val json = Json { ignoreUnknownKeys = true }
+            json.decodeFromString(ExportData.serializer(), jsonString)
+        } catch (_: Exception) {
+            throw IllegalArgumentException("该JSON文件数据格式不正确或已损坏。")
+        }
+
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("records", null, null)
+            db.delete("accounts", null, null)
+            db.delete("categories", null, null)
+            db.delete("settings", null, null)
+
+            for (s in data.settings) {
+                val cv = ContentValues().apply { put("key", s.key); put("value", s.value) }
+                db.insertWithOnConflict("settings", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            for (c in data.categories) {
+                val cv = ContentValues().apply {
+                    put("id", c.id); put("name", c.name); put("icon", c.icon)
+                    put("page", c.page); put("type", c.type)
+                    if (c.parentId != null) put("parent_id", c.parentId) else putNull("parent_id")
+                    put("sort_order", c.sortOrder)
+                }
+                db.insertWithOnConflict("categories", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            for (r in data.records) {
+                val cv = ContentValues().apply {
+                    put("id", r.id); put("book_name", r.bookName); put("type", r.type)
+                    put("amount", r.amount); put("category_id", r.categoryId)
+                    if (r.subcategoryId != null) put("subcategory_id", r.subcategoryId) else putNull("subcategory_id")
+                    put("note", r.note); put("happened_at", r.happenedAt)
+                    if (r.accountId != null) put("account_id", r.accountId) else putNull("account_id")
+                    if (r.discountBefore != null) put("discount_before", r.discountBefore) else putNull("discount_before")
+                    if (r.reimbursementAccountId != null) put("reimbursement_account_id", r.reimbursementAccountId) else putNull("reimbursement_account_id")
+                }
+                db.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            for (a in data.accounts) {
+                val cv = ContentValues().apply {
+                    put("id", a.id); put("name", a.name); put("type", a.type)
+                    put("category", a.category); put("initial_amount", a.initialAmount)
+                    put("note", a.note); put("created_at", a.createdAt); put("updated_at", a.updatedAt)
+                }
+                db.insertWithOnConflict("accounts", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+
+            db.setTransactionSuccessful()
+        } catch (e: IllegalArgumentException) {
+            throw e
+        } catch (_: Exception) {
+            throw IllegalArgumentException("该JSON文件数据格式不正确或已损坏。")
+        } finally {
+            db.endTransaction()
+        }
+    }
 }
+
+@Serializable
+private data class ExportSetting(val key: String, val value: String)
+
+@Serializable
+private data class ExportCategory(
+    val id: String,
+    val name: String,
+    val icon: String,
+    val page: String,
+    val type: String,
+    val parentId: String? = null,
+    val sortOrder: Int = 0
+)
+
+@Serializable
+private data class ExportRecord(
+    val id: String,
+    val bookName: String,
+    val type: String,
+    val amount: String,
+    val categoryId: String,
+    val subcategoryId: String? = null,
+    val note: String = "",
+    val happenedAt: Long,
+    val accountId: String? = null,
+    val discountBefore: String? = null,
+    val reimbursementAccountId: String? = null
+)
+
+@Serializable
+private data class ExportAccount(
+    val id: String,
+    val name: String,
+    val type: String,
+    val category: String = "tradable",
+    val initialAmount: Double = 0.0,
+    val note: String = "",
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+@Serializable
+private data class ExportData(
+    val version: Int = 1,
+    val exportedAt: Long = System.currentTimeMillis(),
+    val settings: List<ExportSetting> = emptyList(),
+    val categories: List<ExportCategory> = emptyList(),
+    val records: List<ExportRecord> = emptyList(),
+    val accounts: List<ExportAccount> = emptyList()
+)

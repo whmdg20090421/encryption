@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
+import android.os.Environment
 import com.whmdg.mczj.tools.AppDataPaths
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -472,6 +473,64 @@ object AccountingRepository {
     /** 检查名称是否已存在 */
     fun isReimbursementAccountNameExists(context: Context, name: String): Boolean {
         return getReimbursementAccounts(context).any { it.name == name }
+    }
+
+    // ─────────────────────────────────────────────
+    // 数据导出
+    // ─────────────────────────────────────────────
+
+    /** 导出全部记账数据为 JSON 文件到 Downloads 目录，返回文件路径 */
+    fun exportData(context: Context): String {
+        val json = getDb(context).exportToJson()
+        val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        val fileName = "记账本备份_${timestamp}.json"
+        val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        if (!dir.exists()) dir.mkdirs()
+        val file = java.io.File(dir, fileName)
+        file.writeText(json, Charsets.UTF_8)
+        return file.absolutePath
+    }
+
+    /** 从 JSON 文件导入全部记账数据（替换现有数据） */
+    fun importData(context: Context, uri: Uri) {
+        val json = context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+            ?: throw IllegalArgumentException("无法读取文件。")
+        getDb(context).importFromJson(json)
+    }
+
+    /** 校验 JSON 文件格式是否正确（不执行导入） */
+    fun validateImportData(context: Context, uri: Uri) {
+        val json = context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+            ?: throw IllegalArgumentException("无法读取文件。")
+        getDb(context).validateImportData(json)
+    }
+
+    /** 导出全部记账记录为 CSV 文件到 Downloads 目录，返回文件路径 */
+    fun exportCsv(context: Context): String {
+        val csv = getDb(context).exportToCsv()
+        val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        val fileName = "记账本备份_${timestamp}.csv"
+        val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        if (!dir.exists()) dir.mkdirs()
+        val file = java.io.File(dir, fileName)
+        file.writeText(csv, Charsets.UTF_8)
+        return file.absolutePath
+    }
+
+    /** 从 CSV 文件导入记账记录（替换所有记录） */
+    fun importCsv(context: Context, uri: Uri) {
+        val csv = context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+            ?: throw IllegalArgumentException("无法读取文件。")
+        getDb(context).importFromCsv(csv)
+    }
+
+    /** 校验 CSV 文件格式是否正确（不执行导入） */
+    fun validateImportCsv(context: Context, uri: Uri) {
+        val csv = context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+            ?: throw IllegalArgumentException("无法读取文件。")
+        getDb(context).validateImportCsv(csv)
     }
 
     // ─────────────────────────────────────────────

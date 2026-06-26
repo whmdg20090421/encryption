@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
@@ -1213,8 +1214,30 @@ private fun MineHeaderCard(bookName: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MinePageContent(bookName: String = "") {
+    val context = LocalContext.current
     // 页面栈：emptyList = 主页面，listOf("个性化设置") = 个性化页面，listOf("个性化设置","分类管理") = 分类管理页
     var pageStack by remember { mutableStateOf<List<String>>(emptyList()) }
+    // 导入流程状态
+    var importError by remember { mutableStateOf<String?>(null) }
+    var importUri by remember { mutableStateOf<Uri?>(null) }
+    var showImportConfirm by remember { mutableStateOf(false) }
+    var showImportDone by remember { mutableStateOf(false) }
+    var countdownSeconds by remember { mutableStateOf(5) }
+    // 格式切换：false = JSON, true = CSV
+    var useCsv by remember { mutableStateOf(false) }
+    val importLauncher = rememberLauncherForActivityResult(OpenDocument) { uri ->
+        if (uri != null) {
+            try {
+                if (useCsv) AccountingRepository.validateImportCsv(context, uri)
+                else AccountingRepository.validateImportData(context, uri)
+                importUri = uri
+                showImportConfirm = true
+            } catch (_: Exception) {
+                importError = if (useCsv) "该CSV文件数据格式不正确或已损坏。"
+                              else "该JSON文件数据格式不正确或已损坏。"
+            }
+        }
+    }
 
     when {
         pageStack.isEmpty() -> {
@@ -1230,6 +1253,165 @@ private fun MinePageContent(bookName: String = "") {
                         subtitle = "图标风格、主题等",
                         onClick = { pageStack = listOf("个性化设置") }
                     )
+                }
+                item { Spacer(Modifier.height(12.dp)) }
+                item {
+                    SettingCard(
+                        icon = Icons.Outlined.Database,
+                        title = "数据管理",
+                        subtitle = "导出、导入记账数据",
+                        onClick = { pageStack = listOf("数据管理") }
+                    )
+                }
+            }
+        }
+        pageStack == listOf("数据管理") -> {
+            // 数据管理页
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                item { Spacer(Modifier.height(16.dp)) }
+                // 格式切换胶囊
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(3.dp)
+                        ) {
+                            Row(modifier = Modifier.padding(3.dp)) {
+                                listOf(false to "JSON", true to "CSV").forEach { (value, label) ->
+                                    val selected = useCsv == value
+                                    Surface(
+                                        onClick = { useCsv = value },
+                                        shape = RoundedCornerShape(50),
+                                        color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        modifier = Modifier.padding(horizontal = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (selected) MaterialTheme.colorScheme.onPrimary
+                                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                item { Spacer(Modifier.height(12.dp)) }
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        )
+                    ) {
+                        Column {
+                            // 导出数据
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        try {
+                                            val path = if (useCsv) AccountingRepository.exportCsv(context)
+                                                       else AccountingRepository.exportData(context)
+                                            android.widget.Toast.makeText(
+                                                context, "已导出到: $path", android.widget.Toast.LENGTH_LONG
+                                            ).show()
+                                        } catch (e: Exception) {
+                                            android.widget.Toast.makeText(
+                                                context, "导出失败: ${e.message}", android.widget.Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.FileUpload,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(Modifier.width(16.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "导出数据",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (useCsv) "将记账记录导出为 CSV（可用 Excel 打开）"
+                                               else "将全部记账数据导出为 JSON",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .graphicsLayer { rotationZ = 180f }
+                                )
+                            }
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant,
+                                thickness = 0.5.dp,
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            )
+                            // 导入数据
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        val mime = if (useCsv) "text/comma-separated-values" else "application/json"
+                                        importLauncher.launch(arrayOf(mime))
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.FileDownload,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(Modifier.width(16.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "导入数据",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (useCsv) "从 CSV 文件导入记账记录"
+                                               else "从 JSON 文件导入全部数据",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .graphicsLayer { rotationZ = 180f }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1250,6 +1432,76 @@ private fun MinePageContent(bookName: String = "") {
         pageStack == listOf("个性化设置", "分类管理") -> {
             // 分类管理页：分类图标开关
             CategoryIconStylePage()
+        }
+    }
+
+    // 导入错误弹窗
+    if (importError != null) {
+        AlertDialog(
+            onDismissRequest = { importError = null },
+            title = { Text("导入失败") },
+            text = { Text(importError!!) },
+            confirmButton = {
+                TextButton(onClick = { importError = null }) { Text("我知道了") }
+            }
+        )
+    }
+
+    // 导入确认弹窗
+    if (showImportConfirm) {
+        AlertDialog(
+            onDismissRequest = { showImportConfirm = false; importUri = null },
+            title = { Text("确认导入") },
+            text = {
+                Text("此操作将完全覆盖本地所有记账数据，原有记录将永久丢失。\n\n建议在导入前先使用导出功能备份当前数据。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showImportConfirm = false
+                    try {
+                        if (useCsv) AccountingRepository.importCsv(context, importUri!!)
+                        else AccountingRepository.importData(context, importUri!!)
+                        showImportDone = true
+                    } catch (_: Exception) {
+                        importError = if (useCsv) "该CSV文件数据格式不正确或已损坏。"
+                                      else "该JSON文件数据格式不正确或已损坏。"
+                    }
+                    importUri = null
+                }) {
+                    Text("确认覆盖", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showImportConfirm = false; importUri = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // 导入完成倒计时弹窗（不可关闭，5秒后自杀，拦截所有手势和点击）
+    if (showImportDone) {
+        BackHandler {}
+        LaunchedEffect(Unit) {
+            while (countdownSeconds > 0) {
+                kotlinx.coroutines.delay(1000L)
+                countdownSeconds--
+            }
+            kotlin.system.exitProcess(0)
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.6f))
+                .clickable(enabled = false) {},
+            contentAlignment = Alignment.Center
+        ) {
+            AlertDialog(
+                onDismissRequest = {},
+                title = { Text("导入成功") },
+                text = { Text("应用数据已导入，为保证安全，${countdownSeconds}秒后将关闭应用。") },
+                confirmButton = {}
+            )
         }
     }
 }

@@ -835,13 +835,12 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                             ) {
                                 Switch(
                                     checked = autoCalc.value,
-                                    onCheckedChange = { autoCalc.value = it },
-                                    modifier = Modifier.weight(0.3f)
+                                    onCheckedChange = { autoCalc.value = it }
                                 )
+                                Spacer(Modifier.width(4.dp))
                                 Text(
                                     "自动计算",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    modifier = Modifier.weight(0.7f)
+                                    style = MaterialTheme.typography.labelSmall
                                 )
                             }
                             // 右半：百分比优惠
@@ -851,13 +850,12 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                             ) {
                                 Switch(
                                     checked = percentMode.value,
-                                    onCheckedChange = { percentMode.value = it },
-                                    modifier = Modifier.weight(0.3f)
+                                    onCheckedChange = { percentMode.value = it }
                                 )
+                                Spacer(Modifier.width(4.dp))
                                 Text(
                                     "百分比优惠",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    modifier = Modifier.weight(0.7f)
+                                    style = MaterialTheme.typography.labelSmall
                                 )
                             }
                         }
