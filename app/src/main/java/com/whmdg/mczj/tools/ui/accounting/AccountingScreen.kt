@@ -1755,10 +1755,10 @@ private fun RecordListContent(
         }
     }
     val monthlyExpense = remember(monthlyRecords) {
-        monthlyRecords.filter { it.type == "支出" && it.reimbursementAccountId == null }.sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
+        monthlyRecords.filter { it.type == "支出" && it.reimbursementAccountId == null && !it.excludeFromStats }.sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
     }
     val monthlyIncome = remember(monthlyRecords) {
-        monthlyRecords.filter { it.type == "收入" && it.reimbursementAccountId == null }.sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
+        monthlyRecords.filter { it.type == "收入" && it.reimbursementAccountId == null && !it.excludeFromStats }.sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
     }
     val monthlyBalance = remember(monthlyIncome, monthlyExpense) { monthlyIncome - monthlyExpense }
     // 余剩预算（暂无预算功能，默认0）

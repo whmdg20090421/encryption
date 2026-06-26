@@ -262,6 +262,27 @@ fun AccountingDetailScreen(
                     }
                 }
             }
+
+            // 属性（如果有）
+            if (record.excludeFromStats || record.excludeFromBudget) {
+                Spacer(Modifier.height(12.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        if (record.excludeFromStats) {
+                            Text("不计入收支统计", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (record.excludeFromBudget) {
+                            Text("不计入预算", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
         }
     }
 }

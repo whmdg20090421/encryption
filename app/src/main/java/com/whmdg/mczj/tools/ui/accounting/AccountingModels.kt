@@ -350,7 +350,9 @@ data class AccountingRecord(
     val accountId: String? = null,  // 关联账户 id（可选）
     val discountBefore: String? = null,  // 优惠前金额（可选）
     val reimbursementAccountId: String? = null,  // 关联报销账户 id（可选），null = 不报销
-    val attachments: List<AttachmentInfo> = emptyList()  // 附件列表（可选）
+    val attachments: List<AttachmentInfo> = emptyList(),  // 附件列表（可选）
+    val excludeFromStats: Boolean = false,   // 不计入收支统计
+    val excludeFromBudget: Boolean = false   // 不计入预算
 )
 
 /**

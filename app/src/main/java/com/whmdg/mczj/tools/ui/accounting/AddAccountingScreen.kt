@@ -127,6 +127,11 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     // 附件
     var attachments by remember { mutableStateOf(editingRecord?.attachments ?: emptyList()) }
     var showAttachmentSheet by remember { mutableStateOf(false) }
+
+    // 属性设置
+    var excludeFromStats by remember { mutableStateOf(editingRecord?.excludeFromStats ?: false) }
+    var excludeFromBudget by remember { mutableStateOf(editingRecord?.excludeFromBudget ?: false) }
+    var showAttrSheet by remember { mutableStateOf(false) }
     // 拍照临时 URI
     var cameraPhotoUri by remember { mutableStateOf<Uri?>(null) }
 
@@ -262,7 +267,9 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             accountId = selectedAccountId,
             discountBefore = discountBefore,
             reimbursementAccountId = selectedReimbursementId,
-            attachments = attachments
+            attachments = attachments,
+            excludeFromStats = excludeFromStats,
+            excludeFromBudget = excludeFromBudget
         )
         val db = AccountingRecordDb.load(context)
         if (editingRecord != null) {
@@ -701,6 +708,17 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     Spacer(Modifier.width(2.dp))
                     Text(if (attachments.isNotEmpty()) "附件(${attachments.size})" else "附件", style = MaterialTheme.typography.labelSmall, color = if (attachments.isNotEmpty()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                // 属性
+                Row(
+                    modifier = Modifier.weight(1f).clickable { showAttrSheet = true },
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Outlined.Settings, contentDescription = "属性", modifier = Modifier.size(16.dp), tint = iconThemeColor)
+                    Spacer(Modifier.width(2.dp))
+                    val attrActive = excludeFromStats || excludeFromBudget
+                    Text("属性", style = MaterialTheme.typography.labelSmall, color = if (attrActive) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
 
             // 附件选择 BottomSheet
@@ -747,6 +765,60 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                 fileLauncher.launch(arrayOf("*/*"))
                             }
                         )
+                        Spacer(Modifier.height(16.dp))
+                    }
+                }
+            }
+
+            // 属性 BottomSheet
+            if (showAttrSheet) {
+                ModalBottomSheet(
+                    onDismissRequest = { showAttrSheet = false },
+                    containerColor = MaterialTheme.colorScheme.surface
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        // 不计入收支
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { excludeFromStats = !excludeFromStats }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = excludeFromStats,
+                                onCheckedChange = { excludeFromStats = it },
+                                colors = CheckboxDefaults.colors(checkedColor = iconThemeColor)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text("不计入收支", style = MaterialTheme.typography.bodyLarge)
+                                Text("收入和支出统计将跳过此记录", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        // 不计入预算
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { excludeFromBudget = !excludeFromBudget }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = excludeFromBudget,
+                                onCheckedChange = { excludeFromBudget = it },
+                                colors = CheckboxDefaults.colors(checkedColor = iconThemeColor)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text("不计入预算", style = MaterialTheme.typography.bodyLarge)
+                                Text("此记录不影响预算计算", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
                         Spacer(Modifier.height(16.dp))
                     }
                 }

@@ -147,7 +147,7 @@ object AccountingRepository {
     private fun getRecordById(context: Context, id: String): AccountingRecord? {
         val sqlDb = getDb(context).readableDatabase
         val cursor = sqlDb.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments FROM records WHERE id = ?",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget FROM records WHERE id = ?",
             arrayOf(id)
         )
         return try {
@@ -168,7 +168,9 @@ object AccountingRepository {
                     accountId = cursor.getString(8),
                     discountBefore = cursor.getString(9),
                     reimbursementAccountId = cursor.getString(10),
-                    attachments = attachments
+                    attachments = attachments,
+                    excludeFromStats = cursor.getInt(12) == 1,
+                    excludeFromBudget = cursor.getInt(13) == 1
                 )
             } else null
         } finally {
@@ -217,6 +219,8 @@ object AccountingRepository {
                     } else {
                         putNull("attachments")
                     }
+                    put("exclude_from_stats", if (record.excludeFromStats) 1 else 0)
+                    put("exclude_from_budget", if (record.excludeFromBudget) 1 else 0)
                 }
                 sqlDb.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
