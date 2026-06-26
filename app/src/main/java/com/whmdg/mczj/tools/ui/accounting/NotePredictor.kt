@@ -129,9 +129,10 @@ object NotePredictor {
         if (records.size < MIN_RECORDS) return
         for (record in records) {
             if (record.note.isEmpty()) continue
-            trainSingle(record.categoryId, record.subcategoryId ?: "", record.amount, extractHour(record.happenedAt), record.note)
-            val emb = forward(getFeatures(record.categoryId, record.subcategoryId ?: "", record.amount, extractHour(record.happenedAt), record.note))
-            embeddings.add(NoteEmbedding(record.note, emb.toList(), record.categoryId, record.subcategoryId ?: "", record.amount, extractHour(record.happenedAt)))
+            val amt = record.amount.toFloatOrNull() ?: 0f
+            trainSingle(record.categoryId, record.subcategoryId ?: "", amt, extractHour(record.happenedAt), record.note)
+            val emb = forward(getFeatures(record.categoryId, record.subcategoryId ?: "", amt, extractHour(record.happenedAt), record.note))
+            embeddings.add(NoteEmbedding(record.note, emb.toList(), record.categoryId, record.subcategoryId ?: "", amt, extractHour(record.happenedAt)))
         }
     }
 
@@ -338,9 +339,10 @@ object NotePredictor {
     fun train(context: Context, record: AccountingRecord) {
         if (record.note.isEmpty()) return
         ensureInitialized(context)
-        trainSingle(record.categoryId, record.subcategoryId ?: "", record.amount, extractHour(record.happenedAt), record.note)
-        val emb = forward(getFeatures(record.categoryId, record.subcategoryId ?: "", record.amount, extractHour(record.happenedAt), record.note))
-        embeddings.add(NoteEmbedding(record.note, emb.toList(), record.categoryId, record.subcategoryId ?: "", record.amount, extractHour(record.happenedAt), false))
+        val amt = record.amount.toFloatOrNull() ?: 0f
+        trainSingle(record.categoryId, record.subcategoryId ?: "", amt, extractHour(record.happenedAt), record.note)
+        val emb = forward(getFeatures(record.categoryId, record.subcategoryId ?: "", amt, extractHour(record.happenedAt), record.note))
+        embeddings.add(NoteEmbedding(record.note, emb.toList(), record.categoryId, record.subcategoryId ?: "", amt, extractHour(record.happenedAt), false))
         // 后台保存
         val dir = File(AccountingRepository.getAccountingDir(context), "ai_model")
         saveState(dir)
