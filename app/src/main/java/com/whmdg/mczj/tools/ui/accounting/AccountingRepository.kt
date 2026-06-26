@@ -88,6 +88,20 @@ object AccountingRepository {
         return getDb(context).getRecordsByBook(bookName)
     }
 
+    /** 获取所有不重复的非空备注（按最近使用倒序） */
+    fun getAllNotes(context: Context): List<String> {
+        val db = getDb(context).readableDatabase
+        val cursor = db.rawQuery(
+            "SELECT DISTINCT note FROM records WHERE note != '' ORDER BY happenedAt DESC", null
+        )
+        val notes = mutableListOf<String>()
+        while (cursor.moveToNext()) {
+            notes.add(cursor.getString(0))
+        }
+        cursor.close()
+        return notes
+    }
+
     /** 插入一条记录（增量维护记账天数） */
     fun insertRecord(context: Context, record: AccountingRecord) {
         val db = getDb(context)

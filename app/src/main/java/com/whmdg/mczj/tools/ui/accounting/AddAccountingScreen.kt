@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.twotone.*
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.Popup
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -494,6 +495,24 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(Modifier.fillMaxHeight().weight(0.2f))
+                // 备注模糊匹配状态
+                var noteSuggestions by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
+                var showSuggestions by remember { mutableStateOf(false) }
+                // 防抖：输入停止 250ms 后才执行匹配
+                LaunchedEffect(note) {
+                    if (note.isEmpty()) {
+                        noteSuggestions = emptyList()
+                        showSuggestions = false
+                        return@LaunchedEffect
+                    }
+                    val allNotes = AccountingRepository.getAllNotes(context)
+                    noteSuggestions = allNotes
+                        .map { it to noteSimilarity(note, it) }
+                        .filter { it.second >= 40 }
+                        .sortedByDescending { it.second }
+                        .take(8)
+                    showSuggestions = noteSuggestions.isNotEmpty()
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
@@ -520,6 +539,56 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                             innerTextField()
                         }
                     )
+                    // 模糊匹配弹出层
+                    if (showSuggestions && noteSuggestions.isNotEmpty()) {
+                        Popup(
+                            alignment = Alignment.BottomStart,
+                            onDismissRequest = { showSuggestions = false }
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                shadowElevation = 8.dp,
+                                color = MaterialTheme.colorScheme.surface,
+                                modifier = Modifier
+                                    .widthIn(min = 200.dp, max = 300.dp)
+                                    .heightIn(max = screenHeight * 0.3f)
+                            ) {
+                                LazyColumn(
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                ) {
+                                    items(noteSuggestions.size) { idx ->
+                                        val (text, score) = noteSuggestions[idx]
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    note = text
+                                                    showSuggestions = false
+                                                }
+                                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = text,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                modifier = Modifier.weight(1f),
+                                                maxLines = 1
+                                            )
+                                            Text(
+                                                text = "${score}%",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = when {
+                                                    score >= 80 -> Color(0xFF4CAF50)
+                                                    score >= 60 -> MaterialTheme.colorScheme.primary
+                                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 Box(
                     modifier = Modifier
@@ -1692,5 +1761,41 @@ private fun getFileName(context: android.content.Context, uri: Uri): String? {
         it.moveToFirst()
         if (nameIndex >= 0) it.getString(nameIndex) else null
     }
+}
+
+/** 备注模糊匹配：返回 0-100 的匹配度百分比 */
+private fun noteSimilarity(input: String, target: String): Int {
+    if (input.isEmpty() || target.isEmpty()) return 0
+    // 完全包含直接满分
+    if (target.contains(input)) return 95
+    // 计算输入与目标每个子串的最小编辑距离
+    val inputLen = input.length
+    val targetLen = target.length
+    var minDist = inputLen
+    for (start in 0 until targetLen) {
+        for (end in start + 1..minOf(start + inputLen + 3, targetLen)) {
+            val sub = target.substring(start, end)
+            val dist = editDistance(input, sub)
+            if (dist < minDist) minDist = dist
+        }
+    }
+    val maxLen = maxOf(inputLen, targetLen)
+    return ((1.0 - minDist.toDouble() / maxLen) * 100).toInt().coerceIn(0, 100)
+}
+
+/** Levenshtein 编辑距离 */
+private fun editDistance(a: String, b: String): Int {
+    val m = a.length
+    val n = b.length
+    val dp = Array(m + 1) { IntArray(n + 1) }
+    for (i in 0..m) dp[i][0] = i
+    for (j in 0..n) dp[0][j] = j
+    for (i in 1..m) {
+        for (j in 1..n) {
+            dp[i][j] = if (a[i - 1] == b[j - 1]) dp[i - 1][j - 1]
+            else minOf(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]) + 1
+        }
+    }
+    return dp[m][n]
 }
 
