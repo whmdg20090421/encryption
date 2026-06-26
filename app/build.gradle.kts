@@ -24,9 +24,9 @@ android {
                 .start()
             proc.inputStream.bufferedReader().readText().trim().toIntOrNull() ?: 0
         } catch (_: Exception) { 0 }
-        versionCode = 1500000000 + gitCommitCount
+        versionCode = 1600000000 + gitCommitCount
         val ts = System.currentTimeMillis() / 1000
-        versionName = "3.1.%d".format(ts)
+        versionName = "3.2.%d".format(ts)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

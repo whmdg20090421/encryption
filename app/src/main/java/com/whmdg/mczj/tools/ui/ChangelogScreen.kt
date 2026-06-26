@@ -29,6 +29,20 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V3.2",
+        date = "2026-06-26",
+        items = listOf(
+            ""我的"页面头部卡片：头像+诗意短句+签名+统计",
+            "报销界面全面升级：分组选择、分组卡片、层级计算框架、金额实时显示",
+            "报销账户完整集成：添加/保存/显示/金额计算，悬浮底部导航栏",
+            "记账本 UI 优化：优惠卡片化、报销金额实时显示、分割线间距、输入框自动焦点",
+            "数据管理独立页面：JSON/CSV 双格式导出导入、导出确认弹窗",
+            "记账本附件功能：支持拍照/相册多选/文件多选，FileProvider 集成",
+            "附件回收站：软删除机制、记录删除级联状态更新、防止孤立引用",
+            "记账本主题色修复：selectedTab 状态提升、暗色模式背景跟随主题色"
+        )
+    ),
+    ChangelogVersion(
         version = "V3.1",
         date = "2026-06-25",
         items = listOf(
