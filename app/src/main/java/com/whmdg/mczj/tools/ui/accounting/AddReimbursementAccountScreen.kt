@@ -10,6 +10,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -80,7 +81,7 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                                     currentGroup = group
                                     showGroupDialog = false
                                 }
-                                .padding(vertical = 8.dp),
+                                .padding(vertical = 5.dp),
                             color = if (group == currentGroup) MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurface
                         )
@@ -100,7 +101,7 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                                 showGroupDialog = false
                                 showAddGroupDialog = true
                             }
-                            .padding(vertical = 8.dp)
+                            .padding(vertical = 5.dp)
                     )
                 }
             },
@@ -179,7 +180,7 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { selectAll = !selectAll }
-                            .padding(vertical = 8.dp)
+                            .padding(vertical = 5.dp)
                     ) {
                         Checkbox(
                             checked = selectAll,
@@ -208,7 +209,7 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                                         bookChecked[book] = !checked
                                     }
                                 }
-                                .padding(vertical = 8.dp)
+                                .padding(vertical = 5.dp)
                         ) {
                             Checkbox(
                                 checked = if (selectAll) true else checked,
@@ -244,6 +245,12 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
         )
     }
 
+    // 名称去重校验（记住现有名称列表，避免每次重读）
+    val existingNames = remember {
+        AccountingRepository.getReimbursementAccounts(context).map { it.name }.toSet()
+    }
+    val isValid = name.isNotBlank() && name !in existingNames
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -262,6 +269,46 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                     containerColor = if (LocalIsDarkMode.current) Color(0xFF2A2A2A) else Color(0xFFF5F5F5)
                 )
             )
+        },
+        bottomBar = {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shadowElevation = 8.dp,
+                tonalElevation = 0.dp,
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = {
+                            val entity = ReimbursementAccountEntity(
+                                name = name,
+                                note = note,
+                                iconPath = iconUri?.toString(),
+                                allBooks = selectAll,
+                                selectedBooks = if (selectAll) emptyList()
+                                               else bookList.filter { bookChecked[it] == true },
+                                groupName = currentGroup
+                            )
+                            AccountingRepository.saveReimbursementAccount(context, entity)
+                            onBack()
+                        },
+                        enabled = isValid
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "保存",
+                            tint = if (isValid) MaterialTheme.colorScheme.primary
+                                   else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
+                }
+            }
         }
     ) { innerPadding ->
         Column(
@@ -285,14 +332,14 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                 )
             ) {
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
                     // 名称行
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { showNameField = true }
-                            .padding(vertical = 8.dp)
+                            .padding(vertical = 5.dp)
                     ) {
                         Text(
                             text = "名称",
@@ -344,7 +391,7 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { showNoteField = true }
-                            .padding(vertical = 8.dp)
+                            .padding(vertical = 5.dp)
                     ) {
                         Text(
                             text = "备注",
@@ -405,13 +452,13 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                 )
             ) {
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
                     // 报销账户图标行
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 8.dp)
+                            .padding(vertical = 5.dp)
                     ) {
                         Text(
                             text = "报销账户图标",
@@ -496,7 +543,7 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { showBookDialog = true }
-                            .padding(vertical = 8.dp)
+                            .padding(vertical = 5.dp)
                     ) {
                         Text(
                             text = "选择生效记账本",
@@ -533,7 +580,7 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { showGroupDialog = true }
-                            .padding(vertical = 8.dp)
+                            .padding(vertical = 5.dp)
                     ) {
                         Text(
                             text = "所属分组",

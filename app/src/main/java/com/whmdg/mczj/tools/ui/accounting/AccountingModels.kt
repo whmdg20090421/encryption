@@ -322,7 +322,8 @@ data class AccountingRecord(
     val note: String = "",
     val happenedAt: Long = System.currentTimeMillis(),
     val accountId: String? = null,  // 关联账户 id（可选）
-    val discountBefore: String? = null  // 优惠前金额（可选）
+    val discountBefore: String? = null,  // 优惠前金额（可选）
+    val reimbursementAccountId: String? = null  // 关联报销账户 id（可选），null = 不报销
 )
 
 /**

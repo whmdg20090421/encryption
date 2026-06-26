@@ -19,7 +19,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 4
+        private const val DB_VERSION = 5
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -85,7 +85,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                 note             TEXT DEFAULT '',
                 happened_at      INTEGER NOT NULL,
                 account_id       TEXT,
-                discount_before  TEXT
+                discount_before         TEXT,
+                reimbursement_account_id TEXT
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX idx_rec_book ON records(book_name)")
@@ -131,6 +132,9 @@ internal class AccountingDatabase private constructor(context: Context) :
         }
         if (oldVersion < 4) {
             db.execSQL("ALTER TABLE records ADD COLUMN discount_before TEXT")
+        }
+        if (oldVersion < 5) {
+            db.execSQL("ALTER TABLE records ADD COLUMN reimbursement_account_id TEXT")
         }
     }
 
@@ -288,7 +292,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAllRecords(): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before FROM records ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id FROM records ORDER BY happened_at DESC",
             null
         )
         try {
@@ -304,7 +308,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByBook(bookName: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before FROM records WHERE book_name = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id FROM records WHERE book_name = ? ORDER BY happened_at DESC",
             arrayOf(bookName)
         )
         try {
@@ -329,6 +333,7 @@ internal class AccountingDatabase private constructor(context: Context) :
             put("happened_at", r.happenedAt)
             if (r.accountId != null) put("account_id", r.accountId) else putNull("account_id")
             if (r.discountBefore != null) put("discount_before", r.discountBefore) else putNull("discount_before")
+            if (r.reimbursementAccountId != null) put("reimbursement_account_id", r.reimbursementAccountId) else putNull("reimbursement_account_id")
         }
     }
 
@@ -343,8 +348,29 @@ internal class AccountingDatabase private constructor(context: Context) :
             note = c.getString(6) ?: "",
             happenedAt = c.getLong(7),
             accountId = c.getString(8),  // 可能为 null
-            discountBefore = c.getString(9)  // 可能为 null
+            discountBefore = c.getString(9),  // 可能为 null
+            reimbursementAccountId = c.getString(10)  // 可能为 null
         )
+    }
+
+    // ─────────────────────────────────────────────
+    // 报销账户查询
+    // ─────────────────────────────────────────────
+
+    fun getRecordsByReimbursementAccount(reimbAccountId: String): List<AccountingRecord> {
+        val records = mutableListOf<AccountingRecord>()
+        val cursor = readableDatabase.rawQuery(
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
+            arrayOf(reimbAccountId)
+        )
+        try {
+            while (cursor.moveToNext()) {
+                records.add(cursorToRecord(cursor))
+            }
+        } finally {
+            cursor.close()
+        }
+        return records
     }
 
     // ─────────────────────────────────────────────

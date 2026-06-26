@@ -1372,10 +1372,10 @@ private fun RecordListContent(
         }
     }
     val monthlyExpense = remember(monthlyRecords) {
-        monthlyRecords.filter { it.type == "支出" }.sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
+        monthlyRecords.filter { it.type == "支出" && it.reimbursementAccountId == null }.sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
     }
     val monthlyIncome = remember(monthlyRecords) {
-        monthlyRecords.filter { it.type == "收入" }.sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
+        monthlyRecords.filter { it.type == "收入" && it.reimbursementAccountId == null }.sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
     }
     val monthlyBalance = remember(monthlyIncome, monthlyExpense) { monthlyIncome - monthlyExpense }
     // 余剩预算（暂无预算功能，默认0）
@@ -1478,6 +1478,7 @@ private fun RecordListContent(
             var dayExpense = 0.0
             var dayIncome = 0.0
             for (r in records) {
+                if (r.reimbursementAccountId != null) continue
                 val v = r.amount.toDoubleOrNull() ?: 0.0
                 when (r.type) {
                     "支出" -> dayExpense += v
@@ -1541,8 +1542,11 @@ private fun RecordListContent(
                                 val displayName = if (childName != null) "$parentName-$childName" else parentName
                                 val icon = subInfo?.second ?: catInfo?.second ?: "category"
                                 val isExpense = record.type == "支出" || record.type == "债务"
+                                val isReimbursable = record.reimbursementAccountId != null
                                 val amountPrefix = if (isExpense) "-" else "+"
-                                val amountColor = if (isExpense) Color(0xFFEF5350) else Color(0xFF4CAF50)
+                                val amountColor = if (isReimbursable) MaterialTheme.colorScheme.onSurface
+                                                  else if (isExpense) Color(0xFFEF5350)
+                                                  else Color(0xFF4CAF50)
                                 val amountDisplay = String.format("%.2f", record.amount.toDoubleOrNull() ?: 0.0)
                                 val discountBeforeDisplay = record.discountBefore?.toDoubleOrNull()?.let { String.format("%.2f", it) }
                                 val timeStr = timeFormat.format(Date(record.happenedAt))

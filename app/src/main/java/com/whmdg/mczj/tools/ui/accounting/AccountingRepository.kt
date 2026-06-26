@@ -5,8 +5,9 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import com.whmdg.mczj.tools.AppDataPaths
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.FileOutputStream
 
@@ -122,7 +123,7 @@ object AccountingRepository {
     private fun getRecordById(context: Context, id: String): AccountingRecord? {
         val sqlDb = getDb(context).readableDatabase
         val cursor = sqlDb.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before FROM records WHERE id = ?",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id FROM records WHERE id = ?",
             arrayOf(id)
         )
         return try {
@@ -137,7 +138,8 @@ object AccountingRepository {
                     note = cursor.getString(6),
                     happenedAt = cursor.getLong(7),
                     accountId = cursor.getString(8),
-                    discountBefore = cursor.getString(9)
+                    discountBefore = cursor.getString(9),
+                    reimbursementAccountId = cursor.getString(10)
                 )
             } else null
         } finally {
@@ -180,6 +182,7 @@ object AccountingRepository {
                     put("happened_at", record.happenedAt)
                     if (record.accountId != null) put("account_id", record.accountId) else putNull("account_id")
                     if (record.discountBefore != null) put("discount_before", record.discountBefore) else putNull("discount_before")
+                    if (record.reimbursementAccountId != null) put("reimbursement_account_id", record.reimbursementAccountId) else putNull("reimbursement_account_id")
                 }
                 sqlDb.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -443,6 +446,35 @@ object AccountingRepository {
     }
 
     // ─────────────────────────────────────────────
+    // 报销账户
+    // ─────────────────────────────────────────────
+
+    private const val KEY_REIMBURSEMENT_ACCOUNTS = "reimbursement_accounts"
+
+    /** 保存报销账户（新增） */
+    fun saveReimbursementAccount(context: Context, account: ReimbursementAccountEntity) {
+        val list = getReimbursementAccounts(context).toMutableList()
+        list.add(account)
+        setSetting(context, KEY_REIMBURSEMENT_ACCOUNTS, Json.encodeToString(list))
+    }
+
+    /** 获取全部报销账户 */
+    fun getReimbursementAccounts(context: Context): List<ReimbursementAccountEntity> {
+        val json = getSetting(context, KEY_REIMBURSEMENT_ACCOUNTS)
+        if (json != null) {
+            try {
+                return Json.decodeFromString<List<ReimbursementAccountEntity>>(json)
+            } catch (_: Exception) {}
+        }
+        return emptyList()
+    }
+
+    /** 检查名称是否已存在 */
+    fun isReimbursementAccountNameExists(context: Context, name: String): Boolean {
+        return getReimbursementAccounts(context).any { it.name == name }
+    }
+
+    // ─────────────────────────────────────────────
     // 内部工具
     // ─────────────────────────────────────────────
 
@@ -450,3 +482,16 @@ object AccountingRepository {
         return AccountingDatabase.getInstance(context)
     }
 }
+
+/** 报销账户持久化数据 */
+@Serializable
+data class ReimbursementAccountEntity(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val name: String,
+    val note: String = "",
+    val iconPath: String? = null,
+    val allBooks: Boolean = true,
+    val selectedBooks: List<String> = emptyList(),
+    val groupName: String = "报销",
+    val createdAt: Long = System.currentTimeMillis()
+)

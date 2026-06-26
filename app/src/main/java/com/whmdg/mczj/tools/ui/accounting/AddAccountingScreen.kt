@@ -102,6 +102,14 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     val selectedAccountName = selectedAccount?.name ?: "账户"
     val selectedAccountSvg = selectedAccount?.let { accountTypeConfigs[it.type]?.svgPath }
 
+    // 报销账户选择
+    val reimbursementAccounts = remember { AccountingRepository.getReimbursementAccounts(context) }
+    val reimbursementAccountMap = remember(reimbursementAccounts) { reimbursementAccounts.associateBy { it.id } }
+    var selectedReimbursementId by remember {
+        mutableStateOf<String?>(editingRecord?.reimbursementAccountId)
+    }
+    var showReimbursementDialog by remember { mutableStateOf(false) }
+
     // 从 JSON 动态加载分类数据（跟随选中的记账类型切换）
     val categoryDb = remember { AccountingCategoryDb.ensureDefault(context) }
 
@@ -187,7 +195,8 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             note = note,
             happenedAt = cal.timeInMillis,
             accountId = selectedAccountId,
-            discountBefore = discountBefore
+            discountBefore = discountBefore,
+            reimbursementAccountId = selectedReimbursementId
         )
         val db = AccountingRecordDb.load(context)
         if (editingRecord != null) {
@@ -552,6 +561,29 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         color = iconThemeColor
                     )
                 }
+
+                Spacer(Modifier.width(elementSpacing))
+
+                // 报销账户
+                val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
+                Row(
+                    modifier = Modifier.clickable { showReimbursementDialog = true },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Receipt,
+                        contentDescription = "报销账户",
+                        modifier = Modifier.size(16.dp),
+                        tint = iconThemeColor
+                    )
+                    Spacer(Modifier.width(2.dp))
+                    Text(
+                        text = selectedReimb?.name ?: "不报销",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selectedReimb != null) MaterialTheme.colorScheme.onSurface
+                               else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             // 键盘
@@ -851,6 +883,90 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     TextButton(onClick = {
                         showDiscountDialog = false
                     }) {
+                        Text("取消")
+                    }
+                }
+            )
+        }
+
+        // 报销账户选择弹窗
+        if (showReimbursementDialog) {
+            AlertDialog(
+                onDismissRequest = { showReimbursementDialog = false },
+                title = { Text("选择报销账户") },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = screenHeight * 0.4f)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        // "不报销"选项
+                        val isNone = selectedReimbursementId == null
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selectedReimbursementId = null
+                                    showReimbursementDialog = false
+                                }
+                                .background(
+                                    if (isNone) iconThemeColor.copy(alpha = 0.3f)
+                                    else Color.Transparent
+                                )
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Receipt,
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp),
+                                tint = iconThemeColor
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                text = "不报销",
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        HorizontalDivider()
+                        // 报销账户列表
+                        reimbursementAccounts.forEach { account ->
+                            val isSelected = selectedReimbursementId == account.id
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        selectedReimbursementId = account.id
+                                        showReimbursementDialog = false
+                                    }
+                                    .background(
+                                        if (isSelected) iconThemeColor.copy(alpha = 0.3f)
+                                        else Color.Transparent
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Receipt,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    text = account.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { showReimbursementDialog = false }) {
                         Text("取消")
                     }
                 }

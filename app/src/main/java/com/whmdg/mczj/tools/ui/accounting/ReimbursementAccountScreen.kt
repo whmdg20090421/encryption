@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.ui.platform.LocalContext
 import com.whmdg.mczj.tools.ui.Screen
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import androidx.compose.material3.*
@@ -38,11 +39,38 @@ data class ReimbursementGroup(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReimbursementAccountScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit) {
-    // 分组数据（目前只有一个默认分组）
-    val groups = remember {
-        mutableStateListOf(
-            ReimbursementGroup(name = "报销")
-        )
+    val context = LocalContext.current
+    // 从数据库加载报销账户，按分组归类
+    val entities = remember { AccountingRepository.getReimbursementAccounts(context) }
+    val allRecords = remember { AccountingRepository.getAllRecords(context) }
+    val groups = remember(entities, allRecords) {
+        // 按报销账户 ID 分组求和
+        val amountByReimbId = mutableMapOf<String, Double>()
+        for (record in allRecords) {
+            val reimbId = record.reimbursementAccountId ?: continue
+            amountByReimbId[reimbId] = (amountByReimbId[reimbId] ?: 0.0) +
+                (record.amount.toDoubleOrNull() ?: 0.0)
+        }
+        mutableStateListOf<ReimbursementGroup>().apply {
+            val grouped = entities.groupBy { it.groupName }
+            if (grouped.isEmpty()) {
+                add(ReimbursementGroup(name = "报销"))
+            } else {
+                grouped.forEach { (groupName, accounts) ->
+                    add(ReimbursementGroup(
+                        name = groupName,
+                        accounts = accounts.map { entity ->
+                            ReimbursementAccount(
+                                id = entity.id,
+                                name = entity.name,
+                                pendingAmount = amountByReimbId[entity.id] ?: 0.0,
+                                completedAmount = 0.0
+                            )
+                        }
+                    ))
+                }
+            }
+        }
     }
     var groupExpanded by remember { mutableStateOf(true) }
 
