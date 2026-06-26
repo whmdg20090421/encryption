@@ -510,7 +510,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         .map { it to noteSimilarity(note, it) }
                         .filter { it.second >= 40 }
                         .sortedByDescending { it.second }
-                        .take(8)
+                        .take(10)
                     showSuggestions = noteSuggestions.isNotEmpty()
                 }
                 Box(
