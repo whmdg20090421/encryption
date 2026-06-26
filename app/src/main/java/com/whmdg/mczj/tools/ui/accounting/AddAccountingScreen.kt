@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
@@ -47,6 +48,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.toDp
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.widget.Toast
@@ -310,6 +312,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .imePadding()
         ) {
             // 50dp 功能栏
             Surface(
@@ -511,6 +514,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 // AI 备注预测状态
                 var noteSuggestions by remember { mutableStateOf<List<NotePredictor.Prediction>>(emptyList()) }
                 var showSuggestions by remember { mutableStateOf(false) }
+                var noteBoxWidthPx by remember { mutableIntStateOf(0) }
                 LaunchedEffect(note) {
                     if (note.isEmpty()) {
                         noteSuggestions = emptyList()
@@ -546,7 +550,8 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     modifier = Modifier
                         .fillMaxHeight()
                         .weight(0.6f)
-                        .padding(horizontal = 4.dp),
+                        .padding(horizontal = 4.dp)
+                        .onGloballyPositioned { noteBoxWidthPx = it.size.width },
                     contentAlignment = Alignment.CenterStart
                 ) {
                     BasicTextField(
@@ -579,7 +584,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                 shadowElevation = 8.dp,
                                 color = MaterialTheme.colorScheme.surface,
                                 modifier = Modifier
-                                    .widthIn(min = 200.dp, max = 300.dp)
+                                    .width(noteBoxWidthPx.toDp())
                                     .heightIn(max = screenHeight * 0.3f)
                             ) {
                                 LazyColumn(

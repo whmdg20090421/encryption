@@ -1,6 +1,7 @@
 package com.whmdg.mczj.tools.ui.accounting
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -53,6 +54,12 @@ fun AccountingDetailScreen(
     var showMenu by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
 
+    // 报销弹窗状态
+    var showReimburseDialog by remember { mutableStateOf(false) }
+    val accounts = remember { AccountingRepository.getAllAccounts(context).filter { it.category == "tradable" } }
+    var reimburseAccountIndex by remember { mutableIntStateOf(0) }
+    val reimburseAmount = record?.amount ?: "0"
+
     if (record == null) {
         // 记录不存在，返回首页
         LaunchedEffect(Unit) { onBack() }
@@ -95,6 +102,83 @@ fun AccountingDetailScreen(
         )
     }
 
+    // 报销弹窗
+    if (showReimburseDialog) {
+        val currentAccount = accounts.getOrNull(reimburseAccountIndex)
+        AlertDialog(
+            onDismissRequest = { showReimburseDialog = false },
+            title = { Text("报销") },
+            text = {
+                Column {
+                    // 报销金额
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("报销金额", style = MaterialTheme.typography.bodyLarge)
+                        Spacer(Modifier.weight(1f))
+                        Text("¥$reimburseAmount", style = MaterialTheme.typography.bodyLarge)
+                    }
+                    // 报销账户
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                            .clickable {
+                                if (accounts.isNotEmpty()) {
+                                    reimburseAccountIndex = (reimburseAccountIndex + 1) % accounts.size
+                                }
+                            },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("报销账户", style = MaterialTheme.typography.bodyLarge)
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            text = currentAccount?.name ?: "暂无账户",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (currentAccount != null) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (currentAccount != null) {
+                            val amt = reimburseAmount.toDoubleOrNull() ?: 0.0
+                            // 更新账户余额
+                            AccountingRepository.updateAccount(
+                                context,
+                                currentAccount.copy(
+                                    initialAmount = currentAccount.initialAmount + amt,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
+                            // 更新账单报销状态
+                            AccountingRepository.updateRecord(
+                                context,
+                                record.copy(
+                                    reimburseStatus = true,
+                                    reimburseAmount = amt
+                                )
+                            )
+                        }
+                        showReimburseDialog = false
+                    },
+                    enabled = currentAccount != null
+                ) {
+                    Text("确认")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReimburseDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -128,20 +212,49 @@ fun AccountingDetailScreen(
             )
         },
         bottomBar = {
-            // 底部编辑按钮
             Surface(
                 tonalElevation = 3.dp,
                 shadowElevation = 8.dp
             ) {
-                Button(
-                    onClick = { onNavigate(Screen.AddAccounting(bookName, recordId)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("编辑")
+                val isReimbursement = record.reimbursementAccountId != null
+                if (isReimbursement) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 15.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(20.dp)
+                    ) {
+                        Button(
+                            onClick = { showReimburseDialog = true },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            enabled = !record.reimburseStatus
+                        ) {
+                            Text("报销")
+                        }
+                        Button(
+                            onClick = { onNavigate(Screen.AddAccounting(bookName, recordId)) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("编辑")
+                        }
+                    }
+                } else {
+                    Button(
+                        onClick = { onNavigate(Screen.AddAccounting(bookName, recordId)) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("编辑")
+                    }
                 }
             }
         }
