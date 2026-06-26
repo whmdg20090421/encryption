@@ -327,13 +327,25 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
 
     Scaffold { innerPadding ->
         val density = LocalDensity.current
-        val imeVisible = WindowInsets.ime.getBottom(density) > 0
 
-        Column(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            val maxHeight = maxHeight
+            val imeBottom = WindowInsets.ime.getBottom(density)
+            val imeVisible = imeBottom > 0
+            val keyboardHeightDp = with(density) { imeBottom.toDp() }
+
+            val toolbarHeight = 50.dp
+            val firstRowHeight = screenHeight * 0.05f
+            val dividerHeight = 1.dp
+            // 分类区高度 = 屏幕顶部到键盘顶部 - 工具栏 - 第一行 - 分割线
+            val categoryAreaHeight = (maxHeight - keyboardHeightDp - toolbarHeight - firstRowHeight - dividerHeight)
+                .coerceAtLeast(80.dp)
+
+            Column(modifier = Modifier.fillMaxSize()) {
             // 50dp 功能栏
             Surface(
                 shadowElevation = 3.dp,
@@ -420,7 +432,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
 
             Column(
                 modifier = Modifier
-                    .weight(1f)
+                    .height(categoryAreaHeight)
                     .fillMaxWidth()
                     .verticalScroll(scrollState)
                     .padding(vertical = 8.dp, horizontal = 12.dp)
@@ -719,9 +731,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 }
             }
 
-            // 键盘弹出时隐藏分割线、第二行和计算器
             val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
-            if (!imeVisible) {
             HorizontalDivider(color = iconThemeColor, thickness = 1.dp)
 
             // 第二行：5 个元素均分，SpaceEvenly 自动分配间距
@@ -959,8 +969,12 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 finishEnabled = canFinish
             )
             } // Surface
-            } // if (!imeVisible)
-        }
+            // 键盘底部 padding，让分割线对齐键盘顶部
+            if (imeVisible) {
+                Spacer(Modifier.height(keyboardHeightDp))
+            }
+            } // Column
+        } // BoxWithConstraints
 
         // 日期时间选择弹窗
         if (showDatePicker) {
