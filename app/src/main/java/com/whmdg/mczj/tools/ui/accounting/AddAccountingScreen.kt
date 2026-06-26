@@ -62,6 +62,8 @@ import java.util.Calendar
 fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? = null) {
     val types = listOf("支出", "收入", "转账", "债务")
     val context = LocalContext.current
+    // 初始化 AI 预测器
+    LaunchedEffect(Unit) { NotePredictor.ensureInitialized(context) }
 
     // 编辑模式：加载已有记录
     val editingRecord = remember(recordId) {
@@ -267,6 +269,10 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             db.update(record).save(context)
         } else {
             db.add(record).save(context)
+        }
+        // AI 训练：用当前记录更新模型
+        if (note.isNotEmpty()) {
+            NotePredictor.train(context, record)
         }
         // 保存本次使用的账户 id
         if (selectedAccountId != null) {
@@ -495,22 +501,32 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(Modifier.fillMaxHeight().weight(0.2f))
-                // 备注模糊匹配状态
-                var noteSuggestions by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
+                // AI 备注预测状态
+                var noteSuggestions by remember { mutableStateOf<List<NotePredictor.Prediction>>(emptyList()) }
                 var showSuggestions by remember { mutableStateOf(false) }
-                // 防抖：输入停止 250ms 后才执行匹配
                 LaunchedEffect(note) {
                     if (note.isEmpty()) {
                         noteSuggestions = emptyList()
                         showSuggestions = false
                         return@LaunchedEffect
                     }
-                    val allNotes = AccountingRepository.getAllNotes(context)
-                    noteSuggestions = allNotes
-                        .map { it to noteSimilarity(note, it) }
-                        .filter { it.second >= 40 }
-                        .sortedByDescending { it.second }
-                        .take(10)
+                    val currentHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                    val currentAmount = amount.toFloatOrNull() ?: 0f
+                    val predictions = NotePredictor.predict(
+                        types[selectedType], selectedCategory ?: "",
+                        currentAmount, currentHour, note
+                    ).toMutableList()
+                    // AI 创建新备注
+                    if (predictions.isEmpty() || predictions.first().score < 50) {
+                        val aiNote = NotePredictor.createAiNote(
+                            types[selectedType], selectedCategory ?: "",
+                            currentAmount, currentHour, note
+                        )
+                        if (aiNote != null) {
+                            predictions.add(0, NotePredictor.Prediction(aiNote, 50, true))
+                        }
+                    }
+                    noteSuggestions = predictions.take(10)
                     showSuggestions = noteSuggestions.isNotEmpty()
                 }
                 Box(
@@ -539,7 +555,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                             innerTextField()
                         }
                     )
-                    // 模糊匹配弹出层
+                    // AI 预测弹出层
                     if (showSuggestions && noteSuggestions.isNotEmpty()) {
                         Popup(
                             alignment = Alignment.BottomStart,
@@ -557,29 +573,35 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                     modifier = Modifier.padding(vertical = 4.dp)
                                 ) {
                                     items(noteSuggestions.size) { idx ->
-                                        val (text, score) = noteSuggestions[idx]
+                                        val pred = noteSuggestions[idx]
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clickable {
-                                                    note = text
+                                                    val cleanNote = pred.note.removePrefix("✦")
+                                                    note = cleanNote
+                                                    NotePredictor.recordHit(cleanNote)
                                                     showSuggestions = false
                                                 }
                                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
-                                                text = text,
+                                                text = pred.note,
                                                 style = MaterialTheme.typography.bodyMedium,
-                                                modifier = Modifier.weight(1f),
-                                                maxLines = 1
+                                                modifier = Modifier.weight(0.7f),
+                                                maxLines = 1,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                text = "${score}%",
+                                                text = if (pred.isAiGenerated) "${pred.score}%(AI)" else "${pred.score}%",
                                                 style = MaterialTheme.typography.labelSmall,
+                                                modifier = Modifier.weight(0.3f),
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.End,
                                                 color = when {
-                                                    score >= 80 -> Color(0xFF4CAF50)
-                                                    score >= 60 -> MaterialTheme.colorScheme.primary
+                                                    pred.isAiGenerated -> Color(0xFF9C27B0)
+                                                    pred.score >= 80 -> Color(0xFF4CAF50)
+                                                    pred.score >= 60 -> MaterialTheme.colorScheme.primary
                                                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                                                 }
                                             )
@@ -1763,39 +1785,4 @@ private fun getFileName(context: android.content.Context, uri: Uri): String? {
     }
 }
 
-/** 备注模糊匹配：返回 0-100 的匹配度百分比 */
-private fun noteSimilarity(input: String, target: String): Int {
-    if (input.isEmpty() || target.isEmpty()) return 0
-    // 完全包含直接满分
-    if (target.contains(input)) return 95
-    // 计算输入与目标每个子串的最小编辑距离
-    val inputLen = input.length
-    val targetLen = target.length
-    var minDist = inputLen
-    for (start in 0 until targetLen) {
-        for (end in start + 1..minOf(start + inputLen + 3, targetLen)) {
-            val sub = target.substring(start, end)
-            val dist = editDistance(input, sub)
-            if (dist < minDist) minDist = dist
-        }
-    }
-    val maxLen = maxOf(inputLen, targetLen)
-    return ((1.0 - minDist.toDouble() / maxLen) * 100).toInt().coerceIn(0, 100)
-}
-
-/** Levenshtein 编辑距离 */
-private fun editDistance(a: String, b: String): Int {
-    val m = a.length
-    val n = b.length
-    val dp = Array(m + 1) { IntArray(n + 1) }
-    for (i in 0..m) dp[i][0] = i
-    for (j in 0..n) dp[0][j] = j
-    for (i in 1..m) {
-        for (j in 1..n) {
-            dp[i][j] = if (a[i - 1] == b[j - 1]) dp[i - 1][j - 1]
-            else minOf(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]) + 1
-        }
-    }
-    return dp[m][n]
-}
 

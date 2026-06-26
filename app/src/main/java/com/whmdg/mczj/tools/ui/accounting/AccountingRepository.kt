@@ -25,6 +25,9 @@ object AccountingRepository {
     // 分类 (Categories)
     // ─────────────────────────────────────────────
 
+    /** 获取记账本数据目录 */
+    fun getAccountingDir(context: Context): File = AppDataPaths.accounting(context)
+
     /** 从 SQLite 加载指定页面、指定类型的分类树 */
     fun loadCategories(context: Context, page: String, type: String): List<AccountingCategory> {
         return getDb(context).getCategories(page, type)
