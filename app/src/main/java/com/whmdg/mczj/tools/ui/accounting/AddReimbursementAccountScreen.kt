@@ -5,8 +5,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 
@@ -50,6 +51,101 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
         }
     }
     var showBookDialog by remember { mutableStateOf(false) }
+
+    // 分组状态
+    val groupList = remember { mutableStateListOf("报销") }
+    var currentGroup by remember { mutableStateOf("报销") }
+    var showGroupDialog by remember { mutableStateOf(false) }
+    var showAddGroupDialog by remember { mutableStateOf(false) }
+    var addGroupName by remember { mutableStateOf("") }
+
+    // 分组选择弹窗（点击即选，无确认/取消）
+    if (showGroupDialog) {
+        AlertDialog(
+            onDismissRequest = { showGroupDialog = false },
+            title = { Text("选择分组", style = MaterialTheme.typography.titleMedium) },
+            text = {
+                Column {
+                    groupList.forEach { group ->
+                        Text(
+                            text = group,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    currentGroup = group
+                                    showGroupDialog = false
+                                }
+                                .padding(vertical = 8.dp),
+                            color = if (group == currentGroup) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        thickness = 0.5.dp
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "+ 添加分组",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showGroupDialog = false
+                                showAddGroupDialog = true
+                            }
+                            .padding(vertical = 8.dp)
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = {}
+        )
+    }
+
+    // 添加分组弹窗
+    if (showAddGroupDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddGroupDialog = false; addGroupName = "" },
+            title = { Text("添加分组", style = MaterialTheme.typography.titleMedium) },
+            text = {
+                BasicTextField(
+                    value = addGroupName,
+                    onValueChange = { addGroupName = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    decorationBox = { innerTextField ->
+                        Box {
+                            if (addGroupName.isEmpty()) {
+                                Text("请输入分组名称",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            innerTextField()
+                        }
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (addGroupName.isNotBlank()) {
+                        groupList.add(addGroupName)
+                        currentGroup = addGroupName
+                        addGroupName = ""
+                        showAddGroupDialog = false
+                    }
+                }) { Text("确认") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddGroupDialog = false; addGroupName = "" }) { Text("取消") }
+            }
+        )
+    }
 
     // 图片选择器
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -151,7 +247,7 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = if (isSystemInDarkTheme()) Color(0xFF2A2A2A) else Color(0xFFF5F5F5)
+                    containerColor = if (LocalIsDarkMode.current) Color(0xFF2A2A2A) else Color(0xFFF5F5F5)
                 )
             )
         }
@@ -162,6 +258,13 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
+            // 基础设置
+            Text(
+                text = "基础设置",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(4.dp))
             // 第一个卡片：名称 + 备注
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -186,13 +289,26 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                         )
                         Spacer(Modifier.width(16.dp))
                         if (showNameField) {
-                            OutlinedTextField(
+                            BasicTextField(
                                 value = name,
                                 onValueChange = { name = it },
-                                placeholder = { Text("添加报销账户的名称", fontSize = 14.sp) },
-                                singleLine = true,
                                 modifier = Modifier.weight(1f),
-                                textStyle = MaterialTheme.typography.bodyLarge
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                    color = MaterialTheme.colorScheme.onSurface
+                                ),
+                                decorationBox = { innerTextField ->
+                                    Box {
+                                        if (name.isEmpty()) {
+                                            Text(
+                                                "添加报销账户的名称",
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
+                                }
                             )
                         } else {
                             Text(
@@ -224,13 +340,26 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                         )
                         Spacer(Modifier.width(16.dp))
                         if (showNoteField) {
-                            OutlinedTextField(
+                            BasicTextField(
                                 value = note,
                                 onValueChange = { note = it },
-                                placeholder = { Text("请输入备注", fontSize = 14.sp) },
-                                singleLine = true,
                                 modifier = Modifier.weight(1f),
-                                textStyle = MaterialTheme.typography.bodyLarge
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                    color = MaterialTheme.colorScheme.onSurface
+                                ),
+                                decorationBox = { innerTextField ->
+                                    Box {
+                                        if (note.isEmpty()) {
+                                            Text(
+                                                "请输入备注",
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        innerTextField()
+                                    }
+                                }
                             )
                         } else {
                             Text(
@@ -245,6 +374,14 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
             }
 
             Spacer(Modifier.height(12.dp))
+
+            // 属性设置
+            Text(
+                text = "属性设置",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(4.dp))
 
             // 第二个卡片：图标 + 生效记账本
             Card(
@@ -369,6 +506,32 @@ fun AddReimbursementAccountScreen(onBack: () -> Unit) {
                                 modifier = Modifier.widthIn(max = screenWidth * 0.45f)
                             )
                         }
+                    }
+
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                        thickness = 0.5.dp
+                    )
+
+                    // 所属分组行
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showGroupDialog = true }
+                            .padding(vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "所属分组",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            text = currentGroup,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

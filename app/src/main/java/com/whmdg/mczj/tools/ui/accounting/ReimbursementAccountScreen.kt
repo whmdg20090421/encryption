@@ -1,7 +1,6 @@
 package com.whmdg.mczj.tools.ui.accounting
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -13,6 +12,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Receipt
 import com.whmdg.mczj.tools.ui.Screen
+import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -74,7 +74,7 @@ fun ReimbursementAccountScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = if (isSystemInDarkTheme()) Color(0xFF2A2A2A) else Color(0xFFF5F5F5)
+                    containerColor = if (LocalIsDarkMode.current) Color(0xFF2A2A2A) else Color(0xFFF5F5F5)
                 )
             )
         }
