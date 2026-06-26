@@ -40,7 +40,6 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.focus.focusRequester
@@ -328,21 +327,12 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
 
     Scaffold { innerPadding ->
         val density = LocalDensity.current
-        val screenHeightPx = with(density) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
-        val imeHeightPx = WindowInsets.ime.getBottom(density)
-        val navBarPx = WindowInsets.navigationBars.getBottom(density)
-        // 第一行下边缘在窗口中的位置（px）
-        var firstRowBottomPx by remember { mutableFloatStateOf(0f) }
-        // 键盘顶到第一行下边缘时才开始顶起
-        val keyboardTopPx = screenHeightPx - imeHeightPx
-        val neededPaddingPx = (firstRowBottomPx - keyboardTopPx).coerceAtLeast(0f)
-        val keyboardBottomPadding = with(density) { neededPaddingPx.toDp() }
+        val imeVisible = WindowInsets.ime.getBottom(density) > 0
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(bottom = keyboardBottomPadding)
         ) {
             // 50dp 功能栏
             Surface(
@@ -557,10 +547,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(infoRowHeight)
-                    .onGloballyPositioned { coords ->
-                        firstRowBottomPx = coords.localToWindow(Offset.Zero).y + coords.size.height.toFloat()
-                    },
+                    .height(infoRowHeight),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(Modifier.fillMaxHeight().weight(0.2f))
@@ -732,10 +719,12 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 }
             }
 
+            // 键盘弹出时隐藏分割线、第二行和计算器
+            val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
+            if (!imeVisible) {
             HorizontalDivider(color = iconThemeColor, thickness = 1.dp)
 
             // 第二行：5 个元素均分，SpaceEvenly 自动分配间距
-            val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -970,6 +959,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 finishEnabled = canFinish
             )
             } // Surface
+            } // if (!imeVisible)
         }
 
         // 日期时间选择弹窗
@@ -1158,7 +1148,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                     }
                                 )
                             }
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
                             Row(
                                 modifier = Modifier.fillMaxWidth().clickable { focusOff.requestFocus() },
                                 verticalAlignment = Alignment.CenterVertically
@@ -1177,7 +1167,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                     }
                                 )
                             }
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
                             Row(
                                 modifier = Modifier.fillMaxWidth().clickable { focusAfter.requestFocus() },
                                 verticalAlignment = Alignment.CenterVertically
