@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -545,157 +546,69 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
 
             HorizontalDivider(color = iconThemeColor, thickness = 1.dp)
 
-            // 第二行：日期时间 + 支付账户
-            val dividerHeight = infoRowHeight * 0.8f
+            // 第二行：5 个元素均分，SpaceEvenly 自动分配间距
+            val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(infoRowHeight)
-                    .padding(start = 16.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .height(infoRowHeight),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                // 日期时间（日历图标 + 上下两行）
+                // 日期时间
                 Row(
-                    modifier = Modifier.clickable { showDatePicker = true },
+                    modifier = Modifier.weight(1f).clickable { showDatePicker = true },
+                    horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.CalendarMonth,
-                        contentDescription = "选择日期",
-                        modifier = Modifier.size(16.dp),
-                        tint = iconThemeColor
-                    )
+                    Icon(Icons.Outlined.CalendarMonth, contentDescription = "选择日期", modifier = Modifier.size(16.dp), tint = iconThemeColor)
                     Spacer(Modifier.width(4.dp))
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "%02d/%02d".format(selectedMonth + 1, selectedDay),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "%02d:%02d".format(selectedHour, selectedMinute),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Text("%02d/%02d".format(selectedMonth + 1, selectedDay), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+                        Text("%02d:%02d".format(selectedHour, selectedMinute), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-
-                Spacer(Modifier.width(10.dp))
-                Box(
-                    modifier = Modifier
-                        .width(0.6.dp)
-                        .height(dividerHeight)
-                        .background(iconThemeColor.copy(alpha = 0.3f))
-                )
-                Spacer(Modifier.width(10.dp))
-
                 // 支付账户
                 Row(
-                    modifier = Modifier.clickable { showAccountDialog = true },
+                    modifier = Modifier.weight(1f).clickable { showAccountDialog = true },
+                    horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (selectedAccountSvg != null) {
-                        AsyncImage(
-                            model = selectedAccountSvg,
-                            contentDescription = null,
-                            modifier = Modifier.size(15.dp)
-                        )
+                        AsyncImage(model = selectedAccountSvg, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(Modifier.width(4.dp))
                     }
-                    Text(
-                        text = selectedAccountName,
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 15.sp),
-                        color = if (selectedAccount != null) MaterialTheme.colorScheme.onSurface
-                               else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text(selectedAccountName, style = MaterialTheme.typography.labelSmall.copy(fontSize = 15.sp), color = if (selectedAccount != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-
-                Spacer(Modifier.width(10.dp))
-                Box(
-                    modifier = Modifier
-                        .width(0.6.dp)
-                        .height(dividerHeight)
-                        .background(iconThemeColor.copy(alpha = 0.3f))
-                )
-                Spacer(Modifier.width(10.dp))
-
                 // 优惠
                 Row(
-                    modifier = Modifier
-                        .clickable { showDiscountDialog = true },
+                    modifier = Modifier.weight(1f).clickable { showDiscountDialog = true },
+                    horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Discount,
-                        contentDescription = "优惠",
-                        modifier = Modifier.size(16.dp),
-                        tint = iconThemeColor
-                    )
+                    Icon(Icons.Outlined.Discount, contentDescription = "优惠", modifier = Modifier.size(16.dp), tint = iconThemeColor)
                     Spacer(Modifier.width(2.dp))
-                    Text(
-                        text = if (hasDiscount) "-${discountOff}" else "优惠",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = iconThemeColor
-                    )
+                    Text(if (hasDiscount) "-${discountOff}" else "优惠", style = MaterialTheme.typography.labelSmall, color = iconThemeColor)
                 }
-
-                Spacer(Modifier.width(10.dp))
-                Box(
-                    modifier = Modifier
-                        .width(0.6.dp)
-                        .height(dividerHeight)
-                        .background(iconThemeColor.copy(alpha = 0.3f))
-                )
-                Spacer(Modifier.width(10.dp))
-
                 // 报销账户
-                val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
                 Row(
-                    modifier = Modifier.clickable { showReimbursementDialog = true },
+                    modifier = Modifier.weight(1f).clickable { showReimbursementDialog = true },
+                    horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Receipt,
-                        contentDescription = "报销账户",
-                        modifier = Modifier.size(16.dp),
-                        tint = iconThemeColor
-                    )
+                    Icon(Icons.Outlined.Receipt, contentDescription = "报销账户", modifier = Modifier.size(16.dp), tint = iconThemeColor)
                     Spacer(Modifier.width(2.dp))
-                    Text(
-                        text = selectedReimb?.name ?: "不报销",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (selectedReimb != null) MaterialTheme.colorScheme.onSurface
-                               else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text(selectedReimb?.name ?: "不报销", style = MaterialTheme.typography.labelSmall, color = if (selectedReimb != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-
-                Spacer(Modifier.width(10.dp))
-                Box(
-                    modifier = Modifier
-                        .width(0.6.dp)
-                        .height(dividerHeight)
-                        .background(iconThemeColor.copy(alpha = 0.3f))
-                )
-                Spacer(Modifier.width(10.dp))
-
                 // 附件
                 Row(
-                    modifier = Modifier.clickable { showAttachmentSheet = true },
+                    modifier = Modifier.weight(1f).clickable { showAttachmentSheet = true },
+                    horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Link,
-                        contentDescription = "附件",
-                        modifier = Modifier.size(16.dp),
-                        tint = iconThemeColor
-                    )
+                    Icon(Icons.Outlined.Link, contentDescription = "附件", modifier = Modifier.size(16.dp), tint = iconThemeColor)
                     Spacer(Modifier.width(2.dp))
-                    Text(
-                        text = if (attachments.isNotEmpty()) "附件(${attachments.size})" else "附件",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (attachments.isNotEmpty()) MaterialTheme.colorScheme.onSurface
-                               else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text(if (attachments.isNotEmpty()) "附件(${attachments.size})" else "附件", style = MaterialTheme.typography.labelSmall, color = if (attachments.isNotEmpty()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -828,65 +741,62 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
 
         // 账户选择弹窗
         if (showAccountDialog) {
-            AlertDialog(
+            ModalBottomSheet(
                 onDismissRequest = { showAccountDialog = false },
-                title = { Text("选择账户") },
-                text = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = screenHeight * 0.4f)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        accounts.forEach { account ->
-                            val isSelected = selectedAccountId == account.id
-                            val svgPath = accountTypeConfigs[account.type]?.svgPath
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        selectedAccountId = account.id
-                                        showAccountDialog = false
-                                    }
-                                    .background(
-                                        if (isSelected) iconThemeColor.copy(alpha = 0.3f)
-                                        else Color.Transparent
-                                    )
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // 账户图标
-                                if (svgPath != null) {
-                                    AsyncImage(
-                                        model = svgPath,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                    Spacer(Modifier.width(12.dp))
+                containerColor = MaterialTheme.colorScheme.surface
+            ) {
+                Text(
+                    "选择账户",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = screenHeight * 0.4f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(bottom = 16.dp)
+                ) {
+                    accounts.forEach { account ->
+                        val isSelected = selectedAccountId == account.id
+                        val svgPath = accountTypeConfigs[account.type]?.svgPath
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selectedAccountId = account.id
+                                    showAccountDialog = false
                                 }
-                                // 账户名称
-                                Text(
-                                    text = account.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.weight(1f)
+                                .background(
+                                    if (isSelected) iconThemeColor.copy(alpha = 0.3f)
+                                    else Color.Transparent
                                 )
-                                // 余额
-                                Text(
-                                    text = "${String.format("%.2f", account.initialAmount)}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (svgPath != null) {
+                                AsyncImage(
+                                    model = svgPath,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp)
                                 )
+                                Spacer(Modifier.width(12.dp))
                             }
+                            Text(
+                                text = account.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "${String.format("%.2f", account.initialAmount)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
-                },
-                confirmButton = {},
-                dismissButton = {
-                    TextButton(onClick = { showAccountDialog = false }) {
-                        Text("取消")
-                    }
                 }
-            )
+            }
         }
 
         // 优惠弹窗
@@ -957,238 +867,175 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             val focusOff = remember { androidx.compose.ui.focus.FocusRequester() }
             val focusAfter = remember { androidx.compose.ui.focus.FocusRequester() }
 
-            AlertDialog(
+            ModalBottomSheet(
                 onDismissRequest = { showDiscountDialog = false },
-                title = { Text("优惠计算") },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        // 三个金额输入卡片
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                                // 优惠前
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { focusBefore.requestFocus() },
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("优惠前", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(64.dp))
-                                    BasicTextField(
-                                        value = inputBefore.value,
-                                        onValueChange = { inputBefore.value = filterAmount(it); recalc("before") },
-                                        modifier = Modifier.weight(1f).focusRequester(focusBefore),
-                                        singleLine = true,
-                                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
-                                        decorationBox = { inner ->
-                                            if (inputBefore.value.isEmpty()) Text("0", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            inner()
-                                        }
-                                    )
-                                }
-                                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
-                                // 优惠
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { focusOff.requestFocus() },
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        if (percentMode.value) "打折%" else "优惠",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        modifier = Modifier.width(64.dp)
-                                    )
-                                    BasicTextField(
-                                        value = inputOff.value,
-                                        onValueChange = {
-                                            inputOff.value = if (percentMode.value) filterPercent(it) else filterAmount(it)
-                                            recalc("off")
-                                        },
-                                        modifier = Modifier.weight(1f).focusRequester(focusOff),
-                                        singleLine = true,
-                                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                                            keyboardType = if (percentMode.value) androidx.compose.ui.text.input.KeyboardType.Number else androidx.compose.ui.text.input.KeyboardType.Decimal
-                                        ),
-                                        decorationBox = { inner ->
-                                            if (inputOff.value.isEmpty()) Text("0", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            inner()
-                                        }
-                                    )
-                                }
-                                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
-                                // 优惠后
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { focusAfter.requestFocus() },
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text("优惠后", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(64.dp))
-                                    BasicTextField(
-                                        value = inputAfter.value,
-                                        onValueChange = { inputAfter.value = filterAmount(it); recalc("after") },
-                                        modifier = Modifier.weight(1f).focusRequester(focusAfter),
-                                        singleLine = true,
-                                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
-                                        decorationBox = { inner ->
-                                            if (inputAfter.value.isEmpty()) Text("0", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            inner()
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        // 两个开关：自动计算 / 百分比优惠
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            // 左半：自动计算
+                containerColor = MaterialTheme.colorScheme.surface
+            ) {
+                Text(
+                    "优惠计算",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             Row(
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.fillMaxWidth().clickable { focusBefore.requestFocus() },
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Switch(
-                                    checked = autoCalc.value,
-                                    onCheckedChange = { autoCalc.value = it }
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    "自动计算",
-                                    style = MaterialTheme.typography.labelSmall
+                                Text("优惠前", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(64.dp))
+                                BasicTextField(
+                                    value = inputBefore.value,
+                                    onValueChange = { inputBefore.value = filterAmount(it); recalc("before") },
+                                    modifier = Modifier.weight(1f).focusRequester(focusBefore),
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                                    decorationBox = { inner ->
+                                        if (inputBefore.value.isEmpty()) Text("0", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        inner()
+                                    }
                                 )
                             }
-                            // 右半：百分比优惠
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
                             Row(
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.fillMaxWidth().clickable { focusOff.requestFocus() },
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Switch(
-                                    checked = percentMode.value,
-                                    onCheckedChange = { percentMode.value = it }
+                                Text(if (percentMode.value) "打折%" else "优惠", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(64.dp))
+                                BasicTextField(
+                                    value = inputOff.value,
+                                    onValueChange = { inputOff.value = if (percentMode.value) filterPercent(it) else filterAmount(it); recalc("off") },
+                                    modifier = Modifier.weight(1f).focusRequester(focusOff),
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = if (percentMode.value) androidx.compose.ui.text.input.KeyboardType.Number else androidx.compose.ui.text.input.KeyboardType.Decimal),
+                                    decorationBox = { inner ->
+                                        if (inputOff.value.isEmpty()) Text("0", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        inner()
+                                    }
                                 )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    "百分比优惠",
-                                    style = MaterialTheme.typography.labelSmall
+                            }
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable { focusAfter.requestFocus() },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("优惠后", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(64.dp))
+                                BasicTextField(
+                                    value = inputAfter.value,
+                                    onValueChange = { inputAfter.value = filterAmount(it); recalc("after") },
+                                    modifier = Modifier.weight(1f).focusRequester(focusAfter),
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                                    decorationBox = { inner ->
+                                        if (inputAfter.value.isEmpty()) Text("0", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        inner()
+                                    }
                                 )
                             }
                         }
                     }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        discountBefore = inputBefore.value.ifEmpty { null }
-                        discountOff = inputOff.value.ifEmpty { null }
-                        discountAfter = inputAfter.value.ifEmpty { null }
-                        if (discountAfter != null) {
-                            amount = discountAfter!!
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Switch(checked = autoCalc.value, onCheckedChange = { autoCalc.value = it })
+                            Spacer(Modifier.width(4.dp))
+                            Text("自动计算", style = MaterialTheme.typography.labelSmall)
                         }
-                        // 持久化开关状态到 Repository
-                        AccountingRepository.setSetting(context, "discount_auto_calc", autoCalc.value.toString())
-                        AccountingRepository.setSetting(context, "discount_percent_mode", percentMode.value.toString())
-                        showDiscountDialog = false
-                    }) {
-                        Text("确认")
+                        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Switch(checked = percentMode.value, onCheckedChange = { percentMode.value = it })
+                            Spacer(Modifier.width(4.dp))
+                            Text("百分比优惠", style = MaterialTheme.typography.labelSmall)
+                        }
                     }
-                },
-                dismissButton = {
-                    TextButton(onClick = {
-                        showDiscountDialog = false
-                    }) {
-                        Text("取消")
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { showDiscountDialog = false }) { Text("取消") }
+                        TextButton(onClick = {
+                            discountBefore = inputBefore.value.ifEmpty { null }
+                            discountOff = inputOff.value.ifEmpty { null }
+                            discountAfter = inputAfter.value.ifEmpty { null }
+                            if (discountAfter != null) amount = discountAfter!!
+                            AccountingRepository.setSetting(context, "discount_auto_calc", autoCalc.value.toString())
+                            AccountingRepository.setSetting(context, "discount_percent_mode", percentMode.value.toString())
+                            showDiscountDialog = false
+                        }) { Text("确认") }
                     }
+                    Spacer(Modifier.height(8.dp))
                 }
-            )
+            }
         }
 
         // 报销账户选择弹窗
         if (showReimbursementDialog) {
-            AlertDialog(
+            ModalBottomSheet(
                 onDismissRequest = { showReimbursementDialog = false },
-                title = { Text("选择报销账户") },
-                text = {
-                    Column(
+                containerColor = MaterialTheme.colorScheme.surface
+            ) {
+                Text(
+                    "选择报销账户",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = screenHeight * 0.4f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(bottom = 16.dp)
+                ) {
+                    val isNone = selectedReimbursementId == null
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = screenHeight * 0.4f)
-                            .verticalScroll(rememberScrollState())
+                            .clickable {
+                                selectedReimbursementId = null
+                                showReimbursementDialog = false
+                            }
+                            .background(
+                                if (isNone) iconThemeColor.copy(alpha = 0.3f)
+                                else Color.Transparent
+                            )
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // "不报销"选项
-                        val isNone = selectedReimbursementId == null
+                        Icon(Icons.Outlined.Receipt, contentDescription = null, modifier = Modifier.size(24.dp), tint = iconThemeColor)
+                        Spacer(Modifier.width(12.dp))
+                        Text("不报销", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    }
+                    HorizontalDivider()
+                    reimbursementAccounts.forEach { account ->
+                        val isSelected = selectedReimbursementId == account.id
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    selectedReimbursementId = null
+                                    selectedReimbursementId = account.id
                                     showReimbursementDialog = false
                                 }
                                 .background(
-                                    if (isNone) iconThemeColor.copy(alpha = 0.3f)
+                                    if (isSelected) iconThemeColor.copy(alpha = 0.3f)
                                     else Color.Transparent
                                 )
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Receipt,
-                                contentDescription = null,
-                                modifier = Modifier.size(24.dp),
-                                tint = iconThemeColor
-                            )
+                            Icon(Icons.Outlined.Receipt, contentDescription = null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.width(12.dp))
-                            Text(
-                                text = "不报销",
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f)
-                            )
+                            Text(account.name, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                         }
-                        HorizontalDivider()
-                        // 报销账户列表
-                        reimbursementAccounts.forEach { account ->
-                            val isSelected = selectedReimbursementId == account.id
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        selectedReimbursementId = account.id
-                                        showReimbursementDialog = false
-                                    }
-                                    .background(
-                                        if (isSelected) iconThemeColor.copy(alpha = 0.3f)
-                                        else Color.Transparent
-                                    )
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Receipt,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(24.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                Text(
-                                    text = account.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                        }
-                    }
-                },
-                confirmButton = {},
-                dismissButton = {
-                    TextButton(onClick = { showReimbursementDialog = false }) {
-                        Text("取消")
                     }
                 }
-            )
+            }
         }
     }
 }
