@@ -81,8 +81,7 @@ fun AccountingDetailScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteDialog = false
-                    val updatedDb = recordDb.remove(record.id)
-                    updatedDb.save(context)
+                    AccountingRepository.deleteRecord(context, record.id)
                     onBack()
                 }) {
                     Text("确认", color = MaterialTheme.colorScheme.error)

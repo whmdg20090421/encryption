@@ -20,7 +20,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 5
+        private const val DB_VERSION = 7
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -87,7 +87,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                 happened_at      INTEGER NOT NULL,
                 account_id       TEXT,
                 discount_before         TEXT,
-                reimbursement_account_id TEXT
+                reimbursement_account_id TEXT,
+                attachments TEXT
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX idx_rec_book ON records(book_name)")
@@ -106,6 +107,17 @@ internal class AccountingDatabase private constructor(context: Context) :
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX idx_acc_category ON accounts(category)")
+
+        db.execSQL("""
+            CREATE TABLE attachment_trash (
+                id                    TEXT PRIMARY KEY,
+                attachment_json       TEXT NOT NULL,
+                original_record_id    TEXT NOT NULL,
+                original_record_status TEXT NOT NULL,
+                deleted_at            INTEGER NOT NULL
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX idx_trash_deleted_at ON attachment_trash(deleted_at)")
 
         // 写入默认数据
         insertDefaultCategoriesToDb(db)
@@ -136,6 +148,21 @@ internal class AccountingDatabase private constructor(context: Context) :
         }
         if (oldVersion < 5) {
             db.execSQL("ALTER TABLE records ADD COLUMN reimbursement_account_id TEXT")
+        }
+        if (oldVersion < 6) {
+            db.execSQL("ALTER TABLE records ADD COLUMN attachments TEXT")
+        }
+        if (oldVersion < 7) {
+            db.execSQL("""
+                CREATE TABLE attachment_trash (
+                    id                    TEXT PRIMARY KEY,
+                    attachment_json       TEXT NOT NULL,
+                    original_record_id    TEXT NOT NULL,
+                    original_record_status TEXT NOT NULL,
+                    deleted_at            INTEGER NOT NULL
+                )
+            """.trimIndent())
+            db.execSQL("CREATE INDEX idx_trash_deleted_at ON attachment_trash(deleted_at)")
         }
     }
 
@@ -293,7 +320,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAllRecords(): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id FROM records ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments FROM records ORDER BY happened_at DESC",
             null
         )
         try {
@@ -309,7 +336,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByBook(bookName: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id FROM records WHERE book_name = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments FROM records WHERE book_name = ? ORDER BY happened_at DESC",
             arrayOf(bookName)
         )
         try {
@@ -335,10 +362,19 @@ internal class AccountingDatabase private constructor(context: Context) :
             if (r.accountId != null) put("account_id", r.accountId) else putNull("account_id")
             if (r.discountBefore != null) put("discount_before", r.discountBefore) else putNull("discount_before")
             if (r.reimbursementAccountId != null) put("reimbursement_account_id", r.reimbursementAccountId) else putNull("reimbursement_account_id")
+            if (r.attachments.isNotEmpty()) {
+                put("attachments", Json.encodeToString(r.attachments))
+            } else {
+                putNull("attachments")
+            }
         }
     }
 
     private fun cursorToRecord(c: android.database.Cursor): AccountingRecord {
+        val attachmentsJson = c.getString(11)
+        val attachments = if (!attachmentsJson.isNullOrEmpty()) {
+            try { Json.decodeFromString<List<AttachmentInfo>>(attachmentsJson) } catch (_: Exception) { emptyList() }
+        } else emptyList()
         return AccountingRecord(
             id = c.getString(0),
             bookName = c.getString(1),
@@ -350,7 +386,8 @@ internal class AccountingDatabase private constructor(context: Context) :
             happenedAt = c.getLong(7),
             accountId = c.getString(8),  // 可能为 null
             discountBefore = c.getString(9),  // 可能为 null
-            reimbursementAccountId = c.getString(10)  // 可能为 null
+            reimbursementAccountId = c.getString(10),  // 可能为 null
+            attachments = attachments
         )
     }
 
@@ -361,7 +398,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByReimbursementAccount(reimbAccountId: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
             arrayOf(reimbAccountId)
         )
         try {
@@ -447,6 +484,80 @@ internal class AccountingDatabase private constructor(context: Context) :
             note = c.getString(5) ?: "",
             createdAt = c.getLong(6),
             updatedAt = c.getLong(7)
+        )
+    }
+
+    // ─────────────────────────────────────────────
+    // 附件回收站表
+    // ─────────────────────────────────────────────
+
+    fun insertTrashEntry(entry: AttachmentTrashEntry) {
+        val cv = ContentValues().apply {
+            put("id", entry.id)
+            put("attachment_json", Json.encodeToString(entry.attachment))
+            put("original_record_id", entry.originalRecordId)
+            put("original_record_status", entry.originalRecordStatus)
+            put("deleted_at", entry.deletedAt)
+        }
+        writableDatabase.insertWithOnConflict("attachment_trash", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun getAllTrashEntries(): List<AttachmentTrashEntry> {
+        val entries = mutableListOf<AttachmentTrashEntry>()
+        val cursor = readableDatabase.rawQuery(
+            "SELECT id, attachment_json, original_record_id, original_record_status, deleted_at FROM attachment_trash ORDER BY deleted_at DESC",
+            null
+        )
+        try {
+            while (cursor.moveToNext()) {
+                entries.add(cursorToTrashEntry(cursor))
+            }
+        } finally {
+            cursor.close()
+        }
+        return entries
+    }
+
+    fun getTrashEntriesByRecord(recordId: String): List<AttachmentTrashEntry> {
+        val entries = mutableListOf<AttachmentTrashEntry>()
+        val cursor = readableDatabase.rawQuery(
+            "SELECT id, attachment_json, original_record_id, original_record_status, deleted_at FROM attachment_trash WHERE original_record_id = ? ORDER BY deleted_at DESC",
+            arrayOf(recordId)
+        )
+        try {
+            while (cursor.moveToNext()) {
+                entries.add(cursorToTrashEntry(cursor))
+            }
+        } finally {
+            cursor.close()
+        }
+        return entries
+    }
+
+    fun deleteTrashEntry(id: String) {
+        writableDatabase.delete("attachment_trash", "id = ?", arrayOf(id))
+    }
+
+    fun deleteTrashEntriesByRecord(recordId: String) {
+        writableDatabase.delete("attachment_trash", "original_record_id = ?", arrayOf(recordId))
+    }
+
+    fun updateTrashEntryRecordStatus(recordId: String, newStatus: String) {
+        val cv = ContentValues().apply {
+            put("original_record_status", newStatus)
+        }
+        writableDatabase.update("attachment_trash", cv, "original_record_id = ?", arrayOf(recordId))
+    }
+
+    private fun cursorToTrashEntry(c: android.database.Cursor): AttachmentTrashEntry {
+        val attachmentJson = c.getString(1)
+        val attachment = Json.decodeFromString<AttachmentInfo>(attachmentJson)
+        return AttachmentTrashEntry(
+            id = c.getString(0),
+            attachment = attachment,
+            originalRecordId = c.getString(2),
+            originalRecordStatus = c.getString(3),
+            deletedAt = c.getLong(4)
         )
     }
 
@@ -555,7 +666,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         // records
         val records = mutableListOf<ExportRecord>()
         val recCursor = db.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id FROM records",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments FROM records",
             null
         )
         try {
@@ -643,7 +754,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         sb.appendLine("﻿类型,分类,二级分类,金额,账本,账户,备注,时间,优惠前金额,报销账户")
 
         val recCursor = db.rawQuery(
-            "SELECT type, amount, category_id, subcategory_id, book_name, account_id, note, happened_at, discount_before, reimbursement_account_id FROM records ORDER BY happened_at ASC",
+            "SELECT type, amount, category_id, subcategory_id, book_name, account_id, note, happened_at, discount_before, reimbursement_account_id, attachments FROM records ORDER BY happened_at ASC",
             null
         )
         try {

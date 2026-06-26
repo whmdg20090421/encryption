@@ -2,4 +2,5 @@
 <paths>
     <external-path name="external" path="." />
     <root-path name="root" path="." />
+    <files-path name="accounting_attachments" path="艨艟战舰工具箱数据/记账本/附件/" />
 </paths>

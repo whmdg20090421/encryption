@@ -104,7 +104,7 @@ object AccountingRepository {
         getDb(context).updateRecord(record)
     }
 
-    /** 删除一条记录（增量维护记账天数） */
+    /** 删除一条记录（增量维护记账天数 + 附件回收站级联） */
     fun deleteRecord(context: Context, id: String) {
         val db = getDb(context)
         // 先查出被删记录的信息
@@ -116,6 +116,12 @@ object AccountingRepository {
                 val newCount = maxOf(getDayCount(context) - 1, 0)
                 setSetting(context, KEY_DAY_COUNT, newCount.toString())
             }
+            // 将当前附件移入回收站（状态为 "deleted"，因为账单本身也要删除）
+            if (record.attachments.isNotEmpty()) {
+                moveToTrashBatch(context, record.attachments, id)
+            }
+            // 级联更新：该账单此前被移除的附件，状态从 "active" 改为 "deleted"
+            cascadeUpdateTrashStatus(context, id, "deleted")
         }
         db.deleteRecord(id)
     }
@@ -124,11 +130,15 @@ object AccountingRepository {
     private fun getRecordById(context: Context, id: String): AccountingRecord? {
         val sqlDb = getDb(context).readableDatabase
         val cursor = sqlDb.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id FROM records WHERE id = ?",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments FROM records WHERE id = ?",
             arrayOf(id)
         )
         return try {
             if (cursor.moveToFirst()) {
+                val attachmentsJson = cursor.getString(11)
+                val attachments = if (!attachmentsJson.isNullOrEmpty()) {
+                    try { Json.decodeFromString<List<AttachmentInfo>>(attachmentsJson) } catch (_: Exception) { emptyList() }
+                } else emptyList()
                 AccountingRecord(
                     id = cursor.getString(0),
                     bookName = cursor.getString(1),
@@ -140,7 +150,8 @@ object AccountingRepository {
                     happenedAt = cursor.getLong(7),
                     accountId = cursor.getString(8),
                     discountBefore = cursor.getString(9),
-                    reimbursementAccountId = cursor.getString(10)
+                    reimbursementAccountId = cursor.getString(10),
+                    attachments = attachments
                 )
             } else null
         } finally {
@@ -184,6 +195,11 @@ object AccountingRepository {
                     if (record.accountId != null) put("account_id", record.accountId) else putNull("account_id")
                     if (record.discountBefore != null) put("discount_before", record.discountBefore) else putNull("discount_before")
                     if (record.reimbursementAccountId != null) put("reimbursement_account_id", record.reimbursementAccountId) else putNull("reimbursement_account_id")
+                    if (record.attachments.isNotEmpty()) {
+                        put("attachments", Json.encodeToString(record.attachments))
+                    } else {
+                        putNull("attachments")
+                    }
                 }
                 sqlDb.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -534,6 +550,124 @@ object AccountingRepository {
     }
 
     // ─────────────────────────────────────────────
+    // ─────────────────────────────────────────────
+    // 附件 (Attachments)
+    // ─────────────────────────────────────────────
+
+    /** 从 URI 复制文件到附件目录，返回元信息 */
+    fun storeAttachment(context: Context, uri: Uri, originalName: String?): AttachmentInfo {
+        val id = java.util.UUID.randomUUID().toString()
+        val ext = originalName?.substringAfterLast('.', "")?.let { if (it.isNotEmpty()) ".$it" else "" } ?: ""
+        val storedFileName = "${id}$ext"
+        val attachDir = AppDataPaths.accountingAttachments(context)
+        val target = File(attachDir, storedFileName)
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(target).use { output ->
+                input.copyTo(output)
+            }
+        }
+        val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+        val fileName = originalName ?: storedFileName
+        return AttachmentInfo(
+            id = id,
+            fileName = fileName,
+            mimeType = mimeType,
+            storedFileName = storedFileName
+        )
+    }
+
+    /** 拍照专用：从 FileProvider URI 复制到附件目录 */
+    fun storeAttachmentFromCamera(context: Context, photoUri: Uri): AttachmentInfo {
+        val id = java.util.UUID.randomUUID().toString()
+        val storedFileName = "${id}.jpg"
+        val attachDir = AppDataPaths.accountingAttachments(context)
+        val target = File(attachDir, storedFileName)
+        context.contentResolver.openInputStream(photoUri)?.use { input ->
+            FileOutputStream(target).use { output ->
+                input.copyTo(output)
+            }
+        }
+        return AttachmentInfo(
+            id = id,
+            fileName = "拍照_$storedFileName",
+            mimeType = "image/jpeg",
+            storedFileName = storedFileName
+        )
+    }
+
+    /** 删除磁盘上的附件文件 */
+    fun deleteAttachmentFile(context: Context, storedFileName: String) {
+        val file = File(AppDataPaths.accountingAttachments(context), storedFileName)
+        if (file.exists()) file.delete()
+    }
+
+    /** 获取附件 File 对象 */
+    fun getAttachmentFile(context: Context, storedFileName: String): File {
+        return File(AppDataPaths.accountingAttachments(context), storedFileName)
+    }
+
+    // ── 附件回收站 ──────────────────────────────────
+
+    /** 将附件移入回收站（软删除）：文件保留在磁盘，元信息写入 attachment_trash 表 */
+    fun moveToTrash(context: Context, attachment: AttachmentInfo, recordId: String) {
+        val entry = AttachmentTrashEntry(
+            attachment = attachment,
+            originalRecordId = recordId,
+            originalRecordStatus = "active"
+        )
+        getDb(context).insertTrashEntry(entry)
+    }
+
+    /** 批量移入回收站 */
+    fun moveToTrashBatch(context: Context, attachments: List<AttachmentInfo>, recordId: String) {
+        for (att in attachments) {
+            moveToTrash(context, att, recordId)
+        }
+    }
+
+    /** 获取所有回收站条目 */
+    fun getAllTrashEntries(context: Context): List<AttachmentTrashEntry> {
+        return getDb(context).getAllTrashEntries()
+    }
+
+    /** 获取指定账单关联的回收站条目 */
+    fun getTrashEntriesByRecord(context: Context, recordId: String): List<AttachmentTrashEntry> {
+        return getDb(context).getTrashEntriesByRecord(recordId)
+    }
+
+    /** 从回收站恢复附件：删除 trash 记录，返回附件元信息（调用方负责将其重新加回记录） */
+    fun restoreFromTrash(context: Context, trashEntryId: String): AttachmentInfo? {
+        val db = getDb(context)
+        val entries = db.getAllTrashEntries()
+        val entry = entries.find { it.id == trashEntryId } ?: return null
+        db.deleteTrashEntry(trashEntryId)
+        return entry.attachment
+    }
+
+    /** 永久删除回收站条目：同时删除磁盘文件和 DB 记录 */
+    fun permanentlyDelete(context: Context, trashEntryId: String) {
+        val db = getDb(context)
+        val entries = db.getAllTrashEntries()
+        val entry = entries.find { it.id == trashEntryId } ?: return
+        deleteAttachmentFile(context, entry.attachment.storedFileName)
+        db.deleteTrashEntry(trashEntryId)
+    }
+
+    /** 永久删除指定账单关联的所有回收站条目 */
+    fun permanentlyDeleteByRecord(context: Context, recordId: String) {
+        val db = getDb(context)
+        val entries = db.getTrashEntriesByRecord(recordId)
+        for (entry in entries) {
+            deleteAttachmentFile(context, entry.attachment.storedFileName)
+        }
+        db.deleteTrashEntriesByRecord(recordId)
+    }
+
+    /** 级联更新：当账单被删除时，将关联回收站条目的 originalRecordStatus 改为 "deleted" */
+    fun cascadeUpdateTrashStatus(context: Context, recordId: String, newStatus: String) {
+        getDb(context).updateTrashEntryRecordStatus(recordId, newStatus)
+    }
+
     // 内部工具
     // ─────────────────────────────────────────────
 

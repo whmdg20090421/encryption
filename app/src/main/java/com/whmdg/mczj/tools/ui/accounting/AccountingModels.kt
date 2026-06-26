@@ -305,6 +305,32 @@ fun setCategoryIconColor(context: Context, colorHex: String) {
     AccountingRepository.setCategoryIconColor(context, colorHex)
 }
 
+// ── 附件数据模型 ──
+
+/**
+ * 附件元信息。DB 只存此信息，文件本体存储在独立目录。
+ */
+@Serializable
+data class AttachmentInfo(
+    val id: String = UUID.randomUUID().toString(),
+    val fileName: String,       // 原始文件名
+    val mimeType: String,       // "image/jpeg" / "application/pdf" 等
+    val storedFileName: String, // 存储到磁盘的文件名（避免重名冲突）
+    val addedAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * 附件回收站记录。附件被移除时进入此表，支持恢复和永久清理。
+ */
+@Serializable
+data class AttachmentTrashEntry(
+    val id: String = UUID.randomUUID().toString(),
+    val attachment: AttachmentInfo,            // 附件元信息
+    val originalRecordId: String,             // 原所属账单 ID
+    val originalRecordStatus: String,         // "active"（账单仍存在）或 "deleted"（账单已移除）
+    val deletedAt: Long = System.currentTimeMillis()
+)
+
 // ── 记账记录数据模型 ──
 
 /**
@@ -323,7 +349,8 @@ data class AccountingRecord(
     val happenedAt: Long = System.currentTimeMillis(),
     val accountId: String? = null,  // 关联账户 id（可选）
     val discountBefore: String? = null,  // 优惠前金额（可选）
-    val reimbursementAccountId: String? = null  // 关联报销账户 id（可选），null = 不报销
+    val reimbursementAccountId: String? = null,  // 关联报销账户 id（可选），null = 不报销
+    val attachments: List<AttachmentInfo> = emptyList()  // 附件列表（可选）
 )
 
 /**

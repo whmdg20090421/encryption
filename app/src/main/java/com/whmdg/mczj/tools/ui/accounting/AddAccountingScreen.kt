@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.twotone.*
+import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -32,6 +33,7 @@ import androidx.compose.ui.Alignment
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,8 +45,14 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import coil3.compose.AsyncImage
+import java.io.File
 import java.util.Calendar
 
 @Composable
@@ -110,6 +118,57 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
         mutableStateOf<String?>(editingRecord?.reimbursementAccountId)
     }
     var showReimbursementDialog by remember { mutableStateOf(false) }
+
+    // 附件
+    var attachments by remember { mutableStateOf(editingRecord?.attachments ?: emptyList()) }
+    var showAttachmentSheet by remember { mutableStateOf(false) }
+    // 拍照临时 URI
+    var cameraPhotoUri by remember { mutableStateOf<Uri?>(null) }
+
+    // 相机权限启动器
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            // 权限通过，创建临时文件并启动相机
+            val tmpFile = File(context.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
+            cameraPhotoUri = androidx.core.content.FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", tmpFile
+            )
+            cameraLauncher.launch(cameraPhotoUri)
+        } else {
+            Toast.makeText(context, "相机权限被拒绝，无法拍照", Toast.LENGTH_SHORT).show()
+        }
+    }
+    // 拍照启动器
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success && cameraPhotoUri != null) {
+            val info = AccountingRepository.storeAttachmentFromCamera(context, cameraPhotoUri!!)
+            attachments = attachments + info
+        }
+    }
+    // 相册多选启动器
+    val albumLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia()
+    ) { uris ->
+        for (uri in uris) {
+            val name = getFileName(context, uri)
+            val info = AccountingRepository.storeAttachment(context, uri, name)
+            attachments = attachments + info
+        }
+    }
+    // 文件多选启动器
+    val fileLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        for (uri in uris) {
+            val name = getFileName(context, uri)
+            val info = AccountingRepository.storeAttachment(context, uri, name)
+            attachments = attachments + info
+        }
+    }
 
     // 从 JSON 动态加载分类数据（跟随选中的记账类型切换）
     val categoryDb = remember { AccountingCategoryDb.ensureDefault(context) }
@@ -197,7 +256,8 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             happenedAt = cal.timeInMillis,
             accountId = selectedAccountId,
             discountBefore = discountBefore,
-            reimbursementAccountId = selectedReimbursementId
+            reimbursementAccountId = selectedReimbursementId,
+            attachments = attachments
         )
         val db = AccountingRecordDb.load(context)
         if (editingRecord != null) {
@@ -606,6 +666,84 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         color = if (selectedReimb != null) MaterialTheme.colorScheme.onSurface
                                else MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+
+                Spacer(Modifier.width(10.dp))
+                Box(
+                    modifier = Modifier
+                        .width(0.6.dp)
+                        .height(dividerHeight)
+                        .background(iconThemeColor.copy(alpha = 0.3f))
+                )
+                Spacer(Modifier.width(10.dp))
+
+                // 附件
+                Row(
+                    modifier = Modifier.clickable { showAttachmentSheet = true },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Link,
+                        contentDescription = "附件",
+                        modifier = Modifier.size(16.dp),
+                        tint = iconThemeColor
+                    )
+                    Spacer(Modifier.width(2.dp))
+                    Text(
+                        text = if (attachments.isNotEmpty()) "附件(${attachments.size})" else "附件",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (attachments.isNotEmpty()) MaterialTheme.colorScheme.onSurface
+                               else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // 附件选择 BottomSheet
+            if (showAttachmentSheet) {
+                ModalBottomSheet(
+                    onDismissRequest = { showAttachmentSheet = false },
+                    containerColor = MaterialTheme.colorScheme.surface
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        // 相机
+                        ListItem(
+                            headlineContent = { Text("拍照") },
+                            leadingContent = {
+                                Icon(Icons.Outlined.CameraAlt, contentDescription = null, tint = iconThemeColor)
+                            },
+                            modifier = Modifier.clickable {
+                                showAttachmentSheet = false
+                                cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+                            }
+                        )
+                        // 相册
+                        ListItem(
+                            headlineContent = { Text("从相册选择") },
+                            leadingContent = {
+                                Icon(Icons.Outlined.PhotoLibrary, contentDescription = null, tint = iconThemeColor)
+                            },
+                            modifier = Modifier.clickable {
+                                showAttachmentSheet = false
+                                albumLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            }
+                        )
+                        // 文件
+                        ListItem(
+                            headlineContent = { Text("选择文件") },
+                            leadingContent = {
+                                Icon(Icons.Outlined.AttachFile, contentDescription = null, tint = iconThemeColor)
+                            },
+                            modifier = Modifier.clickable {
+                                showAttachmentSheet = false
+                                fileLauncher.launch(arrayOf("*/*"))
+                            }
+                        )
+                        Spacer(Modifier.height(16.dp))
+                    }
                 }
             }
 
@@ -1085,15 +1223,17 @@ private fun DateTimePickerDialog(
     val dialogWidth = screenWidth * 0.80f
     val dialogHeight = screenHeight * 0.7f
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {},
-        dismissButton = {},
-        text = {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
             Column(
                 modifier = Modifier
                     .width(dialogWidth)
                     .height(dialogHeight)
+                    .padding(16.dp)
             ) {
                 // 上半：日历（weight均分）
                 Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -1195,7 +1335,7 @@ private fun DateTimePickerDialog(
                 }
             }
         }
-    )
+    }
 }
 
 @Composable
@@ -1217,7 +1357,20 @@ private fun TimeWheel(
     val totalItemHeight = itemHeight + itemSpacing
     val density = LocalDensity.current
 
-    // 滚动停止时自动吸中
+    // 首次布局：用 scrollToItem（无动画）直接居中，避免闪烁
+    var firstLayout by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        if (firstLayout) {
+            snapshotFlow { listState.layoutInfo.viewportEndOffset }
+                .first { it > 0 }
+            val vpH = listState.layoutInfo.let { it.viewportEndOffset - it.viewportStartOffset }
+            val ih = with(density) { itemHeight.roundToPx() }
+            listState.scrollToItem(initialIndex, -((vpH - ih) / 2))
+            firstLayout = false
+        }
+    }
+
+    // 滚动停止时自动吸中（动画）
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }
             .distinctUntilChanged()
@@ -1680,6 +1833,16 @@ private fun SubcategoryCard(
                 }
             }
         }
+    }
+}
+
+/** 从 ContentResolver URI 获取原始文件名 */
+private fun getFileName(context: android.content.Context, uri: Uri): String? {
+    val cursor = context.contentResolver.query(uri, null, null, null, null)
+    return cursor?.use {
+        val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        it.moveToFirst()
+        if (nameIndex >= 0) it.getString(nameIndex) else null
     }
 }
 

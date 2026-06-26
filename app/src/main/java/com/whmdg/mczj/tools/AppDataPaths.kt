@@ -90,6 +90,13 @@ object AppDataPaths {
         return dir
     }
 
+    /** 记账本附件目录 */
+    fun accountingAttachments(context: Context): File {
+        val dir = File(accounting(context), "附件")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     /** 二进制工具目录（7za 等） */
     fun binaries(context: Context): File {
         val dir = File(root(context), "bin")
