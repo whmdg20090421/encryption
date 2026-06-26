@@ -220,6 +220,8 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     data class NoteSuggestion(val note: String, val catId: String, val subId: String?, val catName: String, val subName: String?, val score: Int)
     // 分类滚动目标（点击建议后设置）
     var scrollTarget by remember { mutableStateOf<String?>(null) }
+    // 展开/折叠标记：仅在用户点击分类时为 true，防止键盘弹出时误触发滚动
+    var isTogglingCategory by remember { mutableStateOf(false) }
 
     // 保存记录的辅助函数
     fun saveCurrentRecord(): Boolean {
@@ -320,32 +322,18 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     LaunchedEffect(selectedType) {
         if (typeChanged) {
             selectedCategory = null
+            isTogglingCategory = true
             expandedCategory = null
         }
         typeChanged = true
     }
 
     Scaffold { innerPadding ->
-        val density = LocalDensity.current
-
-        BoxWithConstraints(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            val maxHeight = maxHeight
-            val imeBottom = WindowInsets.ime.getBottom(density)
-            val imeVisible = imeBottom > 0
-            val keyboardHeightDp = with(density) { imeBottom.toDp() }
-
-            val toolbarHeight = 50.dp
-            val firstRowHeight = screenHeight * 0.05f
-            val dividerHeight = 1.dp
-            // 分类区高度 = 屏幕顶部到键盘顶部 - 工具栏 - 第一行 - 分割线
-            val categoryAreaHeight = (maxHeight - keyboardHeightDp - toolbarHeight - firstRowHeight - dividerHeight)
-                .coerceAtLeast(80.dp)
-
-            Column(modifier = Modifier.fillMaxSize()) {
             // 50dp 功能栏
             Surface(
                 shadowElevation = 3.dp,
@@ -389,6 +377,8 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             val itemWidth = screenWidth / itemsPerRow
             val scrollState = rememberScrollState()
 
+            // 展开/折叠标记：仅在用户点击分类时为 true，防止键盘弹出时误触发滚动
+
             // 点击建议后自动展开并滚动到目标分类
             val densityForScroll = LocalDensity.current
             LaunchedEffect(scrollTarget) {
@@ -410,20 +400,21 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             }
 
             // 展开/折叠二级分类时自动滚动，保证内容不被裁剪、不留空白
+            // 仅在用户展开/折叠分类时触发，键盘弹出导致的高度变化不触发
             var prevMaxValue by remember { mutableIntStateOf(0) }
             LaunchedEffect(scrollState) {
                 snapshotFlow { scrollState.maxValue }
                     .collect { newMax ->
                         val oldMax = prevMaxValue
                         prevMaxValue = newMax
-                        if (oldMax == 0) return@collect  // 跳过首次布局
+                        if (!isTogglingCategory) return@collect
+                        isTogglingCategory = false
+                        if (oldMax == 0) return@collect
                         if (newMax < oldMax) {
-                            // 折叠：如果当前滚动超出新内容，滚到底部
                             if (scrollState.value > newMax) {
                                 scrollState.animateScrollTo(newMax)
                             }
                         } else {
-                            // 展开：等布局更新后，滚到旧底部位置
                             delay(150)
                             scrollState.animateScrollTo(oldMax)
                         }
@@ -432,7 +423,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
 
             Column(
                 modifier = Modifier
-                    .height(categoryAreaHeight)
+                    .weight(1f)
                     .fillMaxWidth()
                     .verticalScroll(scrollState)
                     .padding(vertical = 8.dp, horizontal = 12.dp)
@@ -459,9 +450,11 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                     .width(itemWidth)
                                     .clickable {
                                         if (hasChildren) {
+                                            isTogglingCategory = true
                                             expandedCategory = if (isExpanded) null else cat.id
                                         } else {
                                             selectedCategory = if (isSelected) null else cat.id
+                                            isTogglingCategory = true
                                             expandedCategory = null
                                         }
                                     }
@@ -677,6 +670,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                                     showSuggestions = false
                                                     note = s.note
                                                     selectedCategory = s.subId ?: s.catId
+                                                    isTogglingCategory = true
                                                     expandedCategory = if (s.subId != null) s.catId else null
                                                     scrollTarget = s.subId ?: s.catId
                                                 }
@@ -969,12 +963,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 finishEnabled = canFinish
             )
             } // Surface
-            // 键盘底部 padding，让分割线对齐键盘顶部
-            if (imeVisible) {
-                Spacer(Modifier.height(keyboardHeightDp))
-            }
             } // Column
-        } // BoxWithConstraints
 
         // 日期时间选择弹窗
         if (showDatePicker) {
