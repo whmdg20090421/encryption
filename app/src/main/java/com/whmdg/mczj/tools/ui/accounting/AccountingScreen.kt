@@ -5,7 +5,7 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
@@ -1225,7 +1225,7 @@ private fun MinePageContent(bookName: String = "") {
     var countdownSeconds by remember { mutableStateOf(5) }
     // 格式切换：false = JSON, true = CSV
     var useCsv by remember { mutableStateOf(false) }
-    val importLauncher = rememberLauncherForActivityResult(OpenDocument) { uri ->
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             try {
                 if (useCsv) AccountingRepository.validateImportCsv(context, uri)
@@ -1257,7 +1257,7 @@ private fun MinePageContent(bookName: String = "") {
                 item { Spacer(Modifier.height(12.dp)) }
                 item {
                     SettingCard(
-                        icon = Icons.Outlined.Database,
+                        icon = Icons.Outlined.Storage,
                         title = "数据管理",
                         subtitle = "导出、导入记账数据",
                         onClick = { pageStack = listOf("数据管理") }
