@@ -183,6 +183,21 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
 
     // 从 JSON 动态加载分类数据（跟随选中的记账类型切换）
     val categoryDb = remember { AccountingCategoryDb.ensureDefault(context) }
+    // 分类 ID → (名称, 图标) 查找表
+    val categoryLookup = remember(categoryDb) {
+        val map = mutableMapOf<String, Pair<String, String>>()
+        for ((_, typeMap) in categoryDb.pages) {
+            for ((_, cats) in typeMap) {
+                for (cat in cats) {
+                    map[cat.id] = cat.name to cat.icon
+                    for (child in cat.children) {
+                        map[child.id] = child.name to child.icon
+                    }
+                }
+            }
+        }
+        map
+    }
 
     val currentType = types[selectedType]
     val categories = remember(selectedType) {
@@ -201,6 +216,10 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             if (initRecord != null && initRecord.subcategoryId != null) initRecord.categoryId else null
         )
     }
+    // 备注建议（含关联分类）
+    data class NoteSuggestion(val note: String, val catId: String, val subId: String?, val catName: String, val subName: String?, val score: Int)
+    // 分类滚动目标（点击建议后设置）
+    var scrollTarget by remember { mutableStateOf<String?>(null) }
 
     // 保存记录的辅助函数
     fun saveCurrentRecord(): Boolean {
@@ -307,11 +326,22 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     }
 
     Scaffold { innerPadding ->
+        val density = LocalDensity.current
+        val screenHeightPx = with(density) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
+        val imeHeightPx = WindowInsets.ime.getBottom(density)
+        val navBarPx = WindowInsets.navigationBars.getBottom(density)
+        // 第一行下边缘在窗口中的位置（px）
+        var firstRowBottomPx by remember { mutableIntStateOf(0) }
+        // 键盘顶到第一行下边缘时才开始顶起
+        val keyboardTopPx = screenHeightPx - imeHeightPx
+        val neededPaddingPx = (firstRowBottomPx - keyboardTopPx).coerceAtLeast(0f)
+        val keyboardBottomPadding = with(density) { neededPaddingPx.toDp() }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .imePadding()
+                .padding(bottom = keyboardBottomPadding)
         ) {
             // 50dp 功能栏
             Surface(
@@ -355,6 +385,25 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             val screenWidth = LocalConfiguration.current.screenWidthDp.dp
             val itemWidth = screenWidth / itemsPerRow
             val scrollState = rememberScrollState()
+
+            // 点击建议后自动展开并滚动到目标分类
+            LaunchedEffect(scrollTarget) {
+                val target = scrollTarget ?: return@LaunchedEffect
+                scrollTarget = null
+                delay(250)
+                val idx = categories.indexOfFirst { cat ->
+                    cat.id == target || cat.children.any { it.id == target }
+                }
+                if (idx < 0) return@LaunchedEffect
+                val d = LocalDensity.current
+                val rowIdx = idx / itemsPerRow
+                val iconSizePx = with(d) { primaryIconSize.roundToPx() }
+                val labelPx = with(d) { 16.dp.roundToPx() }
+                val spacingPx = with(d) { 16.dp.roundToPx() }
+                val subCardPx = with(d) { 80.dp.roundToPx() }
+                val offset = rowIdx * (iconSizePx + labelPx + spacingPx) + if (expandedCategory != null) subCardPx else 0
+                scrollState.animateScrollTo(offset)
+            }
 
             // 展开/折叠二级分类时自动滚动，保证内容不被裁剪、不留空白
             var prevMaxValue by remember { mutableIntStateOf(0) }
@@ -506,21 +555,38 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(infoRowHeight),
+                    .height(infoRowHeight)
+                    .onGloballyPositioned { coords ->
+                        val rowBottom = coords.size.height.toFloat()
+                        val posInParent = coords.positionInParent()
+                        firstRowBottomPx = posInParent.y + rowBottom
+                    },
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Spacer(Modifier.fillMaxHeight().weight(0.2f))
-                // AI 备注预测状态
-                var noteSuggestions by remember { mutableStateOf<List<NotePredictor.Prediction>>(emptyList()) }
+                // 备注建议（包含关联分类）
+                var noteSuggestions by remember { mutableStateOf<List<NoteSuggestion>>(emptyList()) }
                 var showSuggestions by remember { mutableStateOf(false) }
+                // 已选中的备注（选择后跳过一次计算，删除字时重新激活）
+                var suppressedNotes by remember { mutableStateOf<Set<String>>(emptySet()) }
                 var noteBoxWidthPx by remember { mutableIntStateOf(0) }
                 val noteDensity = LocalDensity.current
                 LaunchedEffect(note) {
+                    // 备注为空时清空并跳过
                     if (note.isEmpty()) {
                         noteSuggestions = emptyList()
                         showSuggestions = false
+                        suppressedNotes = emptySet()
                         return@LaunchedEffect
                     }
+                    // 已选中的备注跳过计算（选择后不再弹出）
+                    if (note in suppressedNotes) {
+                        suppressedNotes = suppressedNotes - note
+                        showSuggestions = false
+                        return@LaunchedEffect
+                    }
+                    // 防抖：等待用户停止输入
+                    delay(150)
                     val predictions = if (NotePredictor.hasEnoughData()) {
                         val currentHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
                         val currentAmount = amount.toFloatOrNull() ?: 0f
@@ -528,7 +594,6 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                             types[selectedType], selectedCategory ?: "",
                             currentAmount, currentHour, note
                         ).toMutableList()
-                        // AI 创建新备注
                         if (list.isEmpty() || list.first().score < 50) {
                             val aiNote = NotePredictor.createAiNote(
                                 types[selectedType], selectedCategory ?: "",
@@ -540,10 +605,25 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         }
                         list
                     } else {
-                        // 数据不足，直接从最近记录中文本匹配
                         NotePredictor.predictFromRecent(context, note)
                     }
-                    noteSuggestions = predictions.take(10)
+                    // 按备注文本收集关联分类（每个备注的每个分类组合占一行）
+                    val rawPredictions = predictions.take(10)
+                    val allRecords = AccountingRepository.getAllRecords(context)
+                    val suggestions = mutableListOf<NoteSuggestion>()
+                    for (pred in rawPredictions) {
+                        val matching = allRecords.filter { it.note == pred.note }
+                        val seenPairs = mutableSetOf<Pair<String, String?>>()
+                        for (r in matching) {
+                            val key = r.categoryId to r.subcategoryId
+                            if (seenPairs.add(key)) {
+                                val catName = categoryLookup[r.categoryId]?.first ?: r.categoryId
+                                val subName = r.subcategoryId?.let { categoryLookup[it]?.first }
+                                suggestions.add(NoteSuggestion(pred.note, r.categoryId, r.subcategoryId, catName, subName, pred.score))
+                            }
+                        }
+                    }
+                    noteSuggestions = suggestions
                     showSuggestions = noteSuggestions.isNotEmpty()
                 }
                 Box(
@@ -576,7 +656,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     // AI 预测弹出层
                     if (showSuggestions && noteSuggestions.isNotEmpty()) {
                         Popup(
-                            alignment = Alignment.BottomStart,
+                            alignment = Alignment.TopStart,
                             onDismissRequest = { showSuggestions = false }
                         ) {
                             Surface(
@@ -591,35 +671,38 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                     modifier = Modifier.padding(vertical = 4.dp)
                                 ) {
                                     items(noteSuggestions.size) { idx ->
-                                        val pred = noteSuggestions[idx]
+                                        val s = noteSuggestions[idx]
+                                        val displayCat = if (s.subName != null) "${s.catName}-${s.subName}" else s.catName
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clickable {
-                                                    val cleanNote = pred.note.removePrefix("✦")
-                                                    note = cleanNote
-                                                    NotePredictor.recordHit(cleanNote)
+                                                    NotePredictor.recordHit(s.note)
+                                                    suppressedNotes = suppressedNotes + s.note
                                                     showSuggestions = false
+                                                    note = s.note
+                                                    selectedCategory = s.subId ?: s.catId
+                                                    expandedCategory = if (s.subId != null) s.catId else null
+                                                    scrollTarget = s.subId ?: s.catId
                                                 }
                                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
-                                                text = pred.note,
+                                                text = displayCat,
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 modifier = Modifier.weight(0.7f),
                                                 maxLines = 1,
                                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                text = if (pred.isAiGenerated) "${pred.score}%(AI)" else "${pred.score}%",
+                                                text = "${s.score}%",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 modifier = Modifier.weight(0.3f),
                                                 textAlign = androidx.compose.ui.text.style.TextAlign.End,
                                                 color = when {
-                                                    pred.isAiGenerated -> Color(0xFF9C27B0)
-                                                    pred.score >= 80 -> Color(0xFF4CAF50)
-                                                    pred.score >= 60 -> MaterialTheme.colorScheme.primary
+                                                    s.score >= 80 -> Color(0xFF4CAF50)
+                                                    s.score >= 60 -> MaterialTheme.colorScheme.primary
                                                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                                                 }
                                             )
