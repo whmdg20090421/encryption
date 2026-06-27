@@ -48,6 +48,21 @@ object AccountingRepository {
         getDb(context).insertDefaultCategories()
     }
 
+    /** 获取所有分类（扁平列表：id, name, parentId） */
+    fun getAllCategoriesFlat(context: Context): List<Triple<String, String, String?>> {
+        return getDb(context).getAllCategoriesFlat()
+    }
+
+    /** 创建一级分类，返回 ID */
+    fun createParentCategory(context: Context, name: String, type: String = "支出"): String {
+        return getDb(context).createParentCategory(name, type)
+    }
+
+    /** 创建二级分类，返回 ID */
+    fun createChildCategory(context: Context, name: String, parentId: String, type: String = "支出"): String {
+        return getDb(context).createChildCategory(name, parentId, type)
+    }
+
     /** 执行数据迁移（JSON + SharedPreferences → SQLite） */
     fun migrateFromLegacy(context: Context) {
         getDb(context).migrateFromLegacy(context)
@@ -556,11 +571,11 @@ object AccountingRepository {
         return file.absolutePath
     }
 
-    /** 从 CSV 文件导入记账记录（替换所有记录） */
-    fun importCsv(context: Context, uri: Uri) {
+    /** 从 CSV 文件导入记账记录 */
+    fun importCsv(context: Context, uri: Uri, appendMode: Boolean = false) {
         val csv = context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
             ?: throw IllegalArgumentException("无法读取文件。")
-        getDb(context).importFromCsv(csv)
+        getDb(context).importFromCsv(csv, appendMode)
     }
 
     /** 校验 CSV 文件格式是否正确（不执行导入） */
@@ -568,6 +583,17 @@ object AccountingRepository {
         val csv = context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
             ?: throw IllegalArgumentException("无法读取文件。")
         getDb(context).validateImportCsv(csv)
+    }
+
+    /** 从 CSV 文本导入记录（带列映射和分类映射），返回成功条数 */
+    fun importCsvWithMapping(
+        context: Context,
+        csvText: String,
+        columnMapping: Map<String, Int?>,
+        categoryMapping: Map<String, String?>,
+        replaceMode: Boolean
+    ): Int {
+        return getDb(context).importFromCsvWithMapping(csvText, columnMapping, categoryMapping, replaceMode)
     }
 
     // ─────────────────────────────────────────────
@@ -692,7 +718,7 @@ object AccountingRepository {
     // 内部工具
     // ─────────────────────────────────────────────
 
-    private fun getDb(context: Context): AccountingDatabase {
+    internal fun getDb(context: Context): AccountingDatabase {
         return AccountingDatabase.getInstance(context)
     }
 }

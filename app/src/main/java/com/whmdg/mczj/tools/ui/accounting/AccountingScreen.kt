@@ -1232,16 +1232,29 @@ private fun MinePageContent(bookName: String = "") {
     var countdownSeconds by remember { mutableStateOf(5) }
     // 格式切换：false = JSON, true = CSV
     var importUseCsv by remember { mutableStateOf(false) }
+    // CSV 映射导入：读取的 CSV 文本
+    var csvImportText by remember { mutableStateOf<String?>(null) }
     var showExportConfirm by remember { mutableStateOf(false) }
     var exportUseCsv by remember { mutableStateOf(false) }
     var exportResult by remember { mutableStateOf<String?>(null) }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             try {
-                if (importUseCsv) AccountingRepository.validateImportCsv(context, uri)
-                else AccountingRepository.validateImportData(context, uri)
-                importUri = uri
-                showImportConfirm = true
+                if (importUseCsv) {
+                    // CSV：读取文本，跳转到映射页面
+                    val csv = context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+                    if (csv != null) {
+                        AccountingRepository.validateImportCsv(context, uri)
+                        csvImportText = csv
+                        pageStack = listOf("数据管理", "导入数据", "CSV映射导入")
+                    } else {
+                        importError = "无法读取CSV文件。"
+                    }
+                } else {
+                    AccountingRepository.validateImportData(context, uri)
+                    importUri = uri
+                    showImportConfirm = true
+                }
             } catch (_: Exception) {
                 importError = if (importUseCsv) "该CSV文件数据格式不正确或已损坏。"
                               else "该JSON文件数据格式不正确或已损坏。"
@@ -1510,6 +1523,21 @@ private fun MinePageContent(bookName: String = "") {
                         modifier = Modifier.padding(horizontal = 16.dp)
                     )
                 }
+            }
+        }
+        pageStack == listOf("数据管理", "导入数据", "CSV映射导入") -> {
+            csvImportText?.let { text ->
+                CsvImportFlowScreen(
+                    csvText = text,
+                    onImportDone = { count ->
+                        csvImportText = null
+                        pageStack = listOf("数据管理")
+                    },
+                    onBack = {
+                        csvImportText = null
+                        pageStack = listOf("数据管理", "导入数据")
+                    }
+                )
             }
         }
         pageStack == listOf("个性化设置") -> {

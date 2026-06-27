@@ -1,0 +1,779 @@
+package com.whmdg.mczj.tools.ui.accounting
+
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+// ─────────────────────────────────────────────
+// 字段定义
+// ─────────────────────────────────────────────
+
+private data class FieldDef(val key: String, val label: String)
+
+private val FIELD_DEFS = listOf(
+    FieldDef("时间", "日期"),
+    FieldDef("类型", "收支类型"),
+    FieldDef("金额", "金额"),
+    FieldDef("分类", "类别"),
+    FieldDef("二级分类", "二级分类"),
+    FieldDef("账户", "账户"),
+    FieldDef("账本", "账本"),
+    FieldDef("备注", "备注"),
+    FieldDef("优惠前金额", "优惠前金额"),
+    FieldDef("报销账户", "报销账户"),
+)
+
+private val HEADER_ALIASES = mapOf(
+    "时间" to "时间", "日期" to "时间", "date" to "时间", "time" to "时间",
+    "类型" to "类型", "收支类型" to "类型", "type" to "类型", "收支" to "类型", "收/支" to "类型",
+    "金额" to "金额", "amount" to "金额",
+    "分类" to "分类", "类别" to "分类", "category" to "分类",
+    "二级分类" to "二级分类", "子分类" to "二级分类", "sub_category" to "二级分类",
+    "账户" to "账户", "account" to "账户",
+    "账本" to "账本", "book" to "账本",
+    "备注" to "备注", "note" to "备注", "说明" to "备注",
+    "优惠前金额" to "优惠前金额", "优惠" to "优惠前金额",
+    "报销账户" to "报销账户", "reimbursement" to "报销账户",
+)
+
+// ─────────────────────────────────────────────
+// CSV 解析
+// ─────────────────────────────────────────────
+
+private fun parseCsvText(csvText: String): List<List<String>> {
+    val lines = csvText.lines().filter { it.isNotBlank() }
+    return lines.map { line ->
+        val result = mutableListOf<String>()
+        val current = StringBuilder()
+        var inQuotes = false
+        var i = 0
+        while (i < line.length) {
+            val c = line[i]
+            when {
+                c == '"' && !inQuotes -> inQuotes = true
+                c == '"' && inQuotes -> {
+                    if (i + 1 < line.length && line[i + 1] == '"') { current.append('"'); i++ }
+                    else inQuotes = false
+                }
+                c == ',' && !inQuotes -> { result.add(current.toString()); current.clear() }
+                else -> current.append(c)
+            }
+            i++
+        }
+        result.add(current.toString())
+        result
+    }
+}
+
+// ─────────────────────────────────────────────
+// 自动检测列映射
+// ─────────────────────────────────────────────
+
+private fun autoDetectColumnMapping(headers: List<String>): Map<String, Int?> {
+    val mapping = mutableMapOf<String, Int?>()
+    for (fieldDef in FIELD_DEFS) mapping[fieldDef.key] = null
+    for (i in headers.indices) {
+        val h = headers[i].trim().lowercase().replace(" ", "")
+        val key = HEADER_ALIASES[h] ?: HEADER_ALIASES[headers[i].trim()]
+        if (key != null && mapping[key] == null) mapping[key] = i
+    }
+    return mapping
+}
+
+/** 从已解析行中提取指定列的不重复值 */
+private fun extractDistinctValues(rows: List<List<String>>, columnIndex: Int): List<String> {
+    val set = linkedSetOf<String>()
+    for (i in 1 until rows.size) {
+        val value = rows[i].getOrNull(columnIndex)?.trim() ?: ""
+        if (value.isNotEmpty()) set.add(value)
+    }
+    return set.toList()
+}
+
+/** 自动匹配 CSV 分类名到应用分类（精确匹配 name） */
+private fun autoMatchCategories(
+    csvNames: List<String>,
+    appCategories: List<AccountingCategory>
+): Map<String, String?> {
+    val result = mutableMapOf<String, String?>()
+    for (name in csvNames) {
+        val match = appCategories.find { it.name == name }
+        result[name] = match?.id
+    }
+    return result
+}
+
+// ─────────────────────────────────────────────
+// 主入口
+// ─────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CsvImportFlowScreen(
+    csvText: String,
+    onImportDone: (Int) -> Unit,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // 解析 CSV
+    var rows by remember { mutableStateOf<List<List<String>>>(emptyList()) }
+    var parsing by remember { mutableStateOf(true) }
+    LaunchedEffect(csvText) {
+        rows = withContext(Dispatchers.IO) { parseCsvText(csvText) }
+        parsing = false
+    }
+
+    var step by remember { mutableIntStateOf(0) }
+
+    // 字段→列索引映射
+    val columnMapping = remember { mutableStateMapOf<String, Int?>() }
+
+    // 一级分类映射：CSV名 → 目标分类ID（null=保持原名，自动创建）
+    val categoryMapping = remember { mutableStateMapOf<String, String?>() }
+    // 二级分类映射：CSV名 → 目标子分类ID（null=保持原名，自动创建）
+    val subcategoryMapping = remember { mutableStateMapOf<String, String?>() }
+
+    var distinctCategories by remember { mutableStateOf<List<String>>(emptyList()) }
+    var distinctSubcategories by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    // 加载应用分类（一级和二级）
+    val parentCategories = remember {
+        val db = AccountingCategoryDb.defaultCategories()
+        val expense = db.getCategories("记账页", "支出")
+        val income = db.getCategories("记账页", "收入")
+        expense + income
+    }
+    // 所有二级分类（展开 children）
+    val allSubcategories = remember(parentCategories) {
+        parentCategories.flatMap { parent ->
+            parent.children.map { child -> parent to child }
+        }
+    }
+
+    // 自动检测列映射
+    LaunchedEffect(rows) {
+        if (rows.size >= 2) {
+            val headers = rows[0].map { it.trim() }
+            val detected = autoDetectColumnMapping(headers)
+            columnMapping.clear()
+            columnMapping.putAll(detected)
+        }
+    }
+
+    // 导入状态
+    var importing by remember { mutableStateOf(false) }
+    var showConfirmDialog by remember { mutableStateOf(false) }
+    var showReplaceWarning by remember { mutableStateOf(false) }
+
+    // 确认弹窗
+    if (showConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!importing) showConfirmDialog = false },
+            title = { Text("确认导入") },
+            text = { Text("即将导入 ${rows.size - 1} 条记账记录。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showConfirmDialog = false
+                    scope.launch {
+                        importing = true
+                        val count = withContext(Dispatchers.IO) {
+                            doImport(
+                                context, csvText, rows,
+                                columnMapping, categoryMapping, subcategoryMapping,
+                                replaceMode = false
+                            )
+                        }
+                        importing = false
+                        android.widget.Toast.makeText(context, "成功导入 $count 条记录", android.widget.Toast.LENGTH_SHORT).show()
+                        onImportDone(count)
+                    }
+                }) { Text("追加导入") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { showConfirmDialog = false }) { Text("取消") }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = {
+                        showConfirmDialog = false
+                        showReplaceWarning = true
+                    }) { Text("替换全部", color = MaterialTheme.colorScheme.error) }
+                }
+            }
+        )
+    }
+
+    // 替换模式二次确认
+    if (showReplaceWarning) {
+        AlertDialog(
+            onDismissRequest = { if (!importing) showReplaceWarning = false },
+            title = { Text("警告", color = MaterialTheme.colorScheme.error) },
+            text = { Text("此操作将删除所有现有记账记录，然后导入 CSV 数据。\n\n建议在操作前先使用导出功能备份当前数据。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showReplaceWarning = false
+                    scope.launch {
+                        importing = true
+                        val count = withContext(Dispatchers.IO) {
+                            doImport(
+                                context, csvText, rows,
+                                columnMapping, categoryMapping, subcategoryMapping,
+                                replaceMode = true
+                            )
+                        }
+                        importing = false
+                        android.widget.Toast.makeText(context, "成功导入 $count 条记录", android.widget.Toast.LENGTH_SHORT).show()
+                        onImportDone(count)
+                    }
+                }) { Text("确认替换", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReplaceWarning = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // 导入中遮罩
+    if (importing) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceVariant, tonalElevation = 6.dp) {
+                Column(modifier = Modifier.padding(horizontal = 32.dp, vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(16.dp))
+                    Text("正在导入...", style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+        }
+        return
+    }
+
+    // ── 页面主体 ──
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text(if (step == 0) "CSV 导入 - 字段映射" else "CSV 导入 - 分类映射") },
+            navigationIcon = {
+                IconButton(onClick = { if (step == 1) step = 0 else onBack() }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                }
+            }
+        )
+
+        if (parsing) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            return@Column
+        }
+        if (rows.size < 2) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("CSV 文件无有效数据行", color = MaterialTheme.colorScheme.error)
+            }
+            return@Column
+        }
+
+        AnimatedContent(
+            targetState = step,
+            transitionSpec = {
+                if (targetState > initialState) slideInHorizontally { it } togetherWith slideOutHorizontally { -it }
+                else slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
+            },
+            modifier = Modifier.weight(1f),
+            label = "stepTransition"
+        ) { currentStep ->
+            if (currentStep == 0) {
+                FieldMappingStep(
+                    rows = rows,
+                    columnMapping = columnMapping,
+                    onNext = {
+                        // 提取不重复的一级和二级分类名
+                        val catIdx = columnMapping["分类"]
+                        val subCatIdx = columnMapping["二级分类"]
+                        if (catIdx != null) {
+                            distinctCategories = extractDistinctValues(rows, catIdx)
+                            val matched = autoMatchCategories(distinctCategories, parentCategories)
+                            categoryMapping.clear()
+                            categoryMapping.putAll(matched)
+                        }
+                        if (subCatIdx != null) {
+                            distinctSubcategories = extractDistinctValues(rows, subCatIdx)
+                            val matched = autoMatchCategories(distinctSubcategories, allSubcategories.map { it.second })
+                            subcategoryMapping.clear()
+                            subcategoryMapping.putAll(matched)
+                        }
+                        step = 1
+                    }
+                )
+            } else {
+                CategoryMappingStep(
+                    distinctCategories = distinctCategories,
+                    distinctSubcategories = distinctSubcategories,
+                    categoryMapping = categoryMapping,
+                    subcategoryMapping = subcategoryMapping,
+                    parentCategories = parentCategories,
+                    allSubcategories = allSubcategories,
+                    onConfirm = { showConfirmDialog = true },
+                    onBack = { step = 0 }
+                )
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────
+// Step 1: 字段映射
+// ─────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FieldMappingStep(
+    rows: List<List<String>>,
+    columnMapping: MutableMap<String, Int?>,
+    onNext: () -> Unit
+) {
+    val headers = rows[0].map { it.trim() }
+    val columnOptions = headers.mapIndexed { i, h -> i to h }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            item {
+                Text(
+                    "已解析 ${rows.size - 1} 条记录，请确认列对应关系：",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+            items(FIELD_DEFS) { fieldDef ->
+                FieldMappingRow(
+                    label = fieldDef.label,
+                    selectedIndex = columnMapping[fieldDef.key],
+                    options = columnOptions,
+                    onSelect = { columnMapping[fieldDef.key] = it }
+                )
+            }
+            item {
+                Spacer(Modifier.height(20.dp))
+                Text("数据预览：", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(8.dp))
+                CsvPreviewTable(headers = headers, dataRows = rows.drop(1).take(5))
+            }
+        }
+        Surface(tonalElevation = 2.dp, shadowElevation = 4.dp) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Button(onClick = onNext) { Text("下一步: 分类映射") }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────
+// Step 2: 分类映射（一级 + 二级分开）
+// ─────────────────────────────────────────────
+
+@Composable
+private fun CategoryMappingStep(
+    distinctCategories: List<String>,
+    distinctSubcategories: List<String>,
+    categoryMapping: MutableMap<String, String?>,
+    subcategoryMapping: MutableMap<String, String?>,
+    parentCategories: List<AccountingCategory>,
+    allSubcategories: List<Pair<AccountingCategory, AccountingCategory>>,
+    onConfirm: () -> Unit,
+    onBack: () -> Unit
+) {
+    // 一级分类下拉选项：保持原名 + 所有父分类
+    val parentDropdownItems = remember(parentCategories) {
+        buildList {
+            add(null to "保持原名（自动创建）")
+            for (cat in parentCategories) {
+                val typeLabel = if (isIncomeCategory(cat.id)) "收入" else "支出"
+                add(cat.id to "${cat.name} ($typeLabel)")
+            }
+        }
+    }
+
+    // 二级分类下拉选项：保持原名 + 所有子分类（显示 "父 > 子"）
+    val childDropdownItems = remember(allSubcategories) {
+        buildList {
+            add(null to "保持原名（自动创建）")
+            for ((parent, child) in allSubcategories) {
+                val typeLabel = if (isIncomeCategory(parent.id)) "收入" else "支出"
+                add(child.id to "${parent.name} > ${child.name} ($typeLabel)")
+            }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            // ── 一级分类映射 ──
+            if (distinctCategories.isNotEmpty()) {
+                item {
+                    Text("一级分类映射", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.height(8.dp))
+                }
+                items(distinctCategories) { csvName ->
+                    CategoryMappingRow(
+                        csvCategoryName = csvName,
+                        selectedId = categoryMapping[csvName],
+                        dropdownItems = parentDropdownItems,
+                        onSelect = { categoryMapping[csvName] = it }
+                    )
+                }
+            }
+
+            // ── 二级分类映射 ──
+            if (distinctSubcategories.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(20.dp))
+                    Text("二级分类映射", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.height(8.dp))
+                }
+                items(distinctSubcategories) { csvName ->
+                    CategoryMappingRow(
+                        csvCategoryName = csvName,
+                        selectedId = subcategoryMapping[csvName],
+                        dropdownItems = childDropdownItems,
+                        onSelect = { subcategoryMapping[csvName] = it }
+                    )
+                }
+            }
+        }
+
+        Surface(tonalElevation = 2.dp, shadowElevation = 4.dp) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                OutlinedButton(onClick = onBack) { Text("上一步") }
+                Button(onClick = onConfirm) { Text("确认导入") }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────
+// 子组件
+// ─────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FieldMappingRow(
+    label: String,
+    selectedIndex: Int?,
+    options: List<Pair<Int, String>>,
+    onSelect: (Int?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = options.find { it.first == selectedIndex }?.second
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(0.3f))
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }, modifier = Modifier.weight(0.7f)) {
+            OutlinedTextField(
+                value = selectedLabel ?: "未选择",
+                onValueChange = {},
+                readOnly = true,
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                textStyle = MaterialTheme.typography.bodySmall,
+                singleLine = true
+            )
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                options.forEach { (idx, hdr) ->
+                    DropdownMenuItem(
+                        text = { Text(hdr, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        onClick = { onSelect(idx); expanded = false }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CategoryMappingRow(
+    csvCategoryName: String,
+    selectedId: String?,
+    dropdownItems: List<Pair<String?, String>>,
+    onSelect: (String?) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = dropdownItems.find { it.first == selectedId }?.second ?: "保持原名"
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = csvCategoryName,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(0.3f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }, modifier = Modifier.weight(0.7f)) {
+            OutlinedTextField(
+                value = selectedLabel,
+                onValueChange = {},
+                readOnly = true,
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                textStyle = MaterialTheme.typography.bodySmall,
+                singleLine = true
+            )
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                dropdownItems.forEach { (id, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        onClick = { onSelect(id); expanded = false }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CsvPreviewTable(headers: List<String>, dataRows: List<List<String>>) {
+    val cellWidth = 120.dp
+    val scrollState = rememberScrollState()
+
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.horizontalScroll(scrollState).padding(8.dp)) {
+            Row {
+                for (h in headers) {
+                    Text(h, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.width(cellWidth), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+            for (row in dataRows) {
+                Row {
+                    for ((i, cell) in row.withIndex()) {
+                        if (i < headers.size) {
+                            Text(cell, style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.width(cellWidth), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────
+// 辅助函数
+// ─────────────────────────────────────────────
+
+/** 判断分类 ID 是否属于收入类 */
+private fun isIncomeCategory(catId: String): Boolean {
+    val incomePrefixes = listOf("salary", "investment", "red_packet", "bonus", "reimbursement",
+        "part_time", "gift", "interest", "refund", "invest_income", "second_hand",
+        "social_benefit", "tax_refund", "provident_fund")
+    return incomePrefixes.any { catId.startsWith(it) }
+}
+
+// ─────────────────────────────────────────────
+// 导入逻辑（带自动创建分类）
+// ─────────────────────────────────────────────
+
+/**
+ * 执行 CSV 导入。
+ *
+ * 流程：
+ * 1. 扫描 CSV，确定需要创建的分类（用户选择"保持原名"的那些）
+ * 2. 通过 AccountingRepository 创建缺失的分类
+ * 3. 对 CSV 文本做列级替换：将用户映射的分类名替换为目标分类名
+ * 4. 将替换后的 CSV 写入临时文件，调用现有 importFromCsv 走标准流程
+ */
+private fun doImport(
+    context: android.content.Context,
+    csvText: String,
+    rows: List<List<String>>,
+    columnMapping: Map<String, Int?>,
+    categoryMapping: Map<String, String?>,
+    subcategoryMapping: Map<String, String?>,
+    replaceMode: Boolean
+): Int {
+    val catIdx = columnMapping["分类"] ?: -1
+    val subCatIdx = columnMapping["二级分类"] ?: -1
+
+    // ── 1. 扫描 CSV，收集需要创建的分类 ──
+    val existingCats = AccountingRepository.getAllCategoriesFlat(context)
+    val existingNames = existingCats.map { it.second }.toSet()
+
+    // 需要创建的一级分类（保持原名且数据库中不存在的）
+    val needCreateParents = mutableSetOf<String>()
+    // 需要创建的二级分类 → 其在 CSV 中的父分类名
+    val needCreateChildren = mutableMapOf<String, String>()
+
+    for (i in 1 until rows.size) {
+        val cols = rows[i]
+        val catName = if (catIdx >= 0) cols.getOrNull(catIdx)?.trim()?.ifEmpty { null } else null
+        val subCatName = if (subCatIdx >= 0) cols.getOrNull(subCatIdx)?.trim()?.ifEmpty { null } else null
+
+        if (catName != null && categoryMapping[catName] == null && catName !in existingNames) {
+            needCreateParents.add(catName)
+        }
+        if (subCatName != null && subcategoryMapping[subCatName] == null && subCatName !in existingNames) {
+            needCreateChildren[subCatName] = catName ?: ""
+        }
+    }
+
+    // ── 2. 通过 Repository 创建缺失的分类 ──
+    // 创建一级分类
+    for (name in needCreateParents) {
+        AccountingRepository.createParentCategory(context, name)
+    }
+
+    // 重新获取（含新创建的），用于查找二级分类的父 ID
+    val allCatsAfterCreate = AccountingRepository.getAllCategoriesFlat(context)
+    val nameToId = allCatsAfterCreate.associate { it.second to it.first }
+
+    // 创建二级分类
+    for ((childName, parentCsvName) in needCreateChildren) {
+        // 父分类 ID：优先用用户映射的目标，其次用 CSV 原始名查数据库
+        val parentId = categoryMapping[parentCsvName]
+            ?: nameToId[parentCsvName]
+            ?: ""
+        if (parentId.isNotEmpty()) {
+            AccountingRepository.createChildCategory(context, childName, parentId)
+        }
+    }
+
+    // ── 3. 对 CSV 文本做列级替换 ──
+    // 将用户映射的分类名替换为目标分类名，然后用替换后的 CSV 走标准导入
+    val hasMapping = categoryMapping.values.any { it != null } || subcategoryMapping.values.any { it != null }
+
+    val finalCsvText = if (hasMapping && catIdx >= 0) {
+        // 从映射中获取目标分类名（ID → name）
+        val allCatsFinal = AccountingRepository.getAllCategoriesFlat(context)
+        val idToName = allCatsFinal.associate { it.first to it.second }
+
+        val catIdToName = categoryMapping.mapValues { (_, v) -> v?.let { idToName[it] } }
+        val subCatIdToName = subcategoryMapping.mapValues { (_, v) -> v?.let { idToName[it] } }
+
+        transformCsvColumns(csvText, rows, catIdx, subCatIdx, catIdToName, subCatIdToName)
+    } else {
+        csvText
+    }
+
+    // ── 4. 写入临时文件，调用标准导入流程 ──
+    val tempFile = java.io.File(context.cacheDir, "import_temp.csv")
+    tempFile.writeText(finalCsvText, Charsets.UTF_8)
+    val tempUri = android.net.Uri.fromFile(tempFile)
+
+    // 标准导入：先清空再导入（替换模式）或直接导入（追加模式）
+    val db = AccountingRepository.getDb(context)
+    if (replaceMode) {
+        db.writableDatabase.beginTransaction()
+        try {
+            db.writableDatabase.delete("records", null, null)
+            db.writableDatabase.setTransactionSuccessful()
+        } finally {
+            db.writableDatabase.endTransaction()
+        }
+    }
+
+    AccountingRepository.importCsv(context, tempUri)
+
+    // 统计导入条数
+    val countCursor = db.readableDatabase.rawQuery("SELECT COUNT(*) FROM records", null)
+    val count = try { if (countCursor.moveToFirst()) countCursor.getInt(0) else 0 } finally { countCursor.close() }
+
+    // 清理临时文件
+    tempFile.delete()
+
+    return count
+}
+
+/**
+ * 对 CSV 文本做列级替换：
+ * 1. 替换 header 行，将非标准列名统一为 importFromCsv 期望的标准名
+ * 2. 替换"分类"列和"二级分类"列中的值（用户映射的目标名）
+ */
+private fun transformCsvColumns(
+    csvText: String,
+    rows: List<List<String>>,
+    catIdx: Int,
+    subCatIdx: Int,
+    catMapping: Map<String, String?>,     // csvName -> targetName or null
+    subCatMapping: Map<String, String?>   // csvName -> targetName or null
+): String {
+    val catReplacements = catMapping.filterValues { it != null }.mapValues { it.value!! }
+    val subCatReplacements = subCatMapping.filterValues { it != null }.mapValues { it.value!! }
+
+    // 标准 header 名（importFromCsv 期望的）
+    val headerNormalize = mapOf(
+        "日期" to "时间", "收支类型" to "类型", "类别" to "分类"
+    )
+
+    val lines = csvText.lines().toMutableList()
+
+    // 替换 header 行
+    if (lines.isNotEmpty()) {
+        val headerCols = rows[0].map { it.trim() }
+        val newHeaders = headerCols.map { h -> headerNormalize[h] ?: h }
+        lines[0] = newHeaders.joinToString(",")
+    }
+
+    // 替换数据行中的分类名
+    for (i in 1 until lines.size) {
+        if (i - 1 >= rows.size) break
+        val cols = rows[i].toMutableList()
+
+        if (catIdx >= 0 && catIdx < cols.size) {
+            val original = cols[catIdx].trim()
+            catReplacements[original]?.let { cols[catIdx] = it }
+        }
+        if (subCatIdx >= 0 && subCatIdx < cols.size) {
+            val original = cols[subCatIdx].trim()
+            subCatReplacements[original]?.let { cols[subCatIdx] = it }
+        }
+
+        lines[i] = cols.joinToString(",") { v ->
+            if (v.contains(',') || v.contains('"') || v.contains('\n'))
+                "\"${v.replace("\"", "\"\"")}\""
+            else v
+        }
+    }
+    return lines.joinToString("\n")
+}

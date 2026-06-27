@@ -72,7 +72,13 @@ class MainActivity : ComponentActivity() {
                         if (animation.typeMask and WindowInsetsCompat.Type.ime() != 0) {
                             val imeInset = ViewCompat.getRootWindowInsets(contentView)
                                 ?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
-                            if (imeInset == 0) contentView.translationY = 0f
+                            if (imeInset == 0 && contentView.translationY != 0f) {
+                                contentView.animate()
+                                    .translationY(0f)
+                                    .setDuration(150)
+                                    .setInterpolator(android.view.animation.DecelerateInterpolator())
+                                    .start()
+                            }
                         }
                     }
                 }

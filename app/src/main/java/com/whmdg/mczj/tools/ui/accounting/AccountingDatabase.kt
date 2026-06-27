@@ -303,6 +303,79 @@ internal class AccountingDatabase private constructor(context: Context) :
         return parents
     }
 
+    // ─────────────────────────────────────────────
+    // 分类 CRUD（供导入等外部流程调用）
+    // ─────────────────────────────────────────────
+
+    /** 获取所有分类（扁平列表，含一级和二级） */
+    fun getAllCategoriesFlat(): List<Triple<String, String, String?>> {
+        val result = mutableListOf<Triple<String, String, String?>>()
+        val cursor = readableDatabase.rawQuery("SELECT id, name, parent_id FROM categories", null)
+        try {
+            while (cursor.moveToNext()) {
+                result.add(Triple(cursor.getString(0), cursor.getString(1), cursor.getString(2)))
+            }
+        } finally {
+            cursor.close()
+        }
+        return result
+    }
+
+    /** 创建一级分类，返回新分类 ID */
+    fun createParentCategory(name: String, type: String = "支出", icon: String = "category"): String {
+        val id = "auto_${name.hashCode().toString(16)}"
+        val cv = ContentValues().apply {
+            put("id", id)
+            put("name", name)
+            put("icon", icon)
+            put("page", "记账页")
+            put("type", type)
+            putNull("parent_id")
+            put("sort_order", 0)
+        }
+        writableDatabase.insertWithOnConflict("categories", null, cv, SQLiteDatabase.CONFLICT_IGNORE)
+        return id
+    }
+
+    /** 创建二级分类，返回新分类 ID */
+    fun createChildCategory(name: String, parentId: String, type: String = "支出", icon: String = "subcategory"): String {
+        val id = "auto_${name.hashCode().toString(16)}"
+        val cv = ContentValues().apply {
+            put("id", id)
+            put("name", name)
+            put("icon", icon)
+            put("page", "记账页")
+            put("type", type)
+            put("parent_id", parentId)
+            put("sort_order", 0)
+        }
+        writableDatabase.insertWithOnConflict("categories", null, cv, SQLiteDatabase.CONFLICT_IGNORE)
+        return id
+    }
+
+    /** 更新一级分类名称 */
+    fun updateParentCategory(id: String, newName: String) {
+        val cv = ContentValues().apply { put("name", newName) }
+        writableDatabase.update("categories", cv, "id = ?", arrayOf(id))
+    }
+
+    /** 更新二级分类名称 */
+    fun updateChildCategory(id: String, newName: String) {
+        val cv = ContentValues().apply { put("name", newName) }
+        writableDatabase.update("categories", cv, "id = ?", arrayOf(id))
+    }
+
+    /** 删除一级分类（同时删除其下所有二级分类） */
+    fun deleteParentCategory(id: String) {
+        writableDatabase.delete("categories", "parent_id = ?", arrayOf(id))
+        writableDatabase.delete("categories", "id = ?", arrayOf(id))
+    }
+
+    /** 删除二级分类 */
+    fun deleteChildCategory(id: String) {
+        writableDatabase.delete("categories", "id = ?", arrayOf(id))
+    }
+
     fun getCategoryVersion(): Int {
         return getSetting("categories_version")?.toIntOrNull() ?: 0
     }
@@ -831,7 +904,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         }
     }
 
-    fun importFromCsv(csvString: String) {
+    fun importFromCsv(csvString: String, appendMode: Boolean = false) {
         val lines = csvString.lines().filter { it.isNotBlank() }
         if (lines.size < 2) throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
 
@@ -876,7 +949,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
         db.beginTransaction()
         try {
-            db.delete("records", null, null)
+            if (!appendMode) db.delete("records", null, null)
 
             for (i in 1 until lines.size) {
                 val cols = parseCsvLine(lines[i])
@@ -922,6 +995,100 @@ internal class AccountingDatabase private constructor(context: Context) :
         } finally {
             db.endTransaction()
         }
+    }
+
+    /**
+     * 从 CSV 导入记录（带列映射和分类映射）。
+     * @param csvText         CSV 文本内容
+     * @param columnMapping   fieldKey -> CSV 列索引映射
+     * @param categoryMapping CSV分类名 -> 目标分类ID映射（null=保持原名）
+     * @param replaceMode     true=替换全部旧记录，false=追加
+     * @return 成功导入的记录数
+     */
+    fun importFromCsvWithMapping(
+        csvText: String,
+        columnMapping: Map<String, Int?>,
+        categoryMapping: Map<String, String?>,
+        replaceMode: Boolean
+    ): Int {
+        val lines = csvText.lines().filter { it.isNotBlank() }
+        if (lines.size < 2) throw IllegalArgumentException("CSV 文件无数据行。")
+
+        val db = writableDatabase
+        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+        val dateFormatFull = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+
+        // 构建账户名→ID 映射
+        val accNameToId = mutableMapOf<String, String>()
+        val accCursor = db.rawQuery("SELECT id, name FROM accounts", null)
+        try { while (accCursor.moveToNext()) accNameToId[accCursor.getString(1)] = accCursor.getString(0) }
+        finally { accCursor.close() }
+
+        var imported = 0
+        db.beginTransaction()
+        try {
+            if (replaceMode) db.delete("records", null, null)
+
+            for (i in 1 until lines.size) {
+                val cols = parseCsvLine(lines[i])
+                if (cols.isEmpty()) continue
+
+                fun col(key: String): String? {
+                    val idx = columnMapping[key] ?: return null
+                    return cols.getOrNull(idx)?.trim()?.ifEmpty { null }
+                }
+
+                val type = col("类型") ?: continue
+                if (type != "支出" && type != "收入" && type != "转账" && type != "债务") continue
+                val amountRaw = col("金额") ?: continue
+                val amount = try {
+                    kotlin.math.abs(amountRaw.replace("[¥$,，]".toRegex(), "").toDouble())
+                } catch (_: Exception) { continue }
+                val amountStr = if (amount == amount.toLong().toDouble()) amount.toLong().toString() else amount.toString()
+
+                val timeStr = col("时间") ?: continue
+                val happenedAt = try {
+                    (dateFormat.parse(timeStr)?.time ?: dateFormatFull.parse(timeStr)?.time) ?: 0L
+                } catch (_: Exception) { 0L }
+
+                val catName = col("分类") ?: ""
+                val subCatName = col("二级分类") ?: ""
+                val book = col("账本") ?: "默认记账本"
+                val accName = col("账户") ?: ""
+                val note = col("备注") ?: ""
+                val discountBefore = col("优惠前金额")
+                val reimbName = col("报销账户") ?: ""
+
+                // 分类映射
+                val catId = if (catName.isNotEmpty()) categoryMapping[catName] ?: catName else ""
+                val subCatId = if (subCatName.isNotEmpty()) categoryMapping[subCatName] ?: subCatName else null
+
+                val cv = ContentValues().apply {
+                    put("id", java.util.UUID.randomUUID().toString())
+                    put("book_name", book)
+                    put("type", type)
+                    put("amount", amountStr)
+                    put("category_id", catId)
+                    if (subCatId != null) put("subcategory_id", subCatId) else putNull("subcategory_id")
+                    put("note", note)
+                    put("happened_at", happenedAt)
+                    val aId = accNameToId[accName]
+                    if (aId != null) put("account_id", aId) else if (accName.isNotEmpty()) put("account_id", accName) else putNull("account_id")
+                    if (discountBefore != null) put("discount_before", discountBefore) else putNull("discount_before")
+                    putNull("reimbursement_account_id")
+                }
+                db.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+                imported++
+            }
+            db.setTransactionSuccessful()
+        } catch (e: IllegalArgumentException) {
+            throw e
+        } catch (_: Exception) {
+            throw IllegalArgumentException("导入过程中发生错误。")
+        } finally {
+            db.endTransaction()
+        }
+        return imported
     }
 
     private fun parseCsvLine(line: String): List<String> {
