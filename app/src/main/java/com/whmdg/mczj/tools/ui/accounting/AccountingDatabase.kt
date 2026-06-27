@@ -893,10 +893,7 @@ internal class AccountingDatabase private constructor(context: Context) :
             val lines = csvString.lines().filter { it.isNotBlank() }
             if (lines.size < 2) throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
             val header = parseCsvLine(lines[0])
-            val required = listOf("类型", "金额", "时间")
-            for (r in required) {
-                if (header.none { it.trim() == r }) throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
-            }
+            if (header.isEmpty()) throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
         } catch (e: IllegalArgumentException) {
             throw e
         } catch (_: Exception) {

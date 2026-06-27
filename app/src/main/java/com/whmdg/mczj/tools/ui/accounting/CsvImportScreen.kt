@@ -44,16 +44,31 @@ private val FIELD_DEFS = listOf(
 )
 
 private val HEADER_ALIASES = mapOf(
+    // 时间
     "时间" to "时间", "日期" to "时间", "date" to "时间", "time" to "时间",
+    "交易时间" to "时间", "消费时间" to "时间", "记账时间" to "时间", "创建时间" to "时间",
+    // 类型
     "类型" to "类型", "收支类型" to "类型", "type" to "类型", "收支" to "类型", "收/支" to "类型",
-    "金额" to "金额", "amount" to "金额",
-    "分类" to "分类", "类别" to "分类", "category" to "分类",
+    "收入支出" to "类型", "收入/支出" to "类型", "kind" to "类型",
+    // 金额
+    "金额" to "金额", "amount" to "金额", "花费" to "金额", "消费金额" to "金额", "money" to "金额",
+    // 分类
+    "分类" to "分类", "类别" to "分类", "category" to "分类", "类目" to "分类",
+    "一级分类" to "分类", "消费分类" to "分类",
+    // 二级分类
     "二级分类" to "二级分类", "子分类" to "二级分类", "sub_category" to "二级分类",
-    "账户" to "账户", "account" to "账户",
-    "账本" to "账本", "book" to "账本",
-    "备注" to "备注", "note" to "备注", "说明" to "备注",
-    "优惠前金额" to "优惠前金额", "优惠" to "优惠前金额",
-    "报销账户" to "报销账户", "reimbursement" to "报销账户",
+    "二级类目" to "二级分类", "子类" to "二级分类", "细分" to "二级分类",
+    // 账户
+    "账户" to "账户", "account" to "账户", "支付方式" to "账户", "付款方式" to "账户", "来源" to "账户",
+    // 账本
+    "账本" to "账本", "book" to "账本", "本子" to "账本",
+    // 备注
+    "备注" to "备注", "note" to "备注", "说明" to "备注", "描述" to "备注",
+    "商品" to "备注", "项目" to "备注", "内容" to "备注", "remark" to "备注",
+    // 优惠前金额
+    "优惠前金额" to "优惠前金额", "优惠" to "优惠前金额", "原价" to "优惠前金额",
+    // 报销账户
+    "报销账户" to "报销账户", "reimbursement" to "报销账户", "报销" to "报销账户",
 )
 
 // ─────────────────────────────────────────────
@@ -61,7 +76,8 @@ private val HEADER_ALIASES = mapOf(
 // ─────────────────────────────────────────────
 
 private fun parseCsvText(csvText: String): List<List<String>> {
-    val lines = csvText.lines().filter { it.isNotBlank() }
+    val cleaned = csvText.removePrefix("﻿") // 去除 UTF-8 BOM
+    val lines = cleaned.lines().filter { it.isNotBlank() }
     return lines.map { line ->
         val result = mutableListOf<String>()
         val current = StringBuilder()
@@ -93,8 +109,9 @@ private fun autoDetectColumnMapping(headers: List<String>): Map<String, Int?> {
     val mapping = mutableMapOf<String, Int?>()
     for (fieldDef in FIELD_DEFS) mapping[fieldDef.key] = null
     for (i in headers.indices) {
-        val h = headers[i].trim().lowercase().replace(" ", "")
-        val key = HEADER_ALIASES[h] ?: HEADER_ALIASES[headers[i].trim()]
+        val raw = headers[i].trim().removePrefix("﻿")
+        val h = raw.lowercase().replace(" ", "")
+        val key = HEADER_ALIASES[h] ?: HEADER_ALIASES[raw]
         if (key != null && mapping[key] == null) mapping[key] = i
     }
     return mapping
@@ -186,6 +203,7 @@ fun CsvImportFlowScreen(
     var importing by remember { mutableStateOf(false) }
     var showConfirmDialog by remember { mutableStateOf(false) }
     var showReplaceWarning by remember { mutableStateOf(false) }
+    var mappingError by remember { mutableStateOf<String?>(null) }
 
     // 确认弹窗
     if (showConfirmDialog) {
@@ -303,7 +321,15 @@ fun CsvImportFlowScreen(
                 FieldMappingStep(
                     rows = rows,
                     columnMapping = columnMapping,
+                    mappingError = mappingError,
                     onNext = {
+                        // 校验必需字段
+                        val missing = listOf("时间", "类型", "金额").filter { columnMapping[it] == null }
+                        if (missing.isNotEmpty()) {
+                            mappingError = "请映射必需字段：${missing.joinToString("、")}"
+                            return@FieldMappingStep
+                        }
+                        mappingError = null
                         // 提取不重复的一级和二级分类名
                         val catIdx = columnMapping["分类"]
                         val subCatIdx = columnMapping["二级分类"]
@@ -347,6 +373,7 @@ fun CsvImportFlowScreen(
 private fun FieldMappingStep(
     rows: List<List<String>>,
     columnMapping: MutableMap<String, Int?>,
+    mappingError: String?,
     onNext: () -> Unit
 ) {
     val headers = rows[0].map { it.trim() }
@@ -381,11 +408,18 @@ private fun FieldMappingStep(
             }
         }
         Surface(tonalElevation = 2.dp, shadowElevation = 4.dp) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.End
-            ) {
-                Button(onClick = onNext) { Text("下一步: 分类映射") }
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                if (mappingError != null) {
+                    Text(
+                        mappingError,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Button(onClick = onNext) { Text("下一步: 分类映射") }
+                }
             }
         }
     }
