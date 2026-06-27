@@ -369,185 +369,6 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             }
             } // Surface
 
-            // 分类选择区（参考 BeeCount：4列网格 + 二级分类原地展开）
-            val itemsPerRow = 4
-            val primaryIconSize = 56.dp
-            val subIconSize = 48.dp
-            val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-            val itemWidth = screenWidth / itemsPerRow
-            val scrollState = rememberScrollState()
-
-            // 展开/折叠标记：仅在用户点击分类时为 true，防止键盘弹出时误触发滚动
-
-            // 点击建议后自动展开并滚动到目标分类
-            val densityForScroll = LocalDensity.current
-            LaunchedEffect(scrollTarget) {
-                val target = scrollTarget ?: return@LaunchedEffect
-                scrollTarget = null
-                delay(250)
-                val idx = categories.indexOfFirst { cat ->
-                    cat.id == target || cat.children.any { it.id == target }
-                }
-                if (idx < 0) return@LaunchedEffect
-                val d = densityForScroll
-                val rowIdx = idx / itemsPerRow
-                val iconSizePx = with(d) { primaryIconSize.roundToPx() }
-                val labelPx = with(d) { 16.dp.roundToPx() }
-                val spacingPx = with(d) { 16.dp.roundToPx() }
-                val subCardPx = with(d) { 80.dp.roundToPx() }
-                val offset = rowIdx * (iconSizePx + labelPx + spacingPx) + if (expandedCategory != null) subCardPx else 0
-                scrollState.animateScrollTo(offset)
-            }
-
-            // 展开/折叠二级分类时自动滚动，保证内容不被裁剪、不留空白
-            // 仅在用户展开/折叠分类时触发，键盘弹出导致的高度变化不触发
-            var prevMaxValue by remember { mutableIntStateOf(0) }
-            LaunchedEffect(scrollState) {
-                snapshotFlow { scrollState.maxValue }
-                    .collect { newMax ->
-                        val oldMax = prevMaxValue
-                        prevMaxValue = newMax
-                        if (!isTogglingCategory) return@collect
-                        isTogglingCategory = false
-                        if (oldMax == 0) return@collect
-                        if (newMax < oldMax) {
-                            if (scrollState.value > newMax) {
-                                scrollState.animateScrollTo(newMax)
-                            }
-                        } else {
-                            delay(150)
-                            scrollState.animateScrollTo(oldMax)
-                        }
-                    }
-            }
-
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .verticalScroll(scrollState)
-                    .padding(vertical = 8.dp, horizontal = 12.dp)
-            ) {
-                // 按每行4个分组显示一级分类
-                var i = 0
-                while (i < categories.size) {
-                    val rowEnd = (i + itemsPerRow).coerceAtMost(categories.size)
-                    val rowItems = categories.subList(i, rowEnd)
-
-                    // 一级分类行
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Start
-                    ) {
-                        rowItems.forEach { cat ->
-                            val isSelected = selectedCategory == cat.id
-                            val isExpanded = expandedCategory == cat.id
-                            val hasChildren = cat.children.isNotEmpty()
-
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .width(itemWidth)
-                                    .clickable {
-                                        if (hasChildren) {
-                                            isTogglingCategory = true
-                                            expandedCategory = if (isExpanded) null else cat.id
-                                        } else {
-                                            selectedCategory = if (isSelected) null else cat.id
-                                            isTogglingCategory = true
-                                            expandedCategory = null
-                                        }
-                                    }
-                                    .padding(vertical = 4.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    // 图标容器
-                                    Box(
-                                        modifier = Modifier
-                                            .size(primaryIconSize)
-                                            .clip(RoundedCornerShape(28.dp))
-                                            .background(
-                                                if (isSelected || isExpanded)
-                                                    iconThemeColor.copy(alpha = 0.25f)
-                                                else
-                                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        CategoryIcon(
-                                            icon = cat.icon,
-                                            size = 24.dp,
-                                            tint = iconThemeColor
-                                        )
-                                    }
-                                    // 有子分类标记：右下角三个点
-                                    if (hasChildren) {
-                                        Box(
-                                            modifier = Modifier
-                                                .align(Alignment.BottomEnd)
-                                                .offset(x = 4.dp, y = 4.dp)
-                                                .size(18.dp)
-                                                .clip(RoundedCornerShape(9.dp))
-                                                .background(
-                                                    if (isExpanded)
-                                                        iconThemeColor.copy(alpha = 0.25f)
-                                                    else
-                                                        MaterialTheme.colorScheme.surfaceVariant
-                                                ),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Outlined.MoreHoriz,
-                                                contentDescription = "展开",
-                                                modifier = Modifier.size(12.dp),
-                                                tint = if (isExpanded)
-                                                    iconThemeColor
-                                                else
-                                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                }
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    text = cat.name,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    maxLines = 1,
-                                    color = if (isSelected || isExpanded)
-                                        iconThemeColor
-                                    else
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                        // 补齐空位（保持对齐）
-                        repeat(itemsPerRow - rowItems.size) {
-                            Spacer(Modifier.width(itemWidth))
-                        }
-                    }
-
-                    // 检查这一行中是否有展开的分类，显示二级分类卡片
-                    val expandedInRow = rowItems.find { it.id == expandedCategory && it.children.isNotEmpty() }
-                    if (expandedInRow != null) {
-                        Spacer(Modifier.height(8.dp))
-                        SubcategoryCard(
-                            parentName = expandedInRow.name,
-                            children = expandedInRow.children,
-                            selectedId = selectedCategory,
-                            themeColor = iconThemeColor,
-                            onSelect = { childId ->
-                                selectedCategory = childId
-                            }
-                        )
-                        Spacer(Modifier.height(8.dp))
-                    } else {
-                        Spacer(Modifier.height(12.dp))
-                    }
-
-                    i = rowEnd
-                }
-            }
-
             // 第一行：左侧20%空 | 中间60%备注输入 | 右侧20%金额
             Row(
                 modifier = Modifier
@@ -727,6 +548,183 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
 
             val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
             HorizontalDivider(color = iconThemeColor, thickness = 1.dp)
+
+            // 分类选择区（参考 BeeCount：4列网格 + 二级分类原地展开）
+            val itemsPerRow = 4
+            val primaryIconSize = 56.dp
+            val subIconSize = 48.dp
+            val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+            val itemWidth = screenWidth / itemsPerRow
+            val scrollState = rememberScrollState()
+
+            // 点击建议后自动展开并滚动到目标分类
+            val densityForScroll = LocalDensity.current
+            LaunchedEffect(scrollTarget) {
+                val target = scrollTarget ?: return@LaunchedEffect
+                scrollTarget = null
+                delay(250)
+                val idx = categories.indexOfFirst { cat ->
+                    cat.id == target || cat.children.any { it.id == target }
+                }
+                if (idx < 0) return@LaunchedEffect
+                val d = densityForScroll
+                val rowIdx = idx / itemsPerRow
+                val iconSizePx = with(d) { primaryIconSize.roundToPx() }
+                val labelPx = with(d) { 16.dp.roundToPx() }
+                val spacingPx = with(d) { 16.dp.roundToPx() }
+                val subCardPx = with(d) { 80.dp.roundToPx() }
+                val offset = rowIdx * (iconSizePx + labelPx + spacingPx) + if (expandedCategory != null) subCardPx else 0
+                scrollState.animateScrollTo(offset)
+            }
+
+            // 展开/折叠二级分类时自动滚动，保证内容不被裁剪、不留空白
+            // 仅在用户展开/折叠分类时触发，键盘弹出导致的高度变化不触发
+            var prevMaxValue by remember { mutableIntStateOf(0) }
+            LaunchedEffect(scrollState) {
+                snapshotFlow { scrollState.maxValue }
+                    .collect { newMax ->
+                        val oldMax = prevMaxValue
+                        prevMaxValue = newMax
+                        if (!isTogglingCategory) return@collect
+                        isTogglingCategory = false
+                        if (oldMax == 0) return@collect
+                        if (newMax < oldMax) {
+                            if (scrollState.value > newMax) {
+                                scrollState.animateScrollTo(newMax)
+                            }
+                        } else {
+                            delay(150)
+                            scrollState.animateScrollTo(oldMax)
+                        }
+                    }
+            }
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(scrollState)
+                    .padding(vertical = 8.dp, horizontal = 12.dp)
+            ) {
+                // 按每行4个分组显示一级分类
+                var i = 0
+                while (i < categories.size) {
+                    val rowEnd = (i + itemsPerRow).coerceAtMost(categories.size)
+                    val rowItems = categories.subList(i, rowEnd)
+
+                    // 一级分类行
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Start
+                    ) {
+                        rowItems.forEach { cat ->
+                            val isSelected = selectedCategory == cat.id
+                            val isExpanded = expandedCategory == cat.id
+                            val hasChildren = cat.children.isNotEmpty()
+
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .width(itemWidth)
+                                    .clickable {
+                                        if (hasChildren) {
+                                            isTogglingCategory = true
+                                            expandedCategory = if (isExpanded) null else cat.id
+                                        } else {
+                                            selectedCategory = if (isSelected) null else cat.id
+                                            isTogglingCategory = true
+                                            expandedCategory = null
+                                        }
+                                    }
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    // 图标容器
+                                    Box(
+                                        modifier = Modifier
+                                            .size(primaryIconSize)
+                                            .clip(RoundedCornerShape(28.dp))
+                                            .background(
+                                                if (isSelected || isExpanded)
+                                                    iconThemeColor.copy(alpha = 0.25f)
+                                                else
+                                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CategoryIcon(
+                                            icon = cat.icon,
+                                            size = 24.dp,
+                                            tint = iconThemeColor
+                                        )
+                                    }
+                                    // 有子分类标记：右下角三个点
+                                    if (hasChildren) {
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .offset(x = 4.dp, y = 4.dp)
+                                                .size(18.dp)
+                                                .clip(RoundedCornerShape(9.dp))
+                                                .background(
+                                                    if (isExpanded)
+                                                        iconThemeColor.copy(alpha = 0.25f)
+                                                    else
+                                                        MaterialTheme.colorScheme.surfaceVariant
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.MoreHoriz,
+                                                contentDescription = "展开",
+                                                modifier = Modifier.size(12.dp),
+                                                tint = if (isExpanded)
+                                                    iconThemeColor
+                                                else
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = cat.name,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    color = if (isSelected || isExpanded)
+                                        iconThemeColor
+                                    else
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        // 补齐空位（保持对齐）
+                        repeat(itemsPerRow - rowItems.size) {
+                            Spacer(Modifier.width(itemWidth))
+                        }
+                    }
+
+                    // 检查这一行中是否有展开的分类，显示二级分类卡片
+                    val expandedInRow = rowItems.find { it.id == expandedCategory && it.children.isNotEmpty() }
+                    if (expandedInRow != null) {
+                        Spacer(Modifier.height(8.dp))
+                        SubcategoryCard(
+                            parentName = expandedInRow.name,
+                            children = expandedInRow.children,
+                            selectedId = selectedCategory,
+                            themeColor = iconThemeColor,
+                            onSelect = { childId ->
+                                selectedCategory = childId
+                            }
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    } else {
+                        Spacer(Modifier.height(12.dp))
+                    }
+
+                    i = rowEnd
+                }
+            }
 
             // 第二行：5 个元素均分，SpaceEvenly 自动分配间距
             Row(
