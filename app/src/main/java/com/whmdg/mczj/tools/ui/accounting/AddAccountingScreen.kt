@@ -369,186 +369,6 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             }
             } // Surface
 
-            // 第一行：左侧20%空 | 中间60%备注输入 | 右侧20%金额
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(infoRowHeight),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Spacer(Modifier.fillMaxHeight().weight(0.2f))
-                // 备注建议（包含关联分类）
-                var noteSuggestions by remember { mutableStateOf<List<NoteSuggestion>>(emptyList()) }
-                var showSuggestions by remember { mutableStateOf(false) }
-                // 用户点击建议后置 true，跳过下一次计算
-                var justSelected by remember { mutableStateOf(false) }
-                var noteBoxWidthPx by remember { mutableIntStateOf(0) }
-                val noteDensity = LocalDensity.current
-                LaunchedEffect(note) {
-                    if (note.isEmpty()) {
-                        noteSuggestions = emptyList()
-                        showSuggestions = false
-                        return@LaunchedEffect
-                    }
-                    if (justSelected) {
-                        justSelected = false
-                        showSuggestions = false
-                        return@LaunchedEffect
-                    }
-                    delay(100)
-                    val predictions = if (NotePredictor.hasEnoughData()) {
-                        val currentHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-                        val currentAmount = amount.toFloatOrNull() ?: 0f
-                        val list = NotePredictor.predict(
-                            types[selectedType], selectedCategory ?: "",
-                            currentAmount, currentHour, note
-                        ).toMutableList()
-                        if (list.isEmpty() || list.first().score < 50) {
-                            val aiNote = NotePredictor.createAiNote(
-                                types[selectedType], selectedCategory ?: "",
-                                currentAmount, currentHour, note
-                            )
-                            if (aiNote != null) {
-                                list.add(0, NotePredictor.Prediction(aiNote, 50, true))
-                            }
-                        }
-                        list
-                    } else {
-                        NotePredictor.predictFromRecent(context, note)
-                    }
-                    // 按备注文本收集关联分类（每个备注的每个分类组合占一行）
-                    val rawPredictions = predictions.take(10)
-                    val allRecords = AccountingRepository.getAllRecords(context)
-                    val suggestions = mutableListOf<NoteSuggestion>()
-                    for (pred in rawPredictions) {
-                        val matching = allRecords.filter { it.note == pred.note }
-                        val seenPairs = mutableSetOf<Pair<String, String?>>()
-                        for (r in matching) {
-                            val key = r.categoryId to r.subcategoryId
-                            if (seenPairs.add(key)) {
-                                val catName = categoryLookup[r.categoryId]?.first ?: r.categoryId
-                                val subName = r.subcategoryId?.let { categoryLookup[it]?.first }
-                                suggestions.add(NoteSuggestion(pred.note, r.categoryId, r.subcategoryId, catName, subName, pred.score))
-                            }
-                        }
-                    }
-                    noteSuggestions = suggestions
-                    showSuggestions = noteSuggestions.isNotEmpty()
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .weight(0.6f)
-                        .padding(horizontal = 4.dp)
-                        .onGloballyPositioned { noteBoxWidthPx = it.size.width },
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    BasicTextField(
-                        value = note,
-                        onValueChange = { note = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(
-                            color = MaterialTheme.colorScheme.onSurface
-                        ),
-                        singleLine = true,
-                        decorationBox = { innerTextField ->
-                            if (note.isEmpty()) {
-                                Text(
-                                    "点击输入备注",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            innerTextField()
-                        }
-                    )
-                    // AI 预测弹出层
-                    if (showSuggestions && noteSuggestions.isNotEmpty()) {
-                        Popup(
-                            alignment = Alignment.TopStart,
-                            onDismissRequest = { showSuggestions = false }
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                shadowElevation = 8.dp,
-                                color = MaterialTheme.colorScheme.surface,
-                                modifier = Modifier
-                                    .width(with(noteDensity) { noteBoxWidthPx.toDp() })
-                                    .heightIn(max = screenHeight * 0.3f)
-                            ) {
-                                LazyColumn(
-                                    modifier = Modifier.padding(vertical = 4.dp)
-                                ) {
-                                    items(noteSuggestions.size) { idx ->
-                                        val s = noteSuggestions[idx]
-                                        val displayCat = if (s.subName != null) "${s.catName}-${s.subName}" else s.catName
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable {
-                                                    NotePredictor.recordHit(s.note)
-                                                    justSelected = true
-                                                    showSuggestions = false
-                                                    note = s.note
-                                                    selectedCategory = s.subId ?: s.catId
-                                                    isTogglingCategory = true
-                                                    expandedCategory = if (s.subId != null) s.catId else null
-                                                    scrollTarget = s.subId ?: s.catId
-                                                }
-                                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = displayCat,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                modifier = Modifier.weight(0.7f),
-                                                maxLines = 1,
-                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                            )
-                                            Text(
-                                                text = "${s.score}%",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                modifier = Modifier.weight(0.3f),
-                                                textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                                                color = when {
-                                                    s.score >= 80 -> Color(0xFF4CAF50)
-                                                    s.score >= 60 -> MaterialTheme.colorScheme.primary
-                                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .weight(0.2f),
-                    contentAlignment = Alignment.CenterEnd
-                ) {
-                    val scrollState = rememberScrollState()
-                    // 金额变化时自动滚到最右
-                    LaunchedEffect(amount) {
-                        scrollState.animateScrollTo(scrollState.maxValue)
-                    }
-                    Text(
-                        text = amount,
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .horizontalScroll(scrollState)
-                            .padding(end = 8.dp)
-                    )
-                }
-            }
-
-            val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
-            HorizontalDivider(color = iconThemeColor, thickness = 1.dp)
-
             // 分类选择区（参考 BeeCount：4列网格 + 二级分类原地展开）
             val itemsPerRow = 4
             val primaryIconSize = 56.dp
@@ -723,6 +543,185 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     }
 
                     i = rowEnd
+                }
+            }
+
+            // 备注+金额行：左侧20%空 | 中间60%备注输入 | 右侧20%金额
+            val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
+            HorizontalDivider(color = iconThemeColor, thickness = 1.dp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(infoRowHeight),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Spacer(Modifier.fillMaxHeight().weight(0.2f))
+                // 备注建议（包含关联分类）
+                var noteSuggestions by remember { mutableStateOf<List<NoteSuggestion>>(emptyList()) }
+                var showSuggestions by remember { mutableStateOf(false) }
+                // 用户点击建议后置 true，跳过下一次计算
+                var justSelected by remember { mutableStateOf(false) }
+                var noteBoxWidthPx by remember { mutableIntStateOf(0) }
+                val noteDensity = LocalDensity.current
+                LaunchedEffect(note) {
+                    if (note.isEmpty()) {
+                        noteSuggestions = emptyList()
+                        showSuggestions = false
+                        return@LaunchedEffect
+                    }
+                    if (justSelected) {
+                        justSelected = false
+                        showSuggestions = false
+                        return@LaunchedEffect
+                    }
+                    delay(100)
+                    val predictions = if (NotePredictor.hasEnoughData()) {
+                        val currentHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                        val currentAmount = amount.toFloatOrNull() ?: 0f
+                        val list = NotePredictor.predict(
+                            types[selectedType], selectedCategory ?: "",
+                            currentAmount, currentHour, note
+                        ).toMutableList()
+                        if (list.isEmpty() || list.first().score < 50) {
+                            val aiNote = NotePredictor.createAiNote(
+                                types[selectedType], selectedCategory ?: "",
+                                currentAmount, currentHour, note
+                            )
+                            if (aiNote != null) {
+                                list.add(0, NotePredictor.Prediction(aiNote, 50, true))
+                            }
+                        }
+                        list
+                    } else {
+                        NotePredictor.predictFromRecent(context, note)
+                    }
+                    // 按备注文本收集关联分类（每个备注的每个分类组合占一行）
+                    val rawPredictions = predictions.take(10)
+                    val allRecords = AccountingRepository.getAllRecords(context)
+                    val suggestions = mutableListOf<NoteSuggestion>()
+                    for (pred in rawPredictions) {
+                        val matching = allRecords.filter { it.note == pred.note }
+                        val seenPairs = mutableSetOf<Pair<String, String?>>()
+                        for (r in matching) {
+                            val key = r.categoryId to r.subcategoryId
+                            if (seenPairs.add(key)) {
+                                val catName = categoryLookup[r.categoryId]?.first ?: r.categoryId
+                                val subName = r.subcategoryId?.let { categoryLookup[it]?.first }
+                                suggestions.add(NoteSuggestion(pred.note, r.categoryId, r.subcategoryId, catName, subName, pred.score))
+                            }
+                        }
+                    }
+                    noteSuggestions = suggestions
+                    showSuggestions = noteSuggestions.isNotEmpty()
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .weight(0.6f)
+                        .padding(horizontal = 4.dp)
+                        .onGloballyPositioned { noteBoxWidthPx = it.size.width },
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    BasicTextField(
+                        value = note,
+                        onValueChange = { note = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        singleLine = true,
+                        decorationBox = { innerTextField ->
+                            if (note.isEmpty()) {
+                                Text(
+                                    "点击输入备注",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            innerTextField()
+                        }
+                    )
+                    // AI 预测弹出层
+                    if (showSuggestions && noteSuggestions.isNotEmpty()) {
+                        Popup(
+                            alignment = Alignment.TopStart,
+                            onDismissRequest = { showSuggestions = false }
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                shadowElevation = 8.dp,
+                                color = MaterialTheme.colorScheme.surface,
+                                modifier = Modifier
+                                    .width(with(noteDensity) { noteBoxWidthPx.toDp() })
+                                    .heightIn(max = screenHeight * 0.3f)
+                            ) {
+                                LazyColumn(
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                ) {
+                                    items(noteSuggestions.size) { idx ->
+                                        val s = noteSuggestions[idx]
+                                        val displayCat = if (s.subName != null) "${s.catName}-${s.subName}" else s.catName
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable {
+                                                    NotePredictor.recordHit(s.note)
+                                                    justSelected = true
+                                                    showSuggestions = false
+                                                    note = s.note
+                                                    selectedCategory = s.subId ?: s.catId
+                                                    isTogglingCategory = true
+                                                    expandedCategory = if (s.subId != null) s.catId else null
+                                                    scrollTarget = s.subId ?: s.catId
+                                                }
+                                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = displayCat,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                modifier = Modifier.weight(0.7f),
+                                                maxLines = 1,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = "${s.score}%",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                modifier = Modifier.weight(0.3f),
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                                                color = when {
+                                                    s.score >= 80 -> Color(0xFF4CAF50)
+                                                    s.score >= 60 -> MaterialTheme.colorScheme.primary
+                                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .weight(0.2f),
+                    contentAlignment = Alignment.CenterEnd
+                ) {
+                    val scrollState = rememberScrollState()
+                    // 金额变化时自动滚到最右
+                    LaunchedEffect(amount) {
+                        scrollState.animateScrollTo(scrollState.maxValue)
+                    }
+                    Text(
+                        text = amount,
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .horizontalScroll(scrollState)
+                            .padding(end = 8.dp)
+                    )
                 }
             }
 
