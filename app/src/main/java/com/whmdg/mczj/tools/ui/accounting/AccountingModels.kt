@@ -354,7 +354,9 @@ data class AccountingRecord(
     val excludeFromStats: Boolean = false,   // 不计入收支统计
     val excludeFromBudget: Boolean = false,  // 不计入预算
     val reimburseStatus: Boolean = false,    // 报销状态
-    val reimburseAmount: Double = 0.0        // 报销金额
+    val reimburseAmount: Double = 0.0,       // 报销金额
+    val refundAmount: Double = 0.0,          // 退款金额
+    val address: String = ""                 // 地址（可选）
 )
 
 /**

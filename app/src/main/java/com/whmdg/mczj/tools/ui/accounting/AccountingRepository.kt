@@ -578,6 +578,11 @@ object AccountingRepository {
         getDb(context).importFromCsv(csv, appendMode)
     }
 
+    /** 导入后重算账户余额 */
+    fun recalculateBalances(context: Context, replaceMode: Boolean) {
+        getDb(context).recalculateBalances(replaceMode)
+    }
+
     /** 校验 CSV 文件格式是否正确（不执行导入） */
     fun validateImportCsv(context: Context, uri: Uri) {
         val csv = context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }

@@ -25,8 +25,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // ─────────────────────────────────────────────
-// 字段定义
+// 数据模型
 // ─────────────────────────────────────────────
+
+private data class AccountMappingInfo(val type: String, val keepName: Boolean, val newName: String)
 
 private data class FieldDef(val key: String, val label: String)
 
@@ -41,6 +43,9 @@ private val FIELD_DEFS = listOf(
     FieldDef("备注", "备注"),
     FieldDef("优惠前金额", "优惠前金额"),
     FieldDef("报销账户", "报销账户"),
+    FieldDef("报销金额", "报销金额"),
+    FieldDef("退款", "退款"),
+    FieldDef("地址", "地址"),
 )
 
 private val HEADER_ALIASES = mapOf(
@@ -69,6 +74,12 @@ private val HEADER_ALIASES = mapOf(
     "优惠前金额" to "优惠前金额", "优惠" to "优惠前金额", "原价" to "优惠前金额",
     // 报销账户
     "报销账户" to "报销账户", "reimbursement" to "报销账户", "报销" to "报销账户",
+    // 报销金额
+    "报销金额" to "报销金额", "reimbursement_amount" to "报销金额", "报销额" to "报销金额",
+    // 退款
+    "退款" to "退款", "refund" to "退款", "退款金额" to "退款",
+    // 地址
+    "地址" to "地址", "address" to "地址", "位置" to "地址", "地点" to "地址",
 )
 
 // ─────────────────────────────────────────────
@@ -244,6 +255,15 @@ fun CsvImportFlowScreen(
     var distinctCategories by remember { mutableStateOf<List<String>>(emptyList()) }
     var distinctSubcategories by remember { mutableStateOf<List<String>>(emptyList()) }
 
+    // 账户映射：CSV账户名 → AccountMappingInfo
+    val accountMapping = remember { mutableStateMapOf<String, AccountMappingInfo>() }
+    var distinctAccounts by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    // 加载应用已有账户
+    val existingAccounts = remember {
+        AccountingRepository.getAllAccounts(context)
+    }
+
     // 加载应用分类（一级和二级）
     val parentCategories = remember {
         val db = AccountingCategoryDb.defaultCategories()
@@ -290,7 +310,7 @@ fun CsvImportFlowScreen(
                                 doImport(
                                     context, normalizedCsvText, rows,
                                     columnMapping, categoryMapping, subcategoryMapping,
-                                    replaceMode = false
+                                    accountMapping, replaceMode = false
                                 )
                             }
                             android.widget.Toast.makeText(context, "成功导入 $count 条记录", android.widget.Toast.LENGTH_SHORT).show()
@@ -332,7 +352,7 @@ fun CsvImportFlowScreen(
                                 doImport(
                                     context, normalizedCsvText, rows,
                                     columnMapping, categoryMapping, subcategoryMapping,
-                                    replaceMode = true
+                                    accountMapping, replaceMode = true
                                 )
                             }
                             android.widget.Toast.makeText(context, "成功导入 $count 条记录", android.widget.Toast.LENGTH_SHORT).show()
@@ -368,9 +388,14 @@ fun CsvImportFlowScreen(
     // ── 页面主体 ──
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text(if (step == 0) "CSV 导入 - 字段映射" else "CSV 导入 - 分类映射") },
+            title = { Text(when (step) {
+                0 -> "CSV 导入 - 字段映射"
+                1 -> "CSV 导入 - 账户映射"
+                2 -> "CSV 导入 - 分类映射"
+                else -> "CSV 导入"
+            }) },
             navigationIcon = {
-                IconButton(onClick = { if (step == 1) step = 0 else onBack() }) {
+                IconButton(onClick = { if (step > 0) step-- else onBack() }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                 }
             }
@@ -409,7 +434,24 @@ fun CsvImportFlowScreen(
                             return@FieldMappingStep
                         }
                         mappingError = null
-                        // 提取不重复的一级和二级分类名（rows 已在解析阶段归一化）
+
+                        // 提取账户名
+                        val accIdx = columnMapping["账户"]
+                        if (accIdx != null) {
+                            distinctAccounts = extractDistinctValues(rows, accIdx)
+                            // 自动匹配已有账户
+                            accountMapping.clear()
+                            for (accName in distinctAccounts) {
+                                val existing = existingAccounts.find { it.name == accName }
+                                if (existing != null) {
+                                    accountMapping[accName] = AccountMappingInfo(existing.type, true, "")
+                                } else {
+                                    accountMapping[accName] = AccountMappingInfo("cash", false, accName)
+                                }
+                            }
+                        }
+
+                        // 提取分类名
                         val catIdx = columnMapping["分类"]
                         val subCatIdx = columnMapping["二级分类"]
                         if (catIdx != null) {
@@ -428,8 +470,18 @@ fun CsvImportFlowScreen(
                             subcategoryMapping.clear()
                             subcategoryMapping.putAll(matched)
                         }
-                        step = 1
+
+                        // 如果没有账户列，直接跳到分类映射
+                        step = if (accIdx != null && distinctAccounts.isNotEmpty()) 1 else 2
                     }
+                )
+            } else if (currentStep == 1) {
+                AccountMappingStep(
+                    distinctAccounts = distinctAccounts,
+                    accountMapping = accountMapping,
+                    existingAccounts = existingAccounts,
+                    onNext = { step = 2 },
+                    onBack = { step = 0 }
                 )
             } else {
                 CategoryMappingStep(
@@ -440,7 +492,7 @@ fun CsvImportFlowScreen(
                     parentCategories = parentCategories,
                     allSubcategories = allSubcategories,
                     onConfirm = { showConfirmDialog = true },
-                    onBack = { step = 0 }
+                    onBack = { step = if (distinctAccounts.isNotEmpty()) 1 else 0 }
                 )
             }
         }
@@ -509,7 +561,150 @@ private fun FieldMappingStep(
 }
 
 // ─────────────────────────────────────────────
-// Step 2: 分类映射（一级 + 二级分开）
+// Step 2: 账户映射
+// ─────────────────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AccountMappingStep(
+    distinctAccounts: List<String>,
+    accountMapping: MutableMap<String, AccountMappingInfo>,
+    existingAccounts: List<AccountingAccount>,
+    onNext: () -> Unit,
+    onBack: () -> Unit
+) {
+    val typeOptions = listOf(
+        "cash" to "现金",
+        "wechat" to "微信钱包",
+        "alipay" to "支付宝",
+        "bank_card" to "银行卡",
+        "custom" to "自定义"
+    )
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            item {
+                Text(
+                    "以下账户在应用中不存在，请确认映射方式：",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+            items(distinctAccounts) { csvAccName ->
+                val info = accountMapping[csvAccName]
+                val isMatched = existingAccounts.any { it.name == csvAccName }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isMatched)
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                        // CSV 账户名
+                        Text(
+                            csvAccName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = if (isMatched) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface
+                        )
+                        if (isMatched) {
+                            Text(
+                                "已匹配应用账户",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else if (info != null) {
+                            Spacer(Modifier.height(8.dp))
+
+                            // 账户类型选择
+                            var typeExpanded by remember { mutableStateOf(false) }
+                            val selectedType = typeOptions.find { it.first == info.type }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("类型:", style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(40.dp))
+                                ExposedDropdownMenuBox(expanded = typeExpanded, onExpandedChange = { typeExpanded = it }, modifier = Modifier.weight(1f)) {
+                                    OutlinedTextField(
+                                        value = selectedType?.second ?: "现金",
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(typeExpanded) },
+                                        modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+                                        shape = RoundedCornerShape(8.dp),
+                                        textStyle = MaterialTheme.typography.bodySmall,
+                                        singleLine = true
+                                    )
+                                    ExposedDropdownMenu(expanded = typeExpanded, onDismissRequest = { typeExpanded = false }) {
+                                        typeOptions.forEach { (key, label) ->
+                                            DropdownMenuItem(
+                                                text = { Text(label) },
+                                                onClick = {
+                                                    accountMapping[csvAccName] = info.copy(type = key)
+                                                    typeExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(Modifier.height(4.dp))
+
+                            // 保持原名 / 重命名
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(
+                                    selected = info.keepName,
+                                    onClick = { accountMapping[csvAccName] = info.copy(keepName = true) }
+                                )
+                                Text("保持原名", style = MaterialTheme.typography.bodySmall)
+                                Spacer(Modifier.width(16.dp))
+                                RadioButton(
+                                    selected = !info.keepName,
+                                    onClick = { accountMapping[csvAccName] = info.copy(keepName = false) }
+                                )
+                                Text("重命名", style = MaterialTheme.typography.bodySmall)
+                            }
+
+                            // 重命名输入框
+                            if (!info.keepName) {
+                                OutlinedTextField(
+                                    value = info.newName,
+                                    onValueChange = { accountMapping[csvAccName] = info.copy(newName = it) },
+                                    label = { Text("新名称") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(8.dp),
+                                    textStyle = MaterialTheme.typography.bodySmall,
+                                    singleLine = true
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Surface(tonalElevation = 2.dp, shadowElevation = 4.dp) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                OutlinedButton(onClick = onBack) { Text("上一步") }
+                Button(onClick = onNext) { Text("下一步: 分类映射") }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────
+// Step 3: 分类映射（一级 + 二级分开）
 // ─────────────────────────────────────────────
 
 @Composable
@@ -748,10 +943,12 @@ private fun doImport(
     columnMapping: Map<String, Int?>,
     categoryMapping: Map<String, String?>,
     subcategoryMapping: Map<String, String?>,
+    accountMapping: Map<String, AccountMappingInfo>,
     replaceMode: Boolean
 ): Int {
     val catIdx = columnMapping["分类"] ?: -1
     val subCatIdx = columnMapping["二级分类"] ?: -1
+    val accIdx = columnMapping["账户"] ?: -1
 
     // ── 1. 扫描 CSV，收集需要创建的分类 ──
     val existingCats = AccountingRepository.getAllCategoriesFlat(context)
@@ -796,8 +993,33 @@ private fun doImport(
         }
     }
 
+    // ── 2b. 创建缺失的账户 ──
+    val existingAccNames = AccountingRepository.getAllAccounts(context).map { it.name }.toSet()
+    for ((csvAccName, info) in accountMapping) {
+        if (csvAccName in existingAccNames) continue
+        val finalName = if (info.keepName) csvAccName else info.newName.ifEmpty { csvAccName }
+        val accountType = info.type
+        val category = accountTypeConfigs[accountType]?.category ?: "tradable"
+        val account = AccountingAccount(
+            name = finalName,
+            type = accountType,
+            category = category
+        )
+        AccountingRepository.insertAccount(context, account)
+    }
+
     // ── 3. 对 CSV 文本做列级替换 ──
-    // 将用户映射的分类名替换为目标分类名，然后用替换后的 CSV 走标准导入
+    // 构建账户名替换映射（重命名的账户）
+    val accReplacements = mutableMapOf<String, String>()
+    val allAccs = AccountingRepository.getAllAccounts(context)
+    for ((csvAccName, info) in accountMapping) {
+        if (!info.keepName && info.newName.isNotEmpty()) {
+            accReplacements[csvAccName] = info.newName
+        } else if (csvAccName !in existingAccNames) {
+            // 保持原名但需要创建的账户，名称不变
+        }
+    }
+
     val hasMapping = categoryMapping.values.any { it != null } || subcategoryMapping.values.any { it != null }
 
     val finalCsvText = if (hasMapping && catIdx >= 0) {
@@ -808,7 +1030,9 @@ private fun doImport(
         val catIdToName = categoryMapping.mapValues { (_, v) -> v?.let { idToName[it] } }
         val subCatIdToName = subcategoryMapping.mapValues { (_, v) -> v?.let { idToName[it] } }
 
-        transformCsvColumns(csvText, rows, catIdx, subCatIdx, catIdToName, subCatIdToName)
+        transformCsvColumns(csvText, rows, catIdx, subCatIdx, accIdx, catIdToName, subCatIdToName, accReplacements)
+    } else if (accReplacements.isNotEmpty()) {
+        transformCsvColumns(csvText, rows, catIdx, subCatIdx, accIdx, emptyMap(), emptyMap(), accReplacements)
     } else {
         csvText
     }
@@ -832,6 +1056,9 @@ private fun doImport(
 
     AccountingRepository.importCsv(context, tempUri)
 
+    // 重算账户余额
+    AccountingRepository.recalculateBalances(context, replaceMode)
+
     // 统计导入条数
     val countCursor = db.readableDatabase.rawQuery("SELECT COUNT(*) FROM records", null)
     val count = try { if (countCursor.moveToFirst()) countCursor.getInt(0) else 0 } finally { countCursor.close() }
@@ -852,15 +1079,18 @@ private fun transformCsvColumns(
     rows: List<List<String>>,
     catIdx: Int,
     subCatIdx: Int,
+    accIdx: Int,
     catMapping: Map<String, String?>,     // csvName -> targetName or null
-    subCatMapping: Map<String, String?>   // csvName -> targetName or null
+    subCatMapping: Map<String, String?>,  // csvName -> targetName or null
+    accMapping: Map<String, String> = emptyMap()  // csvName -> finalName
 ): String {
     val catReplacements = catMapping.filterValues { it != null }.mapValues { it.value!! }
     val subCatReplacements = subCatMapping.filterValues { it != null }.mapValues { it.value!! }
 
     // 标准 header 名（importFromCsv 期望的）
     val headerNormalize = mapOf(
-        "日期" to "时间", "收支类型" to "类型", "类别" to "分类"
+        "日期" to "时间", "收支类型" to "类型", "类别" to "分类",
+        "优惠" to "优惠前金额"
     )
 
     // 从 rows 重建 CSV（rows 已过滤空行，避免索引不一致）
@@ -882,6 +1112,10 @@ private fun transformCsvColumns(
         if (subCatIdx >= 0 && subCatIdx < cols.size) {
             val original = cols[subCatIdx].trim()
             subCatReplacements[original]?.let { cols[subCatIdx] = it }
+        }
+        if (accIdx >= 0 && accIdx < cols.size && accMapping.isNotEmpty()) {
+            val original = cols[accIdx].trim()
+            accMapping[original]?.let { cols[accIdx] = it }
         }
 
         output.add(cols.joinToString(",") { v ->

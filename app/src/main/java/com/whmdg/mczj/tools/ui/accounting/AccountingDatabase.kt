@@ -20,7 +20,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 9
+        private const val DB_VERSION = 11
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -92,7 +92,9 @@ internal class AccountingDatabase private constructor(context: Context) :
                 exclude_from_stats INTEGER DEFAULT 0,
                 exclude_from_budget INTEGER DEFAULT 0,
                 reimburse_status INTEGER DEFAULT 0,
-                reimburse_amount REAL DEFAULT 0
+                reimburse_amount REAL DEFAULT 0,
+                refund_amount REAL DEFAULT 0,
+                address TEXT DEFAULT ''
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX idx_rec_book ON records(book_name)")
@@ -175,6 +177,12 @@ internal class AccountingDatabase private constructor(context: Context) :
         if (oldVersion < 9) {
             db.execSQL("ALTER TABLE records ADD COLUMN reimburse_status INTEGER DEFAULT 0")
             db.execSQL("ALTER TABLE records ADD COLUMN reimburse_amount REAL DEFAULT 0")
+        }
+        if (oldVersion < 10) {
+            db.execSQL("ALTER TABLE records ADD COLUMN refund_amount REAL DEFAULT 0")
+        }
+        if (oldVersion < 11) {
+            db.execSQL("ALTER TABLE records ADD COLUMN address TEXT DEFAULT ''")
         }
     }
 
@@ -405,7 +413,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAllRecords(): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount FROM records ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, refund_amount, address FROM records ORDER BY happened_at DESC",
             null
         )
         try {
@@ -421,7 +429,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByBook(bookName: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount FROM records WHERE book_name = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, refund_amount, address FROM records WHERE book_name = ? ORDER BY happened_at DESC",
             arrayOf(bookName)
         )
         try {
@@ -456,6 +464,8 @@ internal class AccountingDatabase private constructor(context: Context) :
             put("exclude_from_budget", if (r.excludeFromBudget) 1 else 0)
             put("reimburse_status", if (r.reimburseStatus) 1 else 0)
             put("reimburse_amount", r.reimburseAmount)
+            put("refund_amount", r.refundAmount)
+            put("address", r.address)
         }
     }
 
@@ -480,7 +490,9 @@ internal class AccountingDatabase private constructor(context: Context) :
             excludeFromStats = c.getInt(12) == 1,
             excludeFromBudget = c.getInt(13) == 1,
             reimburseStatus = c.getInt(14) == 1,
-            reimburseAmount = c.getDouble(15)
+            reimburseAmount = c.getDouble(15),
+            refundAmount = c.getDouble(16),
+            address = c.getString(17) ?: ""
         )
     }
 
@@ -491,7 +503,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByReimbursementAccount(reimbAccountId: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, refund_amount, address FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
             arrayOf(reimbAccountId)
         )
         try {
@@ -759,7 +771,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         // records
         val records = mutableListOf<ExportRecord>()
         val recCursor = db.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount FROM records",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, refund_amount, address FROM records",
             null
         )
         try {
@@ -777,7 +789,9 @@ internal class AccountingDatabase private constructor(context: Context) :
                     discountBefore = recCursor.getString(9),
                     reimbursementAccountId = recCursor.getString(10),
                     reimburseStatus = recCursor.getInt(14) == 1,
-                    reimburseAmount = recCursor.getDouble(15)
+                    reimburseAmount = recCursor.getDouble(15),
+                    refundAmount = recCursor.getDouble(16),
+                    address = recCursor.getString(17) ?: ""
                 ))
             }
         } finally {
@@ -846,10 +860,10 @@ internal class AccountingDatabase private constructor(context: Context) :
         } catch (_: Exception) {}
 
         val sb = StringBuilder()
-        sb.appendLine("﻿类型,分类,二级分类,金额,账本,账户,备注,时间,优惠前金额,报销账户")
+        sb.appendLine("﻿类型,分类,二级分类,金额,账本,账户,备注,时间,优惠前金额,报销账户,其他,地址")
 
         val recCursor = db.rawQuery(
-            "SELECT type, amount, category_id, subcategory_id, book_name, account_id, note, happened_at, discount_before, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount FROM records ORDER BY happened_at ASC",
+            "SELECT type, amount, category_id, subcategory_id, book_name, account_id, note, happened_at, discount_before, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, refund_amount, address FROM records ORDER BY happened_at ASC",
             null
         )
         try {
@@ -864,11 +878,19 @@ internal class AccountingDatabase private constructor(context: Context) :
                 val ts = recCursor.getLong(7)
                 val discountBefore = recCursor.getString(8) ?: ""
                 val reimbName = reimbMap[recCursor.getString(9)] ?: recCursor.getString(9) ?: ""
+                val excludeFromStats = recCursor.getInt(11) == 1
+                val excludeFromBudget = recCursor.getInt(12) == 1
+                val address = recCursor.getString(16) ?: ""
+
+                val otherParts = mutableListOf<String>()
+                if (excludeFromStats) otherParts.add("不计入收支")
+                if (excludeFromBudget) otherParts.add("不计入预算")
+                val otherStr = otherParts.joinToString("、")
 
                 val dateStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
                     .format(java.util.Date(ts))
 
-                sb.appendLine("${csvEscape(type)},${csvEscape(catName)},${csvEscape(subCatName)},${csvEscape(amount)},${csvEscape(book)},${csvEscape(accName)},${csvEscape(note)},${csvEscape(dateStr)},${csvEscape(discountBefore)},${csvEscape(reimbName)}")
+                sb.appendLine("${csvEscape(type)},${csvEscape(catName)},${csvEscape(subCatName)},${csvEscape(amount)},${csvEscape(book)},${csvEscape(accName)},${csvEscape(note)},${csvEscape(dateStr)},${csvEscape(discountBefore)},${csvEscape(reimbName)},${csvEscape(otherStr)},${csvEscape(address)}")
             }
         } finally {
             recCursor.close()
@@ -914,8 +936,12 @@ internal class AccountingDatabase private constructor(context: Context) :
         val accIdx = header.indexOf("账户")
         val noteIdx = header.indexOf("备注")
         val timeIdx = header.indexOf("时间")
-        val discountIdx = header.indexOf("优惠前金额")
+        val discountIdx = header.indexOf("优惠前金额").let { if (it < 0) header.indexOf("优惠") else it }
         val reimbIdx = header.indexOf("报销账户")
+        val reimbAmountIdx = header.indexOf("报销金额")
+        val refundIdx = header.indexOf("退款")
+        val otherIdx = header.indexOf("其他")
+        val addressIdx = header.indexOf("地址")
 
         if (typeIdx < 0 || amountIdx < 0 || timeIdx < 0) {
             throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
@@ -967,10 +993,30 @@ internal class AccountingDatabase private constructor(context: Context) :
                 val book = cols.getOrNull(bookIdx)?.trim() ?: "默认记账本"
                 val accName = cols.getOrNull(accIdx)?.trim() ?: ""
                 val note = cols.getOrNull(noteIdx)?.trim() ?: ""
-                val discountBefore = cols.getOrNull(discountIdx)?.trim()?.ifEmpty { null }
+                val discountStr = cols.getOrNull(discountIdx)?.trim() ?: ""
                 val reimbName = cols.getOrNull(reimbIdx)?.trim() ?: ""
+                val reimbAmountStr = cols.getOrNull(reimbAmountIdx)?.trim() ?: ""
+                val refundStr = cols.getOrNull(refundIdx)?.trim() ?: ""
+                val otherStr = cols.getOrNull(otherIdx)?.trim() ?: ""
+                val addressStr = cols.getOrNull(addressIdx)?.trim() ?: ""
+
+                // 报销状态：空=非报销账单，0=未报销，非0=已报销
+                val reimburseStatus = reimbName.isNotEmpty() && reimbAmountStr.isNotEmpty() && reimbAmountStr != "0"
+                val reimburseAmount = if (reimburseStatus) {
+                    try { reimbAmountStr.replace("[¥$,，]".toRegex(), "").toDouble() } catch (_: Exception) { 0.0 }
+                } else 0.0
+
+                // 退款金额（CSV金额已是净值，退款仅存储供UI显示）
+                val refundAmount = refundStr.toDoubleOrNull() ?: 0.0
 
                 val absAmount = amount.replace("-", "").replace("+", "").trim()
+
+                // 优惠前金额 = |实付金额| + 优惠金额
+                val discountBefore = if (discountStr.isNotEmpty()) {
+                    val discount = discountStr.toDoubleOrNull() ?: 0.0
+                    val absAmt = absAmount.toDoubleOrNull() ?: 0.0
+                    if (discount > 0) (absAmt + discount).toString() else null
+                } else null
                 val cv = ContentValues().apply {
                     put("id", java.util.UUID.randomUUID().toString())
                     put("book_name", book)
@@ -986,6 +1032,12 @@ internal class AccountingDatabase private constructor(context: Context) :
                     if (discountBefore != null) put("discount_before", discountBefore) else putNull("discount_before")
                     val rId = reimbNameToId[reimbName]
                     if (rId != null) put("reimbursement_account_id", rId) else if (reimbName.isNotEmpty()) put("reimbursement_account_id", reimbName) else putNull("reimbursement_account_id")
+                    put("reimburse_status", if (reimburseStatus) 1 else 0)
+                    put("reimburse_amount", reimburseAmount)
+                    put("refund_amount", refundAmount)
+                    put("exclude_from_stats", if (otherStr.contains("不计入收支")) 1 else 0)
+                    put("exclude_from_budget", if (otherStr.contains("不计入预算")) 1 else 0)
+                    put("address", addressStr)
                 }
                 db.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -1027,6 +1079,15 @@ internal class AccountingDatabase private constructor(context: Context) :
         try { while (accCursor.moveToNext()) accNameToId[accCursor.getString(1)] = accCursor.getString(0) }
         finally { accCursor.close() }
 
+        val reimbNameToId = mutableMapOf<String, String>()
+        try {
+            val json = getSetting("reimbursement_accounts")
+            if (json != null) {
+                val entities = kotlinx.serialization.json.Json.decodeFromString<List<ReimbursementAccountEntity>>(json)
+                entities.forEach { reimbNameToId[it.name] = it.id }
+            }
+        } catch (_: Exception) {}
+
         var imported = 0
         db.beginTransaction()
         try {
@@ -1059,8 +1120,27 @@ internal class AccountingDatabase private constructor(context: Context) :
                 val book = col("账本") ?: "默认记账本"
                 val accName = col("账户") ?: ""
                 val note = col("备注") ?: ""
-                val discountBefore = col("优惠前金额")
+                val discountStr = col("优惠前金额") ?: ""
                 val reimbName = col("报销账户") ?: ""
+                val reimbAmountStr = col("报销金额") ?: ""
+                val refundStr = col("退款") ?: ""
+                val otherStr = col("其他") ?: ""
+                val addressStr = col("地址") ?: ""
+
+                // 报销状态：空=非报销账单，0=未报销，非0=已报销
+                val reimburseStatus = reimbName.isNotEmpty() && reimbAmountStr.isNotEmpty() && reimbAmountStr != "0"
+                val reimburseAmount = if (reimburseStatus) {
+                    try { reimbAmountStr.replace("[¥$,，]".toRegex(), "").toDouble() } catch (_: Exception) { 0.0 }
+                } else 0.0
+
+                // 退款金额（CSV金额已是净值，退款仅存储供UI显示）
+                val refundAmount = refundStr.toDoubleOrNull() ?: 0.0
+
+                // 优惠前金额 = |实付金额| + 优惠金额
+                val discountBefore = if (discountStr.isNotEmpty()) {
+                    val discount = discountStr.toDoubleOrNull() ?: 0.0
+                    if (discount > 0) (amount + discount).toString() else null
+                } else null
 
                 // 分类映射
                 val catId = if (catName.isNotEmpty()) categoryMapping[catName] ?: catName else ""
@@ -1078,7 +1158,14 @@ internal class AccountingDatabase private constructor(context: Context) :
                     val aId = accNameToId[accName]
                     if (aId != null) put("account_id", aId) else if (accName.isNotEmpty()) put("account_id", accName) else putNull("account_id")
                     if (discountBefore != null) put("discount_before", discountBefore) else putNull("discount_before")
-                    putNull("reimbursement_account_id")
+                    val rId = reimbNameToId[reimbName]
+                    if (rId != null) put("reimbursement_account_id", rId) else if (reimbName.isNotEmpty()) put("reimbursement_account_id", reimbName) else putNull("reimbursement_account_id")
+                    put("reimburse_status", if (reimburseStatus) 1 else 0)
+                    put("reimburse_amount", reimburseAmount)
+                    put("refund_amount", refundAmount)
+                    put("exclude_from_stats", if (otherStr.contains("不计入收支")) 1 else 0)
+                    put("exclude_from_budget", if (otherStr.contains("不计入预算")) 1 else 0)
+                    put("address", addressStr)
                 }
                 db.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
                 imported++
@@ -1092,6 +1179,45 @@ internal class AccountingDatabase private constructor(context: Context) :
             db.endTransaction()
         }
         return imported
+    }
+
+    /**
+     * 导入后重算账户余额。
+     * 覆盖模式：先将所有账户 initial_amount 清零，再根据全部记录重算。
+     * 追加模式：在现有 initial_amount 基础上，根据本次导入的记录调整。
+     */
+    fun recalculateBalances(replaceMode: Boolean) {
+        val db = writableDatabase
+        if (replaceMode) {
+            db.execSQL("UPDATE accounts SET initial_amount = 0")
+        }
+        // 按账户汇总：收入加、支出减（转账和债务不参与余额计算）
+        val cursor = db.rawQuery(
+            "SELECT account_id, type, SUM(CAST(amount AS REAL)) FROM records WHERE account_id IS NOT NULL AND type IN ('收入', '支出') GROUP BY account_id, type",
+            null
+        )
+        val deltas = mutableMapOf<String, Double>()
+        try {
+            while (cursor.moveToNext()) {
+                val accId = cursor.getString(0) ?: continue
+                val type = cursor.getString(1)
+                val sum = cursor.getDouble(2)
+                val delta = if (type == "收入") sum else -sum
+                deltas[accId] = (deltas[accId] ?: 0.0) + delta
+            }
+        } finally {
+            cursor.close()
+        }
+        // 更新 initial_amount
+        for ((accId, delta) in deltas) {
+            if (replaceMode) {
+                db.execSQL("UPDATE accounts SET initial_amount = ?, updated_at = ? WHERE id = ?",
+                    arrayOf(delta, System.currentTimeMillis(), accId))
+            } else {
+                db.execSQL("UPDATE accounts SET initial_amount = initial_amount + ?, updated_at = ? WHERE id = ?",
+                    arrayOf(delta, System.currentTimeMillis(), accId))
+            }
+        }
     }
 
     private fun parseCsvLine(line: String): List<String> {
@@ -1165,6 +1291,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                     if (r.reimbursementAccountId != null) put("reimbursement_account_id", r.reimbursementAccountId) else putNull("reimbursement_account_id")
                     put("reimburse_status", if (r.reimburseStatus) 1 else 0)
                     put("reimburse_amount", r.reimburseAmount)
+                    put("refund_amount", r.refundAmount)
+                    put("address", r.address)
                 }
                 db.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -1216,7 +1344,8 @@ private data class ExportRecord(
     val discountBefore: String? = null,
     val reimbursementAccountId: String? = null,
     val reimburseStatus: Boolean = false,
-    val reimburseAmount: Double = 0.0
+    val reimburseAmount: Double = 0.0,
+    val address: String = ""
 )
 
 @Serializable
