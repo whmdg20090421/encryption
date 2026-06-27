@@ -1,7 +1,6 @@
 package com.whmdg.mczj.tools.ui.accounting
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
+import com.whmdg.mczj.tools.MainActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
@@ -40,7 +39,9 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.localToWindow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
@@ -67,6 +68,17 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     val context = LocalContext.current
     // 初始化 AI 预测器
     LaunchedEffect(Unit) { NotePredictor.ensureInitialized(context) }
+
+    // 动态设置 adjustNothing：进入时禁用系统自动调整，退出时恢复
+    val view = LocalView.current
+    DisposableEffect(Unit) {
+        val window = (context as? android.app.Activity)?.window
+        val originalMode = window?.attributes?.softInputMode
+        window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        onDispose {
+            originalMode?.let { window?.setSoftInputMode(it) }
+        }
+    }
 
     // 编辑模式：加载已有记录
     val editingRecord = remember(recordId) {
@@ -330,30 +342,11 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
         typeChanged = true
     }
 
-    Scaffold(
-        contentWindowInsets = WindowInsets.systemBars
-    ) { innerPadding ->
-        val density = LocalDensity.current
-        val imeVisible = WindowInsets.ime.getBottom(density) > 0
-        // 动画 padding：键盘弹出/收起时平滑过渡
-        val imeAnimPadding = remember { Animatable(0f) }
-        var prevImeVisible by remember { mutableStateOf(false) }
-        var savedImeHeightDp by remember { mutableFloatStateOf(0f) }
-        val currentImeHeightDp = with(density) { WindowInsets.ime.getBottom(this@with).toDp().value }
-        LaunchedEffect(imeVisible, currentImeHeightDp) {
-            if (imeVisible) {
-                savedImeHeightDp = currentImeHeightDp
-                imeAnimPadding.animateTo(currentImeHeightDp, animationSpec = tween(250))
-            } else if (prevImeVisible) {
-                imeAnimPadding.animateTo(0f, animationSpec = tween(250))
-            }
-            prevImeVisible = imeVisible
-        }
+    Scaffold { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(bottom = imeAnimPadding.value.dp)
         ) {
             // 50dp 功能栏
             Surface(
@@ -745,10 +738,14 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             }
 
             val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
-            HorizontalDivider(color = iconThemeColor, thickness = 1.dp)
+            HorizontalDivider(
+                color = iconThemeColor,
+                thickness = 1.dp,
+                modifier = Modifier.onGloballyPositioned { coords ->
+                    MainActivity.element4TopPx = coords.localToWindow(Offset.Zero).y
+                }
+            )
 
-            // 键盘弹出时隐藏第二行和计算器，释放空间给分类区
-            if (!imeVisible) {
             // 第二行：5 个元素均分，SpaceEvenly 自动分配间距
             Row(
                 modifier = Modifier
@@ -984,7 +981,6 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 finishEnabled = canFinish
             )
             } // Surface
-            } // if (!imeVisible)
             } // Column
 
         // 日期时间选择弹窗

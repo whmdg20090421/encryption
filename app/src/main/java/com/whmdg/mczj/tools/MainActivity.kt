@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -16,6 +17,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsAnimationCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.doOnLayout
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.theme.LocalOnToggleTheme
 import com.whmdg.mczj.tools.ui.theme.LocalIsGlowEnabled
@@ -28,6 +33,12 @@ import com.whmdg.mczj.tools.encryption.services.EncryptionTaskManager
 import com.whmdg.mczj.tools.security.CrashMonitor
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        /** 4号元素（分割线）顶部在窗口中的 Y 坐标，由 composable 通过 onGloballyPositioned 更新 */
+        var element4TopPx: Float = 0f
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -39,6 +50,35 @@ class MainActivity : ComponentActivity() {
         EncryptionTaskManager.init(applicationContext)
 
         enableEdgeToEdge()
+
+        // ── 键盘动画回调：adjustNothing 模式下手动平移布局 ──
+        val contentView = findViewById<View>(android.R.id.content)
+        contentView.doOnLayout {
+            val initialHeight = contentView.height
+            ViewCompat.setWindowInsetsAnimationCallback(contentView,
+                object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+                    override fun onProgress(
+                        insets: WindowInsetsCompat,
+                        runningAnimations: List<WindowInsetsAnimationCompat>
+                    ): WindowInsetsCompat {
+                        val imeInset = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+                        val imeTop = initialHeight - imeInset
+                        val offset = if (element4TopPx > 0 && element4TopPx > imeTop)
+                            -(element4TopPx - imeTop) else 0f
+                        contentView.translationY = offset
+                        return insets
+                    }
+                    override fun onEnd(animation: WindowInsetsAnimationCompat) {
+                        if (animation.typeMask and WindowInsetsCompat.Type.ime() != 0) {
+                            val imeInset = ViewCompat.getRootWindowInsets(contentView)
+                                ?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
+                            if (imeInset == 0) contentView.translationY = 0f
+                        }
+                    }
+                }
+            )
+        }
+
         setContent {
             val themePrefs = remember { getSharedPreferences(AppDataPaths.PREFS_THEME, MODE_PRIVATE) }
 
