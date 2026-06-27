@@ -1345,6 +1345,7 @@ private data class ExportRecord(
     val reimbursementAccountId: String? = null,
     val reimburseStatus: Boolean = false,
     val reimburseAmount: Double = 0.0,
+    val refundAmount: Double = 0.0,
     val address: String = ""
 )
 
