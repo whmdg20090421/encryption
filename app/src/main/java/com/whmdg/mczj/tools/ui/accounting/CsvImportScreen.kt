@@ -128,48 +128,33 @@ private fun extractDistinctValues(rows: List<List<String>>, columnIndex: Int): L
 }
 
 /**
- * 提取归一化后的一级和二级分类列表。
- * 兼容源应用：类别="收入"/"支出" 表示未选一级分类，二级分类才是真实一级分类。
+ * 对 CSV 原始文本做早期归一化：
+ * 类别="收入"/"支出" → 二级分类提升为一级分类，二级清空。
+ * 在解析 rows 之前调用，确保后续所有步骤基于归一化数据。
  */
-private fun extractNormalizedCategories(
-    rows: List<List<String>>,
-    catIdx: Int?,
-    subCatIdx: Int?
-): Pair<List<String>, List<String>> {
-    val catSet = linkedSetOf<String>()
-    val promotedSubs = mutableSetOf<String>() // 被提升为一级分类的二级分类值
+private fun normalizeCsvText(csvText: String, catIdx: Int?, subCatIdx: Int?): String {
+    if (catIdx == null || subCatIdx == null) return csvText
+    val lines = csvText.lines().toMutableList()
+    if (lines.size < 2) return csvText
 
-    for (i in 1 until rows.size) {
-        val cols = rows[i]
-        val cat = if (catIdx != null && catIdx < cols.size) cols[catIdx].trim() else ""
-        val subCat = if (subCatIdx != null && subCatIdx < cols.size) cols[subCatIdx].trim() else ""
+    val header = parseCsvLine(lines[0]).map { it.trim().removePrefix("﻿") }
+    val actualCatIdx = catIdx
+    val actualSubCatIdx = subCatIdx
 
+    for (i in 1 until lines.size) {
+        val cols = parseCsvLine(lines[i]).toMutableList()
+        if (actualCatIdx >= cols.size || actualSubCatIdx >= cols.size) continue
+        val cat = cols[actualCatIdx].trim()
         if (cat == "收入" || cat == "支出") {
-            // 二级分类提升为一级分类
-            if (subCat.isNotEmpty()) {
-                catSet.add(subCat)
-                promotedSubs.add(subCat)
-            }
-        } else {
-            if (cat.isNotEmpty()) catSet.add(cat)
-        }
-    }
-
-    // 二级分类：排除被提升的，保留剩余的
-    val subcatSet = linkedSetOf<String>()
-    if (subCatIdx != null) {
-        for (i in 1 until rows.size) {
-            val cols = rows[i]
-            val cat = if (catIdx != null && catIdx < cols.size) cols[catIdx].trim() else ""
-            val subCat = if (subCatIdx < cols.size) cols[subCatIdx].trim() else ""
-            // 非归一化行的二级分类，且排除被提升的
-            if (cat != "收入" && cat != "支出" && subCat.isNotEmpty() && subCat !in promotedSubs) {
-                subcatSet.add(subCat)
+            cols[actualCatIdx] = cols[actualSubCatIdx]
+            cols[actualSubCatIdx] = ""
+            lines[i] = cols.joinToString(",") { v ->
+                if (v.contains(',') || v.contains('"') || v.contains('\n'))
+                    "\"${v.replace("\"", "\"\"")}\"" else v
             }
         }
     }
-
-    return catSet.toList() to subcatSet.toList()
+    return lines.joinToString("\n")
 }
 
 /** 自动匹配 CSV 分类名到应用分类（精确匹配 name） */
@@ -199,11 +184,27 @@ fun CsvImportFlowScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // 解析 CSV
+    // 解析 CSV（含"收入"/"支出"归一化）
     var rows by remember { mutableStateOf<List<List<String>>>(emptyList()) }
     var parsing by remember { mutableStateOf(true) }
+    var normalizedCsvText by remember { mutableStateOf(csvText) }
     LaunchedEffect(csvText) {
-        rows = withContext(Dispatchers.IO) { parseCsvText(csvText) }
+        rows = withContext(Dispatchers.IO) {
+            // 先解析表头，获取列索引用于归一化
+            val firstPass = parseCsvText(csvText)
+            if (firstPass.size >= 2) {
+                val headers = firstPass[0].map { it.trim() }
+                val detected = autoDetectColumnMapping(headers)
+                val catIdx = detected["分类"]
+                val subCatIdx = detected["二级分类"]
+                // 归一化"收入"/"支出"行
+                val normalized = normalizeCsvText(csvText, catIdx, subCatIdx)
+                normalizedCsvText = normalized
+                parseCsvText(normalized)
+            } else {
+                firstPass
+            }
+        }
         parsing = false
     }
 
@@ -261,16 +262,21 @@ fun CsvImportFlowScreen(
                     showConfirmDialog = false
                     scope.launch {
                         importing = true
-                        val count = withContext(Dispatchers.IO) {
-                            doImport(
-                                context, csvText, rows,
-                                columnMapping, categoryMapping, subcategoryMapping,
-                                replaceMode = false
-                            )
+                        try {
+                            val count = withContext(Dispatchers.IO) {
+                                doImport(
+                                    context, normalizedCsvText, rows,
+                                    columnMapping, categoryMapping, subcategoryMapping,
+                                    replaceMode = false
+                                )
+                            }
+                            android.widget.Toast.makeText(context, "成功导入 $count 条记录", android.widget.Toast.LENGTH_SHORT).show()
+                            onImportDone(count)
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(context, "导入失败: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                        } finally {
+                            importing = false
                         }
-                        importing = false
-                        android.widget.Toast.makeText(context, "成功导入 $count 条记录", android.widget.Toast.LENGTH_SHORT).show()
-                        onImportDone(count)
                     }
                 }) { Text("追加导入") }
             },
@@ -298,16 +304,21 @@ fun CsvImportFlowScreen(
                     showReplaceWarning = false
                     scope.launch {
                         importing = true
-                        val count = withContext(Dispatchers.IO) {
-                            doImport(
-                                context, csvText, rows,
-                                columnMapping, categoryMapping, subcategoryMapping,
-                                replaceMode = true
-                            )
+                        try {
+                            val count = withContext(Dispatchers.IO) {
+                                doImport(
+                                    context, normalizedCsvText, rows,
+                                    columnMapping, categoryMapping, subcategoryMapping,
+                                    replaceMode = true
+                                )
+                            }
+                            android.widget.Toast.makeText(context, "成功导入 $count 条记录", android.widget.Toast.LENGTH_SHORT).show()
+                            onImportDone(count)
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(context, "导入失败: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                        } finally {
+                            importing = false
                         }
-                        importing = false
-                        android.widget.Toast.makeText(context, "成功导入 $count 条记录", android.widget.Toast.LENGTH_SHORT).show()
-                        onImportDone(count)
                     }
                 }) { Text("确认替换", color = MaterialTheme.colorScheme.error) }
             },
@@ -375,12 +386,15 @@ fun CsvImportFlowScreen(
                             return@FieldMappingStep
                         }
                         mappingError = null
-                        // 提取不重复的一级和二级分类名（含"收入"/"支出"归一化）
+                        // 提取不重复的一级和二级分类名（rows 已在解析阶段归一化）
                         val catIdx = columnMapping["分类"]
                         val subCatIdx = columnMapping["二级分类"]
-                        val (cats, subcats) = extractNormalizedCategories(rows, catIdx, subCatIdx)
-                        distinctCategories = cats
-                        distinctSubcategories = subcats
+                        if (catIdx != null) {
+                            distinctCategories = extractDistinctValues(rows, catIdx)
+                        }
+                        if (subCatIdx != null) {
+                            distinctSubcategories = extractDistinctValues(rows, subCatIdx)
+                        }
                         if (catIdx != null) {
                             val matched = autoMatchCategories(distinctCategories, parentCategories)
                             categoryMapping.clear()
@@ -837,15 +851,6 @@ private fun transformCsvColumns(
     // 数据行：替换分类名
     for (i in 1 until rows.size) {
         val cols = rows[i].toMutableList()
-
-        // 兼容源应用：类别="收入"/"支出" 表示未选一级分类，二级分类才是真实一级分类
-        if (catIdx >= 0 && catIdx < cols.size && subCatIdx >= 0 && subCatIdx < cols.size) {
-            val cat = cols[catIdx].trim()
-            if (cat == "收入" || cat == "支出") {
-                cols[catIdx] = cols[subCatIdx]  // 二级分类提升为一级分类
-                cols[subCatIdx] = ""             // 二级分类清空
-            }
-        }
 
         if (catIdx >= 0 && catIdx < cols.size) {
             val original = cols[catIdx].trim()
