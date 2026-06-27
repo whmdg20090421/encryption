@@ -331,11 +331,27 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     Scaffold(
         contentWindowInsets = WindowInsets.systemBars
     ) { innerPadding ->
+        val density = LocalDensity.current
+        val imeVisible = WindowInsets.ime.getBottom(density) > 0
+        // 动画 padding：键盘弹出/收起时平滑过渡
+        val imeAnimPadding = remember { Animatable(0f) }
+        var prevImeVisible by remember { mutableStateOf(false) }
+        var savedImeHeightDp by remember { mutableFloatStateOf(0f) }
+        val currentImeHeightDp = with(density) { WindowInsets.ime.getBottom(this@with).toDp().value }
+        LaunchedEffect(imeVisible, currentImeHeightDp) {
+            if (imeVisible) {
+                savedImeHeightDp = currentImeHeightDp
+                imeAnimPadding.animateTo(currentImeHeightDp, animationSpec = tween(250))
+            } else if (prevImeVisible) {
+                imeAnimPadding.animateTo(0f, animationSpec = tween(250))
+            }
+            prevImeVisible = imeVisible
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .imePadding()
+                .padding(bottom = imeAnimPadding.value.dp)
         ) {
             // 50dp 功能栏
             Surface(
@@ -729,6 +745,8 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
             HorizontalDivider(color = iconThemeColor, thickness = 1.dp)
 
+            // 键盘弹出时隐藏第二行和计算器，释放空间给分类区
+            if (!imeVisible) {
             // 第二行：5 个元素均分，SpaceEvenly 自动分配间距
             Row(
                 modifier = Modifier
@@ -964,6 +982,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 finishEnabled = canFinish
             )
             } // Surface
+            } // if (!imeVisible)
             } // Column
 
         // 日期时间选择弹窗
