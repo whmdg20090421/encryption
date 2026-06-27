@@ -78,7 +78,7 @@ private val HEADER_ALIASES = mapOf(
 private fun parseCsvText(csvText: String): List<List<String>> {
     val cleaned = csvText.removePrefix("﻿") // 去除 UTF-8 BOM
     val lines = cleaned.lines().filter { it.isNotBlank() }
-    return lines.map { line ->
+    val parsed = lines.map { line ->
         val result = mutableListOf<String>()
         val current = StringBuilder()
         var inQuotes = false
@@ -98,6 +98,10 @@ private fun parseCsvText(csvText: String): List<List<String>> {
         }
         result.add(current.toString())
         result
+    }
+    // 过滤列数不足的数据行（与 importFromCsv 的 cols.size < 3 一致）
+    return parsed.filterIndexed { idx, cols ->
+        idx == 0 || cols.size >= 3
     }
 }
 

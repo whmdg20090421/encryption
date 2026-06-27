@@ -942,7 +942,8 @@ internal class AccountingDatabase private constructor(context: Context) :
             }
         } catch (_: Exception) {}
 
-        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+        val dateFormatFull = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+        val dateFormatShort = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
 
         db.beginTransaction()
         try {
@@ -956,7 +957,11 @@ internal class AccountingDatabase private constructor(context: Context) :
                 val amount = cols.getOrNull(amountIdx)?.trim() ?: continue
                 val timeStr = cols.getOrNull(timeIdx)?.trim() ?: continue
 
-                val happenedAt = try { dateFormat.parse(timeStr)?.time ?: 0L } catch (_: Exception) { 0L }
+                val happenedAt = try {
+                    dateFormatFull.parse(timeStr)?.time ?: dateFormatShort.parse(timeStr)?.time ?: 0L
+                } catch (_: Exception) {
+                    try { dateFormatShort.parse(timeStr)?.time ?: 0L } catch (_: Exception) { 0L }
+                }
                 val catName = cols.getOrNull(catIdx)?.trim() ?: ""
                 val subCatName = cols.getOrNull(subCatIdx)?.trim() ?: ""
                 val book = cols.getOrNull(bookIdx)?.trim() ?: "默认记账本"
@@ -965,11 +970,12 @@ internal class AccountingDatabase private constructor(context: Context) :
                 val discountBefore = cols.getOrNull(discountIdx)?.trim()?.ifEmpty { null }
                 val reimbName = cols.getOrNull(reimbIdx)?.trim() ?: ""
 
+                val absAmount = amount.replace("-", "").replace("+", "").trim()
                 val cv = ContentValues().apply {
                     put("id", java.util.UUID.randomUUID().toString())
                     put("book_name", book)
                     put("type", type)
-                    put("amount", amount)
+                    put("amount", absAmount)
                     put("category_id", catNameToId[catName] ?: catName)
                     val subId = catNameToId[subCatName] ?: subCatName
                     if (subId.isNotEmpty()) put("subcategory_id", subId) else putNull("subcategory_id")
