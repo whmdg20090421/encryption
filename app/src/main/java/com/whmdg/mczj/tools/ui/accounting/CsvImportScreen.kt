@@ -127,6 +127,29 @@ private fun extractDistinctValues(rows: List<List<String>>, columnIndex: Int): L
     return set.toList()
 }
 
+/** 解析单行 CSV（处理引号转义） */
+private fun parseSingleCsvLine(line: String): List<String> {
+    val result = mutableListOf<String>()
+    val current = StringBuilder()
+    var inQuotes = false
+    var i = 0
+    while (i < line.length) {
+        val c = line[i]
+        when {
+            c == '"' && !inQuotes -> inQuotes = true
+            c == '"' && inQuotes -> {
+                if (i + 1 < line.length && line[i + 1] == '"') { current.append('"'); i++ }
+                else inQuotes = false
+            }
+            c == ',' && !inQuotes -> { result.add(current.toString()); current.clear() }
+            else -> current.append(c)
+        }
+        i++
+    }
+    result.add(current.toString())
+    return result
+}
+
 /**
  * 对 CSV 原始文本做早期归一化：
  * 类别="收入"/"支出" → 二级分类提升为一级分类，二级清空。
@@ -134,20 +157,16 @@ private fun extractDistinctValues(rows: List<List<String>>, columnIndex: Int): L
  */
 private fun normalizeCsvText(csvText: String, catIdx: Int?, subCatIdx: Int?): String {
     if (catIdx == null || subCatIdx == null) return csvText
-    val lines = csvText.lines().toMutableList()
+    val lines = csvText.lines().filter { it.isNotBlank() }.toMutableList()
     if (lines.size < 2) return csvText
 
-    val header = parseCsvLine(lines[0]).map { it.trim().removePrefix("﻿") }
-    val actualCatIdx = catIdx
-    val actualSubCatIdx = subCatIdx
-
     for (i in 1 until lines.size) {
-        val cols = parseCsvLine(lines[i]).toMutableList()
-        if (actualCatIdx >= cols.size || actualSubCatIdx >= cols.size) continue
-        val cat = cols[actualCatIdx].trim()
+        val cols = parseSingleCsvLine(lines[i]).toMutableList()
+        if (catIdx >= cols.size || subCatIdx >= cols.size) continue
+        val cat = cols[catIdx].trim()
         if (cat == "收入" || cat == "支出") {
-            cols[actualCatIdx] = cols[actualSubCatIdx]
-            cols[actualSubCatIdx] = ""
+            cols[catIdx] = cols[subCatIdx]
+            cols[subCatIdx] = ""
             lines[i] = cols.joinToString(",") { v ->
                 if (v.contains(',') || v.contains('"') || v.contains('\n'))
                     "\"${v.replace("\"", "\"\"")}\"" else v
