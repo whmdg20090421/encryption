@@ -328,11 +328,14 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
         typeChanged = true
     }
 
-    Scaffold { innerPadding ->
+    Scaffold(
+        contentWindowInsets = WindowInsets.systemBars
+    ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .imePadding()
         ) {
             // 50dp 功能栏
             Surface(
@@ -546,9 +549,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 }
             }
 
-            // 备注+金额行：左侧20%空 | 中间60%备注输入 | 右侧20%金额
-            val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
-            HorizontalDivider(color = iconThemeColor, thickness = 1.dp)
+            // 第一行：左侧20%空 | 中间60%备注输入 | 右侧20%金额
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -724,6 +725,9 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                     )
                 }
             }
+
+            val selectedReimb = selectedReimbursementId?.let { reimbursementAccountMap[it] }
+            HorizontalDivider(color = iconThemeColor, thickness = 1.dp)
 
             // 第二行：5 个元素均分，SpaceEvenly 自动分配间距
             Row(
