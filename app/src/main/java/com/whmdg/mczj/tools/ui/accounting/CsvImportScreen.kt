@@ -127,6 +127,51 @@ private fun extractDistinctValues(rows: List<List<String>>, columnIndex: Int): L
     return set.toList()
 }
 
+/**
+ * 提取归一化后的一级和二级分类列表。
+ * 兼容源应用：类别="收入"/"支出" 表示未选一级分类，二级分类才是真实一级分类。
+ */
+private fun extractNormalizedCategories(
+    rows: List<List<String>>,
+    catIdx: Int?,
+    subCatIdx: Int?
+): Pair<List<String>, List<String>> {
+    val catSet = linkedSetOf<String>()
+    val promotedSubs = mutableSetOf<String>() // 被提升为一级分类的二级分类值
+
+    for (i in 1 until rows.size) {
+        val cols = rows[i]
+        val cat = if (catIdx != null && catIdx < cols.size) cols[catIdx].trim() else ""
+        val subCat = if (subCatIdx != null && subCatIdx < cols.size) cols[subCatIdx].trim() else ""
+
+        if (cat == "收入" || cat == "支出") {
+            // 二级分类提升为一级分类
+            if (subCat.isNotEmpty()) {
+                catSet.add(subCat)
+                promotedSubs.add(subCat)
+            }
+        } else {
+            if (cat.isNotEmpty()) catSet.add(cat)
+        }
+    }
+
+    // 二级分类：排除被提升的，保留剩余的
+    val subcatSet = linkedSetOf<String>()
+    if (subCatIdx != null) {
+        for (i in 1 until rows.size) {
+            val cols = rows[i]
+            val cat = if (catIdx != null && catIdx < cols.size) cols[catIdx].trim() else ""
+            val subCat = if (subCatIdx < cols.size) cols[subCatIdx].trim() else ""
+            // 非归一化行的二级分类，且排除被提升的
+            if (cat != "收入" && cat != "支出" && subCat.isNotEmpty() && subCat !in promotedSubs) {
+                subcatSet.add(subCat)
+            }
+        }
+    }
+
+    return catSet.toList() to subcatSet.toList()
+}
+
 /** 自动匹配 CSV 分类名到应用分类（精确匹配 name） */
 private fun autoMatchCategories(
     csvNames: List<String>,
@@ -330,17 +375,18 @@ fun CsvImportFlowScreen(
                             return@FieldMappingStep
                         }
                         mappingError = null
-                        // 提取不重复的一级和二级分类名
+                        // 提取不重复的一级和二级分类名（含"收入"/"支出"归一化）
                         val catIdx = columnMapping["分类"]
                         val subCatIdx = columnMapping["二级分类"]
+                        val (cats, subcats) = extractNormalizedCategories(rows, catIdx, subCatIdx)
+                        distinctCategories = cats
+                        distinctSubcategories = subcats
                         if (catIdx != null) {
-                            distinctCategories = extractDistinctValues(rows, catIdx)
                             val matched = autoMatchCategories(distinctCategories, parentCategories)
                             categoryMapping.clear()
                             categoryMapping.putAll(matched)
                         }
                         if (subCatIdx != null) {
-                            distinctSubcategories = extractDistinctValues(rows, subCatIdx)
                             val matched = autoMatchCategories(distinctSubcategories, allSubcategories.map { it.second })
                             subcategoryMapping.clear()
                             subcategoryMapping.putAll(matched)
@@ -780,19 +826,26 @@ private fun transformCsvColumns(
         "日期" to "时间", "收支类型" to "类型", "类别" to "分类"
     )
 
-    val lines = csvText.lines().toMutableList()
+    // 从 rows 重建 CSV（rows 已过滤空行，避免索引不一致）
+    val output = mutableListOf<String>()
 
-    // 替换 header 行
-    if (lines.isNotEmpty()) {
-        val headerCols = rows[0].map { it.trim() }
-        val newHeaders = headerCols.map { h -> headerNormalize[h] ?: h }
-        lines[0] = newHeaders.joinToString(",")
-    }
+    // header 行：替换列名
+    val headerCols = rows[0].map { it.trim() }
+    val newHeaders = headerCols.map { h -> headerNormalize[h] ?: h }
+    output.add(newHeaders.joinToString(","))
 
-    // 替换数据行中的分类名
-    for (i in 1 until lines.size) {
-        if (i - 1 >= rows.size) break
+    // 数据行：替换分类名
+    for (i in 1 until rows.size) {
         val cols = rows[i].toMutableList()
+
+        // 兼容源应用：类别="收入"/"支出" 表示未选一级分类，二级分类才是真实一级分类
+        if (catIdx >= 0 && catIdx < cols.size && subCatIdx >= 0 && subCatIdx < cols.size) {
+            val cat = cols[catIdx].trim()
+            if (cat == "收入" || cat == "支出") {
+                cols[catIdx] = cols[subCatIdx]  // 二级分类提升为一级分类
+                cols[subCatIdx] = ""             // 二级分类清空
+            }
+        }
 
         if (catIdx >= 0 && catIdx < cols.size) {
             val original = cols[catIdx].trim()
@@ -803,11 +856,11 @@ private fun transformCsvColumns(
             subCatReplacements[original]?.let { cols[subCatIdx] = it }
         }
 
-        lines[i] = cols.joinToString(",") { v ->
+        output.add(cols.joinToString(",") { v ->
             if (v.contains(',') || v.contains('"') || v.contains('\n'))
                 "\"${v.replace("\"", "\"\"")}\""
             else v
-        }
+        })
     }
-    return lines.joinToString("\n")
+    return output.joinToString("\n")
 }
