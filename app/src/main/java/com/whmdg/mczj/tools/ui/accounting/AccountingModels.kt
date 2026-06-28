@@ -417,6 +417,7 @@ data class AccountingAccount(
     val initialAmount: Double = 0.0,
     val income: Double = 0.0,    // 累计收入
     val expense: Double = 0.0,   // 累计支出
+    val currentBalance: Double = 0.0, // 当前余额（直接存储，显示用）
     val note: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()

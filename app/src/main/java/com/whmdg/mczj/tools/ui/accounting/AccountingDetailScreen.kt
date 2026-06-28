@@ -155,7 +155,7 @@ fun AccountingDetailScreen(
                             AccountingRepository.updateAccount(
                                 context,
                                 currentAccount.copy(
-                                    initialAmount = currentAccount.initialAmount + amt,
+                                    currentBalance = currentAccount.currentBalance + amt,
                                     updatedAt = System.currentTimeMillis()
                                 )
                             )

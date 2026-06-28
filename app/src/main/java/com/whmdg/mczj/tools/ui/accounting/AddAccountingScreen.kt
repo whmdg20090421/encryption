@@ -1073,7 +1073,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                 modifier = Modifier.weight(1f)
                             )
                             Text(
-                                text = "${String.format("%.2f", account.initialAmount)}",
+                                text = "${String.format("%.2f", account.currentBalance)}",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

@@ -20,7 +20,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 15
+        private const val DB_VERSION = 16
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -107,16 +107,17 @@ internal class AccountingDatabase private constructor(context: Context) :
 
         db.execSQL("""
             CREATE TABLE accounts (
-                id             TEXT PRIMARY KEY,
-                name           TEXT NOT NULL,
-                type           TEXT NOT NULL,
-                category       TEXT NOT NULL DEFAULT 'tradable',
-                initial_amount REAL NOT NULL DEFAULT 0,
-                income         REAL NOT NULL DEFAULT 0,
-                expense        REAL NOT NULL DEFAULT 0,
-                note           TEXT DEFAULT '',
-                created_at     INTEGER NOT NULL,
-                updated_at     INTEGER NOT NULL
+                id              TEXT PRIMARY KEY,
+                name            TEXT NOT NULL,
+                type            TEXT NOT NULL,
+                category        TEXT NOT NULL DEFAULT 'tradable',
+                initial_amount  REAL NOT NULL DEFAULT 0,
+                income          REAL NOT NULL DEFAULT 0,
+                expense         REAL NOT NULL DEFAULT 0,
+                current_balance REAL NOT NULL DEFAULT 0,
+                note            TEXT DEFAULT '',
+                created_at      INTEGER NOT NULL,
+                updated_at      INTEGER NOT NULL
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX idx_acc_category ON accounts(category)")
@@ -205,6 +206,11 @@ internal class AccountingDatabase private constructor(context: Context) :
         if (oldVersion < 15) {
             db.execSQL("ALTER TABLE accounts ADD COLUMN income REAL NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE accounts ADD COLUMN expense REAL NOT NULL DEFAULT 0")
+        }
+        if (oldVersion < 16) {
+            db.execSQL("ALTER TABLE accounts ADD COLUMN current_balance REAL NOT NULL DEFAULT 0")
+            // 用 initial_amount + income - expense 初始化当前余额
+            db.execSQL("UPDATE accounts SET current_balance = initial_amount + income - expense")
         }
     }
 
@@ -569,7 +575,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAllAccounts(): List<AccountingAccount> {
         val accounts = mutableListOf<AccountingAccount>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, name, type, category, initial_amount, income, expense, note, created_at, updated_at FROM accounts ORDER BY created_at DESC",
+            "SELECT id, name, type, category, initial_amount, income, expense, current_balance, note, created_at, updated_at FROM accounts ORDER BY created_at DESC",
             null
         )
         try {
@@ -585,7 +591,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAccountsByCategory(category: String): List<AccountingAccount> {
         val accounts = mutableListOf<AccountingAccount>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, name, type, category, initial_amount, income, expense, note, created_at, updated_at FROM accounts WHERE category = ? ORDER BY created_at DESC",
+            "SELECT id, name, type, category, initial_amount, income, expense, current_balance, note, created_at, updated_at FROM accounts WHERE category = ? ORDER BY created_at DESC",
             arrayOf(category)
         )
         try {
@@ -607,6 +613,7 @@ internal class AccountingDatabase private constructor(context: Context) :
             put("initial_amount", a.initialAmount)
             put("income", a.income)
             put("expense", a.expense)
+            put("current_balance", a.currentBalance)
             put("note", a.note)
             put("created_at", a.createdAt)
             put("updated_at", a.updatedAt)
@@ -623,9 +630,10 @@ internal class AccountingDatabase private constructor(context: Context) :
                 initialAmount = c.getDouble(4),
                 income = c.getDouble(5),
                 expense = c.getDouble(6),
-                note = c.getString(7) ?: "",
-                createdAt = c.getLong(8),
-                updatedAt = c.getLong(9)
+                currentBalance = c.getDouble(7),
+                note = c.getString(8) ?: "",
+                createdAt = c.getLong(9),
+                updatedAt = c.getLong(10)
             )
         } catch (e: Exception) {
             android.util.Log.e("AccountingDB", "cursorToAccount failed: ${e.message}, columnCount=${c.columnCount}")
@@ -1306,7 +1314,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun recalculateBalances(replaceMode: Boolean) {
         val db = writableDatabase
         if (replaceMode) {
-            db.execSQL("UPDATE accounts SET initial_amount = 0, income = 0, expense = 0")
+            db.execSQL("UPDATE accounts SET initial_amount = 0, income = 0, expense = 0, current_balance = 0")
         }
 
         // 1. 收入：普通收入记录的 amount
@@ -1370,13 +1378,13 @@ internal class AccountingDatabase private constructor(context: Context) :
 
             if (replaceMode) {
                 db.execSQL(
-                    "UPDATE accounts SET initial_amount = ?, income = ?, expense = ?, updated_at = ? WHERE id = ?",
-                    arrayOf(delta, income, expense, now, accId)
+                    "UPDATE accounts SET initial_amount = ?, income = ?, expense = ?, current_balance = ?, updated_at = ? WHERE id = ?",
+                    arrayOf(delta, income, expense, delta, now, accId)
                 )
             } else {
                 db.execSQL(
-                    "UPDATE accounts SET initial_amount = initial_amount + ?, income = income + ?, expense = expense + ?, updated_at = ? WHERE id = ?",
-                    arrayOf(delta, income, expense, now, accId)
+                    "UPDATE accounts SET initial_amount = initial_amount + ?, income = income + ?, expense = expense + ?, current_balance = current_balance + ?, updated_at = ? WHERE id = ?",
+                    arrayOf(delta, income, expense, delta, now, accId)
                 )
             }
         }
@@ -1526,6 +1534,9 @@ internal class AccountingDatabase private constructor(context: Context) :
                 }
                 db.insertWithOnConflict("accounts", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
+
+            // 计算当前余额（兼容旧导出数据）
+            db.execSQL("UPDATE accounts SET current_balance = initial_amount + income - expense")
 
             db.setTransactionSuccessful()
         } catch (e: IllegalArgumentException) {

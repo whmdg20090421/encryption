@@ -134,12 +134,21 @@ object AccountingRepository {
             updatedAt = record.updatedAt ?: now
         )
         db.insertRecord(withTime)
+        // 同步更新账户当前余额
+        updateAccountBalanceOnRecordChange(context, withTime.accountId, withTime.type, withTime.amount, isAdd = true)
     }
 
     /** 更新一条记录（自动更新 updatedAt，保留 createdAt） */
     fun updateRecord(context: Context, record: AccountingRecord) {
+        val oldRecord = getRecordById(context, record.id)
         val withTime = record.copy(updatedAt = System.currentTimeMillis())
         getDb(context).updateRecord(withTime)
+        // 如果旧记录存在，先反向扣除旧记录的影响
+        if (oldRecord != null) {
+            updateAccountBalanceOnRecordChange(context, oldRecord.accountId, oldRecord.type, oldRecord.amount, isAdd = false)
+        }
+        // 再应用新记录的影响
+        updateAccountBalanceOnRecordChange(context, withTime.accountId, withTime.type, withTime.amount, isAdd = true)
     }
 
     /** 仅更新记录的地址字段（异步定位完成后调用） */
@@ -169,8 +178,28 @@ object AccountingRepository {
             }
             // 级联更新：该账单此前被移除的附件，状态从 "active" 改为 "deleted"
             cascadeUpdateTrashStatus(context, id, "deleted")
+            // 同步更新账户当前余额（反向扣除）
+            updateAccountBalanceOnRecordChange(context, record.accountId, record.type, record.amount, isAdd = false)
         }
         db.deleteRecord(id)
+    }
+
+    /** 记录变更时同步更新账户当前余额 */
+    private fun updateAccountBalanceOnRecordChange(
+        context: Context, accountId: String?, type: String, amount: String, isAdd: Boolean
+    ) {
+        if (accountId == null) return
+        val amountVal = amount.toDoubleOrNull() ?: return
+        val delta = when (type) {
+            "收入" -> if (isAdd) amountVal else -amountVal
+            "支出" -> if (isAdd) -amountVal else amountVal
+            else -> return  // 转账、债务等不直接影响余额
+        }
+        val db = getDb(context).writableDatabase
+        db.execSQL(
+            "UPDATE accounts SET current_balance = current_balance + ?, updated_at = ? WHERE id = ?",
+            arrayOf(delta, System.currentTimeMillis(), accountId)
+        )
     }
 
     /** 按 ID 查单条记录 */

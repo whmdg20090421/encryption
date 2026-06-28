@@ -485,6 +485,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                                 type = typeId,
                                 category = category,
                                 initialAmount = amount,
+                                currentBalance = amount,
                                 note = accountNote
                             )
                             AccountingRepository.insertAccount(context, account)
@@ -617,7 +618,7 @@ private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Un
         }
     } else {
         val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-        val totalAssets = remember(accounts) { accounts.sumOf { it.initialAmount } }
+        val totalAssets = remember(accounts) { accounts.sumOf { it.currentBalance } }
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -771,7 +772,7 @@ private fun AccountGroupCard(
     onAccountClick: (AccountingAccount) -> Unit
 ) {
     var expanded by remember { mutableStateOf(true) }
-    val subtotal = accounts.sumOf { it.initialAmount }
+    val subtotal = accounts.sumOf { it.currentBalance }
 
     Column(
         modifier = Modifier
@@ -882,7 +883,7 @@ private fun AccountGroupCard(
                             }
                             // 右侧：余额
                             Text(
-                                String.format("%.2f", account.initialAmount),
+                                String.format("%.2f", account.currentBalance),
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -995,7 +996,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("余额", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
                             Text(
-                                "${String.format("%.2f", account.initialAmount)}",
+                                "${String.format("%.2f", account.currentBalance)}",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White
                             )
@@ -1031,7 +1032,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                         verticalAlignment = Alignment.Bottom
                     ) {
                         Text(
-                            "${String.format("%.2f", account.initialAmount)}",
+                            "${String.format("%.2f", account.currentBalance)}",
                             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                             color = Color.White
                         )
@@ -2724,20 +2725,14 @@ fun AssetDetailScreen(accountId: String, onBack: () -> Unit, onNavigate: (Screen
 
     // ── 更改金额弹窗 ──
     if (showChangeAmountDialog) {
-        // 计算当前余额：initialAmount + 收入 - 支出
-        val records = AccountingRepository.getAllRecords(context).filter { it.accountId == accountId }
-        val income = records.filter { it.type == "收入" }.sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
-        val expense = records.filter { it.type == "支出" }.sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
-        val currentBalance = currentAccount.initialAmount + income - expense
-
-        var newAmount by remember { mutableStateOf(String.format("%.2f", currentBalance)) }
+        var newAmount by remember { mutableStateOf(String.format("%.2f", currentAccount.currentBalance)) }
 
         AlertDialog(
             onDismissRequest = { showChangeAmountDialog = false },
             title = { Text("更改金额") },
             text = {
                 Column {
-                    Text("当前余额: ${String.format("%.2f", currentBalance)}", style = MaterialTheme.typography.bodyMedium)
+                    Text("当前余额: ${String.format("%.2f", currentAccount.currentBalance)}", style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(12.dp))
                     TextField(
                         value = newAmount,
@@ -2753,9 +2748,7 @@ fun AssetDetailScreen(accountId: String, onBack: () -> Unit, onNavigate: (Screen
                 TextButton(onClick = {
                     val newBalance = newAmount.toDoubleOrNull()
                     if (newBalance != null) {
-                        // 反推新初始金额：新余额 - 收入 + 支出
-                        val newInitial = newBalance - income + expense
-                        val updated = currentAccount.copy(initialAmount = newInitial)
+                        val updated = currentAccount.copy(currentBalance = newBalance)
                         AccountingRepository.updateAccount(context, updated)
                         refreshAccount()
                     }
