@@ -106,7 +106,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
     }
 
     // 底部导航栏透明度
-    val navBarAlpha = 0.8f
+    val navBarAlpha = 0.6f
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -616,7 +616,7 @@ private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Un
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 80.dp)
+            contentPadding = PaddingValues(bottom = 16.dp)
         ) {
             // 资产卡片
             item {
@@ -1886,7 +1886,8 @@ private fun RecordListContent(
         state = listState,
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(MaterialTheme.colorScheme.background),
+        contentPadding = PaddingValues(bottom = 16.dp)
     ) {
         // 顶部留白
         item { Spacer(Modifier.height(barHeight)) }
@@ -2311,7 +2312,7 @@ fun AssetDetailScreen(accountId: String, onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(top = 8.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             AccountCard(account = account, showStats = account.category == "tradable")
         }
