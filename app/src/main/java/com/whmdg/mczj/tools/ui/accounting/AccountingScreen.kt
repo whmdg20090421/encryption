@@ -105,7 +105,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
             val navItems = listOf(
                 "首页" to (Icons.Filled.Home to Icons.Outlined.Home),
                 "资产" to (Icons.Filled.AccountBalanceWallet to Icons.Outlined.AccountBalanceWallet),
-                "统计" to (Icons.Filled.BarChart to Icons.Outlined.BarChart),
+                "统计" to (Icons.Filled.InsertChart to Icons.Outlined.InsertChart),
                 "日历" to (Icons.Filled.CalendarMonth to Icons.Outlined.CalendarMonth),
                 "我的" to (Icons.Filled.Person to Icons.Outlined.Person),
             )

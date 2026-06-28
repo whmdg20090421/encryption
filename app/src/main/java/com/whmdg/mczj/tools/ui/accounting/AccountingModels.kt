@@ -359,7 +359,9 @@ data class AccountingRecord(
     val reimburseAmount: Double = 0.0,       // 报销金额
     val reimburseAfterAmount: String? = null, // 报销后金额（用于余额计算）
     val refundAmount: Double = 0.0,          // 退款金额
-    val address: String = ""                 // 地址（可选）
+    val address: String = "",                // 地址（可选）
+    val createdAt: Long? = null,             // 账单创建时间（首次创建后锁定）
+    val updatedAt: Long? = null              // 最后修改时间（编辑/退款/报销保存时更新）
 )
 
 /**

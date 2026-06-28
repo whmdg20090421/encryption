@@ -292,6 +292,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
         val cal = Calendar.getInstance()
         cal.set(selectedYear, selectedMonth, selectedDay, selectedHour, selectedMinute, 0)
         cal.set(Calendar.MILLISECOND, 0)
+        val now = System.currentTimeMillis()
         val record = AccountingRecord(
             id = editingRecord?.id ?: java.util.UUID.randomUUID().toString(),
             bookName = bookName,
@@ -308,7 +309,9 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             reimbursementAccountId = selectedReimbursementId,
             attachments = attachments,
             excludeFromStats = excludeFromStats,
-            excludeFromBudget = excludeFromBudget
+            excludeFromBudget = excludeFromBudget,
+            createdAt = editingRecord?.createdAt ?: now,
+            updatedAt = now
         )
         val db = AccountingRecordDb.load(context)
         if (editingRecord != null) {

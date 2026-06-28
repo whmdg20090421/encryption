@@ -20,7 +20,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 13
+        private const val DB_VERSION = 14
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -97,7 +97,9 @@ internal class AccountingDatabase private constructor(context: Context) :
                 reimburse_amount REAL DEFAULT 0,
                 reimburse_after_amount TEXT,
                 refund_amount REAL DEFAULT 0,
-                address TEXT DEFAULT ''
+                address TEXT DEFAULT '',
+                created_at INTEGER,
+                updated_at INTEGER
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX idx_rec_book ON records(book_name)")
@@ -193,6 +195,10 @@ internal class AccountingDatabase private constructor(context: Context) :
         }
         if (oldVersion < 13) {
             db.execSQL("ALTER TABLE records ADD COLUMN reimburse_after_amount TEXT")
+        }
+        if (oldVersion < 14) {
+            db.execSQL("ALTER TABLE records ADD COLUMN created_at INTEGER")
+            db.execSQL("ALTER TABLE records ADD COLUMN updated_at INTEGER")
         }
     }
 
@@ -423,7 +429,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAllRecords(): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address FROM records ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records ORDER BY happened_at DESC",
             null
         )
         try {
@@ -439,7 +445,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByBook(bookName: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address FROM records WHERE book_name = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records WHERE book_name = ? ORDER BY happened_at DESC",
             arrayOf(bookName)
         )
         try {
@@ -479,6 +485,8 @@ internal class AccountingDatabase private constructor(context: Context) :
             if (r.reimburseAfterAmount != null) put("reimburse_after_amount", r.reimburseAfterAmount) else putNull("reimburse_after_amount")
             put("refund_amount", r.refundAmount)
             put("address", r.address)
+            if (r.createdAt != null) put("created_at", r.createdAt) else putNull("created_at")
+            if (r.updatedAt != null) put("updated_at", r.updatedAt) else putNull("updated_at")
         }
     }
 
@@ -508,7 +516,9 @@ internal class AccountingDatabase private constructor(context: Context) :
             reimburseAmount = c.getDouble(17),
             reimburseAfterAmount = c.getString(18),
             refundAmount = c.getDouble(19),
-            address = c.getString(20) ?: ""
+            address = c.getString(20) ?: "",
+            createdAt = if (c.isNull(21)) null else c.getLong(21),
+            updatedAt = if (c.isNull(22)) null else c.getLong(22)
         )
     }
 
@@ -519,7 +529,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByReimbursementAccount(reimbAccountId: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
             arrayOf(reimbAccountId)
         )
         try {
@@ -787,7 +797,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         // records
         val records = mutableListOf<ExportRecord>()
         val recCursor = db.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address FROM records",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records",
             null
         )
         try {
@@ -810,7 +820,9 @@ internal class AccountingDatabase private constructor(context: Context) :
                     reimburseAmount = recCursor.getDouble(17),
                     reimburseAfterAmount = recCursor.getString(18),
                     refundAmount = recCursor.getDouble(19),
-                    address = recCursor.getString(20) ?: ""
+                    address = recCursor.getString(20) ?: "",
+                    createdAt = if (recCursor.isNull(21)) null else recCursor.getLong(21),
+                    updatedAt = if (recCursor.isNull(22)) null else recCursor.getLong(22)
                 ))
             }
         } finally {
@@ -879,10 +891,10 @@ internal class AccountingDatabase private constructor(context: Context) :
         } catch (_: Exception) {}
 
         val sb = StringBuilder()
-        sb.appendLine("﻿类型,分类,二级分类,金额,账本,账户,备注,时间,优惠前金额,优惠金额,优惠后金额,报销账户,其他,地址")
+        sb.appendLine("﻿类型,分类,二级分类,金额,账本,账户,备注,时间,优惠前金额,优惠金额,优惠后金额,报销账户,其他,地址,创建时间,修改时间")
 
         val recCursor = db.rawQuery(
-            "SELECT type, amount, category_id, subcategory_id, book_name, account_id, note, happened_at, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address FROM records ORDER BY happened_at ASC",
+            "SELECT type, amount, category_id, subcategory_id, book_name, account_id, note, happened_at, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records ORDER BY happened_at ASC",
             null
         )
         try {
@@ -902,6 +914,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                 val excludeFromStats = recCursor.getInt(13) == 1
                 val excludeFromBudget = recCursor.getInt(14) == 1
                 val address = recCursor.getString(19) ?: ""
+                val createdAtVal = if (recCursor.isNull(20)) null else recCursor.getLong(20)
+                val updatedAtVal = if (recCursor.isNull(21)) null else recCursor.getLong(21)
 
                 val otherParts = mutableListOf<String>()
                 if (excludeFromStats) otherParts.add("不计入收支")
@@ -911,7 +925,10 @@ internal class AccountingDatabase private constructor(context: Context) :
                 val dateStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
                     .format(java.util.Date(ts))
 
-                sb.appendLine("${csvEscape(type)},${csvEscape(catName)},${csvEscape(subCatName)},${csvEscape(amount)},${csvEscape(book)},${csvEscape(accName)},${csvEscape(note)},${csvEscape(dateStr)},${csvEscape(discountBefore)},${csvEscape(discountOff)},${csvEscape(discountAfter)},${csvEscape(reimbName)},${csvEscape(otherStr)},${csvEscape(address)}")
+                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+                val createdAtStr = if (createdAtVal != null) sdf.format(java.util.Date(createdAtVal)) else ""
+                val updatedAtStr = if (updatedAtVal != null) sdf.format(java.util.Date(updatedAtVal)) else ""
+                sb.appendLine("${csvEscape(type)},${csvEscape(catName)},${csvEscape(subCatName)},${csvEscape(amount)},${csvEscape(book)},${csvEscape(accName)},${csvEscape(note)},${csvEscape(dateStr)},${csvEscape(discountBefore)},${csvEscape(discountOff)},${csvEscape(discountAfter)},${csvEscape(reimbName)},${csvEscape(otherStr)},${csvEscape(address)},${csvEscape(createdAtStr)},${csvEscape(updatedAtStr)}")
             }
         } finally {
             recCursor.close()
@@ -963,6 +980,8 @@ internal class AccountingDatabase private constructor(context: Context) :
         val refundIdx = header.indexOf("退款")
         val otherIdx = header.indexOf("其他")
         val addressIdx = header.indexOf("地址")
+        val createdAtIdx = header.indexOf("创建时间")
+        val updatedAtIdx = header.indexOf("修改时间")
 
         if (typeIdx < 0 || amountIdx < 0 || timeIdx < 0) {
             throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
@@ -1020,6 +1039,14 @@ internal class AccountingDatabase private constructor(context: Context) :
                 val refundStr = cols.getOrNull(refundIdx)?.trim() ?: ""
                 val otherStr = cols.getOrNull(otherIdx)?.trim() ?: ""
                 val addressStr = cols.getOrNull(addressIdx)?.trim() ?: ""
+                val createdAtStr = cols.getOrNull(createdAtIdx)?.trim() ?: ""
+                val updatedAtStr = cols.getOrNull(updatedAtIdx)?.trim() ?: ""
+                val createdAt: Long? = if (createdAtStr.isNotEmpty()) {
+                    try { dateFormatFull.parse(createdAtStr)?.time } catch (_: Exception) { null }
+                } else null
+                val updatedAt: Long? = if (updatedAtStr.isNotEmpty()) {
+                    try { dateFormatFull.parse(updatedAtStr)?.time } catch (_: Exception) { null }
+                } else null
 
                 // 报销状态：空=非报销账单，0=未报销，非0=已报销
                 val reimburseStatus = reimbName.isNotEmpty() && reimbAmountStr.isNotEmpty() && reimbAmountStr != "0"
@@ -1080,6 +1107,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                     put("exclude_from_stats", if (otherStr.contains("不计入收支")) 1 else 0)
                     put("exclude_from_budget", if (otherStr.contains("不计入预算")) 1 else 0)
                     put("address", addressStr)
+                    if (createdAt != null) put("created_at", createdAt) else putNull("created_at")
+                    if (updatedAt != null) put("updated_at", updatedAt) else putNull("updated_at")
                 }
                 db.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -1168,6 +1197,14 @@ internal class AccountingDatabase private constructor(context: Context) :
                 val refundStr = col("退款") ?: ""
                 val otherStr = col("其他") ?: ""
                 val addressStr = col("地址") ?: ""
+                val createdAtStr = col("创建时间") ?: ""
+                val updatedAtStr = col("修改时间") ?: ""
+                val createdAtVal: Long? = if (createdAtStr.isNotEmpty()) {
+                    try { dateFormatFull.parse(createdAtStr)?.time } catch (_: Exception) { null }
+                } else null
+                val updatedAtVal: Long? = if (updatedAtStr.isNotEmpty()) {
+                    try { dateFormatFull.parse(updatedAtStr)?.time } catch (_: Exception) { null }
+                } else null
 
                 // 报销状态：空=非报销账单，0=未报销，非0=已报销
                 val reimburseStatus = reimbName.isNotEmpty() && reimbAmountStr.isNotEmpty() && reimbAmountStr != "0"
@@ -1229,6 +1266,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                     put("exclude_from_stats", if (otherStr.contains("不计入收支")) 1 else 0)
                     put("exclude_from_budget", if (otherStr.contains("不计入预算")) 1 else 0)
                     put("address", addressStr)
+                    if (createdAtVal != null) put("created_at", createdAtVal) else putNull("created_at")
+                    if (updatedAtVal != null) put("updated_at", updatedAtVal) else putNull("updated_at")
                 }
                 db.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
                 imported++
@@ -1302,7 +1341,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         val pending = try { if (pendingCursor.moveToFirst()) pendingCursor.getDouble(0) else 0.0 } finally { pendingCursor.close() }
 
         val doneCursor = db.rawQuery(
-            "SELECT SUM(CAST(amount AS REAL)) FROM records WHERE reimbursement_account_id IS NOT NULL AND reimburse_status = 1",
+            "SELECT SUM(CAST(reimburse_amount AS REAL)) FROM records WHERE reimbursement_account_id IS NOT NULL AND reimburse_status = 1",
             null
         )
         val done = try { if (doneCursor.moveToFirst()) doneCursor.getDouble(0) else 0.0 } finally { doneCursor.close() }
@@ -1387,6 +1426,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                     if (r.reimburseAfterAmount != null) put("reimburse_after_amount", r.reimburseAfterAmount) else putNull("reimburse_after_amount")
                     put("refund_amount", r.refundAmount)
                     put("address", r.address)
+                    if (r.createdAt != null) put("created_at", r.createdAt) else putNull("created_at")
+                    if (r.updatedAt != null) put("updated_at", r.updatedAt) else putNull("updated_at")
                 }
                 db.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -1443,7 +1484,9 @@ private data class ExportRecord(
     val reimburseAmount: Double = 0.0,
     val reimburseAfterAmount: String? = null,
     val refundAmount: Double = 0.0,
-    val address: String = ""
+    val address: String = "",
+    val createdAt: Long? = null,
+    val updatedAt: Long? = null
 )
 
 @Serializable

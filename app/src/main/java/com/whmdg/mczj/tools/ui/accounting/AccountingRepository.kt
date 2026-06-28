@@ -128,12 +128,18 @@ object AccountingRepository {
             // 新的一天，天数 +1
             setSetting(context, KEY_DAY_COUNT, (getDayCount(context) + 1).toString())
         }
-        db.insertRecord(record)
+        val now = System.currentTimeMillis()
+        val withTime = record.copy(
+            createdAt = record.createdAt ?: now,
+            updatedAt = record.updatedAt ?: now
+        )
+        db.insertRecord(withTime)
     }
 
-    /** 更新一条记录 */
+    /** 更新一条记录（自动更新 updatedAt，保留 createdAt） */
     fun updateRecord(context: Context, record: AccountingRecord) {
-        getDb(context).updateRecord(record)
+        val withTime = record.copy(updatedAt = System.currentTimeMillis())
+        getDb(context).updateRecord(withTime)
     }
 
     /** 删除一条记录（增量维护记账天数 + 附件回收站级联） */
@@ -162,7 +168,7 @@ object AccountingRepository {
     private fun getRecordById(context: Context, id: String): AccountingRecord? {
         val sqlDb = getDb(context).readableDatabase
         val cursor = sqlDb.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address FROM records WHERE id = ?",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records WHERE id = ?",
             arrayOf(id)
         )
         return try {
@@ -192,7 +198,9 @@ object AccountingRepository {
                     reimburseAmount = cursor.getDouble(17),
                     reimburseAfterAmount = cursor.getString(18),
                     refundAmount = cursor.getDouble(19),
-                    address = cursor.getString(20) ?: ""
+                    address = cursor.getString(20) ?: "",
+                    createdAt = if (cursor.isNull(21)) null else cursor.getLong(21),
+                    updatedAt = if (cursor.isNull(22)) null else cursor.getLong(22)
                 )
             } else null
         } finally {
@@ -250,6 +258,8 @@ object AccountingRepository {
                     if (record.reimburseAfterAmount != null) put("reimburse_after_amount", record.reimburseAfterAmount) else putNull("reimburse_after_amount")
                     put("refund_amount", record.refundAmount)
                     put("address", record.address)
+                    if (record.createdAt != null) put("created_at", record.createdAt) else putNull("created_at")
+                    if (record.updatedAt != null) put("updated_at", record.updatedAt) else putNull("updated_at")
                 }
                 sqlDb.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
