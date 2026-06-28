@@ -574,7 +574,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         )
         try {
             while (cursor.moveToNext()) {
-                accounts.add(cursorToAccount(cursor))
+                cursorToAccount(cursor)?.let { accounts.add(it) }
             }
         } finally {
             cursor.close()
@@ -590,7 +590,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         )
         try {
             while (cursor.moveToNext()) {
-                accounts.add(cursorToAccount(cursor))
+                cursorToAccount(cursor)?.let { accounts.add(it) }
             }
         } finally {
             cursor.close()
@@ -613,19 +613,24 @@ internal class AccountingDatabase private constructor(context: Context) :
         }
     }
 
-    private fun cursorToAccount(c: android.database.Cursor): AccountingAccount {
-        return AccountingAccount(
-            id = c.getString(0),
-            name = c.getString(1),
-            type = c.getString(2),
-            category = c.getString(3),
-            initialAmount = c.getDouble(4),
-            income = c.getDouble(5),
-            expense = c.getDouble(6),
-            note = c.getString(7) ?: "",
-            createdAt = c.getLong(8),
-            updatedAt = c.getLong(9)
-        )
+    private fun cursorToAccount(c: android.database.Cursor): AccountingAccount? {
+        return try {
+            AccountingAccount(
+                id = c.getString(0),
+                name = c.getString(1),
+                type = c.getString(2),
+                category = c.getString(3),
+                initialAmount = c.getDouble(4),
+                income = c.getDouble(5),
+                expense = c.getDouble(6),
+                note = c.getString(7) ?: "",
+                createdAt = c.getLong(8),
+                updatedAt = c.getLong(9)
+            )
+        } catch (e: Exception) {
+            android.util.Log.e("AccountingDB", "cursorToAccount failed: ${e.message}, columnCount=${c.columnCount}")
+            null
+        }
     }
 
     // ─────────────────────────────────────────────
