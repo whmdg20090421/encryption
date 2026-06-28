@@ -962,7 +962,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     }
 
     fun importFromCsv(csvString: String, appendMode: Boolean = false) {
-        val lines = csvString.lines().filter { it.isNotBlank() }
+        val lines = mergeCsvLines(csvString.lines()).filter { it.isNotBlank() }
         if (lines.size < 2) throw IllegalArgumentException("该CSV文件数据格式不正确或已损坏。")
 
         val header = parseCsvLine(lines[0]).map { it.trim() }
@@ -1137,7 +1137,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         categoryMapping: Map<String, String?>,
         replaceMode: Boolean
     ): Int {
-        val lines = csvText.lines().filter { it.isNotBlank() }
+        val lines = mergeCsvLines(csvText.lines()).filter { it.isNotBlank() }
         if (lines.size < 2) throw IllegalArgumentException("CSV 文件无数据行。")
 
         val db = writableDatabase
@@ -1370,6 +1370,38 @@ internal class AccountingDatabase private constructor(context: Context) :
         }
         result.add(current.toString())
         return result
+    }
+
+    /**
+     * 将 CSV 原始行合并为逻辑记录行（处理跨行的引号字段）。
+     * 例如报销明细字段包含换行时，需要将多行合并为一行再解析。
+     */
+    private fun mergeCsvLines(rawLines: List<String>): List<String> {
+        val merged = mutableListOf<String>()
+        val buffer = StringBuilder()
+        var inQuotes = false
+        for (line in rawLines) {
+            if (buffer.isNotEmpty()) buffer.append('\n')
+            buffer.append(line)
+            // 计算引号数（忽略转义的双引号 ""）
+            var quoteCount = 0
+            var j = 0
+            while (j < line.length) {
+                if (line[j] == '"') {
+                    if (j + 1 < line.length && line[j + 1] == '"') { j += 2; continue }
+                    quoteCount++
+                }
+                j++
+            }
+            if (inQuotes) quoteCount++  // 加上之前未关闭的引号
+            inQuotes = quoteCount % 2 != 0
+            if (!inQuotes) {
+                merged.add(buffer.toString())
+                buffer.clear()
+            }
+        }
+        if (buffer.isNotEmpty()) merged.add(buffer.toString())
+        return merged
     }
 
     fun validateImportData(jsonString: String) {

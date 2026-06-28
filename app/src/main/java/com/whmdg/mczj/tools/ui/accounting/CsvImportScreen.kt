@@ -86,9 +86,39 @@ private val HEADER_ALIASES = mapOf(
 // CSV 解析
 // ─────────────────────────────────────────────
 
+/**
+ * 将 CSV 原始行合并为逻辑记录行（处理跨行的引号字段）。
+ */
+private fun mergeCsvLines(rawLines: List<String>): List<String> {
+    val merged = mutableListOf<String>()
+    val buffer = StringBuilder()
+    var inQuotes = false
+    for (line in rawLines) {
+        if (buffer.isNotEmpty()) buffer.append('\n')
+        buffer.append(line)
+        var quoteCount = 0
+        var j = 0
+        while (j < line.length) {
+            if (line[j] == '"') {
+                if (j + 1 < line.length && line[j + 1] == '"') { j += 2; continue }
+                quoteCount++
+            }
+            j++
+        }
+        if (inQuotes) quoteCount++
+        inQuotes = quoteCount % 2 != 0
+        if (!inQuotes) {
+            merged.add(buffer.toString())
+            buffer.clear()
+        }
+    }
+    if (buffer.isNotEmpty()) merged.add(buffer.toString())
+    return merged
+}
+
 private fun parseCsvText(csvText: String): List<List<String>> {
     val cleaned = csvText.removePrefix("﻿") // 去除 UTF-8 BOM
-    val lines = cleaned.lines().filter { it.isNotBlank() }
+    val lines = mergeCsvLines(cleaned.lines()).filter { it.isNotBlank() }
     val parsed = lines.map { line ->
         val result = mutableListOf<String>()
         val current = StringBuilder()
@@ -172,7 +202,7 @@ private fun parseSingleCsvLine(line: String): List<String> {
  */
 private fun normalizeCsvText(csvText: String, catIdx: Int?, subCatIdx: Int?): String {
     if (catIdx == null || subCatIdx == null) return csvText
-    val lines = csvText.lines().filter { it.isNotBlank() }.toMutableList()
+    val lines = mergeCsvLines(csvText.lines()).filter { it.isNotBlank() }.toMutableList()
     if (lines.size < 2) return csvText
 
     for (i in 1 until lines.size) {
