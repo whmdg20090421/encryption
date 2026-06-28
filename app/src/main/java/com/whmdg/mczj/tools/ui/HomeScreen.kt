@@ -93,6 +93,7 @@ import com.whmdg.mczj.tools.ui.accounting.AccountingDetailScreen
 import com.whmdg.mczj.tools.ui.accounting.AccountingScreen
 import com.whmdg.mczj.tools.ui.accounting.AddAccountingScreen
 import com.whmdg.mczj.tools.ui.accounting.ReimbursementAccountScreen
+import com.whmdg.mczj.tools.ui.accounting.ReimbursementAccountDetailScreen
 import com.whmdg.mczj.tools.ui.accounting.AddReimbursementAccountScreen
 import com.whmdg.mczj.tools.ui.accounting.AssetDetailScreen
 import com.whmdg.mczj.tools.ui.components.GlowCard
@@ -149,6 +150,7 @@ sealed class Screen {
     data class AccountingDetail(val bookName: String, val recordId: String) : Screen()
     data class AddAccounting(val bookName: String, val recordId: String? = null) : Screen()
     object ReimbursementAccount : Screen()
+    data class ReimbursementAccountDetail(val accountId: String) : Screen()
     object AddReimbursementAccount : Screen()
     data class AssetDetail(val accountId: String) : Screen()
     object About : Screen()
@@ -389,7 +391,9 @@ fun MainAppContainer() {
                     if (isCurrentlyInEncryptionFlow()) {
                         encryptionError = e
                     } else {
-                        throw e
+                        // 手动触发全局异常处理器，避免异常在 Looper.loop() 中无限循环
+                        Thread.getDefaultUncaughtExceptionHandler()
+                            ?.uncaughtException(Thread.currentThread(), e)
                     }
                 }
             }
@@ -612,6 +616,13 @@ fun MainAppContainer() {
         }
         is Screen.ReimbursementAccount -> {
             ReimbursementAccountScreen(
+                onBack = { navigateBack() },
+                onNavigate = { navigateTo(it) }
+            )
+        }
+        is Screen.ReimbursementAccountDetail -> {
+            ReimbursementAccountDetailScreen(
+                accountId = currentScreen.accountId,
                 onBack = { navigateBack() },
                 onNavigate = { navigateTo(it) }
             )

@@ -1,6 +1,7 @@
 package com.whmdg.mczj.tools.ui.accounting
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -158,13 +159,13 @@ fun ReimbursementAccountScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit)
                         containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                     )
                 ) {
-                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)) {
                         // 分组头部：点击展开/收起
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 4.dp)
+                                .padding(vertical = 6.dp)
                         ) {
                             Icon(
                                 imageVector = if (groupExpanded) Icons.Default.KeyboardArrowDown
@@ -210,31 +211,39 @@ fun ReimbursementAccountScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit)
                                         color = MaterialTheme.colorScheme.outlineVariant,
                                         thickness = 0.5.dp
                                     )
-                                    group.accounts.forEach { account ->
+                                    group.accounts.forEachIndexed { index, account ->
                                         // 账户行
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .padding(vertical = 10.dp)
+                                                .clickable { onNavigate(Screen.ReimbursementAccountDetail(account.id)) }
+                                                .padding(vertical = 14.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.Receipt,
                                                 contentDescription = null,
                                                 tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(20.dp)
+                                                modifier = Modifier.size(24.dp)
                                             )
-                                            Spacer(Modifier.width(12.dp))
+                                            Spacer(Modifier.width(16.dp))
                                             Text(
                                                 text = account.name,
-                                                style = MaterialTheme.typography.bodyMedium,
+                                                style = MaterialTheme.typography.bodyLarge,
                                                 color = MaterialTheme.colorScheme.onSurface,
                                                 modifier = Modifier.weight(1f)
                                             )
                                             Text(
                                                 text = formatAmount(account.pendingAmount),
-                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
                                                 color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                        if (index < group.accounts.lastIndex) {
+                                            HorizontalDivider(
+                                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                                                thickness = 0.5.dp,
+                                                modifier = Modifier.padding(horizontal = 4.dp)
                                             )
                                         }
                                     }
