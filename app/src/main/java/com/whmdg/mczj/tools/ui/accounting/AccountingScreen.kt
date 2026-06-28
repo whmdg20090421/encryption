@@ -121,6 +121,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .background(Color.Transparent)
                     .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
                 Surface(
