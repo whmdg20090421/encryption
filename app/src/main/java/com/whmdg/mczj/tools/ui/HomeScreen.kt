@@ -635,7 +635,8 @@ fun MainAppContainer() {
         is Screen.AssetDetail -> {
             AssetDetailScreen(
                 accountId = currentScreen.accountId,
-                onBack = { navigateBack() }
+                onBack = { navigateBack() },
+                onNavigate = { screen -> navigateTo(screen) }
             )
         }
         is Screen.FunctionalTest -> {

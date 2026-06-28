@@ -42,14 +42,14 @@ fun ReimbursementAccountDetailScreen(accountId: String, onBack: () -> Unit, onNa
     val allRecords = remember { AccountingRepository.getAllRecords(context) }
     val pendingRecords = remember {
         allRecords
-            .filter { it.reimbursementAccountId == accountId && it.reimburseStatus != "已报销" }
+            .filter { it.reimbursementAccountId == accountId && !it.reimburseStatus }
             .sortedByDescending { it.happenedAt }
     }
     val pendingAmount = remember { pendingRecords.sumOf { it.amount.toDoubleOrNull() ?: 0.0 } }
     val completedAmount = remember {
         allRecords
-            .filter { it.reimbursementAccountId == accountId && it.reimburseStatus == "已报销" }
-            .sumOf { it.reimburseAmount?.toDoubleOrNull() ?: 0.0 }
+            .filter { it.reimbursementAccountId == accountId && it.reimburseStatus }
+            .sumOf { it.reimburseAmount }
     }
     val totalAmount = pendingAmount + completedAmount
 

@@ -2299,7 +2299,7 @@ private fun CategoryIconStylePage() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AssetDetailScreen(accountId: String, onBack: () -> Unit) {
+fun AssetDetailScreen(accountId: String, onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     val context = LocalContext.current
     var account by remember {
         mutableStateOf(AccountingRepository.getAllAccounts(context).find { it.id == accountId })
@@ -2609,8 +2609,6 @@ fun AssetDetailScreen(accountId: String, onBack: () -> Unit) {
     }
 
     // ── 编辑信息弹窗 ──
-    var showTypeSelector by remember { mutableStateOf(false) }
-
     if (showEditInfoDialog) {
         var editName by remember { mutableStateOf(currentAccount.name) }
         var editNote by remember { mutableStateOf(currentAccount.note) }
