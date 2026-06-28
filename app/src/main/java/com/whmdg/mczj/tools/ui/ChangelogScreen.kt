@@ -29,6 +29,20 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V3.3",
+        date = "2026-06-28",
+        items = listOf(
+            "CSV 导入全面增强：退款/优惠/报销/余额/其他标志/地址字段解析，BigDecimal 精确优惠三值计算（优惠前/优惠金额/优惠后）",
+            "CSV 导入分类模糊匹配：双向子串匹配+歧义检测，单候选自动匹配、多候选放弃让用户选择",
+            "备注输入智能辅助：编辑距离模糊匹配+百分比匹配度，AI 小型 MLP 在线学习+embedding 最近邻预测",
+            "添加记账键盘交互优化：键盘弹起布局自适应+动画过渡+分割线精确对齐键盘顶边+操作栏/计算器自动隐藏",
+            "报销流程完整闭环：报销弹窗+报销状态/金额存储+报销后金额字段+余额 CASE WHEN 计算",
+            "资产卡片重设计：左半净资产+右半总资产/负资产，VerticalDivider 分隔",
+            "记账属性开关：单条记录可设「不计入收支」「不计入预算」",
+            "DB 升级 v12→v13：新增 discount_off、discount_after、reimburse_after_amount 三列"
+        )
+    ),
+    ChangelogVersion(
         version = "V3.2",
         date = "2026-06-26",
         items = listOf(
