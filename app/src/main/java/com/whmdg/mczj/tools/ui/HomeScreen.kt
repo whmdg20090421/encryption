@@ -623,7 +623,7 @@ fun MainAppContainer() {
         }
         is Screen.AssetDetail -> {
             AssetDetailScreen(
-                accountId = screen.accountId,
+                accountId = currentScreen.accountId,
                 onBack = { navigateBack() }
             )
         }
