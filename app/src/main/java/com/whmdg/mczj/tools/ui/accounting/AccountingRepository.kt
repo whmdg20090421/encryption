@@ -657,6 +657,63 @@ object AccountingRepository {
         return pending to done
     }
 
+    /** 修复含 AUTO 的分类标签，返回修复条数 */
+    fun repairCategoryLabels(context: Context): Int {
+        val db = getDb(context).writableDatabase
+        val cursor = db.rawQuery(
+            "SELECT id, category_id, subcategory_id FROM records WHERE category_id LIKE '%AUTO%' OR subcategory_id LIKE '%AUTO%'",
+            null
+        )
+        val records = mutableListOf<Triple<String, String?, String?>>()
+        try {
+            while (cursor.moveToNext()) {
+                records.add(Triple(cursor.getString(0), cursor.getString(1), cursor.getString(2)))
+            }
+        } finally {
+            cursor.close()
+        }
+        if (records.isEmpty()) return 0
+
+        // 收集有效的 (categoryId, subcategoryId) 配对
+        val validPairs = mutableMapOf<String, String>()       // subCatId -> catId
+        val validPairsRev = mutableMapOf<String, String>()    // catId -> subCatId
+        val allCursor = db.rawQuery("SELECT category_id, subcategory_id FROM records", null)
+        try {
+            while (allCursor.moveToNext()) {
+                val cId = allCursor.getString(0) ?: continue
+                val sId = allCursor.getString(1) ?: continue
+                if (!cId.contains("AUTO", ignoreCase = true) && !sId.contains("AUTO", ignoreCase = true)) {
+                    validPairs.getOrPut(sId) { cId }
+                    validPairsRev.getOrPut(cId) { sId }
+                }
+            }
+        } finally {
+            allCursor.close()
+        }
+
+        var fixed = 0
+        for ((id, catId, subCatId) in records) {
+            val catBad = catId != null && catId.contains("AUTO", ignoreCase = true)
+            val subBad = subCatId != null && subCatId.contains("AUTO", ignoreCase = true)
+            val newCatId: String? = when {
+                catBad && !subBad -> subCatId?.let { validPairs[it] }
+                else -> null
+            }
+            val newSubId: String? = when {
+                subBad && !catBad -> catId?.let { validPairsRev[it] }
+                else -> null
+            }
+            if (newCatId != null || newSubId != null) {
+                db.execSQL(
+                    "UPDATE records SET category_id = COALESCE(?, category_id), subcategory_id = ? WHERE id = ?",
+                    arrayOf(newCatId, if (newSubId != null) newSubId else subCatId, id)
+                )
+                fixed++
+            }
+        }
+        return fixed
+    }
+
     /** 校验 CSV 文件格式是否正确（不执行导入） */
     fun validateImportCsv(context: Context, uri: Uri) {
         val csv = context.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }

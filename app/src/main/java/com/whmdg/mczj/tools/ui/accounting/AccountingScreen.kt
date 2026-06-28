@@ -1398,7 +1398,7 @@ private fun MinePageContent(bookName: String = "") {
             }
         }
         pageStack == listOf("数据管理") -> {
-            // 数据管理页 — 两个入口卡片
+            // 数据管理页 — 入口卡片
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 item { Spacer(Modifier.height(16.dp)) }
                 item {
@@ -1415,6 +1415,14 @@ private fun MinePageContent(bookName: String = "") {
                         title = "导入数据",
                         subtitle = "从文件导入记账数据",
                         onClick = { pageStack = listOf("数据管理", "导入数据") }
+                    )
+                }
+                item {
+                    SettingCard(
+                        icon = Icons.Outlined.Build,
+                        title = "数据修复",
+                        subtitle = "修复异常的分类标签等数据问题",
+                        onClick = { pageStack = listOf("数据管理", "数据修复") }
                     )
                 }
             }
@@ -1649,6 +1657,64 @@ private fun MinePageContent(bookName: String = "") {
                 )
             }
         }
+        pageStack == listOf("数据管理", "数据修复") -> {
+            // 数据修复页
+            val repairContext = LocalContext.current
+            var showRepairConfirm by remember { mutableStateOf(false) }
+            var repairResult by remember { mutableStateOf<String?>(null) }
+
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                item { Spacer(Modifier.height(16.dp)) }
+                item {
+                    SettingCard(
+                        icon = Icons.Outlined.AutoFixHigh,
+                        title = "分类标签修复",
+                        subtitle = "修复含有 AUTO 等异常标识的分类标签",
+                        onClick = { showRepairConfirm = true }
+                    )
+                }
+                if (repairResult != null) {
+                    item {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            )
+                        ) {
+                            Text(
+                                text = repairResult!!,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (showRepairConfirm) {
+                AlertDialog(
+                    onDismissRequest = { showRepairConfirm = false },
+                    title = { Text("分类标签修复") },
+                    text = { Text("将自动修复含有 AUTO 等异常标识的分类标签。修复会覆盖部分数据，建议先导出备份。是否继续？") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showRepairConfirm = false
+                            val fixed = AccountingRepository.repairCategoryLabels(repairContext)
+                            repairResult = if (fixed > 0) "修复完成，共修复 $fixed 条记录的分类标签。" else "未发现需要修复的记录。"
+                        }) { Text("确认修复") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showRepairConfirm = false }) { Text("取消") }
+                    }
+                )
+            }
+
+            // 返回按钮
+            BackHandler { pageStack = listOf("数据管理") }
+        }
         pageStack == listOf("数据自动化") -> {
             AutomationPage(onBack = { pageStack = emptyList() })
         }
@@ -1866,6 +1932,19 @@ private fun RecordListContent(
             .toSortedMap(compareByDescending { it })
     }
 
+    // 分离异常账单（分类 ID 含 AUTO）
+    val anomalyRecords = remember(groupedRecords) {
+        groupedRecords.values.flatten().filter { record ->
+            (record.categoryId?.contains("AUTO", ignoreCase = true) == true) ||
+            (record.subcategoryId?.contains("AUTO", ignoreCase = true) == true)
+        }.sortedByDescending { it.happenedAt }
+    }
+    val anomalyIds = remember(anomalyRecords) { anomalyRecords.map { it.id }.toSet() }
+    val normalGroupedRecords = remember(groupedRecords, anomalyIds) {
+        groupedRecords.mapValues { (_, records) -> records.filter { it.id !in anomalyIds } }
+            .filter { it.value.isNotEmpty() }
+    }
+
     // 构建分类 id → (name, icon) 的快速查找表
     val categoryLookup = remember(categoryDb) {
         val map = mutableMapOf<String, Pair<String, String>>()
@@ -1979,7 +2058,7 @@ private fun RecordListContent(
             }
         }
 
-        if (groupedRecords.isEmpty()) {
+        if (normalGroupedRecords.isEmpty() && anomalyRecords.isEmpty()) {
             item {
                 Box(
                     modifier = Modifier
@@ -1997,7 +2076,127 @@ private fun RecordListContent(
         }
 
         val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-        groupedRecords.forEach { (dateKey, records) ->
+
+        // 异常账单区域
+        if (anomalyRecords.isNotEmpty()) {
+            item {
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "账单异常",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Color(0xFFEF5350)
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            text = "${anomalyRecords.size} 条",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFEF5350)
+                        )
+                    }
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFFFF3F0)
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    ) {
+                        Column {
+                            anomalyRecords.forEachIndexed { index, record ->
+                                val catInfo = categoryLookup[record.categoryId]
+                                val subInfo = record.subcategoryId?.let { categoryLookup[it] }
+                                val parentName = catInfo?.first ?: record.categoryId ?: ""
+                                val childName = subInfo?.first
+                                val displayName = if (childName != null) "$parentName-$childName" else parentName
+                                val icon = subInfo?.second ?: catInfo?.second ?: "category"
+                                val isExpense = record.type == "支出" || record.type == "债务"
+                                val amountPrefix = if (isExpense) "-" else "+"
+                                val amountColor = if (isExpense) Color(0xFFEF5350) else Color(0xFF4CAF50)
+                                val amountDisplay = String.format("%.2f", record.amount.toDoubleOrNull() ?: 0.0)
+                                val timeStr = timeFormat.format(Date(record.happenedAt))
+                                val cal = Calendar.getInstance().apply { timeInMillis = record.happenedAt }
+                                val dateStr = "${cal.get(Calendar.MONTH) + 1}/${cal.get(Calendar.DAY_OF_MONTH)}"
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onNavigate(Screen.AccountingDetail(bookName, record.id)) }
+                                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = materialIcon(icon),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(24.dp),
+                                            tint = Color(0xFFEF5350)
+                                        )
+                                    }
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = displayName,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            Text(
+                                                text = "$amountPrefix$amountDisplay",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                color = amountColor
+                                            )
+                                        }
+                                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = "$dateStr $timeStr",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            if (record.note.isNotEmpty()) {
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(
+                                                    text = record.note,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                if (index < anomalyRecords.lastIndex) {
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(horizontal = 16.dp),
+                                        thickness = 0.5.dp,
+                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        normalGroupedRecords.forEach { (dateKey, records) ->
             // 计算当日收支汇总
             var dayExpense = 0.0
             var dayIncome = 0.0
