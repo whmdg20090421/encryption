@@ -110,8 +110,8 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     var showDiscountDialog by remember { mutableStateOf(false) }
     // 优惠数据：null 表示未设置
     var discountBefore by remember { mutableStateOf<String?>(editingRecord?.discountBefore) }
-    var discountOff by remember { mutableStateOf<String?>(null) }
-    var discountAfter by remember { mutableStateOf<String?>(null) }
+    var discountOff by remember { mutableStateOf<String?>(editingRecord?.discountOff) }
+    var discountAfter by remember { mutableStateOf<String?>(editingRecord?.discountAfter) }
     val hasDiscount = discountAfter != null
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     val infoRowHeight = screenHeight * 0.05f
@@ -303,6 +303,8 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             happenedAt = cal.timeInMillis,
             accountId = selectedAccountId,
             discountBefore = discountBefore,
+            discountOff = discountOff,
+            discountAfter = discountAfter,
             reimbursementAccountId = selectedReimbursementId,
             attachments = attachments,
             excludeFromStats = excludeFromStats,
@@ -778,7 +780,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         AsyncImage(model = selectedAccountSvg, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(Modifier.width(4.dp))
                     }
-                    Text(selectedAccountName, style = MaterialTheme.typography.labelSmall.copy(fontSize = 15.sp), color = if (selectedAccount != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(selectedAccountName, style = MaterialTheme.typography.labelSmall, color = if (selectedAccount != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 // 优惠
                 Row(

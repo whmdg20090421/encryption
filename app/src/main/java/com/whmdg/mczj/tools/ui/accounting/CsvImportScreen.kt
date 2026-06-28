@@ -191,15 +191,21 @@ private fun normalizeCsvText(csvText: String, catIdx: Int?, subCatIdx: Int?): St
     return lines.joinToString("\n")
 }
 
-/** 自动匹配 CSV 分类名到应用分类（精确匹配 name） */
+/** 自动匹配 CSV 分类名到应用分类（精确匹配 + 子串模糊匹配，歧义时放弃） */
 private fun autoMatchCategories(
     csvNames: List<String>,
     appCategories: List<AccountingCategory>
 ): Map<String, String?> {
     val result = mutableMapOf<String, String?>()
     for (name in csvNames) {
-        val match = appCategories.find { it.name == name }
-        result[name] = match?.id
+        // 精确匹配优先
+        val exact = appCategories.find { it.name == name }
+        if (exact != null) { result[name] = exact.id; continue }
+        // 子串模糊匹配：CSV名⊂应用名 或 应用名⊂CSV名
+        val candidates = appCategories.filter { app ->
+            name.contains(app.name) || app.name.contains(name)
+        }
+        result[name] = if (candidates.size == 1) candidates[0].id else null
     }
     return result
 }
@@ -1058,6 +1064,9 @@ private fun doImport(
 
     // 重算账户余额
     AccountingRepository.recalculateBalances(context, replaceMode)
+
+    // 全量重算报销统计
+    AccountingRepository.recalculateReimburseTotals(context)
 
     // 统计导入条数
     val countCursor = db.readableDatabase.rawQuery("SELECT COUNT(*) FROM records", null)

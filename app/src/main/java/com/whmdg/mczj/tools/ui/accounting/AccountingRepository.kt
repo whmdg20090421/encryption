@@ -162,12 +162,12 @@ object AccountingRepository {
     private fun getRecordById(context: Context, id: String): AccountingRecord? {
         val sqlDb = getDb(context).readableDatabase
         val cursor = sqlDb.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget FROM records WHERE id = ?",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address FROM records WHERE id = ?",
             arrayOf(id)
         )
         return try {
             if (cursor.moveToFirst()) {
-                val attachmentsJson = cursor.getString(11)
+                val attachmentsJson = cursor.getString(13)
                 val attachments = if (!attachmentsJson.isNullOrEmpty()) {
                     try { Json.decodeFromString<List<AttachmentInfo>>(attachmentsJson) } catch (_: Exception) { emptyList() }
                 } else emptyList()
@@ -182,10 +182,17 @@ object AccountingRepository {
                     happenedAt = cursor.getLong(7),
                     accountId = cursor.getString(8),
                     discountBefore = cursor.getString(9),
-                    reimbursementAccountId = cursor.getString(10),
+                    discountOff = cursor.getString(10),
+                    discountAfter = cursor.getString(11),
+                    reimbursementAccountId = cursor.getString(12),
                     attachments = attachments,
-                    excludeFromStats = cursor.getInt(12) == 1,
-                    excludeFromBudget = cursor.getInt(13) == 1
+                    excludeFromStats = cursor.getInt(14) == 1,
+                    excludeFromBudget = cursor.getInt(15) == 1,
+                    reimburseStatus = cursor.getInt(16) == 1,
+                    reimburseAmount = cursor.getDouble(17),
+                    reimburseAfterAmount = cursor.getString(18),
+                    refundAmount = cursor.getDouble(19),
+                    address = cursor.getString(20) ?: ""
                 )
             } else null
         } finally {
@@ -228,6 +235,8 @@ object AccountingRepository {
                     put("happened_at", record.happenedAt)
                     if (record.accountId != null) put("account_id", record.accountId) else putNull("account_id")
                     if (record.discountBefore != null) put("discount_before", record.discountBefore) else putNull("discount_before")
+                    if (record.discountOff != null) put("discount_off", record.discountOff) else putNull("discount_off")
+                    if (record.discountAfter != null) put("discount_after", record.discountAfter) else putNull("discount_after")
                     if (record.reimbursementAccountId != null) put("reimbursement_account_id", record.reimbursementAccountId) else putNull("reimbursement_account_id")
                     if (record.attachments.isNotEmpty()) {
                         put("attachments", Json.encodeToString(record.attachments))
@@ -236,6 +245,11 @@ object AccountingRepository {
                     }
                     put("exclude_from_stats", if (record.excludeFromStats) 1 else 0)
                     put("exclude_from_budget", if (record.excludeFromBudget) 1 else 0)
+                    put("reimburse_status", if (record.reimburseStatus) 1 else 0)
+                    put("reimburse_amount", record.reimburseAmount)
+                    if (record.reimburseAfterAmount != null) put("reimburse_after_amount", record.reimburseAfterAmount) else putNull("reimburse_after_amount")
+                    put("refund_amount", record.refundAmount)
+                    put("address", record.address)
                 }
                 sqlDb.insertWithOnConflict("records", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -581,6 +595,18 @@ object AccountingRepository {
     /** 导入后重算账户余额 */
     fun recalculateBalances(context: Context, replaceMode: Boolean) {
         getDb(context).recalculateBalances(replaceMode)
+    }
+
+    /** 导入后全量重算报销统计 */
+    fun recalculateReimburseTotals(context: Context) {
+        getDb(context).recalculateReimburseTotals()
+    }
+
+    /** 获取报销统计：Pair(可报销总额, 已报销总额) */
+    fun getReimburseTotals(context: Context): Pair<Double, Double> {
+        val pending = getSetting(context, "reimburse_pending_total")?.toDoubleOrNull() ?: 0.0
+        val done = getSetting(context, "reimburse_done_total")?.toDoubleOrNull() ?: 0.0
+        return pending to done
     }
 
     /** 校验 CSV 文件格式是否正确（不执行导入） */

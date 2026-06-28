@@ -609,8 +609,12 @@ private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Un
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 80.dp)
         ) {
-            // 总资产卡片
+            // 资产卡片
             item {
+                val (reimbPending, _) = remember { AccountingRepository.getReimburseTotals(context) }
+                val negativeAssets = 0.0  // 负资产（借入），暂未实现
+                val totalAll = totalAssets + negativeAssets + reimbPending
+
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -624,34 +628,44 @@ private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Un
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            "总资产",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            String.format("%.2f", totalAssets),
-                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                            color = themeColor
-                        )
+                        // 左半：净资产
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("净资产", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                String.format("%.2f", totalAssets),
+                                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                                color = themeColor
+                            )
+                        }
+                        // 分隔线
+                        VerticalDivider(modifier = Modifier.height(40.dp), thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                        // 右半：总资产 / 负资产
+                        Column(modifier = Modifier.weight(1f).padding(start = 16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("总资产", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(Modifier.width(8.dp))
+                                Text(String.format("%.2f", totalAll), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("负资产", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(Modifier.width(8.dp))
+                                Text(String.format("%.2f", negativeAssets), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
                     }
                 }
             }
 
-            // 20% 屏幕高度空白
-            item { Spacer(Modifier.height(screenHeight * 0.2f)) }
-
             // 三个功能卡片：报销 / 债务 / 理财
             item {
-                // 计算报销金额
-                val allRecordsForReimb = remember { AccountingRepository.getAllRecords(context) }
-                val reimbPending = remember(allRecordsForReimb) {
-                    allRecordsForReimb.filter { it.reimbursementAccountId != null }
-                        .sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
-                }
+                val (reimbPending, reimbDone) = remember { AccountingRepository.getReimburseTotals(context) }
 
                 Row(
                     modifier = Modifier
@@ -679,7 +693,7 @@ private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Un
                                     "报销" -> {
                                         Text("可报销: ${formatAmount(reimbPending)}", style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        Text("已报销: 0", style = MaterialTheme.typography.bodySmall,
+                                        Text("已报销: ${formatAmount(reimbDone)}", style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                     "债务" -> {
