@@ -569,7 +569,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAllAccounts(): List<AccountingAccount> {
         val accounts = mutableListOf<AccountingAccount>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, name, type, category, initial_amount, note, created_at, updated_at FROM accounts ORDER BY created_at DESC",
+            "SELECT id, name, type, category, initial_amount, income, expense, note, created_at, updated_at FROM accounts ORDER BY created_at DESC",
             null
         )
         try {
@@ -585,7 +585,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAccountsByCategory(category: String): List<AccountingAccount> {
         val accounts = mutableListOf<AccountingAccount>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, name, type, category, initial_amount, note, created_at, updated_at FROM accounts WHERE category = ? ORDER BY created_at DESC",
+            "SELECT id, name, type, category, initial_amount, income, expense, note, created_at, updated_at FROM accounts WHERE category = ? ORDER BY created_at DESC",
             arrayOf(category)
         )
         try {
