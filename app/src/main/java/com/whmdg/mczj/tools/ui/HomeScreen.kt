@@ -94,6 +94,7 @@ import com.whmdg.mczj.tools.ui.accounting.AccountingScreen
 import com.whmdg.mczj.tools.ui.accounting.AddAccountingScreen
 import com.whmdg.mczj.tools.ui.accounting.ReimbursementAccountScreen
 import com.whmdg.mczj.tools.ui.accounting.AddReimbursementAccountScreen
+import com.whmdg.mczj.tools.ui.accounting.AssetDetailScreen
 import com.whmdg.mczj.tools.ui.components.GlowCard
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.components.GlowSection
@@ -149,6 +150,7 @@ sealed class Screen {
     data class AddAccounting(val bookName: String, val recordId: String? = null) : Screen()
     object ReimbursementAccount : Screen()
     object AddReimbursementAccount : Screen()
+    data class AssetDetail(val accountId: String) : Screen()
     object About : Screen()
     object Changelog : Screen()
     data class TextEditor(val filePath: String) : Screen()
@@ -616,6 +618,12 @@ fun MainAppContainer() {
         }
         is Screen.AddReimbursementAccount -> {
             AddReimbursementAccountScreen(
+                onBack = { navigateBack() }
+            )
+        }
+        is Screen.AssetDetail -> {
+            AssetDetailScreen(
+                accountId = screen.accountId,
                 onBack = { navigateBack() }
             )
         }

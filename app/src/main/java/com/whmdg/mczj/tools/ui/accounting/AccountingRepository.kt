@@ -142,6 +142,15 @@ object AccountingRepository {
         getDb(context).updateRecord(withTime)
     }
 
+    /** 仅更新记录的地址字段（异步定位完成后调用） */
+    fun updateRecordAddress(context: Context, recordId: String, address: String) {
+        val db = getDb(context).writableDatabase
+        db.execSQL(
+            "UPDATE records SET address = ?, updated_at = ? WHERE id = ?",
+            arrayOf(address, System.currentTimeMillis(), recordId)
+        )
+    }
+
     /** 删除一条记录（增量维护记账天数 + 附件回收站级联） */
     fun deleteRecord(context: Context, id: String) {
         val db = getDb(context)

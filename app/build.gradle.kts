@@ -124,6 +124,7 @@ dependencies {
     implementation(libs.coil.svg)
     implementation(libs.libsu.core)
     implementation(libs.androidx.appcompat)
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 
     // 压缩/解压
     implementation(libs.jxl.coder)                              // JPEG XL 图片压缩

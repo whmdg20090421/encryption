@@ -1,7 +1,13 @@
 package com.whmdg.mczj.tools.ui.accounting
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.core.content.ContextCompat
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -99,6 +105,9 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
         }
     }
 
+    // 底部导航栏透明度
+    val navBarAlpha = 0.8f
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
@@ -117,7 +126,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(28.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = navBarAlpha),
                     shadowElevation = 8.dp
                 ) {
                     Row(modifier = Modifier.height(56.dp)) {
@@ -719,12 +728,12 @@ private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Un
             val tradableAccounts = accounts.filter { it.category == "tradable" }
             if (tradableAccounts.isNotEmpty()) {
                 item {
-                    AccountGroupSection(
+                    AccountGroupCard(
                         title = "资金账户",
                         icon = Icons.Outlined.AccountBalanceWallet,
                         iconColor = themeColor,
                         accounts = tradableAccounts,
-                        showStats = true
+                        onAccountClick = { onNavigate(Screen.AssetDetail(it.id)) }
                     )
                 }
             }
@@ -733,12 +742,12 @@ private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Un
             val valuationAccounts = accounts.filter { it.category == "valuation" }
             if (valuationAccounts.isNotEmpty()) {
                 item {
-                    AccountGroupSection(
+                    AccountGroupCard(
                         title = "估值账户",
                         icon = Icons.Outlined.TrendingUp,
                         iconColor = themeColor,
                         accounts = valuationAccounts,
-                        showStats = false
+                        onAccountClick = { onNavigate(Screen.AssetDetail(it.id)) }
                     )
                 }
             }
@@ -746,15 +755,15 @@ private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Un
     }
 }
 
-// ── 账户分组 ──
+// ── 账户分组（合并卡片） ──
 
 @Composable
-private fun AccountGroupSection(
+private fun AccountGroupCard(
     title: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     iconColor: Color,
     accounts: List<AccountingAccount>,
-    showStats: Boolean
+    onAccountClick: (AccountingAccount) -> Unit
 ) {
     var expanded by remember { mutableStateOf(true) }
     val subtotal = accounts.sumOf { it.initialAmount }
@@ -762,7 +771,7 @@ private fun AccountGroupSection(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp)
+            .padding(horizontal = 16.dp)
     ) {
         // 分组标题
         Row(
@@ -806,28 +815,83 @@ private fun AccountGroupSection(
                 )
             }
             Spacer(Modifier.weight(1f))
-            if (showStats) {
-                Text(
-                    "${String.format("%.2f", subtotal)}",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                    color = iconColor
-                )
-                Spacer(Modifier.width(4.dp))
-            }
-            Icon(
-                Icons.Default.KeyboardArrowDown,
-                contentDescription = null,
-                modifier = Modifier
-                    .size(18.dp)
-                    .graphicsLayer { rotationZ = if (expanded) 0f else -90f },
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            Text(
+                String.format("%.2f", subtotal),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = iconColor
             )
         }
 
-        // 账户卡片列表
+        // 合并卡片：每个账户一行
         if (expanded) {
-            accounts.forEach { account ->
-                AccountCard(account = account, showStats = showStats)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column {
+                    accounts.forEachIndexed { index, account ->
+                        val config = accountTypeConfigs[account.type]
+                        val typeLabel = config?.label ?: account.type
+                        val typeSvg = config?.svgPath ?: "file:///android_asset/icons/other_account.svg"
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onAccountClick(account) }
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 左侧：图标 + 名称
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(
+                                        iconColor.copy(alpha = 0.12f),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                AsyncImage(
+                                    model = typeSvg,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    account.name,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    typeLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            // 右侧：余额
+                            Text(
+                                String.format("%.2f", account.initialAmount),
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        // 分隔线（最后一行不加）
+                        if (index < accounts.size - 1) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                                thickness = 0.5.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -924,7 +988,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("收入", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
                             Text(
-                                "0.00",
+                                "${String.format("%.2f", account.income)}",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White
                             )
@@ -932,7 +996,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("支出", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
                             Text(
-                                "0.00",
+                                "${String.format("%.2f", account.expense)}",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White
                             )
@@ -1300,6 +1364,15 @@ private fun MinePageContent(bookName: String = "") {
                         onClick = { pageStack = listOf("数据管理") }
                     )
                 }
+                item { Spacer(Modifier.height(12.dp)) }
+                item {
+                    SettingCard(
+                        icon = Icons.Outlined.AutoAwesome,
+                        title = "数据自动化",
+                        subtitle = "自动化处理记账数据",
+                        onClick = { pageStack = listOf("数据自动化") }
+                    )
+                }
             }
         }
         pageStack == listOf("数据管理") -> {
@@ -1553,6 +1626,9 @@ private fun MinePageContent(bookName: String = "") {
                     }
                 )
             }
+        }
+        pageStack == listOf("数据自动化") -> {
+            AutomationPage(onBack = { pageStack = emptyList() })
         }
         pageStack == listOf("个性化设置") -> {
             // 个性化设置页
@@ -2192,6 +2268,223 @@ private fun CategoryIconStylePage() {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// ── 资产详情页 ──
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AssetDetailScreen(accountId: String, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val account = remember {
+        AccountingRepository.getAllAccounts(context).find { it.id == accountId }
+    }
+
+    if (account == null) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("账户不存在", color = MaterialTheme.colorScheme.error)
+        }
+        return
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text(account.name, fontWeight = FontWeight.Bold)
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = { Spacer(Modifier.width(48.dp)) }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(top = 8.dp)
+        ) {
+            AccountCard(account = account, showStats = account.category == "tradable")
+        }
+    }
+}
+
+// ── 数据自动化页 ──
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AutomationPage(onBack: () -> Unit) {
+    val context = LocalContext.current
+
+    // 从数据库读取当前开关状态
+    var autoLocation by remember {
+        mutableStateOf(AccountingRepository.getSetting(context, "auto_location") == "true")
+    }
+    // 弹窗状态
+    var showPermissionDeniedDialog by remember { mutableStateOf(false) }
+    var showPermissionPermanentlyDeniedDialog by remember { mutableStateOf(false) }
+
+    // 后台定位权限是否可用（Android 10+）
+    val hasBackgroundLocation = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+        } else true
+    }
+
+    // 定位权限申请器
+    val fineLocationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            // 精准定位已授权，尝试申请后台定位（非必要）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !hasBackgroundLocation) {
+                // Android 11+ 需要先检查是否应该显示 rationale
+                // 这里直接申请，系统会处理
+            }
+            autoLocation = true
+            AccountingRepository.setSetting(context, "auto_location", "true")
+        } else {
+            // 被拒绝，检查是否永久拒绝
+            val activity = context as? android.app.Activity
+            val shouldShowRationale = activity?.let {
+                androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.ACCESS_FINE_LOCATION)
+            } ?: false
+            if (shouldShowRationale) {
+                showPermissionDeniedDialog = true
+            } else {
+                showPermissionPermanentlyDeniedDialog = true
+            }
+        }
+    }
+
+    // 后台定位权限申请器
+    val backgroundLocationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        // 后台定位非必要，无论结果如何都不影响功能开启
+    }
+
+    // 权限被拒绝弹窗（可再次申请）
+    if (showPermissionDeniedDialog) {
+        AlertDialog(
+            onDismissRequest = { showPermissionDeniedDialog = false },
+            title = { Text("需要定位权限") },
+            text = { Text("记账自动定位功能需要精准定位权限才能使用。请授予定位权限。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showPermissionDeniedDialog = false
+                    fineLocationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                }) { Text("重新申请") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermissionDeniedDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // 权限被永久拒绝弹窗（需去设置手动开启）
+    if (showPermissionPermanentlyDeniedDialog) {
+        AlertDialog(
+            onDismissRequest = { showPermissionPermanentlyDeniedDialog = false },
+            title = { Text("定位权限被禁止") },
+            text = { Text("定位权限已被永久拒绝，请前往系统设置手动开启。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showPermissionPermanentlyDeniedDialog = false
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", context.packageName, null)
+                    }
+                    context.startActivity(intent)
+                }) { Text("前往设置") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermissionPermanentlyDeniedDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // 页面内容
+    Column(modifier = Modifier.fillMaxSize()) {
+        // 顶部导航栏
+        TopAppBar(
+            title = {
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text("数据自动化", fontWeight = FontWeight.Bold)
+                }
+            },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                }
+            },
+            actions = { Spacer(Modifier.width(48.dp)) }
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        // 记账时自动定位
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "记账时自动定位",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "需要精准定位权限",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = autoLocation,
+                    onCheckedChange = { newValue ->
+                        if (newValue) {
+                            // 检查精准定位权限
+                            val hasFine = ContextCompat.checkSelfPermission(
+                                context, Manifest.permission.ACCESS_FINE_LOCATION
+                            ) == PackageManager.PERMISSION_GRANTED
+
+                            if (hasFine) {
+                                autoLocation = true
+                                AccountingRepository.setSetting(context, "auto_location", "true")
+                                // 尝试申请后台定位（非必要）
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !hasBackgroundLocation) {
+                                    backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                }
+                            } else {
+                                // 申请精准定位
+                                fineLocationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                            }
+                        } else {
+                            autoLocation = false
+                            AccountingRepository.setSetting(context, "auto_location", "false")
+                        }
+                    }
+                )
             }
         }
     }

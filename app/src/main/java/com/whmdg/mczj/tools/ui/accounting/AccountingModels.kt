@@ -415,6 +415,8 @@ data class AccountingAccount(
     val type: String,
     val category: String,        // "tradable" 或 "valuation"
     val initialAmount: Double = 0.0,
+    val income: Double = 0.0,    // 累计收入
+    val expense: Double = 0.0,   // 累计支出
     val note: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()

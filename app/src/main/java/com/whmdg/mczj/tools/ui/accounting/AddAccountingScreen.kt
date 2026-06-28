@@ -52,9 +52,17 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.Manifest
+import android.content.pm.PackageManager
+import android.location.Location
 import android.net.Uri
+import android.os.Looper
 import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -67,6 +75,7 @@ import java.util.Calendar
 fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? = null) {
     val types = listOf("支出", "收入", "转账", "债务")
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     // 初始化 AI 预测器
     LaunchedEffect(Unit) { NotePredictor.ensureInitialized(context) }
 
@@ -326,6 +335,11 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
         // 保存本次使用的账户 id
         if (selectedAccountId != null) {
             AccountingRepository.setLastAccountId(context, selectedAccountId!!)
+        }
+        // 异步获取定位并写入地址（不阻塞 UI）
+        val recordId = record.id
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            fetchLocationAndSave(context, recordId)
         }
         return true
     }
@@ -1965,3 +1979,54 @@ private fun getFileName(context: android.content.Context, uri: Uri): String? {
 }
 
 
+
+/**
+ * 异步获取定位并写入记录地址。
+ * 检查 auto_location 设置和定位权限，最多重试 3 次。
+ */
+private suspend fun fetchLocationAndSave(context: android.content.Context, recordId: String) {
+    // 检查是否开启自动定位
+    if (AccountingRepository.getSetting(context, "auto_location") != "true") return
+    // 检查定位权限
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+        != PackageManager.PERMISSION_GRANTED) return
+
+    val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+    val maxRetries = 3
+
+    for (attempt in 1..maxRetries) {
+        try {
+            val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
+                .setMaxUpdates(1)
+                .build()
+
+            val location: Location? = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                val callback = object : com.google.android.gms.location.LocationCallback() {
+                    override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
+                        fusedClient.removeLocationUpdates(this)
+                        if (cont.isActive) cont.resume(result.lastLocation, null)
+                    }
+                }
+                try {
+                    fusedClient.requestLocationUpdates(locationRequest, callback, Looper.getMainLooper())
+                    cont.invokeOnCancellation {
+                        fusedClient.removeLocationUpdates(callback)
+                    }
+                } catch (e: SecurityException) {
+                    if (cont.isActive) cont.resume(null, null)
+                }
+            }
+
+            if (location != null) {
+                val address = "${location.latitude},${location.longitude}"
+                AccountingRepository.updateRecordAddress(context, recordId, address)
+                return
+            }
+        } catch (_: Exception) {
+            // 获取失败，继续重试
+        }
+        // 重试前等待
+        kotlinx.coroutines.delay(1000L)
+    }
+    // 3 次均失败，放弃
+}

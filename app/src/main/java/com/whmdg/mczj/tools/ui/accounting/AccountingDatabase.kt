@@ -20,7 +20,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 14
+        private const val DB_VERSION = 15
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -112,6 +112,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                 type           TEXT NOT NULL,
                 category       TEXT NOT NULL DEFAULT 'tradable',
                 initial_amount REAL NOT NULL DEFAULT 0,
+                income         REAL NOT NULL DEFAULT 0,
+                expense        REAL NOT NULL DEFAULT 0,
                 note           TEXT DEFAULT '',
                 created_at     INTEGER NOT NULL,
                 updated_at     INTEGER NOT NULL
@@ -199,6 +201,10 @@ internal class AccountingDatabase private constructor(context: Context) :
         if (oldVersion < 14) {
             db.execSQL("ALTER TABLE records ADD COLUMN created_at INTEGER")
             db.execSQL("ALTER TABLE records ADD COLUMN updated_at INTEGER")
+        }
+        if (oldVersion < 15) {
+            db.execSQL("ALTER TABLE accounts ADD COLUMN income REAL NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE accounts ADD COLUMN expense REAL NOT NULL DEFAULT 0")
         }
     }
 
@@ -599,6 +605,8 @@ internal class AccountingDatabase private constructor(context: Context) :
             put("type", a.type)
             put("category", a.category)
             put("initial_amount", a.initialAmount)
+            put("income", a.income)
+            put("expense", a.expense)
             put("note", a.note)
             put("created_at", a.createdAt)
             put("updated_at", a.updatedAt)
@@ -612,9 +620,11 @@ internal class AccountingDatabase private constructor(context: Context) :
             type = c.getString(2),
             category = c.getString(3),
             initialAmount = c.getDouble(4),
-            note = c.getString(5) ?: "",
-            createdAt = c.getLong(6),
-            updatedAt = c.getLong(7)
+            income = c.getDouble(5),
+            expense = c.getDouble(6),
+            note = c.getString(7) ?: "",
+            createdAt = c.getLong(8),
+            updatedAt = c.getLong(9)
         )
     }
 
@@ -1291,38 +1301,78 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun recalculateBalances(replaceMode: Boolean) {
         val db = writableDatabase
         if (replaceMode) {
-            db.execSQL("UPDATE accounts SET initial_amount = 0")
+            db.execSQL("UPDATE accounts SET initial_amount = 0, income = 0, expense = 0")
         }
-        // 按账户汇总：收入加、支出减（转账和债务不参与余额计算）
-        // 报销账单使用 reimburse_after_amount（已报销加回报销金额，未报销保持原支出）
-        val cursor = db.rawQuery(
-            """SELECT account_id, type, SUM(
-                CASE WHEN reimbursement_account_id IS NOT NULL AND reimburse_after_amount IS NOT NULL
-                THEN CAST(reimburse_after_amount AS REAL)
-                ELSE CAST(amount AS REAL) END
-            ) FROM records WHERE account_id IS NOT NULL AND type IN ('收入', '支出') GROUP BY account_id, type""",
+
+        // 1. 收入：普通收入记录的 amount
+        val incomeMap = mutableMapOf<String, Double>()
+        val incomeCursor = db.rawQuery(
+            """SELECT account_id, SUM(CAST(amount AS REAL))
+               FROM records WHERE account_id IS NOT NULL AND type = '收入'
+               GROUP BY account_id""",
             null
         )
-        val deltas = mutableMapOf<String, Double>()
         try {
-            while (cursor.moveToNext()) {
-                val accId = cursor.getString(0) ?: continue
-                val type = cursor.getString(1)
-                val sum = cursor.getDouble(2)
-                val delta = if (type == "收入") sum else -sum
-                deltas[accId] = (deltas[accId] ?: 0.0) + delta
+            while (incomeCursor.moveToNext()) {
+                incomeMap[incomeCursor.getString(0)] = incomeCursor.getDouble(1)
             }
         } finally {
-            cursor.close()
+            incomeCursor.close()
         }
-        // 更新 initial_amount
-        for ((accId, delta) in deltas) {
+
+        // 2. 支出：普通支出 + 报销记录的原始金额（不抵扣报销）
+        val expenseMap = mutableMapOf<String, Double>()
+        val expenseCursor = db.rawQuery(
+            """SELECT account_id, SUM(CAST(amount AS REAL))
+               FROM records WHERE account_id IS NOT NULL
+               AND (type = '支出' OR reimbursement_account_id IS NOT NULL)
+               GROUP BY account_id""",
+            null
+        )
+        try {
+            while (expenseCursor.moveToNext()) {
+                expenseMap[expenseCursor.getString(0)] = expenseCursor.getDouble(1)
+            }
+        } finally {
+            expenseCursor.close()
+        }
+
+        // 3. 报销收入：已报销记录的 reimburse_amount
+        val reimburseIncomeMap = mutableMapOf<String, Double>()
+        val reimburseCursor = db.rawQuery(
+            """SELECT account_id, SUM(CAST(reimburse_amount AS REAL))
+               FROM records WHERE reimbursement_account_id IS NOT NULL
+               AND reimburse_amount IS NOT NULL
+               GROUP BY account_id""",
+            null
+        )
+        try {
+            while (reimburseCursor.moveToNext()) {
+                reimburseIncomeMap[reimburseCursor.getString(0)] = reimburseCursor.getDouble(1)
+            }
+        } finally {
+            reimburseCursor.close()
+        }
+
+        // 合并所有涉及的账户 ID
+        val allAccIds = (incomeMap.keys + expenseMap.keys + reimburseIncomeMap.keys).distinct()
+        val now = System.currentTimeMillis()
+
+        for (accId in allAccIds) {
+            val income = (incomeMap[accId] ?: 0.0) + (reimburseIncomeMap[accId] ?: 0.0)
+            val expense = expenseMap[accId] ?: 0.0
+            val delta = income - expense
+
             if (replaceMode) {
-                db.execSQL("UPDATE accounts SET initial_amount = ?, updated_at = ? WHERE id = ?",
-                    arrayOf(delta, System.currentTimeMillis(), accId))
+                db.execSQL(
+                    "UPDATE accounts SET initial_amount = ?, income = ?, expense = ?, updated_at = ? WHERE id = ?",
+                    arrayOf(delta, income, expense, now, accId)
+                )
             } else {
-                db.execSQL("UPDATE accounts SET initial_amount = initial_amount + ?, updated_at = ? WHERE id = ?",
-                    arrayOf(delta, System.currentTimeMillis(), accId))
+                db.execSQL(
+                    "UPDATE accounts SET initial_amount = initial_amount + ?, income = income + ?, expense = expense + ?, updated_at = ? WHERE id = ?",
+                    arrayOf(delta, income, expense, now, accId)
+                )
             }
         }
     }
