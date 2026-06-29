@@ -27,7 +27,7 @@ data class AccountingCategoryDb(
 ) {
     companion object {
         /** 当前默认数据版本，递增此值触发重新释放 */
-        private const val CURRENT_VERSION = 3
+        private const val CURRENT_VERSION = 4
 
         fun empty() = AccountingCategoryDb()
 
