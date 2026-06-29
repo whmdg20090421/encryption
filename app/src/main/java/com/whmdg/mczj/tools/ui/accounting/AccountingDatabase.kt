@@ -20,7 +20,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 19
+        private const val DB_VERSION = 20
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -245,6 +245,12 @@ internal class AccountingDatabase private constructor(context: Context) :
             for ((catId, overlay) in ColorIconRegistry.CATEGORY_OVERLAY_MAP) {
                 db.execSQL("UPDATE categories SET overlay = ? WHERE id = ?", arrayOf(overlay, catId))
             }
+            // 兜底：将所有非 build_in_XXXX 的 icon 替换为默认图标（CSV 导入创建的分类使用 Material Icons 名称）
+            db.execSQL("UPDATE categories SET icon = 'build_in_0233' WHERE icon NOT LIKE 'build_in_%'")
+        }
+        if (oldVersion < 20) {
+            // 修复 CSV 导入创建的分类使用 Material Icons 的问题
+            db.execSQL("UPDATE categories SET icon = 'build_in_0233' WHERE icon NOT LIKE 'build_in_%'")
         }
     }
 
@@ -445,7 +451,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         return max + 1
     }
 
-    fun createParentCategory(name: String, type: String = "支出", icon: String = "category"): String {
+    fun createParentCategory(name: String, type: String = "支出", icon: String = "build_in_0233"): String {
         val seq = nextCategorySeq("A")
         val id = "A%03d".format(seq)
         val cv = ContentValues().apply {
@@ -462,7 +468,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     }
 
     /** 创建二级分类，返回新分类 ID */
-    fun createChildCategory(name: String, parentId: String, type: String = "支出", icon: String = "subcategory"): String {
+    fun createChildCategory(name: String, parentId: String, type: String = "支出", icon: String = "build_in_0233"): String {
         val seq = nextCategorySeq("B")
         val id = "B%03d".format(seq)
         val cv = ContentValues().apply {
