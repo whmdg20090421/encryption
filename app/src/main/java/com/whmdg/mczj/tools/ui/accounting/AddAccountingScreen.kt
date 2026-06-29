@@ -1832,8 +1832,8 @@ internal fun materialIcon(icon: String): ImageVector = when (icon) {
     "search" -> Icons.Filled.Search
     "person" -> Icons.Filled.Person
     "redeem" -> Icons.Filled.Redeem
-    // 兜底
-    else -> Icons.Filled.Category
+    // 无兜底，未匹配的图标直接抛出异常
+    else -> throw IllegalArgumentException("未知图标: $icon")
 }
 
 /** 分类 ID → 主题色（每个分类不同颜色） */
@@ -1866,12 +1866,49 @@ private fun CategoryIcon(
     size: androidx.compose.ui.unit.Dp,
     tint: Color = MaterialTheme.colorScheme.onSurface
 ) {
-    Icon(
-        imageVector = materialIcon(icon),
-        contentDescription = null,
-        modifier = Modifier.size(size),
-        tint = tint
-    )
+    var error by remember { mutableStateOf<String?>(null) }
+    var imageVector by remember { mutableStateOf<ImageVector?>(null) }
+
+    // 尝试加载图标，失败时捕获异常
+    LaunchedEffect(icon) {
+        try {
+            imageVector = materialIcon(icon)
+            error = null
+        } catch (e: Exception) {
+            error = "${e.message}\n${e.stackTraceToString()}"
+            imageVector = null
+        }
+    }
+
+    if (imageVector != null) {
+        Icon(
+            imageVector = imageVector!!,
+            contentDescription = null,
+            modifier = Modifier.size(size),
+            tint = tint
+        )
+    } else {
+        // 显示报错信息
+        Column(
+            modifier = Modifier.size(size),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = "⚠",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+            if (error != null) {
+                Text(
+                    text = error!!.take(20),  // 只显示前20个字符
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2
+                )
+            }
+        }
+    }
 }
 
 /** 二级分类选择卡片（参考 BeeCount _SubcategorySelectorCard） */
