@@ -1731,7 +1731,7 @@ private fun SubcategoryCard(
                                         ),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Box(modifier = Modifier.size(20.dp))
+                                    ColorIconImage(buildInId = child.icon, size = 20.dp, overlay = child.overlay)
                                 }
                                 Spacer(Modifier.height(4.dp))
                                 Text(
