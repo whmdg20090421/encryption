@@ -31,7 +31,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Popup
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.Alignment
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -509,10 +508,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                             ),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        CategoryIcon(
-                                            icon = cat.icon,
-                                            size = 24.dp
-                                        )
+                                        ColorIconImage(buildInId = cat.icon, size = 24.dp, overlay = cat.overlay)
                                     }
                                     // 有子分类标记：右下角三个点
                                     if (hasChildren) {
@@ -1684,233 +1680,6 @@ private fun KeyButton(
     }
 }
 
-/** 图标标识 → Material Icons 映射（TwoTone 双色调风格） */
-internal fun materialIcon(icon: String): ImageVector = when (icon) {
-    // 餐饮美食
-    "restaurant" -> Icons.Filled.Restaurant
-    "fastfood" -> Icons.Filled.Fastfood
-    "local_cafe" -> Icons.Filled.LocalCafe
-    "local_bar" -> Icons.Filled.LocalBar
-    "cake" -> Icons.Filled.Cake
-    "coffee" -> Icons.Filled.Coffee
-    "free_breakfast" -> Icons.Filled.FreeBreakfast
-    "lunch_dining" -> Icons.Filled.LunchDining
-    "dinner_dining" -> Icons.Filled.DinnerDining
-    "icecream" -> Icons.Filled.Icecream
-    "bakery_dining" -> Icons.Filled.BakeryDining
-    "liquor" -> Icons.Filled.Liquor
-    "set_meal" -> Icons.Filled.SetMeal
-    "ramen_dining" -> Icons.Filled.RamenDining
-    "delivery_dining" -> Icons.Filled.DeliveryDining
-    "dining" -> Icons.Filled.Restaurant
-    // 水果零食
-    "eco" -> Icons.Filled.Eco
-    "apple" -> Icons.Filled.Eco
-    "sports_cricket" -> Icons.Filled.SportsCricket
-    "circle" -> Icons.Filled.Circle
-    "bubble_chart" -> Icons.Filled.BubbleChart
-    "pie_chart" -> Icons.Filled.PieChart
-    "cookie" -> Icons.Filled.Cookie
-    "candy" -> Icons.Filled.Icecream
-    "chocolate" -> Icons.Filled.Cake
-    "grain" -> Icons.Filled.Grain
-    // 饮品
-    "juice" -> Icons.Filled.LocalCafe
-    "water_drop" -> Icons.Filled.WaterDrop
-    // 食材
-    "kitchen" -> Icons.Filled.Kitchen
-    "yard" -> Icons.Filled.Yard
-    "blender" -> Icons.Filled.Blender
-    // 购物
-    "shopping_cart" -> Icons.Filled.ShoppingCart
-    "shopping_bag" -> Icons.Filled.ShoppingBag
-    "storefront" -> Icons.Filled.Storefront
-    "watch" -> Icons.Filled.Watch
-    "accessibility" -> Icons.Filled.Accessibility
-    // 宠物
-    "pets" -> Icons.Filled.Pets
-    "pet_supplies" -> Icons.Filled.Pets
-    "inventory_2" -> Icons.Filled.Inventory2
-    "medical_services" -> Icons.Filled.MedicalServices
-    "shower" -> Icons.Filled.Shower
-    // 交通出行
-    "directions_car" -> Icons.Filled.DirectionsCar
-    "directions_bus" -> Icons.Filled.DirectionsBus
-    "directions_subway" -> Icons.Filled.DirectionsSubway
-    "directions_bike" -> Icons.Filled.DirectionsBike
-    "local_taxi" -> Icons.Filled.LocalTaxi
-    "local_parking" -> Icons.Filled.LocalParking
-    "local_gas_station" -> Icons.Filled.LocalGasStation
-    // 汽车
-    "build" -> Icons.Filled.Build
-    "handyman" -> Icons.Filled.Handyman
-    "security" -> Icons.Filled.Security
-    "local_car_wash" -> Icons.Filled.LocalCarWash
-    "report_problem" -> Icons.Filled.ReportProblem
-    // 服饰
-    "checkroom" -> Icons.Filled.Checkroom
-    "diamond" -> Icons.Filled.Diamond
-    "auto_awesome" -> Icons.Filled.AutoAwesome
-    "hiking" -> Icons.Filled.Hiking
-    // 日用品
-    "local_laundry_service" -> Icons.Filled.LocalLaundryService
-    "receipt" -> Icons.Filled.Receipt
-    "cleaning_services" -> Icons.Filled.CleaningServices
-    // 教育
-    "school" -> Icons.Filled.School
-    "model_training" -> Icons.Filled.ModelTraining
-    "menu_book" -> Icons.Filled.MenuBook
-    "edit" -> Icons.Filled.Edit
-    "business_center" -> Icons.Filled.BusinessCenter
-    // 投资
-    "trending_down" -> Icons.Filled.TrendingDown
-    "show_chart" -> Icons.Filled.ShowChart
-    "money_off" -> Icons.Filled.MoneyOff
-    // 娱乐
-    "movie" -> Icons.Filled.Movie
-    "mic" -> Icons.Filled.Mic
-    "attractions" -> Icons.Filled.Attractions
-    "celebration" -> Icons.Filled.Celebration
-    // 游戏
-    "sports_esports" -> Icons.Filled.SportsEsports
-    "payments" -> Icons.Filled.Payments
-    "workspace_premium" -> Icons.Filled.WorkspacePremium
-    // 保健
-    "medication" -> Icons.Filled.Medication
-    "biotech" -> Icons.Filled.Biotech
-    "health_and_safety" -> Icons.Filled.HealthAndSafety
-    // 订阅
-    "subscriptions" -> Icons.Filled.Subscriptions
-    "play_circle" -> Icons.Filled.PlayCircle
-    "music_note" -> Icons.Filled.MusicNote
-    "cloud" -> Icons.Filled.Cloud
-    // 运动
-    "fitness_center" -> Icons.Filled.FitnessCenter
-    "sports" -> Icons.Filled.Sports
-    "sports_martial_arts" -> Icons.Filled.SportsMartialArts
-    // 住房居家
-    "home_work" -> Icons.Filled.HomeWork
-    "home" -> Icons.Filled.Home
-    "construction" -> Icons.Filled.Construction
-    "weekend" -> Icons.Filled.Weekend
-    "devices" -> Icons.Filled.Devices
-    "palette" -> Icons.Filled.Palette
-    "bed" -> Icons.Filled.Bed
-    // 美容
-    "face" -> Icons.Filled.Face
-    "face_retouching_natural" -> Icons.Filled.FaceRetouchingNatural
-    "content_cut" -> Icons.Filled.ContentCut
-    "back_hand" -> Icons.Filled.BackHand
-    // 收入分类
-    "work" -> Icons.Filled.Work
-    "account_balance" -> Icons.Filled.AccountBalance
-    "card_giftcard" -> Icons.Filled.CardGiftcard
-    "emoji_events" -> Icons.Filled.EmojiEvents
-    "star" -> Icons.Filled.Star
-    "schedule" -> Icons.Filled.Schedule
-    "access_time" -> Icons.Filled.AccessTime
-    "monetization_on" -> Icons.Filled.MonetizationOn
-    "savings" -> Icons.Filled.Savings
-    "military_tech" -> Icons.Filled.MilitaryTech
-    "flight" -> Icons.Filled.Flight
-    "attach_money" -> Icons.Filled.AttachMoney
-    "undo" -> Icons.Filled.Undo
-    "trending_up" -> Icons.Filled.TrendingUp
-    "sell" -> Icons.Filled.Sell
-    "favorite" -> Icons.Filled.Favorite
-    "child_care" -> Icons.Filled.ChildCare
-    "receipt_long" -> Icons.Filled.ReceiptLong
-    "description" -> Icons.Filled.Description
-    "account_balance_wallet" -> Icons.Filled.AccountBalanceWallet
-    // 新增
-    "phone_android" -> Icons.Filled.PhoneAndroid
-    "sim_card" -> Icons.Filled.SimCard
-    "local_shipping" -> Icons.Filled.LocalShipping
-    "local_hospital" -> Icons.Filled.LocalHospital
-    "wifi" -> Icons.Filled.Wifi
-    "more_horiz" -> Icons.Filled.MoreHoriz
-    "search" -> Icons.Filled.Search
-    "person" -> Icons.Filled.Person
-    "redeem" -> Icons.Filled.Redeem
-    // 无兜底，未匹配的图标直接抛出异常
-    else -> throw IllegalArgumentException("未知图标: $icon")
-}
-
-/** 分类 ID → 主题色（每个分类不同颜色） */
-internal fun categoryColor(id: String): Color = when (id) {
-    // 支出分类
-    "A001" -> Color(0xFFFF6B6B)        // 红色 - 食品餐饮
-    "A002" -> Color(0xFF42A5F5)        // 蓝色 - 购物消费
-    "A003" -> Color(0xFF5C6BC0)        // 靛蓝 - 出行交通
-    "A004" -> Color(0xFF66BB6A)        // 绿色 - 健康医疗
-    "A005" -> Color(0xFFFFA726)        // 橙色 - 居家生活
-    "A006" -> Color(0xFF42A5F5)        // 蓝色 - 文化教育
-    "A007" -> Color(0xFFAB47BC)        // 紫色 - 休闲娱乐
-    "A008" -> Color(0xFFE91E63)        // 粉红 - 送礼人情
-    "A009" -> Color(0xFF9E9E9E)        // 灰色 - 其他
-    // 收入分类
-    "B001" -> Color(0xFF4CAF50)        // 绿色 - 收入
-    "B002" -> Color(0xFFFFA726)        // 橙色 - 生活费
-    "B003" -> Color(0xFF4CAF50)        // 绿色 - 工资
-    "B004" -> Color(0xFFFF9800)        // 橙色 - 奖金
-    "B005" -> Color(0xFFFFEB3B)        // 黄色 - 中奖
-    "B006" -> Color(0xFFF44336)        // 红色 - 礼金人情
-    // 兜底
-    else -> Color(0xFF9E9E9E)            // 灰色
-}
-
-/** 分类图标渲染（Filled 单色风格，使用分类主题色） */
-@Composable
-private fun CategoryIcon(
-    icon: String,
-    size: androidx.compose.ui.unit.Dp,
-    tint: Color = MaterialTheme.colorScheme.onSurface
-) {
-    var error by remember { mutableStateOf<String?>(null) }
-    var imageVector by remember { mutableStateOf<ImageVector?>(null) }
-
-    // 尝试加载图标，失败时捕获异常
-    LaunchedEffect(icon) {
-        try {
-            imageVector = materialIcon(icon)
-            error = null
-        } catch (e: Exception) {
-            error = "${e.message}\n${e.stackTraceToString()}"
-            imageVector = null
-        }
-    }
-
-    if (imageVector != null) {
-        Icon(
-            imageVector = imageVector!!,
-            contentDescription = null,
-            modifier = Modifier.size(size),
-            tint = tint
-        )
-    } else {
-        // 显示报错信息
-        Column(
-            modifier = Modifier.size(size),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = "⚠",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
-            )
-            if (error != null) {
-                Text(
-                    text = error!!.take(20),  // 只显示前20个字符
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    maxLines = 2
-                )
-            }
-        }
-    }
-}
-
 /** 二级分类选择卡片（参考 BeeCount _SubcategorySelectorCard） */
 @Composable
 private fun SubcategoryCard(
@@ -1962,10 +1731,7 @@ private fun SubcategoryCard(
                                         ),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    CategoryIcon(
-                                        icon = child.icon,
-                                        size = 20.dp
-                                    )
+                                    Box(modifier = Modifier.size(20.dp))
                                 }
                                 Spacer(Modifier.height(4.dp))
                                 Text(

@@ -37,13 +37,13 @@ fun AccountingDetailScreen(
 
     // 构建分类查找表
     val categoryLookup = remember(categoryDb) {
-        val map = mutableMapOf<String, Pair<String, String>>()
+        val map = mutableMapOf<String, Triple<String, String, String?>>()
         for ((_, typeMap) in categoryDb.pages) {
             for ((_, cats) in typeMap) {
                 for (cat in cats) {
-                    map[cat.id] = cat.name to cat.icon
+                    map[cat.id] = Triple(cat.name, cat.icon, cat.overlay)
                     for (child in cat.children) {
-                        map[child.id] = child.name to child.icon
+                        map[child.id] = Triple(child.name, child.icon, child.overlay)
                     }
                 }
             }
@@ -76,6 +76,7 @@ fun AccountingDetailScreen(
     val childName = subInfo?.first
     val displayName = if (childName != null) "$parentName-$childName" else parentName
     val icon = subInfo?.second ?: catInfo?.second ?: "category"
+    val overlay = subInfo?.third ?: catInfo?.third
     val isExpense = record.type == "支出" || record.type == "债务"
     val amountPrefix = if (isExpense) "-" else "+"
     val amountColor = if (isExpense) Color(0xFFEF5350) else Color(0xFF4CAF50)
@@ -293,12 +294,7 @@ fun AccountingDetailScreen(
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = materialIcon(icon),
-                            contentDescription = null,
-                            modifier = Modifier.size(24.dp),
-                            tint = categoryColor(record.categoryId)
-                        )
+                        ColorIconImage(buildInId = icon, size = 24.dp, overlay = overlay)
                     }
                     Spacer(Modifier.width(12.dp))
                     // 分类名

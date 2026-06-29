@@ -13,7 +13,8 @@ data class AccountingCategory(
     val id: String,
     val name: String,
     val icon: String,
-    val children: List<AccountingCategory> = emptyList()
+    val children: List<AccountingCategory> = emptyList(),
+    val overlay: String? = null
 )
 
 /**
@@ -27,97 +28,97 @@ data class AccountingCategoryDb(
 ) {
     companion object {
         /** 当前默认数据版本，递增此值触发重新释放 */
-        private const val CURRENT_VERSION = 4
+        private const val CURRENT_VERSION = 5
 
         fun empty() = AccountingCategoryDb()
 
         /** 内置默认分类模板（来源于用户账单 CSV 提取） */
         fun defaultCategories(): AccountingCategoryDb {
             val expenseCategories = listOf(
-                AccountingCategory("A001", "食品餐饮", "restaurant", listOf(
-                    AccountingCategory("A001_01", "早餐", "free_breakfast"),
-                    AccountingCategory("A001_02", "午餐", "lunch_dining"),
-                    AccountingCategory("A001_03", "晚餐", "dinner_dining"),
-                    AccountingCategory("A001_04", "休闲零食", "cookie"),
-                    AccountingCategory("A001_05", "饮料酒水", "local_cafe"),
-                    AccountingCategory("A001_06", "冰糕", "icecream")
+                AccountingCategory("A001", "食品餐饮", "build_in_0052", listOf(
+                    AccountingCategory("A001_01", "早餐", "build_in_0036"),
+                    AccountingCategory("A001_02", "午餐", "build_in_0047"),
+                    AccountingCategory("A001_03", "晚餐", "build_in_0039"),
+                    AccountingCategory("A001_04", "休闲零食", "build_in_0057"),
+                    AccountingCategory("A001_05", "饮料酒水", "build_in_0035"),
+                    AccountingCategory("A001_06", "冰糕", "build_in_0045")
                 )),
-                AccountingCategory("A002", "购物消费", "shopping_cart", listOf(
-                    AccountingCategory("A002_01", "日常家居", "shopping_cart"),
-                    AccountingCategory("A002_02", "手机数码", "devices"),
-                    AccountingCategory("A002_03", "虚拟充值", "payments"),
-                    AccountingCategory("A002_04", "宠物用品", "pets"),
-                    AccountingCategory("A002_05", "装修装饰", "construction"),
-                    AccountingCategory("A002_06", "VIP", "workspace_premium")
+                AccountingCategory("A002", "购物消费", "build_in_0066", listOf(
+                    AccountingCategory("A002_01", "日常家居", "build_in_0088"),
+                    AccountingCategory("A002_02", "手机数码", "build_in_0124"),
+                    AccountingCategory("A002_03", "虚拟充值", "build_in_0104"),
+                    AccountingCategory("A002_04", "宠物用品", "build_in_0248"),
+                    AccountingCategory("A002_05", "装修装饰", "build_in_0109"),
+                    AccountingCategory("A002_06", "VIP", "build_in_0123")
                 )),
-                AccountingCategory("A003", "出行交通", "directions_car", listOf(
-                    AccountingCategory("A003_01", "公共交通", "directions_subway"),
-                    AccountingCategory("A003_02", "打车", "local_taxi"),
-                    AccountingCategory("A003_03", "运费", "delivery_dining")
+                AccountingCategory("A003", "出行交通", "build_in_0279", listOf(
+                    AccountingCategory("A003_01", "公共交通", "build_in_0274"),
+                    AccountingCategory("A003_02", "打车", "build_in_0277"),
+                    AccountingCategory("A003_03", "运费", "build_in_0080")
                 )),
-                AccountingCategory("A004", "健康医疗", "local_hospital", listOf(
-                    AccountingCategory("A004_01", "买药", "medication"),
-                    AccountingCategory("A004_02", "医院", "local_hospital")
+                AccountingCategory("A004", "健康医疗", "build_in_0224", listOf(
+                    AccountingCategory("A004_01", "买药", "build_in_0230"),
+                    AccountingCategory("A004_02", "医院", "build_in_0225")
                 )),
-                AccountingCategory("A005", "居家生活", "home", listOf(
-                    AccountingCategory("A005_01", "话费宽带", "wifi")
+                AccountingCategory("A005", "居家生活", "build_in_0205", listOf(
+                    AccountingCategory("A005_01", "话费宽带", "build_in_0096")
                 )),
-                AccountingCategory("A006", "文化教育", "menu_book", listOf(
-                    AccountingCategory("A006_01", "学费", "school"),
-                    AccountingCategory("A006_02", "培训考试", "model_training"),
-                    AccountingCategory("A006_03", "书报杂志", "menu_book"),
-                    AccountingCategory("A006_04", "文具", "edit")
+                AccountingCategory("A006", "文化教育", "build_in_0016", listOf(
+                    AccountingCategory("A006_01", "学费", "build_in_0024"),
+                    AccountingCategory("A006_02", "培训考试", "build_in_0023"),
+                    AccountingCategory("A006_03", "书报杂志", "build_in_0019"),
+                    AccountingCategory("A006_04", "文具", "build_in_0022")
                 )),
-                AccountingCategory("A007", "休闲娱乐", "sports_esports", listOf(
-                    AccountingCategory("A007_01", "棋牌桌游", "sports_esports")
+                AccountingCategory("A007", "休闲娱乐", "build_in_0127", listOf(
+                    AccountingCategory("A007_01", "棋牌桌游", "build_in_0130")
                 )),
-                AccountingCategory("A008", "送礼人情", "card_giftcard", listOf(
-                    AccountingCategory("A008_01", "孝敬长辈", "favorite"),
-                    AccountingCategory("A008_02", "红包", "card_giftcard"),
-                    AccountingCategory("A008_03", "借出", "money_off")
+                AccountingCategory("A008", "送礼人情", "build_in_0196", listOf(
+                    AccountingCategory("A008_01", "孝敬长辈", "build_in_0194"),
+                    AccountingCategory("A008_02", "红包", "build_in_0199"),
+                    AccountingCategory("A008_03", "借出", "build_in_0198")
                 )),
-                AccountingCategory("A009", "其他", "more_horiz", listOf(
-                    AccountingCategory("A009_01", "丢失", "search"),
-                    AccountingCategory("A009_02", "代买", "shopping_bag")
+                AccountingCategory("A009", "其他", "build_in_0240", listOf(
+                    AccountingCategory("A009_01", "丢失", "build_in_0233"),
+                    AccountingCategory("A009_02", "代买", "build_in_0236")
                 ))
             )
             val incomeCategories = listOf(
-                AccountingCategory("B001", "收入", "savings", listOf(
-                    AccountingCategory("B001_01", "中奖", "emoji_events"),
-                    AccountingCategory("B001_02", "二手闲置", "sell"),
-                    AccountingCategory("B001_03", "其他", "more_horiz"),
-                    AccountingCategory("B001_04", "兼职外快", "schedule"),
-                    AccountingCategory("B001_05", "奖金", "emoji_events"),
-                    AccountingCategory("B001_06", "报销", "receipt"),
-                    AccountingCategory("B001_07", "生活费", "home"),
-                    AccountingCategory("B001_08", "礼金人情", "card_giftcard"),
-                    AccountingCategory("B001_09", "补贴", "health_and_safety")
+                AccountingCategory("B001", "收入", "build_in_0180", listOf(
+                    AccountingCategory("B001_01", "中奖", "build_in_0181"),
+                    AccountingCategory("B001_02", "二手闲置", "build_in_0191"),
+                    AccountingCategory("B001_03", "其他", "build_in_0184"),
+                    AccountingCategory("B001_04", "兼职外快", "build_in_0185"),
+                    AccountingCategory("B001_05", "奖金", "build_in_0174"),
+                    AccountingCategory("B001_06", "报销", "build_in_0187"),
+                    AccountingCategory("B001_07", "生活费", "build_in_0186"),
+                    AccountingCategory("B001_08", "礼金人情", "build_in_0178"),
+                    AccountingCategory("B001_09", "补贴", "build_in_0192")
                 )),
-                AccountingCategory("B002", "生活费", "account_balance", listOf(
-                    AccountingCategory("B002_01", "婆婆", "person"),
-                    AccountingCategory("B002_02", "爷爷", "person"),
-                    AccountingCategory("B002_03", "爸爸", "person")
+                AccountingCategory("B002", "生活费", "build_in_0152", listOf(
+                    AccountingCategory("B002_01", "婆婆", "build_in_0150"),
+                    AccountingCategory("B002_02", "爷爷", "build_in_0150"),
+                    AccountingCategory("B002_03", "爸爸", "build_in_0149")
                 )),
-                AccountingCategory("B003", "工资", "work", listOf(
-                    AccountingCategory("B003_01", "学校工资", "payments")
+                AccountingCategory("B003", "工资", "build_in_0189", listOf(
+                    AccountingCategory("B003_01", "学校工资", "build_in_0016")
                 )),
-                AccountingCategory("B004", "奖金", "emoji_events", listOf(
-                    AccountingCategory("B004_01", "快手极速版", "phone_android"),
-                    AccountingCategory("B004_02", "抖音提现", "phone_android"),
-                    AccountingCategory("B004_03", "拼多多", "shopping_cart")
+                AccountingCategory("B004", "奖金", "build_in_0177", listOf(
+                    AccountingCategory("B004_01", "快手极速版", "build_in_0174"),
+                    AccountingCategory("B004_02", "抖音提现", "build_in_0176"),
+                    AccountingCategory("B004_03", "拼多多", "build_in_0187")
                 )),
-                AccountingCategory("B005", "中奖", "emoji_events", listOf(
-                    AccountingCategory("B005_01", "捡钱", "attach_money")
+                AccountingCategory("B005", "中奖", "build_in_0181", listOf(
+                    AccountingCategory("B005_01", "捡钱", "build_in_0182")
                 )),
-                AccountingCategory("B006", "礼金人情", "redeem", listOf(
-                    AccountingCategory("B006_01", "亲人红包", "card_giftcard"),
-                    AccountingCategory("B006_02", "外公红包", "card_giftcard"),
-                    AccountingCategory("B006_03", "妈妈红包", "card_giftcard"),
-                    AccountingCategory("B006_04", "婆婆红包", "card_giftcard"),
-                    AccountingCategory("B006_05", "朋友红包", "card_giftcard"),
-                    AccountingCategory("B006_06", "未知红包", "card_giftcard"),
-                    AccountingCategory("B006_07", "爷爷红包", "card_giftcard"),
-                    AccountingCategory("B006_08", "爸爸红包", "card_giftcard")
+                AccountingCategory("B006", "礼金人情", "build_in_0199", listOf(
+                    AccountingCategory("B006_01", "亲人红包", "build_in_0199"),
+                    AccountingCategory("B006_02", "外公红包", "build_in_0199"),
+                    AccountingCategory("B006_03", "妈妈红包", "build_in_0199"),
+                    AccountingCategory("B006_04", "婆婆红包", "build_in_0199"),
+                    AccountingCategory("B006_05", "朋友红包", "build_in_0199"),
+                    AccountingCategory("B006_06", "未知红包", "build_in_0199"),
+                    AccountingCategory("B006_07", "爷爷红包", "build_in_0199"),
+                    AccountingCategory("B006_08", "爸爸红包", "build_in_0199")
                 ))
             )
             val pages = mapOf(

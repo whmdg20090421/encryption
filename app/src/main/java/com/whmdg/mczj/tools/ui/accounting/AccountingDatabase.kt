@@ -20,7 +20,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 18
+        private const val DB_VERSION = 19
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -69,7 +69,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                 page       TEXT NOT NULL,
                 type       TEXT NOT NULL,
                 parent_id  TEXT,
-                sort_order INTEGER NOT NULL DEFAULT 0
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                overlay    TEXT
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX idx_cat_page_type ON categories(page, type)")
@@ -135,9 +136,18 @@ internal class AccountingDatabase private constructor(context: Context) :
         """.trimIndent())
         db.execSQL("CREATE INDEX idx_trash_deleted_at ON attachment_trash(deleted_at)")
 
+        // 彩色图标表
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS color_icons (
+                id   TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            )
+        """.trimIndent())
+
         // 写入默认数据
         insertDefaultCategoriesToDb(db)
         insertDefaultSettingsToDb(db)
+        insertColorIconsToDb(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -221,6 +231,21 @@ internal class AccountingDatabase private constructor(context: Context) :
             db.execSQL("UPDATE records SET category_name = (SELECT name FROM categories WHERE id = records.category_id)")
             db.execSQL("UPDATE records SET subcategory_name = (SELECT name FROM categories WHERE id = records.subcategory_id)")
         }
+        if (oldVersion < 19) {
+            // 彩色图标表
+            db.execSQL("CREATE TABLE IF NOT EXISTS color_icons (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+            insertColorIconsToDb(db)
+            // categories 表加 overlay 列
+            db.execSQL("ALTER TABLE categories ADD COLUMN overlay TEXT")
+            // 更新分类 icon 字段为 build_in_XXXX
+            for ((catId, buildInId) in ColorIconRegistry.CATEGORY_ICON_MAP) {
+                db.execSQL("UPDATE categories SET icon = ? WHERE id = ?", arrayOf(buildInId, catId))
+            }
+            // 更新分类 overlay
+            for ((catId, overlay) in ColorIconRegistry.CATEGORY_OVERLAY_MAP) {
+                db.execSQL("UPDATE categories SET overlay = ? WHERE id = ?", arrayOf(overlay, catId))
+            }
+        }
     }
 
     // ─────────────────────────────────────────────
@@ -257,6 +282,39 @@ internal class AccountingDatabase private constructor(context: Context) :
     }
 
     // ─────────────────────────────────────────────
+    // 彩色图标表
+    // ─────────────────────────────────────────────
+
+    private fun insertColorIconsToDb(db: SQLiteDatabase) {
+        db.beginTransaction()
+        try {
+            for ((buildInId, name) in ColorIconRegistry.ID_TO_NAME) {
+                val cv = ContentValues().apply {
+                    put("id", buildInId)
+                    put("name", name)
+                }
+                db.insertWithOnConflict("color_icons", null, cv, SQLiteDatabase.CONFLICT_IGNORE)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun getAllColorIcons(): List<Pair<String, String>> {
+        val result = mutableListOf<Pair<String, String>>()
+        val cursor = readableDatabase.rawQuery("SELECT id, name FROM color_icons ORDER BY id", null)
+        try {
+            while (cursor.moveToNext()) {
+                result.add(Pair(cursor.getString(0), cursor.getString(1)))
+            }
+        } finally {
+            cursor.close()
+        }
+        return result
+    }
+
+    // ─────────────────────────────────────────────
     // 分类表
     // ─────────────────────────────────────────────
 
@@ -282,6 +340,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                             put("type", type)
                             putNull("parent_id")
                             put("sort_order", order++)
+                            val ov = ColorIconRegistry.CATEGORY_OVERLAY_MAP[cat.id]
+                            if (ov != null) put("overlay", ov) else putNull("overlay")
                         }
                         db.insertWithOnConflict("categories", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
                         // 二级分类
@@ -294,6 +354,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                                 put("type", type)
                                 put("parent_id", cat.id)
                                 put("sort_order", childOrder)
+                                val ov = ColorIconRegistry.CATEGORY_OVERLAY_MAP[child.id]
+                                if (ov != null) put("overlay", ov) else putNull("overlay")
                             }
                             db.insertWithOnConflict("categories", null, childCv, SQLiteDatabase.CONFLICT_REPLACE)
                         }
@@ -315,7 +377,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         // 查一级分类
         val parents = mutableListOf<AccountingCategory>()
         val parentCursor = db.rawQuery(
-            "SELECT id, name, icon FROM categories WHERE page = ? AND type = ? AND parent_id IS NULL ORDER BY sort_order",
+            "SELECT id, name, icon, overlay FROM categories WHERE page = ? AND type = ? AND parent_id IS NULL ORDER BY sort_order",
             arrayOf(page, type)
         )
         try {
@@ -323,10 +385,11 @@ internal class AccountingDatabase private constructor(context: Context) :
                 val id = parentCursor.getString(0)
                 val name = parentCursor.getString(1)
                 val icon = parentCursor.getString(2)
+                val overlay = parentCursor.getString(3)
                 // 查二级分类
                 val children = mutableListOf<AccountingCategory>()
                 val childCursor = db.rawQuery(
-                    "SELECT id, name, icon FROM categories WHERE parent_id = ? ORDER BY sort_order",
+                    "SELECT id, name, icon, overlay FROM categories WHERE parent_id = ? ORDER BY sort_order",
                     arrayOf(id)
                 )
                 try {
@@ -334,13 +397,14 @@ internal class AccountingDatabase private constructor(context: Context) :
                         children.add(AccountingCategory(
                             id = childCursor.getString(0),
                             name = childCursor.getString(1),
-                            icon = childCursor.getString(2)
+                            icon = childCursor.getString(2),
+                            overlay = childCursor.getString(3)
                         ))
                     }
                 } finally {
                     childCursor.close()
                 }
-                parents.add(AccountingCategory(id = id, name = name, icon = icon, children = children))
+                parents.add(AccountingCategory(id = id, name = name, icon = icon, children = children, overlay = overlay))
             }
         } finally {
             parentCursor.close()
