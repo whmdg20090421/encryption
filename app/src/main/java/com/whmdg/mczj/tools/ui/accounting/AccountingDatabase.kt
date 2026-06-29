@@ -1124,9 +1124,20 @@ internal class AccountingDatabase private constructor(context: Context) :
                     put("book_name", book)
                     put("type", type)
                     put("amount", absAmount)
-                    put("category_id", catNameToId[catName] ?: catName)
-                    val subId = catNameToId[subCatName] ?: subCatName
-                    if (subId.isNotEmpty()) put("subcategory_id", subId) else putNull("subcategory_id")
+                    // 自动创建缺失分类
+                    val catId = catNameToId[catName] ?: run {
+                        val newId = createParentCategory(catName, type)
+                        catNameToId[catName] = newId
+                        newId
+                    }
+                    put("category_id", catId)
+                    val subId = if (subCatName.isEmpty()) null
+                        else catNameToId[subCatName] ?: run {
+                            val newId = createChildCategory(subCatName, catId, type)
+                            catNameToId[subCatName] = newId
+                            newId
+                        }
+                    if (subId != null) put("subcategory_id", subId) else putNull("subcategory_id")
                     put("category_name", catName)
                     if (subCatName.isNotEmpty()) put("subcategory_name", subCatName) else putNull("subcategory_name")
                     put("note", note)
@@ -1277,9 +1288,16 @@ internal class AccountingDatabase private constructor(context: Context) :
                     discountOff = null; discountAfter = null; discountBefore = null
                 }
 
-                // 分类映射
-                val catId = if (catName.isNotEmpty()) categoryMapping[catName] ?: catName else ""
-                val subCatId = if (subCatName.isNotEmpty()) categoryMapping[subCatName] ?: subCatName else null
+                // 分类映射（缺失时自动创建）
+                val catId = if (catName.isEmpty()) ""
+                    else categoryMapping[catName] ?: run {
+                        val newId = createParentCategory(catName, type)
+                        newId
+                    }
+                val subCatId = if (subCatName.isEmpty()) null
+                    else categoryMapping[subCatName] ?: run {
+                        if (catId.isNotEmpty()) createChildCategory(subCatName, catId, type) else subCatName
+                    }
 
                 val cv = ContentValues().apply {
                     put("id", java.util.UUID.randomUUID().toString())
