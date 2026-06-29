@@ -291,6 +291,9 @@ fun CsvImportFlowScreen(
     var distinctCategories by remember { mutableStateOf<List<String>>(emptyList()) }
     var distinctSubcategories by remember { mutableStateOf<List<String>>(emptyList()) }
 
+    // 是否沿用系统内置分类
+    var useBuiltInCategories by remember { mutableStateOf(true) }
+
     // 账户映射：CSV账户名 → AccountMappingInfo
     val accountMapping = remember { mutableStateMapOf<String, AccountMappingInfo>() }
     var distinctAccounts by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -426,8 +429,9 @@ fun CsvImportFlowScreen(
         TopAppBar(
             title = { Text(when (step) {
                 0 -> "CSV 导入 - 字段映射"
-                1 -> "CSV 导入 - 账户映射"
-                2 -> "CSV 导入 - 分类映射"
+                1 -> "CSV 导入 - 分类方案"
+                2 -> "CSV 导入 - 账户映射"
+                3 -> "CSV 导入 - 分类映射"
                 else -> "CSV 导入"
             }) },
             navigationIcon = {
@@ -475,7 +479,6 @@ fun CsvImportFlowScreen(
                         val accIdx = columnMapping["账户"]
                         if (accIdx != null) {
                             distinctAccounts = extractDistinctValues(rows, accIdx)
-                            // 自动匹配已有账户
                             accountMapping.clear()
                             for (accName in distinctAccounts) {
                                 val existing = existingAccounts.find { it.name == accName }
@@ -490,34 +493,58 @@ fun CsvImportFlowScreen(
                         // 提取分类名
                         val catIdx = columnMapping["分类"]
                         val subCatIdx = columnMapping["二级分类"]
-                        if (catIdx != null) {
-                            distinctCategories = extractDistinctValues(rows, catIdx)
-                        }
-                        if (subCatIdx != null) {
-                            distinctSubcategories = extractDistinctValues(rows, subCatIdx)
-                        }
-                        if (catIdx != null) {
-                            val matched = autoMatchCategories(distinctCategories, parentCategories)
-                            categoryMapping.clear()
-                            categoryMapping.putAll(matched)
-                        }
-                        if (subCatIdx != null) {
-                            val matched = autoMatchCategories(distinctSubcategories, allSubcategories.map { it.second })
-                            subcategoryMapping.clear()
-                            subcategoryMapping.putAll(matched)
-                        }
+                        if (catIdx != null) distinctCategories = extractDistinctValues(rows, catIdx)
+                        if (subCatIdx != null) distinctSubcategories = extractDistinctValues(rows, subCatIdx)
 
-                        // 如果没有账户列，直接跳到分类映射
-                        step = if (accIdx != null && distinctAccounts.isNotEmpty()) 1 else 2
+                        // 进入分类方案选择
+                        step = 1
                     }
                 )
             } else if (currentStep == 1) {
+                CategoryChoiceStep(
+                    useBuiltIn = useBuiltInCategories,
+                    onChoice = { useIt ->
+                        useBuiltInCategories = useIt
+                        if (useIt) {
+                            // 沿用内置分类：自动匹配后进入下一步
+                            val catIdx = columnMapping["分类"]
+                            val subCatIdx = columnMapping["二级分类"]
+                            if (catIdx != null) {
+                                val matched = autoMatchCategories(distinctCategories, parentCategories)
+                                categoryMapping.clear()
+                                categoryMapping.putAll(matched)
+                            }
+                            if (subCatIdx != null) {
+                                val matched = autoMatchCategories(distinctSubcategories, allSubcategories.map { it.second })
+                                subcategoryMapping.clear()
+                                subcategoryMapping.putAll(matched)
+                            }
+                            val accIdx = columnMapping["账户"]
+                            step = if (accIdx != null && distinctAccounts.isNotEmpty()) 2 else 3
+                        } else {
+                            // 不沿用：清空映射，全部由导入函数自动创建
+                            categoryMapping.clear()
+                            subcategoryMapping.clear()
+                            val accIdx = columnMapping["账户"]
+                            if (accIdx != null && distinctAccounts.isNotEmpty()) {
+                                step = 2  // 先映射账户
+                            } else {
+                                showConfirmDialog = true  // 直接导入
+                            }
+                        }
+                    },
+                    onBack = { step = 0 }
+                )
+            } else if (currentStep == 2) {
                 AccountMappingStep(
                     distinctAccounts = distinctAccounts,
                     accountMapping = accountMapping,
                     existingAccounts = existingAccounts,
-                    onNext = { step = 2 },
-                    onBack = { step = 0 }
+                    onNext = {
+                        if (useBuiltInCategories) step = 3
+                        else showConfirmDialog = true
+                    },
+                    onBack = { step = 1 }
                 )
             } else {
                 CategoryMappingStep(
@@ -528,7 +555,7 @@ fun CsvImportFlowScreen(
                     parentCategories = parentCategories,
                     allSubcategories = allSubcategories,
                     onConfirm = { showConfirmDialog = true },
-                    onBack = { step = if (distinctAccounts.isNotEmpty()) 1 else 0 }
+                    onBack = { step = if (columnMapping["账户"] != null && distinctAccounts.isNotEmpty()) 2 else 1 }
                 )
             }
         }
@@ -591,6 +618,80 @@ private fun FieldMappingStep(
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Button(onClick = onNext) { Text("下一步: 分类映射") }
                 }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────
+// Step 1: 分类方案选择
+// ─────────────────────────────────────────────
+
+@Composable
+private fun CategoryChoiceStep(
+    useBuiltIn: Boolean,
+    onChoice: (Boolean) -> Unit,
+    onBack: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 20.dp, vertical = 16.dp)
+    ) {
+        Text(
+            "分类方案",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "是否沿用系统内置的支出/收入分类？",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(24.dp))
+
+        // 沿用内置分类
+        Card(
+            onClick = { onChoice(true) },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (useBuiltIn) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("沿用系统分类", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "保留现有分类，导入时可将 CSV 分类映射到系统分类或自动创建新分类",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // 不沿用内置分类
+        Card(
+            onClick = { onChoice(false) },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (!useBuiltIn) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("不沿用，全部自动创建", fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "清空内置分类，导入时根据 CSV 数据自动创建所有一级和二级分类",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

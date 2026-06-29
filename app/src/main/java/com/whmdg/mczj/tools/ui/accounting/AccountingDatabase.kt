@@ -367,8 +367,23 @@ internal class AccountingDatabase private constructor(context: Context) :
     }
 
     /** 创建一级分类，返回新分类 ID */
+    /** 查询 A/B 系列分类的最大编号 */
+    private fun nextCategorySeq(prefix: String): Int {
+        val cursor = readableDatabase.rawQuery(
+            "SELECT id FROM categories WHERE id LIKE ? ORDER BY id DESC LIMIT 1",
+            arrayOf("${prefix}%")
+        )
+        val max = try {
+            if (cursor.moveToFirst()) {
+                cursor.getString(0).removePrefix(prefix).toIntOrNull() ?: 0
+            } else 0
+        } finally { cursor.close() }
+        return max + 1
+    }
+
     fun createParentCategory(name: String, type: String = "支出", icon: String = "category"): String {
-        val id = "auto_${name.hashCode().toString(16)}"
+        val seq = nextCategorySeq("A")
+        val id = "A%03d".format(seq)
         val cv = ContentValues().apply {
             put("id", id)
             put("name", name)
@@ -384,7 +399,8 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     /** 创建二级分类，返回新分类 ID */
     fun createChildCategory(name: String, parentId: String, type: String = "支出", icon: String = "subcategory"): String {
-        val id = "auto_${name.hashCode().toString(16)}"
+        val seq = nextCategorySeq("B")
+        val id = "B%03d".format(seq)
         val cv = ContentValues().apply {
             put("id", id)
             put("name", name)
