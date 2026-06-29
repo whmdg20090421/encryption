@@ -13,7 +13,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,6 +32,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -68,6 +76,10 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
     var currentBookName by remember { mutableStateOf(AccountingRepository.getLastBookName(context)) }
     var accountRefreshTrigger by remember { mutableIntStateOf(0) }
     var isInSubPage by remember { mutableStateOf(false) }
+    // 多选状态
+    var isMultiSelectMode by remember { mutableStateOf(false) }
+    var selectedRecordIds by remember { mutableStateOf(setOf<String>()) }
+    val allRecords = remember { AccountingRecordDb.load(context).records }
 
     // 切换标签时重置子页面状态
     LaunchedEffect(selectedTab) {
@@ -87,8 +99,14 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
     val fabThemeColor = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
 
+    // 多选模式下返回手势退出多选
+    BackHandler(enabled = isMultiSelectMode) {
+        isMultiSelectMode = false
+        selectedRecordIds = emptySet()
+    }
+
     // 返回手势处理：非首页标签→回首页；首页标签→双击退出
-    BackHandler {
+    BackHandler(enabled = !isMultiSelectMode) {
         if (selectedTab != 0) {
             onTabSelect(0)
         } else {
@@ -141,7 +159,20 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                     bookName = currentBookName,
                     listState = listState,
                     barHeight = barHeight,
-                    onNavigate = onNavigate
+                    onNavigate = onNavigate,
+                    isMultiSelectMode = isMultiSelectMode,
+                    selectedRecordIds = selectedRecordIds,
+                    onLongPress = { recordId ->
+                        isMultiSelectMode = true
+                        selectedRecordIds = setOf(recordId)
+                    },
+                    onToggleSelection = { recordId ->
+                        selectedRecordIds = if (recordId in selectedRecordIds) {
+                            selectedRecordIds - recordId
+                        } else {
+                            selectedRecordIds + recordId
+                        }
+                    }
                 )
 
                 // 状态栏背景层（首页专属，滚动时渐显）
@@ -239,26 +270,34 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                 }
             }
 
-            // 右下角按钮（首页=记一笔，资产=添加账户，其他tab不显示）
-            if (selectedTab == 0) {
-                FloatingActionButton(
-                    onClick = { onNavigate(Screen.AddAccounting(currentBookName)) },
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 25.dp, bottom = 25.dp),
-                    containerColor = fabThemeColor
-                ) {
-                    Icon(Icons.Default.NoteAdd, contentDescription = "记一笔", tint = Color.White)
-                }
-            } else if (selectedTab == 1) {
-                FloatingActionButton(
-                    onClick = { showAccountTypeDialog = true },
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 25.dp, bottom = 25.dp),
-                    containerColor = fabThemeColor
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "添加账户", tint = Color.White)
+            // 右下角按钮（首页=记一笔，资产=添加账户，其他tab不显示）— 多选时向右滑出
+            val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
+            AnimatedVisibility(
+                visible = !isMultiSelectMode && (selectedTab == 0 || selectedTab == 1),
+                exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+                enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+                modifier = Modifier.align(Alignment.BottomEnd)
+            ) {
+                if (selectedTab == 0) {
+                    FloatingActionButton(
+                        onClick = { onNavigate(Screen.AddAccounting(currentBookName)) },
+                        modifier = Modifier
+                            .padding(end = 25.dp, bottom = 25.dp)
+                            .padding(bottom = navBarPadding.calculateBottomPadding()),
+                        containerColor = fabThemeColor
+                    ) {
+                        Icon(Icons.Default.NoteAdd, contentDescription = "记一笔", tint = Color.White)
+                    }
+                } else if (selectedTab == 1) {
+                    FloatingActionButton(
+                        onClick = { showAccountTypeDialog = true },
+                        modifier = Modifier
+                            .padding(end = 25.dp, bottom = 25.dp)
+                            .padding(bottom = navBarPadding.calculateBottomPadding()),
+                        containerColor = fabThemeColor
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "添加账户", tint = Color.White)
+                    }
                 }
             }
 
@@ -517,55 +556,130 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
         }
     }
 
-    // 底部导航栏（悬浮在内容上面，子页面时隐藏）
-    if (!isInSubPage) Box(
+    // 底部导航栏（悬浮在内容上面，子页面时隐藏，多选时滑出）
+    AnimatedVisibility(
+        visible = !isInSubPage && !isMultiSelectMode,
+        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
         modifier = Modifier
             .fillMaxWidth()
             .align(Alignment.BottomCenter)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(28.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = navBarAlpha),
-            shadowElevation = 8.dp
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            Row(modifier = Modifier.height(56.dp)) {
-                navItems.forEachIndexed { index, (label, iconPair) ->
-                    val isActive = selectedTab == index
-                    val iconColor = if (isActive) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = navBarAlpha),
+                shadowElevation = 8.dp
+            ) {
+                Row(modifier = Modifier.height(56.dp)) {
+                    navItems.forEachIndexed { index, (label, iconPair) ->
+                        val isActive = selectedTab == index
+                        val iconColor = if (isActive) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clickable { onTabSelect(index) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(22.dp))
+                                    .background(
+                                        if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                        else Color.Transparent
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isActive) iconPair.first else iconPair.second,
+                                    contentDescription = label,
+                                    tint = iconColor,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(Modifier.height(1.dp))
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.sp,
+                                        fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal
+                                    ),
+                                    color = iconColor,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 多选操作栏（从下方滑入）
+    AnimatedVisibility(
+        visible = isMultiSelectMode,
+        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .align(Alignment.BottomCenter)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = navBarAlpha),
+                shadowElevation = 8.dp
+            ) {
+                Row(modifier = Modifier.height(56.dp)) {
+                    // 全选
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
-                            .clickable { onTabSelect(index) },
+                            .clickable {
+                                val allIds = allRecords
+                                    .filter { it.bookName == currentBookName }
+                                    .map { it.id }
+                                    .toSet()
+                                selectedRecordIds = if (selectedRecordIds.size == allIds.size) emptySet() else allIds
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(22.dp))
-                                .background(
-                                    if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                    else Color.Transparent
-                                )
+                                .background(Color.Transparent)
                                 .padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
                             Icon(
-                                imageVector = if (isActive) iconPair.first else iconPair.second,
-                                contentDescription = label,
-                                tint = iconColor,
+                                imageVector = Icons.Default.SelectAll,
+                                contentDescription = "全选",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(22.dp)
                             )
                             Spacer(Modifier.height(1.dp))
                             Text(
-                                text = label,
+                                text = "全选",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontSize = 10.sp,
-                                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal
+                                    fontWeight = FontWeight.Normal
                                 ),
-                                color = iconColor,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1
                             )
                         }
@@ -1917,7 +2031,11 @@ private fun RecordListContent(
     bookName: String,
     listState: androidx.compose.foundation.lazy.LazyListState,
     barHeight: androidx.compose.ui.unit.Dp,
-    onNavigate: (Screen) -> Unit
+    onNavigate: (Screen) -> Unit,
+    isMultiSelectMode: Boolean = false,
+    selectedRecordIds: Set<String> = emptySet(),
+    onLongPress: (String) -> Unit = {},
+    onToggleSelection: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val recordDb = remember { AccountingRecordDb.load(context) }
@@ -2137,21 +2255,51 @@ private fun RecordListContent(
                                 val cal = Calendar.getInstance().apply { timeInMillis = record.happenedAt }
                                 val dateStr = "${cal.get(Calendar.MONTH) + 1}/${cal.get(Calendar.DAY_OF_MONTH)}"
 
+                                val isSelectedRecord = record.id in selectedRecordIds
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable { onNavigate(Screen.AccountingDetail(bookName, record.id)) }
+                                        .combinedClickable(
+                                            onClick = {
+                                                if (isMultiSelectMode) onToggleSelection(record.id)
+                                                else onNavigate(Screen.AccountingDetail(bookName, record.id))
+                                            },
+                                            onLongClick = { onLongPress(record.id) }
+                                        )
                                         .padding(horizontal = 16.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(48.dp)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        ColorIconImage(buildInId = icon, size = 24.dp, overlay = overlay)
+                                    if (isMultiSelectMode) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .clip(CircleShape)
+                                                .border(2.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                                                .then(
+                                                    if (isSelectedRecord) Modifier.background(MaterialTheme.colorScheme.primary)
+                                                    else Modifier
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isSelectedRecord) {
+                                                Icon(
+                                                    Icons.Default.Check,
+                                                    contentDescription = "已选中",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            ColorIconImage(buildInId = icon, size = 24.dp, overlay = overlay)
+                                        }
                                     }
                                     Spacer(Modifier.width(12.dp))
                                     Column(modifier = Modifier.weight(1f)) {
@@ -2284,22 +2432,54 @@ private fun RecordListContent(
                                 // 账户信息
                                 val account = record.accountId?.let { accountMap[it] }
 
+                                val isSelectedRecord = record.id in selectedRecordIds
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable { onNavigate(Screen.AccountingDetail(bookName, record.id)) }
+                                        .combinedClickable(
+                                            onClick = {
+                                                if (isMultiSelectMode) onToggleSelection(record.id)
+                                                else onNavigate(Screen.AccountingDetail(bookName, record.id))
+                                            },
+                                            onLongClick = { onLongPress(record.id) }
+                                        )
                                         .padding(horizontal = 16.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     // 左侧图标框
-                                    Box(
-                                        modifier = Modifier
-                                            .size(48.dp)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        ColorIconImage(buildInId = icon, size = 24.dp, overlay = overlay)
+                                    if (isMultiSelectMode) {
+                                        // 多选模式：空心/实心圆圈
+                                        Box(
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .clip(CircleShape)
+                                                .border(2.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                                                .then(
+                                                    if (isSelectedRecord) Modifier.background(MaterialTheme.colorScheme.primary)
+                                                    else Modifier
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isSelectedRecord) {
+                                                Icon(
+                                                    Icons.Default.Check,
+                                                    contentDescription = "已选中",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        // 正常模式：分类图标
+                                        Box(
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            ColorIconImage(buildInId = icon, size = 24.dp, overlay = overlay)
+                                        }
                                     }
                                     Spacer(Modifier.width(12.dp))
                                     // 右侧内容
