@@ -1054,10 +1054,7 @@ private fun CsvPreviewTable(headers: List<String>, dataRows: List<List<String>>)
 
 /** 判断分类 ID 是否属于收入类 */
 private fun isIncomeCategory(catId: String): Boolean {
-    val incomePrefixes = listOf("salary", "investment", "red_packet", "bonus", "reimbursement",
-        "part_time", "gift", "interest", "refund", "invest_income", "second_hand",
-        "social_benefit", "tax_refund", "provident_fund")
-    return incomePrefixes.any { catId.startsWith(it) }
+    return catId.startsWith("B")
 }
 
 // ─────────────────────────────────────────────

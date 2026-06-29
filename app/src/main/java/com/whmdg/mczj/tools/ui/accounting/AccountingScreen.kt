@@ -2154,7 +2154,7 @@ private fun RecordListContent(
                                             imageVector = materialIcon(icon),
                                             contentDescription = null,
                                             modifier = Modifier.size(24.dp),
-                                            tint = Color(0xFFEF5350)
+                                            tint = categoryColor(record.categoryId)
                                         )
                                     }
                                     Spacer(Modifier.width(12.dp))
@@ -2306,7 +2306,7 @@ private fun RecordListContent(
                                             imageVector = materialIcon(icon),
                                             contentDescription = null,
                                             modifier = Modifier.size(24.dp),
-                                            tint = themeColor
+                                            tint = categoryColor(record.categoryId)
                                         )
                                     }
                                     Spacer(Modifier.width(12.dp))

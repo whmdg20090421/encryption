@@ -297,7 +297,7 @@ fun AccountingDetailScreen(
                             imageVector = materialIcon(icon),
                             contentDescription = null,
                             modifier = Modifier.size(24.dp),
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = categoryColor(record.categoryId)
                         )
                     }
                     Spacer(Modifier.width(12.dp))

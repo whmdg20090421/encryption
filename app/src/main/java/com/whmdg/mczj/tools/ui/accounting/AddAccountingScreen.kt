@@ -511,8 +511,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                     ) {
                                         CategoryIcon(
                                             icon = cat.icon,
-                                            size = 24.dp,
-                                            tint = iconThemeColor
+                                            size = 24.dp
                                         )
                                     }
                                     // 有子分类标记：右下角三个点
@@ -1688,195 +1687,184 @@ private fun KeyButton(
 /** 图标标识 → Material Icons 映射（TwoTone 双色调风格） */
 internal fun materialIcon(icon: String): ImageVector = when (icon) {
     // 餐饮美食
-    "restaurant" -> Icons.TwoTone.Restaurant
-    "fastfood" -> Icons.TwoTone.Fastfood
-    "local_cafe" -> Icons.TwoTone.LocalCafe
-    "local_bar" -> Icons.TwoTone.LocalBar
-    "cake" -> Icons.TwoTone.Cake
-    "coffee" -> Icons.TwoTone.Coffee
-    "free_breakfast" -> Icons.TwoTone.FreeBreakfast
-    "lunch_dining" -> Icons.TwoTone.LunchDining
-    "dinner_dining" -> Icons.TwoTone.DinnerDining
-    "icecream" -> Icons.TwoTone.Icecream
-    "bakery_dining" -> Icons.TwoTone.BakeryDining
-    "liquor" -> Icons.TwoTone.Liquor
-    "set_meal" -> Icons.TwoTone.SetMeal
-    "ramen_dining" -> Icons.TwoTone.RamenDining
-    "delivery_dining" -> Icons.TwoTone.DeliveryDining
-    "dining" -> Icons.TwoTone.Restaurant
+    "restaurant" -> Icons.Filled.Restaurant
+    "fastfood" -> Icons.Filled.Fastfood
+    "local_cafe" -> Icons.Filled.LocalCafe
+    "local_bar" -> Icons.Filled.LocalBar
+    "cake" -> Icons.Filled.Cake
+    "coffee" -> Icons.Filled.Coffee
+    "free_breakfast" -> Icons.Filled.FreeBreakfast
+    "lunch_dining" -> Icons.Filled.LunchDining
+    "dinner_dining" -> Icons.Filled.DinnerDining
+    "icecream" -> Icons.Filled.Icecream
+    "bakery_dining" -> Icons.Filled.BakeryDining
+    "liquor" -> Icons.Filled.Liquor
+    "set_meal" -> Icons.Filled.SetMeal
+    "ramen_dining" -> Icons.Filled.RamenDining
+    "delivery_dining" -> Icons.Filled.DeliveryDining
+    "dining" -> Icons.Filled.Restaurant
     // 水果零食
-    "eco" -> Icons.TwoTone.Eco
-    "apple" -> Icons.TwoTone.Eco
-    "sports_cricket" -> Icons.TwoTone.SportsCricket
-    "circle" -> Icons.TwoTone.Circle
-    "bubble_chart" -> Icons.TwoTone.BubbleChart
-    "pie_chart" -> Icons.TwoTone.PieChart
-    "cookie" -> Icons.TwoTone.Cookie
-    "candy" -> Icons.TwoTone.Icecream
-    "chocolate" -> Icons.TwoTone.Cake
-    "grain" -> Icons.TwoTone.Grain
+    "eco" -> Icons.Filled.Eco
+    "apple" -> Icons.Filled.Eco
+    "sports_cricket" -> Icons.Filled.SportsCricket
+    "circle" -> Icons.Filled.Circle
+    "bubble_chart" -> Icons.Filled.BubbleChart
+    "pie_chart" -> Icons.Filled.PieChart
+    "cookie" -> Icons.Filled.Cookie
+    "candy" -> Icons.Filled.Icecream
+    "chocolate" -> Icons.Filled.Cake
+    "grain" -> Icons.Filled.Grain
     // 饮品
-    "juice" -> Icons.TwoTone.LocalCafe
-    "water_drop" -> Icons.TwoTone.WaterDrop
+    "juice" -> Icons.Filled.LocalCafe
+    "water_drop" -> Icons.Filled.WaterDrop
     // 食材
-    "kitchen" -> Icons.TwoTone.Kitchen
-    "yard" -> Icons.TwoTone.Yard
-    "blender" -> Icons.TwoTone.Blender
+    "kitchen" -> Icons.Filled.Kitchen
+    "yard" -> Icons.Filled.Yard
+    "blender" -> Icons.Filled.Blender
     // 购物
-    "shopping_cart" -> Icons.TwoTone.ShoppingCart
-    "shopping_bag" -> Icons.TwoTone.ShoppingBag
-    "storefront" -> Icons.TwoTone.Storefront
-    "watch" -> Icons.TwoTone.Watch
-    "accessibility" -> Icons.TwoTone.Accessibility
+    "shopping_cart" -> Icons.Filled.ShoppingCart
+    "shopping_bag" -> Icons.Filled.ShoppingBag
+    "storefront" -> Icons.Filled.Storefront
+    "watch" -> Icons.Filled.Watch
+    "accessibility" -> Icons.Filled.Accessibility
     // 宠物
-    "pets" -> Icons.TwoTone.Pets
-    "pet_supplies" -> Icons.TwoTone.Pets
-    "inventory_2" -> Icons.TwoTone.Inventory2
-    "medical_services" -> Icons.TwoTone.MedicalServices
-    "shower" -> Icons.TwoTone.Shower
+    "pets" -> Icons.Filled.Pets
+    "pet_supplies" -> Icons.Filled.Pets
+    "inventory_2" -> Icons.Filled.Inventory2
+    "medical_services" -> Icons.Filled.MedicalServices
+    "shower" -> Icons.Filled.Shower
     // 交通出行
-    "directions_car" -> Icons.TwoTone.DirectionsCar
-    "directions_bus" -> Icons.TwoTone.DirectionsBus
-    "directions_subway" -> Icons.TwoTone.DirectionsSubway
-    "directions_bike" -> Icons.TwoTone.DirectionsBike
-    "local_taxi" -> Icons.TwoTone.LocalTaxi
-    "local_parking" -> Icons.TwoTone.LocalParking
-    "local_gas_station" -> Icons.TwoTone.LocalGasStation
+    "directions_car" -> Icons.Filled.DirectionsCar
+    "directions_bus" -> Icons.Filled.DirectionsBus
+    "directions_subway" -> Icons.Filled.DirectionsSubway
+    "directions_bike" -> Icons.Filled.DirectionsBike
+    "local_taxi" -> Icons.Filled.LocalTaxi
+    "local_parking" -> Icons.Filled.LocalParking
+    "local_gas_station" -> Icons.Filled.LocalGasStation
     // 汽车
-    "build" -> Icons.TwoTone.Build
-    "handyman" -> Icons.TwoTone.Handyman
-    "security" -> Icons.TwoTone.Security
-    "local_car_wash" -> Icons.TwoTone.LocalCarWash
-    "report_problem" -> Icons.TwoTone.ReportProblem
+    "build" -> Icons.Filled.Build
+    "handyman" -> Icons.Filled.Handyman
+    "security" -> Icons.Filled.Security
+    "local_car_wash" -> Icons.Filled.LocalCarWash
+    "report_problem" -> Icons.Filled.ReportProblem
     // 服饰
-    "checkroom" -> Icons.TwoTone.Checkroom
-    "diamond" -> Icons.TwoTone.Diamond
-    "auto_awesome" -> Icons.TwoTone.AutoAwesome
-    "hiking" -> Icons.TwoTone.Hiking
+    "checkroom" -> Icons.Filled.Checkroom
+    "diamond" -> Icons.Filled.Diamond
+    "auto_awesome" -> Icons.Filled.AutoAwesome
+    "hiking" -> Icons.Filled.Hiking
     // 日用品
-    "local_laundry_service" -> Icons.TwoTone.LocalLaundryService
-    "receipt" -> Icons.TwoTone.Receipt
-    "cleaning_services" -> Icons.TwoTone.CleaningServices
+    "local_laundry_service" -> Icons.Filled.LocalLaundryService
+    "receipt" -> Icons.Filled.Receipt
+    "cleaning_services" -> Icons.Filled.CleaningServices
     // 教育
-    "school" -> Icons.TwoTone.School
-    "model_training" -> Icons.TwoTone.ModelTraining
-    "menu_book" -> Icons.TwoTone.MenuBook
-    "edit" -> Icons.TwoTone.Edit
-    "business_center" -> Icons.TwoTone.BusinessCenter
+    "school" -> Icons.Filled.School
+    "model_training" -> Icons.Filled.ModelTraining
+    "menu_book" -> Icons.Filled.MenuBook
+    "edit" -> Icons.Filled.Edit
+    "business_center" -> Icons.Filled.BusinessCenter
     // 投资
-    "trending_down" -> Icons.TwoTone.TrendingDown
-    "show_chart" -> Icons.TwoTone.ShowChart
-    "money_off" -> Icons.TwoTone.MoneyOff
+    "trending_down" -> Icons.Filled.TrendingDown
+    "show_chart" -> Icons.Filled.ShowChart
+    "money_off" -> Icons.Filled.MoneyOff
     // 娱乐
-    "movie" -> Icons.TwoTone.Movie
-    "mic" -> Icons.TwoTone.Mic
-    "attractions" -> Icons.TwoTone.Attractions
-    "celebration" -> Icons.TwoTone.Celebration
+    "movie" -> Icons.Filled.Movie
+    "mic" -> Icons.Filled.Mic
+    "attractions" -> Icons.Filled.Attractions
+    "celebration" -> Icons.Filled.Celebration
     // 游戏
-    "sports_esports" -> Icons.TwoTone.SportsEsports
-    "payments" -> Icons.TwoTone.Payments
-    "workspace_premium" -> Icons.TwoTone.WorkspacePremium
+    "sports_esports" -> Icons.Filled.SportsEsports
+    "payments" -> Icons.Filled.Payments
+    "workspace_premium" -> Icons.Filled.WorkspacePremium
     // 保健
-    "medication" -> Icons.TwoTone.Medication
-    "biotech" -> Icons.TwoTone.Biotech
-    "health_and_safety" -> Icons.TwoTone.HealthAndSafety
+    "medication" -> Icons.Filled.Medication
+    "biotech" -> Icons.Filled.Biotech
+    "health_and_safety" -> Icons.Filled.HealthAndSafety
     // 订阅
-    "subscriptions" -> Icons.TwoTone.Subscriptions
-    "play_circle" -> Icons.TwoTone.PlayCircle
-    "music_note" -> Icons.TwoTone.MusicNote
-    "cloud" -> Icons.TwoTone.Cloud
+    "subscriptions" -> Icons.Filled.Subscriptions
+    "play_circle" -> Icons.Filled.PlayCircle
+    "music_note" -> Icons.Filled.MusicNote
+    "cloud" -> Icons.Filled.Cloud
     // 运动
-    "fitness_center" -> Icons.TwoTone.FitnessCenter
-    "sports" -> Icons.TwoTone.Sports
-    "sports_martial_arts" -> Icons.TwoTone.SportsMartialArts
+    "fitness_center" -> Icons.Filled.FitnessCenter
+    "sports" -> Icons.Filled.Sports
+    "sports_martial_arts" -> Icons.Filled.SportsMartialArts
     // 住房居家
-    "home_work" -> Icons.TwoTone.HomeWork
-    "home" -> Icons.TwoTone.Home
-    "construction" -> Icons.TwoTone.Construction
-    "weekend" -> Icons.TwoTone.Weekend
-    "devices" -> Icons.TwoTone.Devices
-    "palette" -> Icons.TwoTone.Palette
-    "bed" -> Icons.TwoTone.Bed
+    "home_work" -> Icons.Filled.HomeWork
+    "home" -> Icons.Filled.Home
+    "construction" -> Icons.Filled.Construction
+    "weekend" -> Icons.Filled.Weekend
+    "devices" -> Icons.Filled.Devices
+    "palette" -> Icons.Filled.Palette
+    "bed" -> Icons.Filled.Bed
     // 美容
-    "face" -> Icons.TwoTone.Face
-    "face_retouching_natural" -> Icons.TwoTone.FaceRetouchingNatural
-    "content_cut" -> Icons.TwoTone.ContentCut
-    "back_hand" -> Icons.TwoTone.BackHand
+    "face" -> Icons.Filled.Face
+    "face_retouching_natural" -> Icons.Filled.FaceRetouchingNatural
+    "content_cut" -> Icons.Filled.ContentCut
+    "back_hand" -> Icons.Filled.BackHand
     // 收入分类
-    "work" -> Icons.TwoTone.Work
-    "account_balance" -> Icons.TwoTone.AccountBalance
-    "card_giftcard" -> Icons.TwoTone.CardGiftcard
-    "emoji_events" -> Icons.TwoTone.EmojiEvents
-    "star" -> Icons.TwoTone.Star
-    "schedule" -> Icons.TwoTone.Schedule
-    "access_time" -> Icons.TwoTone.AccessTime
-    "monetization_on" -> Icons.TwoTone.MonetizationOn
-    "savings" -> Icons.TwoTone.Savings
-    "military_tech" -> Icons.TwoTone.MilitaryTech
-    "flight" -> Icons.TwoTone.Flight
-    "attach_money" -> Icons.TwoTone.AttachMoney
-    "undo" -> Icons.TwoTone.Undo
-    "trending_up" -> Icons.TwoTone.TrendingUp
-    "sell" -> Icons.TwoTone.Sell
-    "favorite" -> Icons.TwoTone.Favorite
-    "child_care" -> Icons.TwoTone.ChildCare
-    "receipt_long" -> Icons.TwoTone.ReceiptLong
-    "description" -> Icons.TwoTone.Description
-    "account_balance_wallet" -> Icons.TwoTone.AccountBalanceWallet
+    "work" -> Icons.Filled.Work
+    "account_balance" -> Icons.Filled.AccountBalance
+    "card_giftcard" -> Icons.Filled.CardGiftcard
+    "emoji_events" -> Icons.Filled.EmojiEvents
+    "star" -> Icons.Filled.Star
+    "schedule" -> Icons.Filled.Schedule
+    "access_time" -> Icons.Filled.AccessTime
+    "monetization_on" -> Icons.Filled.MonetizationOn
+    "savings" -> Icons.Filled.Savings
+    "military_tech" -> Icons.Filled.MilitaryTech
+    "flight" -> Icons.Filled.Flight
+    "attach_money" -> Icons.Filled.AttachMoney
+    "undo" -> Icons.Filled.Undo
+    "trending_up" -> Icons.Filled.TrendingUp
+    "sell" -> Icons.Filled.Sell
+    "favorite" -> Icons.Filled.Favorite
+    "child_care" -> Icons.Filled.ChildCare
+    "receipt_long" -> Icons.Filled.ReceiptLong
+    "description" -> Icons.Filled.Description
+    "account_balance_wallet" -> Icons.Filled.AccountBalanceWallet
+    // 新增
+    "phone_android" -> Icons.Filled.PhoneAndroid
+    "sim_card" -> Icons.Filled.SimCard
+    "local_shipping" -> Icons.Filled.LocalShipping
+    "local_hospital" -> Icons.Filled.LocalHospital
+    "wifi" -> Icons.Filled.Wifi
+    "more_horiz" -> Icons.Filled.MoreHoriz
+    "search" -> Icons.Filled.Search
+    "person" -> Icons.Filled.Person
+    "redeem" -> Icons.Filled.Redeem
     // 兜底
-    else -> Icons.TwoTone.Category
+    else -> Icons.Filled.Category
 }
 
 /** 分类 ID → 主题色（每个分类不同颜色） */
-private fun categoryColor(id: String): Color = when (id) {
+internal fun categoryColor(id: String): Color = when (id) {
     // 支出分类
-    "dining" -> Color(0xFFFF6B6B)        // 红色 - 餐饮
-    "snacks" -> Color(0xFFFF9F43)        // 橙色 - 零食
-    "fruit" -> Color(0xFF2ED573)         // 绿色 - 水果
-    "beverage" -> Color(0xFF7C4DFF)      // 紫色 - 饮品
-    "pastry" -> Color(0xFFFF6F91)        // 粉色 - 糕点
-    "cooking" -> Color(0xFF4CAF50)       // 深绿 - 做饭食材
-    "shopping" -> Color(0xFF42A5F5)      // 蓝色 - 购物
-    "pets" -> Color(0xFFAB47BC)          // 紫色 - 宠物
-    "transport" -> Color(0xFF5C6BC0)     // 靛蓝 - 交通
-    "car" -> Color(0xFF1E88E5)           // 深蓝 - 汽车
-    "clothing" -> Color(0xFFEC407A)      // 粉红 - 服饰
-    "daily_goods" -> Color(0xFF26A69A)   // 青色 - 日用品
-    "education" -> Color(0xFF42A5F5)     // 蓝色 - 教育
-    "invest_loss" -> Color(0xFFEF5350)   // 红色 - 投资亏损
-    "entertainment" -> Color(0xFFAB47BC) // 紫色 - 娱乐
-    "game" -> Color(0xFF7E57C2)          // 深紫 - 游戏
-    "health_products" -> Color(0xFF66BB6A) // 绿色 - 保健品
-    "subscription" -> Color(0xFF29B6F6)  // 浅蓝 - 订阅服务
-    "sports" -> Color(0xFFEF5350)        // 红色 - 运动
-    "housing" -> Color(0xFF8D6E63)       // 棕色 - 住房
-    "home" -> Color(0xFFFFA726)          // 橙色 - 居家
-    "beauty" -> Color(0xFFEC407A)        // 粉红 - 美容
+    "A001" -> Color(0xFFFF6B6B)        // 红色 - 食品餐饮
+    "A002" -> Color(0xFF42A5F5)        // 蓝色 - 购物消费
+    "A003" -> Color(0xFF5C6BC0)        // 靛蓝 - 出行交通
+    "A004" -> Color(0xFF66BB6A)        // 绿色 - 健康医疗
+    "A005" -> Color(0xFFFFA726)        // 橙色 - 居家生活
+    "A006" -> Color(0xFF42A5F5)        // 蓝色 - 文化教育
+    "A007" -> Color(0xFFAB47BC)        // 紫色 - 休闲娱乐
+    "A008" -> Color(0xFFE91E63)        // 粉红 - 送礼人情
+    "A009" -> Color(0xFF9E9E9E)        // 灰色 - 其他
     // 收入分类
-    "salary" -> Color(0xFF4CAF50)        // 绿色 - 工资
-    "investment" -> Color(0xFF2196F3)    // 蓝色 - 理财
-    "red_packet" -> Color(0xFFF44336)    // 红色 - 红包
-    "bonus" -> Color(0xFFFF9800)         // 橙色 - 奖金
-    "reimbursement" -> Color(0xFF9C27B0) // 紫色 - 报销
-    "part_time" -> Color(0xFF00BCD4)     // 青色 - 兼职
-    "gift" -> Color(0xFFE91E63)          // 粉红 - 礼物
-    "interest" -> Color(0xFF4CAF50)      // 绿色 - 利息
-    "refund" -> Color(0xFFFF5722)        // 深橙 - 退款
-    "invest_income" -> Color(0xFF2196F3) // 蓝色 - 投资收益
-    "second_hand" -> Color(0xFF795548)   // 棕色 - 二手交易
-    "social_benefit" -> Color(0xFF607D8B) // 灰蓝 - 社会福利
-    "tax_refund" -> Color(0xFF009688)    // 青色 - 退税
-    "provident_fund" -> Color(0xFF3F51B5) // 靛蓝 - 公积金
+    "B001" -> Color(0xFF4CAF50)        // 绿色 - 收入
+    "B002" -> Color(0xFFFFA726)        // 橙色 - 生活费
+    "B003" -> Color(0xFF4CAF50)        // 绿色 - 工资
+    "B004" -> Color(0xFFFF9800)        // 橙色 - 奖金
+    "B005" -> Color(0xFFFFEB3B)        // 黄色 - 中奖
+    "B006" -> Color(0xFFF44336)        // 红色 - 礼金人情
     // 兜底
     else -> Color(0xFF9E9E9E)            // 灰色
 }
 
-/** 分类图标渲染（TwoTone 双色调风格） */
+/** 分类图标渲染（Filled 单色风格，使用分类主题色） */
 @Composable
 private fun CategoryIcon(
     icon: String,
     size: androidx.compose.ui.unit.Dp,
-    tint: Color
+    tint: Color = MaterialTheme.colorScheme.onSurface
 ) {
     Icon(
         imageVector = materialIcon(icon),
@@ -1939,8 +1927,7 @@ private fun SubcategoryCard(
                                 ) {
                                     CategoryIcon(
                                         icon = child.icon,
-                                        size = 20.dp,
-                                        tint = themeColor
+                                        size = 20.dp
                                     )
                                 }
                                 Spacer(Modifier.height(4.dp))

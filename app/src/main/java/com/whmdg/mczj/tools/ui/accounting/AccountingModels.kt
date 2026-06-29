@@ -27,227 +27,97 @@ data class AccountingCategoryDb(
 ) {
     companion object {
         /** 当前默认数据版本，递增此值触发重新释放 */
-        private const val CURRENT_VERSION = 2
+        private const val CURRENT_VERSION = 3
 
         fun empty() = AccountingCategoryDb()
 
-        /** 内置默认分类模板（参考 BeeCount 二级分类模式） */
+        /** 内置默认分类模板（来源于用户账单 CSV 提取） */
         fun defaultCategories(): AccountingCategoryDb {
             val expenseCategories = listOf(
-                AccountingCategory("dining", "餐饮", "restaurant", listOf(
-                    AccountingCategory("dining_breakfast", "早餐", "free_breakfast"),
-                    AccountingCategory("dining_lunch", "午餐", "lunch_dining"),
-                    AccountingCategory("dining_dinner", "晚餐", "dinner_dining"),
-                    AccountingCategory("dining_meituan", "美团", "delivery_dining"),
-                    AccountingCategory("dining_eleme", "饿了么", "delivery_dining"),
-                    AccountingCategory("dining_jd", "京东", "delivery_dining"),
-                    AccountingCategory("dining_restaurant", "餐厅", "restaurant"),
-                    AccountingCategory("dining_food", "食堂", "fastfood")
+                AccountingCategory("A001", "食品餐饮", "restaurant", listOf(
+                    AccountingCategory("A001_01", "早餐", "free_breakfast"),
+                    AccountingCategory("A001_02", "午餐", "lunch_dining"),
+                    AccountingCategory("A001_03", "晚餐", "dinner_dining"),
+                    AccountingCategory("A001_04", "休闲零食", "cookie"),
+                    AccountingCategory("A001_05", "饮料酒水", "local_cafe"),
+                    AccountingCategory("A001_06", "冰糕", "icecream")
                 )),
-                AccountingCategory("snacks", "零食", "fastfood", listOf(
-                    AccountingCategory("snacks_biscuit", "饼干", "cookie"),
-                    AccountingCategory("snacks_chips", "薯片", "ramen_dining"),
-                    AccountingCategory("snacks_candy", "糖果", "candy"),
-                    AccountingCategory("snacks_chocolate", "巧克力", "chocolate"),
-                    AccountingCategory("snacks_nuts", "坚果", "grain")
+                AccountingCategory("A002", "购物消费", "shopping_cart", listOf(
+                    AccountingCategory("A002_01", "日常家居", "shopping_cart"),
+                    AccountingCategory("A002_02", "手机数码", "devices"),
+                    AccountingCategory("A002_03", "虚拟充值", "payments"),
+                    AccountingCategory("A002_04", "宠物用品", "pets"),
+                    AccountingCategory("A002_05", "装修装饰", "construction"),
+                    AccountingCategory("A002_06", "VIP", "workspace_premium")
                 )),
-                AccountingCategory("fruit", "水果", "eco", listOf(
-                    AccountingCategory("fruit_apple", "苹果", "apple"),
-                    AccountingCategory("fruit_banana", "香蕉", "sports_cricket"),
-                    AccountingCategory("fruit_orange", "橙子", "circle"),
-                    AccountingCategory("fruit_grape", "葡萄", "bubble_chart"),
-                    AccountingCategory("fruit_watermelon", "西瓜", "pie_chart"),
-                    AccountingCategory("fruit_other", "其他", "eco")
+                AccountingCategory("A003", "出行交通", "directions_car", listOf(
+                    AccountingCategory("A003_01", "公共交通", "directions_subway"),
+                    AccountingCategory("A003_02", "打车", "local_taxi"),
+                    AccountingCategory("A003_03", "运费", "delivery_dining")
                 )),
-                AccountingCategory("beverage", "饮品", "local_cafe", listOf(
-                    AccountingCategory("beverage_milk_tea", "奶茶", "local_cafe"),
-                    AccountingCategory("beverage_coffee", "咖啡", "coffee"),
-                    AccountingCategory("beverage_juice", "果汁", "juice"),
-                    AccountingCategory("beverage_soda", "汽水", "liquor"),
-                    AccountingCategory("beverage_water", "矿泉水", "water_drop")
+                AccountingCategory("A004", "健康医疗", "local_hospital", listOf(
+                    AccountingCategory("A004_01", "买药", "medication"),
+                    AccountingCategory("A004_02", "医院", "local_hospital")
                 )),
-                AccountingCategory("pastry", "糕点", "cake", listOf(
-                    AccountingCategory("pastry_cake", "蛋糕", "cake"),
-                    AccountingCategory("pastry_bread", "面包", "bakery_dining"),
-                    AccountingCategory("pastry_dessert", "甜点", "icecream"),
-                    AccountingCategory("pastry_biscuit", "饼干", "cookie")
+                AccountingCategory("A005", "居家生活", "home", listOf(
+                    AccountingCategory("A005_01", "话费宽带", "wifi")
                 )),
-                AccountingCategory("cooking", "做饭食材", "kitchen", listOf(
-                    AccountingCategory("cooking_vegetable", "蔬菜", "yard"),
-                    AccountingCategory("cooking_meat", "肉类", "lunch_dining"),
-                    AccountingCategory("cooking_seafood", "海鲜", "set_meal"),
-                    AccountingCategory("cooking_seasoning", "调料", "blender"),
-                    AccountingCategory("cooking_grain", "粮油", "grain")
+                AccountingCategory("A006", "文化教育", "menu_book", listOf(
+                    AccountingCategory("A006_01", "学费", "school"),
+                    AccountingCategory("A006_02", "培训考试", "model_training"),
+                    AccountingCategory("A006_03", "书报杂志", "menu_book"),
+                    AccountingCategory("A006_04", "文具", "edit")
                 )),
-                AccountingCategory("shopping", "购物", "shopping_cart", listOf(
-                    AccountingCategory("shopping_clothing", "衣服", "checkroom"),
-                    AccountingCategory("shopping_shoes", "鞋子", "accessibility"),
-                    AccountingCategory("shopping_bag", "包包", "shopping_bag"),
-                    AccountingCategory("shopping_accessory", "配饰", "watch"),
-                    AccountingCategory("shopping_daily", "日用", "shopping_cart")
+                AccountingCategory("A007", "休闲娱乐", "sports_esports", listOf(
+                    AccountingCategory("A007_01", "棋牌桌游", "sports_esports")
                 )),
-                AccountingCategory("pets", "宠物", "pets", listOf(
-                    AccountingCategory("pets_food", "粮食", "pet_supplies"),
-                    AccountingCategory("pets_supplies", "用品", "inventory_2"),
-                    AccountingCategory("pets_medical", "医疗", "medical_services"),
-                    AccountingCategory("pets_grooming", "美容", "shower")
+                AccountingCategory("A008", "送礼人情", "card_giftcard", listOf(
+                    AccountingCategory("A008_01", "孝敬长辈", "favorite"),
+                    AccountingCategory("A008_02", "红包", "card_giftcard"),
+                    AccountingCategory("A008_03", "借出", "money_off")
                 )),
-                AccountingCategory("transport", "交通", "directions_car", listOf(
-                    AccountingCategory("transport_subway", "地铁", "directions_subway"),
-                    AccountingCategory("transport_bus", "公交", "directions_bus"),
-                    AccountingCategory("transport_taxi", "出租车", "local_taxi"),
-                    AccountingCategory("transport_ride", "骑行", "directions_bike"),
-                    AccountingCategory("transport_parking", "停车", "local_parking"),
-                    AccountingCategory("transport_fuel", "加油", "local_gas_station")
-                )),
-                AccountingCategory("car", "汽车", "directions_car", listOf(
-                    AccountingCategory("car_maintenance", "保养", "build"),
-                    AccountingCategory("car_repair", "维修", "handyman"),
-                    AccountingCategory("car_insurance", "保险", "security"),
-                    AccountingCategory("car_wash", "洗车", "local_car_wash"),
-                    AccountingCategory("car_fine", "罚款", "report_problem")
-                )),
-                AccountingCategory("clothing", "服饰", "checkroom", listOf(
-                    AccountingCategory("clothing_top", "上衣", "checkroom"),
-                    AccountingCategory("clothing_pants", "裤子", "diamond"),
-                    AccountingCategory("clothing_skirt", "裙子", "auto_awesome"),
-                    AccountingCategory("clothing_shoes", "鞋子", "hiking"),
-                    AccountingCategory("clothing_accessory", "配饰", "watch")
-                )),
-                AccountingCategory("daily_goods", "日用品", "local_laundry_service", listOf(
-                    AccountingCategory("daily_toiletries", "洗护", "shower"),
-                    AccountingCategory("daily_paper", "纸品", "receipt"),
-                    AccountingCategory("daily_cleaning", "清洁", "cleaning_services"),
-                    AccountingCategory("daily_kitchen", "厨具", "kitchen")
-                )),
-                AccountingCategory("education", "教育", "school", listOf(
-                    AccountingCategory("education_tuition", "学费", "school"),
-                    AccountingCategory("education_training", "培训", "model_training"),
-                    AccountingCategory("education_books", "书籍", "menu_book"),
-                    AccountingCategory("education_stationery", "文具", "edit"),
-                    AccountingCategory("education_office", "办公", "business_center")
-                )),
-                AccountingCategory("invest_loss", "投资亏损", "trending_down", listOf(
-                    AccountingCategory("invest_loss_stock", "股票", "trending_down"),
-                    AccountingCategory("invest_loss_fund", "基金", "show_chart"),
-                    AccountingCategory("invest_loss_other", "其他", "money_off")
-                )),
-                AccountingCategory("entertainment", "娱乐", "movie", listOf(
-                    AccountingCategory("entertainment_movie", "电影", "movie"),
-                    AccountingCategory("entertainment_ktv", "KTV", "mic"),
-                    AccountingCategory("entertainment_amusement", "游乐", "attractions"),
-                    AccountingCategory("entertainment_bar", "酒吧", "local_bar"),
-                    AccountingCategory("entertainment_other", "其他", "celebration")
-                )),
-                AccountingCategory("game", "游戏", "sports_esports", listOf(
-                    AccountingCategory("game_recharge", "充值", "payments"),
-                    AccountingCategory("game_equipment", "装备", "sports_esports"),
-                    AccountingCategory("game_membership", "会员", "workspace_premium")
-                )),
-                AccountingCategory("health_products", "保健品", "medication", listOf(
-                    AccountingCategory("health_vitamin", "维生素", "medication"),
-                    AccountingCategory("health_food", "食品", "biotech"),
-                    AccountingCategory("health_nutrition", "营养品", "health_and_safety")
-                )),
-                AccountingCategory("subscription", "订阅服务", "subscriptions", listOf(
-                    AccountingCategory("subscription_video", "视频", "play_circle"),
-                    AccountingCategory("subscription_music", "音乐", "music_note"),
-                    AccountingCategory("subscription_cloud", "云盘", "cloud"),
-                    AccountingCategory("subscription_other", "其他", "subscriptions")
-                )),
-                AccountingCategory("sports", "运动", "fitness_center", listOf(
-                    AccountingCategory("sports_gym", "健身", "fitness_center"),
-                    AccountingCategory("sports_equipment", "器材", "sports"),
-                    AccountingCategory("sports_course", "课程", "sports_martial_arts"),
-                    AccountingCategory("sports_outdoor", "户外", "hiking")
-                )),
-                AccountingCategory("housing", "住房", "home_work", listOf(
-                    AccountingCategory("housing_rent", "房租", "home"),
-                    AccountingCategory("housing_property", "物业", "home_work"),
-                    AccountingCategory("housing_mortgage", "房贷", "account_balance"),
-                    AccountingCategory("housing_decoration", "装修", "construction")
-                )),
-                AccountingCategory("home", "居家", "home", listOf(
-                    AccountingCategory("home_furniture", "家具", "weekend"),
-                    AccountingCategory("home_appliance", "家电", "devices"),
-                    AccountingCategory("home_decor", "装饰", "palette"),
-                    AccountingCategory("home_bedding", "床品", "bed")
-                )),
-                AccountingCategory("beauty", "美容", "face", listOf(
-                    AccountingCategory("beauty_skincare", "护肤", "face"),
-                    AccountingCategory("beauty_cosmetics", "彩妆", "face_retouching_natural"),
-                    AccountingCategory("beauty_salon", "美发", "content_cut"),
-                    AccountingCategory("beauty_nail", "美甲", "back_hand")
+                AccountingCategory("A009", "其他", "more_horiz", listOf(
+                    AccountingCategory("A009_01", "丢失", "search"),
+                    AccountingCategory("A009_02", "代买", "shopping_bag")
                 ))
             )
             val incomeCategories = listOf(
-                AccountingCategory("salary", "工资", "work", listOf(
-                    AccountingCategory("salary_basic", "基本工资", "payments"),
-                    AccountingCategory("salary_performance", "绩效", "star"),
-                    AccountingCategory("salary_year_end", "年终奖", "card_giftcard"),
-                    AccountingCategory("salary_overtime", "加班费", "access_time")
+                AccountingCategory("B001", "收入", "savings", listOf(
+                    AccountingCategory("B001_01", "中奖", "emoji_events"),
+                    AccountingCategory("B001_02", "二手闲置", "sell"),
+                    AccountingCategory("B001_03", "其他", "more_horiz"),
+                    AccountingCategory("B001_04", "兼职外快", "schedule"),
+                    AccountingCategory("B001_05", "奖金", "emoji_events"),
+                    AccountingCategory("B001_06", "报销", "receipt"),
+                    AccountingCategory("B001_07", "生活费", "home"),
+                    AccountingCategory("B001_08", "礼金人情", "card_giftcard"),
+                    AccountingCategory("B001_09", "补贴", "health_and_safety")
                 )),
-                AccountingCategory("investment", "理财", "account_balance", listOf(
-                    AccountingCategory("investment_fund", "基金", "account_balance"),
-                    AccountingCategory("investment_dividend", "分红", "trending_up"),
-                    AccountingCategory("investment_product", "理财产品", "savings"),
-                    AccountingCategory("investment_other", "其他", "monetization_on")
+                AccountingCategory("B002", "生活费", "account_balance", listOf(
+                    AccountingCategory("B002_01", "婆婆", "person"),
+                    AccountingCategory("B002_02", "爷爷", "person"),
+                    AccountingCategory("B002_03", "爸爸", "person")
                 )),
-                AccountingCategory("red_packet", "红包", "card_giftcard", listOf(
-                    AccountingCategory("red_packet_festival", "节日", "celebration"),
-                    AccountingCategory("red_packet_birthday", "生日", "cake"),
-                    AccountingCategory("red_packet_return", "回礼", "card_giftcard")
+                AccountingCategory("B003", "工资", "work", listOf(
+                    AccountingCategory("B003_01", "学校工资", "payments")
                 )),
-                AccountingCategory("bonus", "奖金", "emoji_events", listOf(
-                    AccountingCategory("bonus_year_end", "年终", "emoji_events"),
-                    AccountingCategory("bonus_quarterly", "季度", "star"),
-                    AccountingCategory("bonus_project", "项目", "workspace_premium"),
-                    AccountingCategory("bonus_other", "其他", "military_tech")
+                AccountingCategory("B004", "奖金", "emoji_events", listOf(
+                    AccountingCategory("B004_01", "快手极速版", "phone_android"),
+                    AccountingCategory("B004_02", "抖音提现", "phone_android"),
+                    AccountingCategory("B004_03", "拼多多", "shopping_cart")
                 )),
-                AccountingCategory("reimbursement", "报销", "receipt", listOf(
-                    AccountingCategory("reimbursement_travel", "差旅", "flight"),
-                    AccountingCategory("reimbursement_meal", "餐饮", "restaurant"),
-                    AccountingCategory("reimbursement_other", "其他", "receipt")
+                AccountingCategory("B005", "中奖", "emoji_events", listOf(
+                    AccountingCategory("B005_01", "捡钱", "attach_money")
                 )),
-                AccountingCategory("part_time", "兼职", "schedule", listOf(
-                    AccountingCategory("part_time_income", "收入", "schedule"),
-                    AccountingCategory("part_time_extra", "外快", "attach_money")
-                )),
-                AccountingCategory("gift", "礼物", "card_giftcard", listOf(
-                    AccountingCategory("gift_wedding", "婚礼", "favorite"),
-                    AccountingCategory("gift_birthday", "生日", "cake"),
-                    AccountingCategory("gift_other", "其他", "card_giftcard")
-                )),
-                AccountingCategory("interest", "利息", "monetization_on", listOf(
-                    AccountingCategory("interest_bank", "银行", "account_balance"),
-                    AccountingCategory("interest_other", "其他", "monetization_on")
-                )),
-                AccountingCategory("refund", "退款", "undo", listOf(
-                    AccountingCategory("refund_shopping", "购物", "shopping_cart"),
-                    AccountingCategory("refund_service", "服务", "build"),
-                    AccountingCategory("refund_other", "其他", "undo")
-                )),
-                AccountingCategory("invest_income", "投资收益", "trending_up", listOf(
-                    AccountingCategory("invest_income_stock", "股票", "trending_up"),
-                    AccountingCategory("invest_income_fund", "基金", "account_balance"),
-                    AccountingCategory("invest_income_other", "其他", "attach_money")
-                )),
-                AccountingCategory("second_hand", "二手交易", "sell", listOf(
-                    AccountingCategory("second_hand_idle", "闲置", "sell"),
-                    AccountingCategory("second_hand_goods", "商品", "storefront")
-                )),
-                AccountingCategory("social_benefit", "社会福利", "health_and_safety", listOf(
-                    AccountingCategory("social_benefit_unemployment", "失业金", "health_and_safety"),
-                    AccountingCategory("social_benefit_maternity", "生育金", "child_care"),
-                    AccountingCategory("social_benefit_other", "其他", "favorite")
-                )),
-                AccountingCategory("tax_refund", "退税", "receipt_long", listOf(
-                    AccountingCategory("tax_refund_personal", "个人", "receipt_long"),
-                    AccountingCategory("tax_refund_other", "其他", "description")
-                )),
-                AccountingCategory("provident_fund", "公积金", "account_balance_wallet", listOf(
-                    AccountingCategory("provident_fund_withdrawal", "提取", "account_balance_wallet"),
-                    AccountingCategory("provident_fund_interest", "利息", "savings")
+                AccountingCategory("B006", "礼金人情", "redeem", listOf(
+                    AccountingCategory("B006_01", "亲人红包", "card_giftcard"),
+                    AccountingCategory("B006_02", "外公红包", "card_giftcard"),
+                    AccountingCategory("B006_03", "妈妈红包", "card_giftcard"),
+                    AccountingCategory("B006_04", "婆婆红包", "card_giftcard"),
+                    AccountingCategory("B006_05", "朋友红包", "card_giftcard"),
+                    AccountingCategory("B006_06", "未知红包", "card_giftcard"),
+                    AccountingCategory("B006_07", "爷爷红包", "card_giftcard"),
+                    AccountingCategory("B006_08", "爸爸红包", "card_giftcard")
                 ))
             )
             val pages = mapOf(
