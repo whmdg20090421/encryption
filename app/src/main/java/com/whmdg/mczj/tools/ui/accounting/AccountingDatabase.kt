@@ -20,7 +20,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 17
+        private const val DB_VERSION = 18
         private const val TAG = "AccountingDatabase"
 
         @Volatile
