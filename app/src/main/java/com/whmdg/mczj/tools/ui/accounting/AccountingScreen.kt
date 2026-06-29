@@ -67,6 +67,12 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
     var bookList by remember { mutableStateOf(AccountingRepository.getBookList(context)) }
     var currentBookName by remember { mutableStateOf(AccountingRepository.getLastBookName(context)) }
     var accountRefreshTrigger by remember { mutableIntStateOf(0) }
+    var isInSubPage by remember { mutableStateOf(false) }
+
+    // 切换标签时重置子页面状态
+    LaunchedEffect(selectedTab) {
+        if (selectedTab != 4) isInSubPage = false
+    }
 
     // 判断是否在顶部：第一个 item 可见且 offset 为 0
     val isAtTop by remember {
@@ -128,7 +134,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
         ) {
             // 内容区：根据 selectedTab 显示不同内容
             if (selectedTab == 4) {
-                MinePageContent(bookName = currentBookName)
+                MinePageContent(bookName = currentBookName, onSubPageChange = { isInSubPage = it })
             } else if (selectedTab == 0) {
                 // 首页：记录列表
                 RecordListContent(
@@ -511,8 +517,8 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
         }
     }
 
-    // 底部导航栏（悬浮在内容上面）
-    Box(
+    // 底部导航栏（悬浮在内容上面，子页面时隐藏）
+    if (!isInSubPage) Box(
         modifier = Modifier
             .fillMaxWidth()
             .align(Alignment.BottomCenter)
@@ -1314,10 +1320,15 @@ private fun MineHeaderCard(bookName: String) {
 /** "我的"页面内容：个性化设置 → 分类管理 → 分类图标 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MinePageContent(bookName: String = "") {
+private fun MinePageContent(bookName: String = "", onSubPageChange: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
     // 页面栈：emptyList = 主页面，listOf("个性化设置") = 个性化页面，listOf("个性化设置","分类管理") = 分类管理页
     var pageStack by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    // 通知父组件是否在子页面
+    LaunchedEffect(pageStack) {
+        onSubPageChange(pageStack.isNotEmpty())
+    }
 
     // 返回手势处理：在子页面时返回到"我的"主页面
     BackHandler(enabled = pageStack.isNotEmpty()) {
