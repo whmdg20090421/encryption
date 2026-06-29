@@ -1932,11 +1932,11 @@ private fun RecordListContent(
             .toSortedMap(compareByDescending { it })
     }
 
-    // 分离异常账单（分类 ID 含 AUTO）
+    // 分离异常账单（分类中文名含 AUTO）
     val anomalyRecords = remember(groupedRecords) {
         groupedRecords.values.flatten().filter { record ->
-            (record.categoryId?.contains("AUTO", ignoreCase = true) == true) ||
-            (record.subcategoryId?.contains("AUTO", ignoreCase = true) == true)
+            record.categoryName.contains("AUTO", ignoreCase = true) ||
+            (record.subcategoryName?.contains("AUTO", ignoreCase = true) == true)
         }.sortedByDescending { it.happenedAt }
     }
     val anomalyIds = remember(anomalyRecords) { anomalyRecords.map { it.id }.toSet() }
@@ -2113,8 +2113,8 @@ private fun RecordListContent(
                             anomalyRecords.forEachIndexed { index, record ->
                                 val catInfo = categoryLookup[record.categoryId]
                                 val subInfo = record.subcategoryId?.let { categoryLookup[it] }
-                                val parentName = catInfo?.first ?: record.categoryId ?: ""
-                                val childName = subInfo?.first
+                                val parentName = record.categoryName.ifEmpty { catInfo?.first ?: record.categoryId }
+                                val childName = record.subcategoryName ?: subInfo?.first
                                 val displayName = if (childName != null) "$parentName-$childName" else parentName
                                 val icon = subInfo?.second ?: catInfo?.second ?: "category"
                                 val isExpense = record.type == "支出" || record.type == "债务"
@@ -2260,8 +2260,8 @@ private fun RecordListContent(
                             records.forEachIndexed { index, record ->
                                 val catInfo = categoryLookup[record.categoryId]
                                 val subInfo = record.subcategoryId?.let { categoryLookup[it] }
-                                val parentName = catInfo?.first ?: record.categoryId
-                                val childName = subInfo?.first
+                                val parentName = record.categoryName.ifEmpty { catInfo?.first ?: record.categoryId }
+                                val childName = record.subcategoryName ?: subInfo?.first
                                 val displayName = if (childName != null) "$parentName-$childName" else parentName
                                 val icon = subInfo?.second ?: catInfo?.second ?: "category"
                                 val isExpense = record.type == "支出" || record.type == "债务"
@@ -2703,8 +2703,8 @@ fun AssetDetailScreen(accountId: String, onBack: () -> Unit, onNavigate: (Screen
                                     dayRecords.forEachIndexed { index, record ->
                                         val catInfo = categoryLookup[record.categoryId]
                                         val subInfo = record.subcategoryId?.let { categoryLookup[it] }
-                                        val parentName = catInfo?.first ?: record.categoryId
-                                        val childName = subInfo?.first
+                                        val parentName = record.categoryName.ifEmpty { catInfo?.first ?: record.categoryId }
+                                        val childName = record.subcategoryName ?: subInfo?.first
                                         val displayName = if (childName != null) "$parentName-$childName" else parentName
                                         val icon = subInfo?.second ?: catInfo?.second ?: "category"
                                         val isExpense = record.type == "支出" || record.type == "债务"

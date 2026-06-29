@@ -20,7 +20,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 16
+        private const val DB_VERSION = 17
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -83,6 +83,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                 amount           TEXT NOT NULL,
                 category_id      TEXT NOT NULL,
                 subcategory_id   TEXT,
+                category_name    TEXT DEFAULT '',
+                subcategory_name TEXT,
                 note             TEXT DEFAULT '',
                 happened_at      INTEGER NOT NULL,
                 account_id       TEXT,
@@ -211,6 +213,13 @@ internal class AccountingDatabase private constructor(context: Context) :
             db.execSQL("ALTER TABLE accounts ADD COLUMN current_balance REAL NOT NULL DEFAULT 0")
             // 用 initial_amount + income - expense 初始化当前余额
             db.execSQL("UPDATE accounts SET current_balance = initial_amount + income - expense")
+        }
+        if (oldVersion < 17) {
+            db.execSQL("ALTER TABLE records ADD COLUMN category_name TEXT DEFAULT ''")
+            db.execSQL("ALTER TABLE records ADD COLUMN subcategory_name TEXT")
+            // 从 categories 表填充中文名
+            db.execSQL("UPDATE records SET category_name = (SELECT name FROM categories WHERE id = records.category_id)")
+            db.execSQL("UPDATE records SET subcategory_name = (SELECT name FROM categories WHERE id = records.subcategory_id)")
         }
     }
 
@@ -441,7 +450,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAllRecords(): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name FROM records ORDER BY happened_at DESC",
             null
         )
         try {
@@ -457,7 +466,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByBook(bookName: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records WHERE book_name = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name FROM records WHERE book_name = ? ORDER BY happened_at DESC",
             arrayOf(bookName)
         )
         try {
@@ -478,6 +487,8 @@ internal class AccountingDatabase private constructor(context: Context) :
             put("amount", r.amount)
             put("category_id", r.categoryId)
             if (r.subcategoryId != null) put("subcategory_id", r.subcategoryId) else putNull("subcategory_id")
+            put("category_name", r.categoryName)
+            if (r.subcategoryName != null) put("subcategory_name", r.subcategoryName) else putNull("subcategory_name")
             put("note", r.note)
             put("happened_at", r.happenedAt)
             if (r.accountId != null) put("account_id", r.accountId) else putNull("account_id")
@@ -530,7 +541,9 @@ internal class AccountingDatabase private constructor(context: Context) :
             refundAmount = c.getDouble(19),
             address = c.getString(20) ?: "",
             createdAt = if (c.isNull(21)) null else c.getLong(21),
-            updatedAt = if (c.isNull(22)) null else c.getLong(22)
+            updatedAt = if (c.isNull(22)) null else c.getLong(22),
+            categoryName = c.getString(23) ?: "",
+            subcategoryName = c.getString(24)
         )
     }
 
@@ -541,7 +554,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByReimbursementAccount(reimbAccountId: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
             arrayOf(reimbAccountId)
         )
         try {
@@ -820,7 +833,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         // records
         val records = mutableListOf<ExportRecord>()
         val recCursor = db.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name FROM records",
             null
         )
         try {
@@ -1114,6 +1127,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                     put("category_id", catNameToId[catName] ?: catName)
                     val subId = catNameToId[subCatName] ?: subCatName
                     if (subId.isNotEmpty()) put("subcategory_id", subId) else putNull("subcategory_id")
+                    put("category_name", catName)
+                    if (subCatName.isNotEmpty()) put("subcategory_name", subCatName) else putNull("subcategory_name")
                     put("note", note)
                     put("happened_at", happenedAt)
                     val aId = accNameToId[accName]

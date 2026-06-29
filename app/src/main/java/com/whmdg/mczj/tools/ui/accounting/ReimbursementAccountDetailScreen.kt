@@ -229,8 +229,8 @@ fun ReimbursementAccountDetailScreen(accountId: String, onBack: () -> Unit, onNa
                                     dayRecords.forEachIndexed { index, record ->
                                         val catInfo = categoryLookup[record.categoryId]
                                         val subInfo = record.subcategoryId?.let { categoryLookup[it] }
-                                        val parentName = catInfo?.first ?: record.categoryId
-                                        val childName = subInfo?.first
+                                        val parentName = record.categoryName.ifEmpty { catInfo?.first ?: record.categoryId }
+                                        val childName = record.subcategoryName ?: subInfo?.first
                                         val displayName = if (childName != null) "$parentName-$childName" else parentName
                                         val icon = subInfo?.second ?: catInfo?.second ?: "category"
                                         val amountDisplay = String.format("%.2f", record.amount.toDoubleOrNull() ?: 0.0)

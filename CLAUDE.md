@@ -185,9 +185,16 @@ app/src/main/java/com/whmdg/mczj/tools/
     ├── WebDavEditDialog.kt            # WebDAV 服务器编辑对话框
     ├── FileOperationDialogs.kt        # 文件操作冲突/错误确认弹窗
     ├── accounting/                    # 记账本模块
-    │   ├── AccountingScreen.kt        # 记账本首页（账本列表 + 底部导航 + 顶部滚动交互）
-    │   ├── AddAccountingScreen.kt     # 记一笔（收支类型 + 金额键盘 + 日期时间齿轮 + 分类选择）
-    │   └── AccountingModels.kt        # 分类数据模型（JSON 持久化 + 首次释放 + 二级分类预留）
+    │   ├── AccountingScreen.kt        # 记账本首页（5 Tab：首页/资产/统计/日历/我的）
+    │   ├── AccountingDetailScreen.kt  # 账单详情（报销操作 + 编辑入口）
+    │   ├── AddAccountingScreen.kt     # 记一笔（收支类型 + 金额键盘 + 日期时间齿轮 + 分类选择 + 附件）
+    │   ├── AccountingModels.kt        # 数据模型（Record/Category/Account/Attachment + 账户类型配置）
+    │   ├── AccountingDatabase.kt      # SQLite 数据库（5 表：settings/categories/records/accounts/attachment_trash）
+    │   ├── AccountingRepository.kt    # 数据访问层（Repository 模式，禁止外部直接使用 Database）
+    │   ├── CsvImportScreen.kt         # CSV 导入流程（字段映射→账户映射→分类映射→确认）
+    │   ├── NotePredictor.kt           # 备注预测器（MLP + Adam + 对比学习，持久化到 ai_model/）
+    │   ├── ReimbursementAccountScreen.kt  # 报销账户列表（分组 + 汇总）
+    │   └── AddReimbursementAccountScreen.kt # 添加报销账户
     ├── components/
     │   ├── GlowCard.kt               # 青色光晕边框卡片组件
     │   ├── ApkInfoDialog.kt          # APK 信息弹窗
@@ -243,7 +250,10 @@ third_party/argon2/                    # 内嵌 Argon2 实现（供 JNI 直接�
   ├── 日记 (Diary)
   │     └── 笔记本详情 (DiaryBookDetail)  ← 日期时间线
   ├── 记账本 (Accounting)
-  │     └── 记一笔 (AddAccounting)         ← 金额键盘 + 日期时间齿轮选择器
+  │     ├── 记一笔 (AddAccounting)         ← 金额键盘 + 日期时间齿轮选择器
+  │     ├── 账单详情 (AccountingDetail)    ← 报销操作
+  │     ├── 报销账户 (ReimbursementAccount)
+  │     └── 添加报销账户 (AddReimbursementAccount)
   ├── WiFi (Wifi)
   ├── 批量下载 (BatchDownloader)
   ├── FA 下载 (FADownloader / FALogin)
@@ -422,13 +432,70 @@ CompressService                         # 压缩/解压服务
 
 ### 记账本模块
 
-- 数据持久化：JSON 文件存储于 `AppDataPaths.accounting()`（`AccountingCategoryDb` 模型，参考 `DiaryDb` 模式）
-- 导航：`Screen.Accounting`（首页）→ `Screen.AddAccounting(bookName)`（记一笔）
-- 首页顶部交互：`LazyListState` 控制背景 alpha（顶部=0，滚动=1），按钮层始终可见
-- 金额输入：自定义计算器键盘（含运算自动求值），水平滑动查看完整金额
-- 日期时间选择：`TimeWheel` 无限循环齿轮（`totalItems = size * 10000`），`snapshotFlow` 检测滚动停止自动吸中，点击直接居中
-- 分类系统：首次安装释放默认模板到 JSON → UI 动态读取，支持页面→类型→分类三级结构，`children` 字段预留二级分类
-- 一级分类行：50dp 圆角正方体 + 25dp 金色图标，白底黑框/选中青色，跟随记账类型（支出/收入/转账/债务）动态切换
+**存储架构**：SQLite（`AccountingDatabase`，`SQLiteOpenHelper`，当前 DB_VERSION=14），DB 文件存储于 `AppDataPaths.accounting()/accounting.db`。历史 JSON 文件和 SharedPreferences 数据在首次启动时自动迁移到 SQLite 后删除。
+
+**数据访问层**：所有数据库操作必须通过 `AccountingRepository`（单例 Repository 模式），禁止外部代码直接使用 `AccountingDatabase`。
+
+**五张表**：
+| 表 | 用途 | 关键字段 |
+|---|---|---|
+| `settings` | 键值设置（分类图标色、账本列表、报销统计等） | key/value |
+| `categories` | 分类（一级+二级，parent_id 树形） | id, name, icon, page, type, parent_id, sort_order |
+| `records` | 记账记录 | id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before/off/after, reimbursement_account_id, attachments, exclude_from_stats/budget, reimburse_status/amount/after_amount, refund_amount, address, created_at, updated_at |
+| `accounts` | 资金/估值账户 | id, name, type, category(tradable/valuation), initial_amount, note |
+| `attachment_trash` | 附件回收站（软删除） | id, attachment_json, original_record_id, original_record_status, deleted_at |
+
+**记录模型核心字段**（`AccountingRecord`）：
+- `amount` 保留字符串精度，`happenedAt` 为毫秒时间戳
+- `type`：支出/收入/转账/债务
+- 报销：`reimbursementAccountId` 关联报销账户，`reimburseStatus` 标记是否已报销，`reimburseAmount` 报销金额，`reimburseAfterAmount` 报销后金额（用于余额计算）
+- 优惠：`discountBefore`/`discountOff`/`discountAfter` 三值联动（BigDecimal 精确运算）
+- 附件：`attachments` JSON 数组，文件本体存储于 `AppDataPaths.accountingAttachments()`
+- 属性标志：`excludeFromStats`（不计入收支）、`excludeFromBudget`（不计入预算）
+
+**导航结构**：
+```
+Screen.Accounting（首页，含5个底部Tab）
+  ├── Tab 0: 首页 — 记录列表 + 月度统计 + 记账本切换
+  ├── Tab 1: 资产 — 账户卡片 + 报销/债务/理财汇总
+  ├── Tab 2: 统计（占位）
+  ├── Tab 3: 日历（占位）
+  └── Tab 4: 我的 — 头像/签名 + 个性化设置 + 数据管理（JSON/CSV 导入导出）
+Screen.AccountingDetail(bookName, recordId) — 账单详情 + 报销操作
+Screen.AddAccounting(bookName, recordId?) — 记一笔 / 编辑
+Screen.ReimbursementAccount — 报销账户列表（分组+汇总）
+Screen.AddReimbursementAccount — 添加报销账户
+```
+
+**分类系统**：
+- 内置默认模板（`AccountingCategoryDb.defaultCategories()`）：22 个支出一级分类 + 14 个收入一级分类，每个含二级子分类
+- 首次安装释放到 SQLite，版本号 `CURRENT_VERSION=2` 控制重新释放
+- 自定义分类：`createParentCategory()` / `createChildCategory()` 动态创建
+- CSV 导入时自动创建缺失分类
+
+**记账本管理**：记账本列表存储在 `settings` 表（JSON 数组），默认"默认记账本"，支持多账本切换。上次使用的账本名称持久化。
+
+**报销账户**：`ReimbursementAccountEntity` 序列化存储在 `settings` 表的 `reimbursement_accounts` 键中。支持分组（groupName）、记账本范围（allBooks/selectedBooks）。报销统计（可报销/已报销总额）在导入和报销操作后全量重算。
+
+**CSV 导入流程**（`CsvImportScreen`）：
+1. 解析 + 多行引号字段合并（`mergeCsvLines`）
+2. 自动检测列映射（`HEADER_ALIASES` 支持中英文别名）
+3. "收入"/"支出"分类名归一化（`normalizeCsvText`）
+4. 账户映射（匹配已有账户 or 创建新账户）
+5. 分类映射（精确匹配 + 子串模糊匹配，歧义时放弃）
+6. 追加/替换模式 + 导入后重算余额和报销统计
+
+**备注预测器**（`NotePredictor`）：基于小型 MLP（输入 119 维 → 隐藏层 32/16 → 16 维 embedding），使用 Adam 优化器对比学习，持久化权重和 embedding 到 `ai_model/` 目录。输入特征：一级分类 one-hot + 二级分类 one-hot + 金额 + sin/cos(hour) + 备注字符 bag-of-words。
+
+**首页交互**：`LazyListState` 控制背景 alpha（顶部=0，滚动=1），顶部按钮层始终可见。返回手势：非首页 Tab→回首页，首页 Tab→双击退出。
+
+**金额输入**：自定义计算器键盘（含运算自动求值），水平滑动查看完整金额。
+
+**日期时间选择**：`TimeWheel` 无限循环齿轮（`totalItems = size * 10000`），`snapshotFlow` 检测滚动停止自动吸中，点击直接居中。
+
+**记账天数**：增量维护（插入新日期 +1，删除最后一条 -1），存储在 `settings` 表。
+
+**附件系统**：文件存储于 `AppDataPaths.accountingAttachments()`，支持从相册选取和拍照。删除附件时进入回收站（`attachment_trash` 表），支持恢复和永久清理。账单删除时级联更新回收站状态。
 
 ### Xposed 模块
 

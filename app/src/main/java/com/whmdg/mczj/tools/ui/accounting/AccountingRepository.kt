@@ -661,7 +661,7 @@ object AccountingRepository {
     fun repairCategoryLabels(context: Context): Int {
         val db = getDb(context).writableDatabase
         val cursor = db.rawQuery(
-            "SELECT id, category_id, subcategory_id FROM records WHERE category_id LIKE '%AUTO%' OR subcategory_id LIKE '%AUTO%'",
+            "SELECT id, category_name, subcategory_name FROM records WHERE category_name LIKE '%AUTO%' OR subcategory_name LIKE '%AUTO%'",
             null
         )
         val records = mutableListOf<Triple<String, String?, String?>>()
@@ -674,17 +674,17 @@ object AccountingRepository {
         }
         if (records.isEmpty()) return 0
 
-        // 收集有效的 (categoryId, subcategoryId) 配对
-        val validPairs = mutableMapOf<String, String>()       // subCatId -> catId
-        val validPairsRev = mutableMapOf<String, String>()    // catId -> subCatId
-        val allCursor = db.rawQuery("SELECT category_id, subcategory_id FROM records", null)
+        // 收集有效的 (categoryName, subcategoryName) 配对
+        val validPairs = mutableMapOf<String, String>()       // subCatName -> catName
+        val validPairsRev = mutableMapOf<String, String>()    // catName -> subCatName
+        val allCursor = db.rawQuery("SELECT category_name, subcategory_name FROM records", null)
         try {
             while (allCursor.moveToNext()) {
-                val cId = allCursor.getString(0) ?: continue
-                val sId = allCursor.getString(1) ?: continue
-                if (!cId.contains("AUTO", ignoreCase = true) && !sId.contains("AUTO", ignoreCase = true)) {
-                    validPairs.getOrPut(sId) { cId }
-                    validPairsRev.getOrPut(cId) { sId }
+                val cName = allCursor.getString(0) ?: continue
+                val sName = allCursor.getString(1) ?: continue
+                if (!cName.contains("AUTO", ignoreCase = true) && !sName.contains("AUTO", ignoreCase = true)) {
+                    validPairs.getOrPut(sName) { cName }
+                    validPairsRev.getOrPut(cName) { sName }
                 }
             }
         } finally {
@@ -692,21 +692,21 @@ object AccountingRepository {
         }
 
         var fixed = 0
-        for ((id, catId, subCatId) in records) {
-            val catBad = catId != null && catId.contains("AUTO", ignoreCase = true)
-            val subBad = subCatId != null && subCatId.contains("AUTO", ignoreCase = true)
-            val newCatId: String? = when {
-                catBad && !subBad -> subCatId?.let { validPairs[it] }
+        for ((id, catName, subCatName) in records) {
+            val catBad = catName != null && catName.contains("AUTO", ignoreCase = true)
+            val subBad = subCatName != null && subCatName.contains("AUTO", ignoreCase = true)
+            val newCatName: String? = when {
+                catBad && !subBad -> subCatName?.let { validPairs[it] }
                 else -> null
             }
-            val newSubId: String? = when {
-                subBad && !catBad -> catId?.let { validPairsRev[it] }
+            val newSubName: String? = when {
+                subBad && !catBad -> catName?.let { validPairsRev[it] }
                 else -> null
             }
-            if (newCatId != null || newSubId != null) {
+            if (newCatName != null || newSubName != null) {
                 db.execSQL(
-                    "UPDATE records SET category_id = COALESCE(?, category_id), subcategory_id = ? WHERE id = ?",
-                    arrayOf(newCatId, if (newSubId != null) newSubId else subCatId, id)
+                    "UPDATE records SET category_name = COALESCE(?, category_name), subcategory_name = ? WHERE id = ?",
+                    arrayOf(newCatName, if (newSubName != null) newSubName else subCatName, id)
                 )
                 fixed++
             }

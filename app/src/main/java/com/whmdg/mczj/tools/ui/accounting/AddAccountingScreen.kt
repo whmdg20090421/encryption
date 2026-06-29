@@ -302,13 +302,16 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
         cal.set(selectedYear, selectedMonth, selectedDay, selectedHour, selectedMinute, 0)
         cal.set(Calendar.MILLISECOND, 0)
         val now = System.currentTimeMillis()
+        val catIdForRecord = parentId ?: selectedCategory!!
         val record = AccountingRecord(
             id = editingRecord?.id ?: java.util.UUID.randomUUID().toString(),
             bookName = bookName,
             type = currentType,
             amount = finalAmount,
-            categoryId = parentId ?: selectedCategory!!,
+            categoryId = catIdForRecord,
             subcategoryId = subId,
+            categoryName = categoryLookup[catIdForRecord]?.first ?: "",
+            subcategoryName = subId?.let { categoryLookup[it]?.first },
             note = note,
             happenedAt = cal.timeInMillis,
             accountId = selectedAccountId,
