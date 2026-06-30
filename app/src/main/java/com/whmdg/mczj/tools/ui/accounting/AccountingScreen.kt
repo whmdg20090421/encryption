@@ -1701,7 +1701,6 @@ private fun StatisticsTabContent() {
                                 }
                             }
                         }
-                        }
                     }
                 }
             }
