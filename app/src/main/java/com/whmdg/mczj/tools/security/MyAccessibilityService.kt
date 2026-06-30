@@ -29,11 +29,6 @@ class MyAccessibilityService : AccessibilityService() {
         )
     }
 
-    /** 最近一次检测到的前台应用包名 */
-    @Volatile
-    var topPackage: String? = null
-        private set
-
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -44,14 +39,7 @@ class MyAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val pkg = event.packageName?.toString() ?: return
-            if (pkg != packageName && pkg !in SYSTEM_PACKAGES) {
-                topPackage = pkg
-            }
-        }
-    }
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
     override fun onInterrupt() {}
 
@@ -104,6 +92,29 @@ class MyAccessibilityService : AccessibilityService() {
             }
         }
         return null
+    }
+
+    /** 窗口信息 */
+    data class WindowInfo(
+        val packageName: String,
+        val bounds: Rect,
+        val type: Int
+    )
+
+    /** 获取当前屏幕所有可见窗口的信息 */
+    fun getAllWindowsInfo(): List<WindowInfo> {
+        val allWindows = windows ?: return emptyList()
+        return allWindows.mapNotNull { window ->
+            val root = window.root ?: return@mapNotNull null
+            val pkg = root.packageName?.toString() ?: return@mapNotNull null
+            val bounds = Rect()
+            window.getBoundsInScreen(bounds)
+            if (bounds.width() > 0 && bounds.height() > 0) {
+                WindowInfo(pkg, bounds, window.type)
+            } else {
+                null
+            }
+        }
     }
 
     private fun traverseNode(node: AccessibilityNodeInfo, sb: StringBuilder) {

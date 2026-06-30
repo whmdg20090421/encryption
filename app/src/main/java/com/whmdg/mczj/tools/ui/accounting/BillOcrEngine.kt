@@ -30,7 +30,7 @@ object BillOcrEngine {
             return RecognizeResult(null, "未获取到页面文字")
         }
 
-        val pkg = service.topPackage ?: service.getTopPackageFromWindow()
+        val pkg = service.getTopPackageFromWindow()
         if (pkg == null) {
             return RecognizeResult(null, "未检测到前台应用")
         }

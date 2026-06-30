@@ -5,6 +5,9 @@ import android.animation.ObjectAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
@@ -252,6 +255,15 @@ object OcrFloatingWindow {
             LinearLayout.LayoutParams.MATCH_PARENT, buttonHeight
         ))
 
+        // UI展示按钮
+        val uiBtn = createButton(context, "UI展示", density) {
+            hideMenu()
+            showAllWindowsVisualization(context, bubble, density)
+        }
+        menu.addView(uiBtn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, buttonHeight
+        ).apply { topMargin = (6 * density).toInt() })
+
         // 计算菜单位置（气泡下方，自适应屏幕边界）
         val screenHeight = context.resources.displayMetrics.heightPixels
         val menuY = bubbleParams.y + bubbleParams.height + (8 * density).toInt()
@@ -321,8 +333,7 @@ object OcrFloatingWindow {
             }
 
             // 2. 在截图后立即获取包名并检测（动画前）
-            val topPkg = service.topPackage ?: service.getTopPackageFromWindow()
-            var pkg = topPkg
+            var pkg = service.getTopPackageFromWindow()
             var searchMode = false
             var croppedScreenshot: Bitmap? = null
 
@@ -588,6 +599,131 @@ object OcrFloatingWindow {
             menuView = menu
             state = State.RESULT
         } catch (_: Exception) {}
+    }
+
+    // ── UI 窗口可视化 ──
+
+    private fun showAllWindowsVisualization(
+        context: Context,
+        bubble: FrameLayout,
+        density: Float
+    ) {
+        val service = MyAccessibilityService.instance
+        if (service == null) {
+            showResult(context, bubble, density, null, "无障碍服务未运行", null)
+            return
+        }
+
+        state = State.LOADING
+
+        scope?.launch {
+            // 1. 截图
+            val screenshot = withContext(Dispatchers.IO) {
+                service.takeScreenshot()?.let {
+                    with(service) { it.toSoftwareBitmap() }
+                }
+            }
+            if (screenshot == null) {
+                showResult(context, bubble, density, null, "截图失败", null)
+                return@launch
+            }
+
+            // 2. 获取所有窗口信息
+            val windowsInfo = service.getAllWindowsInfo()
+
+            // 3. 在截图上绘制窗口边框和包名
+            val annotated = screenshot.copy(Bitmap.Config.ARGB_8888, true)
+            screenshot.recycle()
+
+            val canvas = Canvas(annotated)
+            val borderPaint = Paint().apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 4f * density
+            }
+            val bgPaint = Paint().apply {
+                style = Paint.Style.FILL
+                color = Color.argb(160, 0, 0, 0)
+            }
+            val textPaint = Paint().apply {
+                color = Color.WHITE
+                textSize = 12f * density
+                isAntiAlias = true
+            }
+
+            // 不同窗口用不同颜色
+            val colors = intArrayOf(
+                Color.rgb(255, 87, 34),   // 橙红
+                Color.rgb(33, 150, 243),  // 蓝色
+                Color.rgb(76, 175, 80),   // 绿色
+                Color.rgb(156, 39, 176),  // 紫色
+                Color.rgb(255, 193, 7),   // 黄色
+                Color.rgb(0, 188, 212),   // 青色
+            )
+
+            for ((index, info) in windowsInfo.withIndex()) {
+                val color = colors[index % colors.size]
+                borderPaint.color = color
+
+                val b = info.bounds
+                // 画边框
+                canvas.drawRect(b.left.toFloat(), b.top.toFloat(),
+                    b.right.toFloat(), b.bottom.toFloat(), borderPaint)
+
+                // 右下角标签背景
+                val label = info.packageName
+                val textWidth = textPaint.measureText(label)
+                val textHeight = textPaint.textSize
+                val labelPadding = 4f * density
+                val labelLeft = b.right - textWidth - labelPadding * 2
+                val labelTop = b.bottom - textHeight - labelPadding * 2
+                canvas.drawRect(labelLeft, labelTop,
+                    b.right.toFloat(), b.bottom.toFloat(), bgPaint)
+
+                // 右下角包名文字
+                textPaint.color = color
+                canvas.drawText(label, b.right - textWidth - labelPadding,
+                    b.bottom - labelPadding, textPaint)
+            }
+
+            // 4. 显示全屏结果图
+            val wm = windowManager ?: return@launch
+            val overlay = FrameLayout(context)
+            val imageView = ImageView(context).apply {
+                setImageBitmap(annotated)
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            }
+            overlay.addView(imageView, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+
+            // 点击关闭
+            overlay.setOnClickListener {
+                imageView.setImageDrawable(null)
+                annotated.recycle()
+                try { wm.removeView(overlay) } catch (_: Exception) {}
+                animationView = null
+                state = State.BUBBLE
+            }
+
+            val overlayParams = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+            }
+
+            try {
+                wm.addView(overlay, overlayParams)
+                animationView = overlay
+                state = State.RESULT
+            } catch (_: Exception) {
+                annotated.recycle()
+            }
+        }
     }
 
     // ── 工具方法 ──
