@@ -1243,9 +1243,10 @@ private fun StatisticsTabContent() {
     }
 
     // 每日总资产数据（用于折线图）
+    // 从当前总资产反推：月初资产 = 当前总资产 - 本月所有变动，再逐日累加
     val dailyAssetData = remember(recordDb, selectedYear, selectedMonth, currentBookName) {
         val accounts = AccountingRepository.getAllAccounts(context)
-        val baseTotal = accounts.sumOf { it.initialAmount }
+        val currentTotal = accounts.sumOf { it.currentBalance }
 
         val cal = Calendar.getInstance().apply {
             set(Calendar.YEAR, selectedYear)
@@ -1253,34 +1254,30 @@ private fun StatisticsTabContent() {
         }
         val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
 
-        // 月初之前的所有记录（累计到月初的资产变化）
-        val monthStart = cal.timeInMillis
-        val allRecords = recordDb.records.filter { it.bookName == currentBookName }.sortedBy { it.happenedAt }
-        val beforeMonthRecords = allRecords.filter { it.happenedAt < monthStart }
-        val monthStartBalance = baseTotal + beforeMonthRecords.sumOf { r ->
-            val amt = r.amount.toDoubleOrNull() ?: 0.0
-            when (r.type) {
-                "收入" -> amt
-                "支出" -> -amt
-                else -> 0.0
-            }
-        }
-
         // 当月每日变动
         val dailyDelta = mutableMapOf<Int, Double>()
         for (d in 1..daysInMonth) dailyDelta[d] = 0.0
-        allRecords.filter { it.happenedAt >= monthStart }.forEach { r ->
+        var monthTotalDelta = 0.0
+        recordDb.records.filter { r ->
+            r.bookName == currentBookName &&
+            r.reimbursementAccountId == null && !r.excludeFromStats
+        }.forEach { r ->
             val cal2 = Calendar.getInstance().apply { timeInMillis = r.happenedAt }
             if (cal2.get(Calendar.YEAR) == selectedYear && cal2.get(Calendar.MONTH) == selectedMonth) {
                 val day = cal2.get(Calendar.DAY_OF_MONTH)
                 val amt = r.amount.toDoubleOrNull() ?: 0.0
-                dailyDelta[day] = (dailyDelta[day] ?: 0.0) + when (r.type) {
+                val delta = when (r.type) {
                     "收入" -> amt
                     "支出" -> -amt
                     else -> 0.0
                 }
+                dailyDelta[day] = (dailyDelta[day] ?: 0.0) + delta
+                monthTotalDelta += delta
             }
         }
+
+        // 月初资产 = 当前总资产 - 本月累计变动
+        val monthStartBalance = currentTotal - monthTotalDelta
 
         // 累计每日总资产
         val dailyMap = mutableMapOf<Int, Double>()
@@ -4161,5 +4158,156 @@ private fun AutomationPage(onBack: () -> Unit) {
                 )
             }
         }
+
+        Spacer(Modifier.height(12.dp))
+
+        // ── 账单自动识别 ──
+        var ocrEnabled by remember {
+            mutableStateOf(BillOcrConfig.isEnabled(context))
+        }
+        var showOcrResult by remember { mutableStateOf(false) }
+        var ocrResult by remember { mutableStateOf<OcrBillResult?>(null) }
+
+        val hasAccessibility = remember {
+            com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isAccessibilityEnabled(context)
+        }
+
+        // 进入页面时检查是否有缓存的识别结果
+        LaunchedEffect(Unit) {
+            BillOcrEngine.consumeResult()?.let {
+                ocrResult = it
+                showOcrResult = true
+            }
+        }
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "账单自动识别",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            when {
+                                ocrEnabled && hasAccessibility -> "已就绪，识别到账单后自动提醒"
+                                ocrEnabled -> "需要开启无障碍服务"
+                                else -> "自动识别微信/支付宝账单页面"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = ocrEnabled,
+                        onCheckedChange = { newValue ->
+                            if (newValue && !hasAccessibility) {
+                                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                                android.widget.Toast.makeText(context, "请先开启无障碍服务", android.widget.Toast.LENGTH_LONG).show()
+                            }
+                            ocrEnabled = newValue
+                            BillOcrConfig.setEnabled(context, newValue)
+                            if (newValue && hasAccessibility) {
+                                android.widget.Toast.makeText(context, "OCR识别已就绪", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
+                }
+
+                // 引擎选择（占位）
+                if (ocrEnabled) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "识别引擎：",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "系统 TextClassifier",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "ML Kit 模型（即将支持）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+            }
+        }
+
+        // 识别结果弹窗
+        if (showOcrResult && ocrResult != null) {
+            AlertDialog(
+                onDismissRequest = { showOcrResult = false },
+                title = { Text("识别结果预览") },
+                text = {
+                    Column {
+                        ResultRow("类型", ocrResult!!.type)
+                        ResultRow("金额", "¥${"%.2f".format(ocrResult!!.amount)}")
+                        ResultRow("商户", ocrResult!!.merchant)
+                        ResultRow("来源", BillOcrConfig.getAppName(ocrResult!!.sourceApp))
+                        ResultRow("置信度", "${(ocrResult!!.confidence * 100).toInt()}%")
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "原始文本：",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            ocrResult!!.rawText.take(300),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 8,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showOcrResult = false }) {
+                        Text("确认（暂不导入）")
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ResultRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+    ) {
+        Text(
+            "$label：",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall
+        )
     }
 }
