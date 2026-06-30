@@ -51,15 +51,7 @@ object BillOcrEngine {
     }
 
     /** 通过截图 Bitmap 识别（主要方式） */
-    suspend fun recognizeFromBitmap(bitmap: Bitmap, service: MyAccessibilityService): RecognizeResult {
-        val pkg = service.topPackage ?: service.getTopPackageFromWindow()
-        if (pkg == null) {
-            return RecognizeResult(null, "未检测到前台应用")
-        }
-        if (pkg !in BillOcrConfig.supportedApps) {
-            return RecognizeResult(null, "当前应用不支持：${BillOcrConfig.getAppName(pkg)}")
-        }
-
+    suspend fun recognizeFromBitmap(bitmap: Bitmap, pkg: String): RecognizeResult {
         // OCR 识别文字
         val text = try {
             val image = InputImage.fromBitmap(bitmap, 0)
@@ -97,14 +89,17 @@ object BillOcrEngine {
 
     // ── 正则规则匹配（参考 AutoAccounting BillService.parseBillInfo） ──
     private fun parseBill(text: String, app: String): OcrBillResult? {
-        // 金额提取：¥123.45 / ￥123.45 / 123.45元 / 支付 123.45
+        // 金额提取：支持千分位逗号（¥1,234.56 / ￥123.45 / 123.45元 / 支付 123.45）
         val amountRegex = Regex(
-            "[¥￥]\\s*(\\d+\\.?\\d*)" +
-            "|(\\d+\\.\\d{2})\\s*元" +
-            "|(?:支付|付款|收款|转账|消费)\\s*(\\d+\\.?\\d*)"
+            "[¥￥]\\s*([\\d,]+\\.?\\d*)" +
+            "|([\\d,]+\\.\\d{2})\\s*元" +
+            "|(?:支付|付款|收款|转账|消费)\\s*([\\d,]+\\.?\\d*)"
         )
-        val amount = amountRegex.find(text)?.groupValues?.drop(1)
-            ?.firstOrNull { it.isNotEmpty() }?.toDoubleOrNull() ?: return null
+        val rawAmount = amountRegex.find(text)?.groupValues?.drop(1)
+            ?.firstOrNull { it.isNotEmpty() } ?: return null
+
+        // 去除逗号后转 double
+        val amount = rawAmount.replace(",", "").toDoubleOrNull() ?: return null
 
         if (amount <= 0) return null
 

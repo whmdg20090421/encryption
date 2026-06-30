@@ -308,32 +308,45 @@ object OcrFloatingWindow {
         }
 
         scope?.launch {
-            // 1. 截图
+            // 1. 截图 + 转换为软件位图（在 IO 线程执行）
             val screenshot = withContext(Dispatchers.IO) {
-                service.takeScreenshot()
+                service.takeScreenshot()?.let {
+                    with(service) { it.toSoftwareBitmap() }
+                }
             }
             if (screenshot == null) {
                 showResult(context, bubble, density, null, "截图失败", null)
                 return@launch
             }
 
-            // 2. 显示截图动画（缩小飞入悬浮窗）
+            // 2. 在截图后立即获取包名并检测（动画前）
+            val pkg = service.topPackage ?: service.getTopPackageFromWindow()
+            if (pkg == null || pkg !in BillOcrConfig.supportedApps) {
+                screenshot.recycle()
+                val errorMsg = if (pkg == null) "未检测到前台应用"
+                               else "当前应用不支持：${BillOcrConfig.getAppName(pkg)}"
+                showResult(context, bubble, density, null, errorMsg, null)
+                return@launch
+            }
+
+            // 3. 包名有效，播放动画
             showScreenshotAnimation(context, bubble, density, screenshot) {
-                // 3. 动画结束后显示转圈
+                // 4. 动画结束后显示转圈
                 val progress = bubble.getTag() as? ProgressBar
                 progress?.visibility = View.VISIBLE
 
-                // 4. OCR 识别
+                // 5. OCR 识别（try-finally 确保 bitmap 回收）
                 scope?.launch {
-                    val result = withContext(Dispatchers.IO) {
-                        BillOcrEngine.recognizeFromBitmap(screenshot, service)
+                    try {
+                        val result = withContext(Dispatchers.IO) {
+                            BillOcrEngine.recognizeFromBitmap(screenshot, pkg)
+                        }
+                        val debugText = if (result.bill == null) result.debugText else null
+                        showResult(context, bubble, density, result.bill, result.error, debugText)
+                    } finally {
+                        screenshot.recycle()
+                        progress?.visibility = View.GONE
                     }
-                    screenshot.recycle()
-                    progress?.visibility = View.GONE
-
-                    // 5. 显示结果（失败时显示识别到的文字）
-                    val debugText = if (result.bill == null) result.debugText else null
-                    showResult(context, bubble, density, result.bill, result.error, debugText)
                 }
             }
         }
@@ -394,6 +407,9 @@ object OcrFloatingWindow {
             wm.addView(overlay, overlayParams)
             animationView = overlay
         } catch (_: Exception) {
+            bitmap.recycle()
+            // 不手动设置 state，让 showResult 内部处理
+            showResult(context, bubble, density, null, "悬浮窗创建失败", null)
             return
         }
 
@@ -419,27 +435,22 @@ object OcrFloatingWindow {
         }
 
         animatorSet.addListener(object : android.animation.AnimatorListenerAdapter() {
-            override fun onAnimationEnd(animation: android.animation.Animator) {
-                // 先清除 ImageView 的 bitmap 引用，避免 recycled bitmap 异常
-                imageView.setImageDrawable(null)
-                // 移除动画窗口
-                try {
-                    wm.removeView(overlay)
-                } catch (_: Exception) {}
-                animationView = null
-                // 回调通知动画结束
-                onAnimationEnd()
-            }
+            var cancelled = false
 
             override fun onAnimationCancel(animation: android.animation.Animator) {
-                // 动画被取消时也要清理
+                cancelled = true
                 imageView.setImageDrawable(null)
-                try {
-                    wm.removeView(overlay)
-                } catch (_: Exception) {}
+                try { wm.removeView(overlay) } catch (_: Exception) {}
                 animationView = null
-                // 动画被取消时回收 bitmap
                 bitmap.recycle()
+            }
+
+            override fun onAnimationEnd(animation: android.animation.Animator) {
+                if (cancelled) return  // 取消触发的 end，跳过
+                imageView.setImageDrawable(null)
+                try { wm.removeView(overlay) } catch (_: Exception) {}
+                animationView = null
+                onAnimationEnd()
             }
         })
 
