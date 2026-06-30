@@ -2,8 +2,8 @@ package com.whmdg.mczj.tools.xposed.hooks
 
 import android.content.Context
 import android.content.Intent
-import de.robv.android.xposed.XC_MethodHook
-import de.robv.android.xposed.XposedHelpers
+import io.github.libxposed.api.XposedModule
+import io.github.libxposed.api.XposedInterface
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentLinkedQueue
 
@@ -12,42 +12,48 @@ import java.util.concurrent.ConcurrentLinkedQueue
  *
  * 当用户在微信中打开账单详情页时，WebView 会通过 evaluateJavascript 调用
  * WeixinJSBridge._handleMessageFromWeixin()，其中包含完整的账单 JSON。
+ *
+ * 使用 libxposed API（io.github.libxposed.api），不依赖旧版 de.robv.android.xposed。
  */
 object WebViewBillHooker {
 
     private const val ACTION_HOOK_BILL = "com.whmdg.mczj.tools.ACTION_HOOK_BILL"
     private const val EXTRA_BILL_JSON = "bill_json"
 
-    /** MD5 去重队列（30 秒内相同数据不重复发送） */
+    /** MD5 去重队列 */
     private val recentHashes = ConcurrentLinkedQueue<String>()
     private const val MAX_HASHES = 100
 
-    fun hook(classLoader: ClassLoader) {
-        val webViewClass = XposedHelpers.findClass(
-            "com.tencent.xweb.WebView", classLoader
-        )
-
-        XposedHelpers.findAndHookMethod(
-            webViewClass,
+    fun hook(module: XposedModule, classLoader: ClassLoader) {
+        val webViewClass = classLoader.loadClass("com.tencent.xweb.WebView")
+        val evaluateMethod = webViewClass.getDeclaredMethod(
             "evaluateJavascript",
             String::class.java,
-            android.webkit.ValueCallback::class.java,
-            object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    try {
-                        val js = param.args[0] as? String ?: return
-                        handleEvaluateJavascript(js, param)
-                    } catch (_: Throwable) {}
-                }
-            }
+            android.webkit.ValueCallback::class.java
         )
+
+        module.hook(evaluateMethod)
+            .setPriority(XposedModule.PRIORITY_DEFAULT)
+            .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+            .intercept { chain ->
+                val js = chain.getArgs().toArray()[0] as? String
+                val result = chain.proceed()
+                try {
+                    if (js != null) {
+                        handleEvaluateJavascript(js, module)
+                    }
+                } catch (_: Throwable) {}
+                result
+            }
     }
 
-    private fun handleEvaluateJavascript(js: String, param: MethodHookParam) {
+    private fun handleEvaluateJavascript(js: String, module: XposedModule) {
         if (!js.contains("nativeWXPayCgiTunnel:ok")) return
 
+        val start = js.indexOf("javascript:WeixinJSBridge._handleMessageFromWeixin(")
+        if (start < 0) return
         val jsonStr = js.substring(
-            "javascript:WeixinJSBridge._handleMessageFromWeixin(".length,
+            start + "javascript:WeixinJSBridge._handleMessageFromWeixin(".length,
             js.length - 1
         )
 
@@ -58,7 +64,7 @@ object WebViewBillHooker {
         val respbuf = params.getString("respbuf")
         val respJson = JSONObject(respbuf)
 
-        // 去重：用 header.fee + preview 中的转账单号
+        // 去重
         val header = respJson.optJSONObject("header")
         val fee = header?.optString("fee", "") ?: ""
         val orderNo = extractOrderNo(respJson)
@@ -68,7 +74,8 @@ object WebViewBillHooker {
 
         // 解析并发送
         val result = BillHookParser.parse(respJson) ?: return
-        sendBroadcast(param.thisObject, result)
+        module.log("艨艟: Hook 到微信账单: ${result["amount"]} ${result["merchant"]}")
+        sendBroadcast(result)
     }
 
     private fun extractOrderNo(respJson: JSONObject): String {
@@ -88,9 +95,9 @@ object WebViewBillHooker {
         return ""
     }
 
-    private fun sendBroadcast(source: Any, result: Map<String, String>) {
+    private fun sendBroadcast(result: Map<String, String>) {
         try {
-            val context = getContext(source) ?: return
+            val context = getContext() ?: return
             val json = JSONObject(result as Map<*, *>).toString()
             val intent = Intent(ACTION_HOOK_BILL).apply {
                 setPackage(context.packageName)
@@ -101,7 +108,7 @@ object WebViewBillHooker {
         } catch (_: Throwable) {}
     }
 
-    private fun getContext(source: Any): Context? {
+    private fun getContext(): Context? {
         return try {
             val activityThread = Class.forName("android.app.ActivityThread")
             val method = activityThread.getMethod("currentApplication")
@@ -113,9 +120,7 @@ object WebViewBillHooker {
 
     private fun simpleHash(input: String): String {
         var h = 0L
-        for (c in input) {
-            h = h * 31 + c.code
-        }
+        for (c in input) h = h * 31 + c.code
         return h.toString(16)
     }
 

@@ -13,7 +13,7 @@ object WechatBillHooker {
 
     fun register(module: XposedModule, param: PackageLoadedParam) {
         try {
-            WebViewBillHooker.hook(param.classLoader)
+            WebViewBillHooker.hook(module, param.classLoader)
             module.log("艨艟: 微信账单 Hook 已注册")
         } catch (e: Throwable) {
             module.log("艨艟: 微信账单 Hook 注册失败: ${e.message}")
