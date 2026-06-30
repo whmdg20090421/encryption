@@ -106,6 +106,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
     val fabThemeColor = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
 
+    var showMultiSelectSettings by remember { mutableStateOf(false) }
     // 多选模式下返回手势退出多选
     BackHandler(enabled = isMultiSelectMode) {
         isMultiSelectMode = false
@@ -660,21 +661,18 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(28.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = navBarAlpha),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
                 shadowElevation = 8.dp
             ) {
                 Row(modifier = Modifier.height(56.dp)) {
-                    // 全选
+                    // 最左：多选（退出多选模式）
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
                             .clickable {
-                                val allIds = allRecords
-                                    .filter { it.bookName == currentBookName }
-                                    .map { it.id }
-                                    .toSet()
-                                selectedRecordIds = if (selectedRecordIds.size == allIds.size) emptySet() else allIds
+                                isMultiSelectMode = false
+                                selectedRecordIds = emptySet()
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -686,24 +684,144 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                                 .padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.SelectAll,
-                                contentDescription = "全选",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                imageVector = Icons.Default.Checklist,
+                                contentDescription = "多选",
+                                tint = Color.White,
                                 modifier = Modifier.size(22.dp)
                             )
                             Spacer(Modifier.height(1.dp))
                             Text(
-                                text = "全选",
+                                text = "多选",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Normal
                                 ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = fabThemeColor,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    // 中左：组合
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(Color.Transparent)
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Group,
+                                contentDescription = "组合",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(Modifier.height(1.dp))
+                            Text(
+                                text = "组合",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Normal
+                                ),
+                                color = fabThemeColor,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    // 中右：统计
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(Color.Transparent)
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.BarChart,
+                                contentDescription = "统计",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(Modifier.height(1.dp))
+                            Text(
+                                text = "统计",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Normal
+                                ),
+                                color = fabThemeColor,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    // 最右：设置
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clickable { showMultiSelectSettings = true },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(Color.Transparent)
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "设置",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(Modifier.height(1.dp))
+                            Text(
+                                text = "设置",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Normal
+                                ),
+                                color = fabThemeColor,
                                 maxLines = 1
                             )
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // 多选设置 ModalBottomSheet
+    if (showMultiSelectSettings) {
+        ModalBottomSheet(
+            onDismissRequest = { showMultiSelectSettings = false },
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+            ) {
+                listOf("账本", "账户", "分类", "报销账户", "备注", "日期", "地点", "设置").forEach { item ->
+                    Text(
+                        text = item,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showMultiSelectSettings = false }
+                            .padding(vertical = 14.dp)
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
             }
         }
     }
@@ -2293,7 +2411,7 @@ private fun RecordListContent(
                                     if (isMultiSelectMode) {
                                         Box(
                                             modifier = Modifier
-                                                .size(48.dp)
+                                                .size(28.dp)
                                                 .clip(CircleShape)
                                                 .border(2.dp, MaterialTheme.colorScheme.outline, CircleShape)
                                                 .then(
@@ -2307,7 +2425,7 @@ private fun RecordListContent(
                                                     Icons.Default.Check,
                                                     contentDescription = "已选中",
                                                     tint = Color.White,
-                                                    modifier = Modifier.size(20.dp)
+                                                    modifier = Modifier.size(16.dp)
                                                 )
                                             }
                                         }
@@ -2474,7 +2592,7 @@ private fun RecordListContent(
                                         // 多选模式：空心/实心圆圈
                                         Box(
                                             modifier = Modifier
-                                                .size(48.dp)
+                                                .size(28.dp)
                                                 .clip(CircleShape)
                                                 .border(2.dp, MaterialTheme.colorScheme.outline, CircleShape)
                                                 .then(
@@ -2488,7 +2606,7 @@ private fun RecordListContent(
                                                     Icons.Default.Check,
                                                     contentDescription = "已选中",
                                                     tint = Color.White,
-                                                    modifier = Modifier.size(20.dp)
+                                                    modifier = Modifier.size(16.dp)
                                                 )
                                             }
                                         }
