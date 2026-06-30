@@ -1,7 +1,5 @@
 package com.whmdg.mczj.tools.ui.accounting
 
-import android.animation.AnimatorSet
-import android.animation.ObjectAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
@@ -11,13 +9,10 @@ import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
-import android.os.Handler
-import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.view.animation.AccelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -320,183 +315,9 @@ object OcrFloatingWindow {
             return
         }
 
-        scope?.launch {
-            // 1. 截图 + 转换为软件位图（在 IO 线程执行）
-            val screenshot = withContext(Dispatchers.IO) {
-                service.takeScreenshot()?.let {
-                    with(service) { it.toSoftwareBitmap() }
-                }
-            }
-            if (screenshot == null) {
-                showResult(context, bubble, density, null, "截图失败", null)
-                return@launch
-            }
-
-            // 2. 在截图后立即获取包名并检测（动画前）
-            var pkg = service.getTopPackageFromWindow()
-            var searchMode = false
-            var croppedScreenshot: Bitmap? = null
-
-            if (pkg == null || pkg !in BillOcrConfig.supportedApps) {
-                // 包名不在支持列表中，搜索所有窗口找支持的应用
-                val found = service.findSupportedAppWindow(BillOcrConfig.supportedApps)
-                if (found != null) {
-                    val (foundPkg, bounds) = found
-                    // 局部截图：裁剪到目标窗口区域
-                    val safeLeft = bounds.left.coerceIn(0, screenshot.width)
-                    val safeTop = bounds.top.coerceIn(0, screenshot.height)
-                    val safeRight = bounds.right.coerceIn(0, screenshot.width)
-                    val safeBottom = bounds.bottom.coerceIn(0, screenshot.height)
-                    val cropW = safeRight - safeLeft
-                    val cropH = safeBottom - safeTop
-                    if (cropW > 0 && cropH > 0) {
-                        croppedScreenshot = Bitmap.createBitmap(screenshot, safeLeft, safeTop, cropW, cropH)
-                        pkg = foundPkg
-                        searchMode = true
-                    }
-                }
-            }
-
-            if (pkg == null || pkg !in BillOcrConfig.supportedApps) {
-                screenshot.recycle()
-                croppedScreenshot?.recycle()
-                val errorMsg = if (pkg == null) "未检测到前台应用"
-                               else "当前应用不支持：${BillOcrConfig.getAppName(pkg)}"
-                showResult(context, bubble, density, null, errorMsg, null)
-                return@launch
-            }
-
-            // 3. 最终使用的截图（搜索模式用裁剪图，普通模式用全屏截图）
-            val ocrBitmap = croppedScreenshot ?: screenshot
-
-            // 4. 包名有效，播放动画
-            showScreenshotAnimation(context, bubble, density, ocrBitmap) {
-                // 5. 动画结束后显示转圈
-                val progress = bubble.getTag() as? ProgressBar
-                progress?.visibility = View.VISIBLE
-
-                // 6. OCR 识别（try-finally 确保 bitmap 回收）
-                scope?.launch {
-                    try {
-                        val result = withContext(Dispatchers.IO) {
-                            BillOcrEngine.recognizeFromBitmap(ocrBitmap, pkg!!)
-                        }
-                        val debugText = if (result.bill == null) result.debugText else null
-                        showResult(context, bubble, density, result.bill, result.error, debugText, searchMode)
-                    } finally {
-                        ocrBitmap.recycle()
-                        // 搜索模式下原始截图也需要回收
-                        if (searchMode) screenshot.recycle()
-                        progress?.visibility = View.GONE
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * 截图动画：截图从原始位置缩小飞入悬浮窗
-     */
-    private fun showScreenshotAnimation(
-        context: Context,
-        bubble: FrameLayout,
-        density: Float,
-        bitmap: Bitmap,
-        onAnimationEnd: () -> Unit
-    ) {
-        val wm = windowManager ?: return
-        val bubbleLp = bubble.layoutParams as? WindowManager.LayoutParams ?: return
-
-        // 计算悬浮窗屏幕位置
-        val bubbleScreenX = bubbleLp.x
-        val bubbleScreenY = bubbleLp.y
-        val bubbleSize = (BUBBLE_SIZE_DP * density).toInt()
-
-        // 创建全屏透明窗口用于动画
-        val overlay = FrameLayout(context)
-
-        // 截图 ImageView
-        val imageView = ImageView(context).apply {
-            setImageBitmap(bitmap)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-        }
-
-        // 初始大小（屏幕的 80%）
-        val screenWidth = context.resources.displayMetrics.widthPixels
-        val screenHeight = context.resources.displayMetrics.heightPixels
-        val initialWidth = (screenWidth * 0.8f).toInt()
-        val initialHeight = (screenHeight * 0.8f).toInt()
-        val initialX = (screenWidth - initialWidth) / 2
-        val initialY = (screenHeight - initialHeight) / 2
-
-        val imageParams = FrameLayout.LayoutParams(initialWidth, initialHeight).apply {
-            leftMargin = initialX
-            topMargin = initialY
-        }
-        overlay.addView(imageView, imageParams)
-
-        val overlayParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-        }
-
-        try {
-            wm.addView(overlay, overlayParams)
-            animationView = overlay
-        } catch (_: Exception) {
-            bitmap.recycle()
-            // 不手动设置 state，让 showResult 内部处理
-            showResult(context, bubble, density, null, "悬浮窗创建失败", null)
-            return
-        }
-
-        // 动画：缩小 + 移动到悬浮窗位置
-        val targetScale = bubbleSize.toFloat() / initialWidth
-
-        val scaleX = ObjectAnimator.ofFloat(imageView, "scaleX", 1f, targetScale)
-        val scaleY = ObjectAnimator.ofFloat(imageView, "scaleY", 1f, targetScale)
-        val translationX = ObjectAnimator.ofFloat(
-            imageView, "translationX",
-            0f, (bubbleScreenX - initialX).toFloat()
-        )
-        val translationY = ObjectAnimator.ofFloat(
-            imageView, "translationY",
-            0f, (bubbleScreenY - initialY).toFloat()
-        )
-        val alpha = ObjectAnimator.ofFloat(imageView, "alpha", 1f, 0.7f)
-
-        val animatorSet = AnimatorSet().apply {
-            playTogether(scaleX, scaleY, translationX, translationY, alpha)
-            duration = 500
-            interpolator = AccelerateInterpolator()
-        }
-
-        animatorSet.addListener(object : android.animation.AnimatorListenerAdapter() {
-            var cancelled = false
-
-            override fun onAnimationCancel(animation: android.animation.Animator) {
-                cancelled = true
-                imageView.setImageDrawable(null)
-                try { wm.removeView(overlay) } catch (_: Exception) {}
-                animationView = null
-                bitmap.recycle()
-            }
-
-            override fun onAnimationEnd(animation: android.animation.Animator) {
-                if (cancelled) return  // 取消触发的 end，跳过
-                imageView.setImageDrawable(null)
-                try { wm.removeView(overlay) } catch (_: Exception) {}
-                animationView = null
-                onAnimationEnd()
-            }
-        })
-
-        animatorSet.start()
+        val result = BillOcrEngine.recognizeNow(service)
+        val debugText = if (result.bill == null) result.debugText else null
+        showResult(context, bubble, density, result.bill, result.error, debugText)
     }
 
     // ── 结果展示 ──
@@ -507,8 +328,7 @@ object OcrFloatingWindow {
         density: Float,
         result: OcrBillResult?,
         error: String?,
-        debugText: String?,
-        searchMode: Boolean = false
+        debugText: String?
     ) {
         val menuWidth = (MENU_WIDTH_DP * density).toInt()
         val padding = (12 * density).toInt()
@@ -523,15 +343,8 @@ object OcrFloatingWindow {
             setPadding(padding, padding, padding, padding)
         }
 
-        // 搜索模式标识
-        if (searchMode) {
-            menu.addView(createText(context, "搜索模式", 0xFFFFAB40.toInt(), 12f))
-        }
-
         if (error != null) {
-            menu.addView(createText(context, error, 0xFFFF5252.toInt(), 14f).apply {
-                if (searchMode) setPadding(0, (6 * density).toInt(), 0, 0)
-            })
+            menu.addView(createText(context, error, 0xFFFF5252.toInt(), 14f))
             // 显示调试信息
             if (debugText != null && debugText.isNotBlank()) {
                 menu.addView(createText(context, "提取到的文字:", 0xFF888888.toInt(), 11f).apply {
@@ -540,9 +353,7 @@ object OcrFloatingWindow {
                 menu.addView(createText(context, debugText, 0xFFAAAAAA.toInt(), 11f))
             }
         } else if (result != null) {
-            menu.addView(createText(context, "识别成功", 0xFF4CAF50.toInt(), 12f).apply {
-                if (searchMode) setPadding(0, (6 * density).toInt(), 0, 0)
-            })
+            menu.addView(createText(context, "识别成功", 0xFF4CAF50.toInt(), 12f))
 
             menu.addView(createText(context,
                 "${result.type}  ¥${String.format("%.2f", result.amount)}",
@@ -562,9 +373,7 @@ object OcrFloatingWindow {
                 setPadding(0, lineSpacing, 0, 0)
             })
         } else {
-            menu.addView(createText(context, "未识别到账单信息", 0xFFFF9800.toInt(), 14f).apply {
-                if (searchMode) setPadding(0, (6 * density).toInt(), 0, 0)
-            })
+            menu.addView(createText(context, "未识别到账单信息", 0xFFFF9800.toInt(), 14f))
         }
 
         // 关闭按钮

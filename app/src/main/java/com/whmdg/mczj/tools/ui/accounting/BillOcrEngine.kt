@@ -1,16 +1,11 @@
 package com.whmdg.mczj.tools.ui.accounting
 
-import android.graphics.Bitmap
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import com.whmdg.mczj.tools.security.MyAccessibilityService
-import kotlinx.coroutines.tasks.await
 
 /**
- * 账单 OCR 引擎（本地规则匹配，不联网）。
+ * 账单识别引擎（通过无障碍节点树提取文字，本地规则匹配）。
  *
- * 由悬浮窗主动调用，支持节点树提取和截图 OCR 两种方式。
+ * 由悬浮窗主动调用，用户手动点击触发。
  */
 object BillOcrEngine {
 
@@ -18,60 +13,25 @@ object BillOcrEngine {
     data class RecognizeResult(
         val bill: OcrBillResult?,
         val error: String? = null,
-        val debugText: String? = null  // 识别到的文字（用于调试）
+        val debugText: String? = null  // 提取到的文字（用于调试）
     )
 
-    private val textRecognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
-
-    /** 通过节点树识别（备用） */
+    /** 通过节点树识别 */
     fun recognizeNow(service: MyAccessibilityService): RecognizeResult {
         val text = service.extractAllText()
         if (text.isBlank()) {
             return RecognizeResult(null, "未获取到页面文字")
         }
 
-        val pkg = service.getTopPackageFromWindow()
-        if (pkg == null) {
-            return RecognizeResult(null, "未检测到前台应用")
-        }
-        if (pkg !in BillOcrConfig.supportedApps) {
-            return RecognizeResult(null, "当前应用不支持：${BillOcrConfig.getAppName(pkg)}")
-        }
+        val pkg = service.getTopPackageFromWindow() ?: "未知"
 
         if (!matchesBillKeywords(text)) {
-            return RecognizeResult(null, "未匹配到账单关键词")
+            return RecognizeResult(null, "未匹配到账单关键词", text.take(200))
         }
 
         val bill = parseBill(text, pkg)
         if (bill == null) {
-            return RecognizeResult(null, "未解析到金额信息")
-        }
-
-        return RecognizeResult(bill)
-    }
-
-    /** 通过截图 Bitmap 识别（主要方式） */
-    suspend fun recognizeFromBitmap(bitmap: Bitmap, pkg: String): RecognizeResult {
-        // OCR 识别文字
-        val text = try {
-            val image = InputImage.fromBitmap(bitmap, 0)
-            val result = textRecognizer.process(image).await()
-            result.text
-        } catch (e: Exception) {
-            return RecognizeResult(null, "OCR识别失败：${e.message}")
-        }
-
-        if (text.isBlank()) {
-            return RecognizeResult(null, "未识别到文字")
-        }
-
-        if (!matchesBillKeywords(text)) {
-            return RecognizeResult(bill = null, error = "未匹配到账单关键词", debugText = text.take(200))
-        }
-
-        val bill = parseBill(text, pkg)
-        if (bill == null) {
-            return RecognizeResult(bill = null, error = "未解析到金额信息", debugText = text.take(200))
+            return RecognizeResult(null, "未解析到金额信息", text.take(200))
         }
 
         return RecognizeResult(bill)

@@ -4170,19 +4170,12 @@ private fun AutomationPage(onBack: () -> Unit) {
         var ocrEnabled by remember {
             mutableStateOf(BillOcrConfig.isEnabled(context))
         }
-        var ocrMode by remember {
-            mutableStateOf(BillOcrConfig.getOcrMode(context))
-        }
-        val isHookMode = ocrMode == BillOcrConfig.MODE_HOOK
 
         var hasAccessibility by remember {
             mutableStateOf(com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isAccessibilityEnabled(context))
         }
         var hasOverlay by remember {
             mutableStateOf(android.provider.Settings.canDrawOverlays(context))
-        }
-        val isXposedActive by remember {
-            mutableStateOf(com.whmdg.mczj.tools.util.XposedDetector.isModuleActive())
         }
 
         // 从设置页返回时重新检测权限
@@ -4193,18 +4186,10 @@ private fun AutomationPage(onBack: () -> Unit) {
                     hasAccessibility = com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isAccessibilityEnabled(context)
                     hasOverlay = android.provider.Settings.canDrawOverlays(context)
                     // 权限不足时自动关闭
-                    if (ocrEnabled) {
-                        val shouldDisable = if (isHookMode) {
-                            !hasOverlay || !isXposedActive
-                        } else {
-                            !hasAccessibility || !hasOverlay
-                        }
-                        if (shouldDisable) {
-                            ocrEnabled = false
-                            BillOcrConfig.setEnabled(context, false)
-                            OcrFloatingService.stop(context)
-                            HookFloatingService.stop(context)
-                        }
+                    if (ocrEnabled && (!hasAccessibility || !hasOverlay)) {
+                        ocrEnabled = false
+                        BillOcrConfig.setEnabled(context, false)
+                        OcrFloatingService.stop(context)
                     }
                 }
             }
@@ -4236,11 +4221,9 @@ private fun AutomationPage(onBack: () -> Unit) {
                         )
                         Text(
                             when {
-                                ocrEnabled && isHookMode && isXposedActive -> "Hook 模式就绪，退出后自动捕获微信账单"
-                                ocrEnabled && isHookMode -> "需要安装并激活 LSPosed 模块"
-                                ocrEnabled && hasAccessibility && hasOverlay -> "OCR 就绪，退出后点击悬浮窗识别"
+                                ocrEnabled && hasAccessibility && hasOverlay -> "就绪，退出后点击悬浮窗识别"
                                 ocrEnabled -> "需要开启无障碍和悬浮窗权限"
-                                else -> "自动识别支付宝/QQ/微信账单"
+                                else -> "通过无障碍节点树识别账单文字"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -4250,33 +4233,17 @@ private fun AutomationPage(onBack: () -> Unit) {
                         checked = ocrEnabled,
                         onCheckedChange = { newValue ->
                             if (newValue) {
-                                if (isHookMode) {
-                                    // Hook 模式需要悬浮窗 + Xposed 模块激活
-                                    if (!hasOverlay) {
-                                        val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            android.net.Uri.parse("package:${context.packageName}"))
-                                        context.startActivity(intent)
-                                        android.widget.Toast.makeText(context, "请先开启悬浮窗权限", android.widget.Toast.LENGTH_LONG).show()
-                                        return@Switch
-                                    }
-                                    if (!isXposedActive) {
-                                        android.widget.Toast.makeText(context, "请先激活 LSPosed 模块", android.widget.Toast.LENGTH_LONG).show()
-                                        return@Switch
-                                    }
-                                } else {
-                                    // OCR 模式需要无障碍 + 悬浮窗
-                                    if (!hasAccessibility) {
-                                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                                        android.widget.Toast.makeText(context, "请先开启无障碍服务", android.widget.Toast.LENGTH_LONG).show()
-                                        return@Switch
-                                    }
-                                    if (!hasOverlay) {
-                                        val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                            android.net.Uri.parse("package:${context.packageName}"))
-                                        context.startActivity(intent)
-                                        android.widget.Toast.makeText(context, "请先开启悬浮窗权限", android.widget.Toast.LENGTH_LONG).show()
-                                        return@Switch
-                                    }
+                                if (!hasAccessibility) {
+                                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                                    android.widget.Toast.makeText(context, "请先开启无障碍服务", android.widget.Toast.LENGTH_LONG).show()
+                                    return@Switch
+                                }
+                                if (!hasOverlay) {
+                                    val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        android.net.Uri.parse("package:${context.packageName}"))
+                                    context.startActivity(intent)
+                                    android.widget.Toast.makeText(context, "请先开启悬浮窗权限", android.widget.Toast.LENGTH_LONG).show()
+                                    return@Switch
                                 }
                                 ocrEnabled = true
                                 BillOcrConfig.setEnabled(context, true)
@@ -4284,46 +4251,14 @@ private fun AutomationPage(onBack: () -> Unit) {
                                 ocrEnabled = false
                                 BillOcrConfig.setEnabled(context, false)
                                 OcrFloatingService.stop(context)
-                                HookFloatingService.stop(context)
                             }
                         }
                     )
                 }
 
-                // 模式切换（始终显示）
-                Spacer(Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = !isHookMode,
-                        onClick = {
-                            ocrMode = BillOcrConfig.MODE_OCR
-                            BillOcrConfig.setOcrMode(context, BillOcrConfig.MODE_OCR)
-                            HookFloatingService.stop(context)
-                        },
-                        label = { Text("OCR 截图") },
-                        modifier = Modifier.weight(1f)
-                    )
-                    FilterChip(
-                        selected = isHookMode,
-                        onClick = {
-                            ocrMode = BillOcrConfig.MODE_HOOK
-                            BillOcrConfig.setOcrMode(context, BillOcrConfig.MODE_HOOK)
-                            OcrFloatingService.stop(context)
-                        },
-                        label = { Text("Hook 拦截") },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (isHookMode)
-                        "需要 LSPosed 框架，自动拦截微信支付数据"
-                    else
-                        "需要无障碍+悬浮窗权限，点击悬浮窗触发截图识别",
+                    "需要无障碍+悬浮窗权限，点击悬浮窗触发识别",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

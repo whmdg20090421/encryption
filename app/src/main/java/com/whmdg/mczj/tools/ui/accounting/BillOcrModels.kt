@@ -4,7 +4,7 @@ import android.content.Context
 import java.util.UUID
 
 /**
- * OCR 识别的账单结果（暂存，不导入）
+ * 识别的账单结果（暂存，不导入）
  */
 data class OcrBillResult(
     val id: String = UUID.randomUUID().toString(),
@@ -19,15 +19,10 @@ data class OcrBillResult(
 )
 
 /**
- * 账单自动识别配置（通过 AccountingRepository settings 表持久化）
+ * 账单识别配置（通过 AccountingRepository settings 表持久化）
  */
 object BillOcrConfig {
     private const val KEY_ENABLED = "bill_ocr_enabled"
-    private const val KEY_MODE = "bill_ocr_mode"
-
-    /** 识别模式 */
-    const val MODE_OCR = "ocr"
-    const val MODE_HOOK = "hook"
 
     fun isEnabled(context: Context): Boolean =
         AccountingRepository.getSetting(context, KEY_ENABLED) == "true"
@@ -35,13 +30,7 @@ object BillOcrConfig {
     fun setEnabled(context: Context, enabled: Boolean) =
         AccountingRepository.setSetting(context, KEY_ENABLED, enabled.toString())
 
-    fun getOcrMode(context: Context): String =
-        AccountingRepository.getSetting(context, KEY_MODE) ?: MODE_OCR
-
-    fun setOcrMode(context: Context, mode: String) =
-        AccountingRepository.setSetting(context, KEY_MODE, mode)
-
-    /** 支持自动识别的 App */
+    /** 支持自动识别的 App（仅用于结果展示） */
     val supportedApps = setOf(
         "com.eg.android.AlipayGphone",  // 支付宝
         "com.tencent.mobileqq",         // QQ

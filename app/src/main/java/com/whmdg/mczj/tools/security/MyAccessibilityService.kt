@@ -73,27 +73,6 @@ class MyAccessibilityService : AccessibilityService() {
         return null
     }
 
-    /**
-     * 搜索所有窗口，找到包含在 supportedPkgs 中的应用窗口
-     * 返回 Pair(包名, 窗口在屏幕中的矩形区域)，未找到返回 null
-     */
-    fun findSupportedAppWindow(supportedPkgs: Set<String>): Pair<String, Rect>? {
-        val allWindows = windows ?: return null
-        for (window in allWindows) {
-            if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
-            val root = window.root ?: continue
-            val pkg = root.packageName?.toString() ?: continue
-            if (pkg in supportedPkgs) {
-                val bounds = Rect()
-                window.getBoundsInScreen(bounds)
-                if (bounds.width() > 0 && bounds.height() > 0) {
-                    return pkg to bounds
-                }
-            }
-        }
-        return null
-    }
-
     /** 窗口信息 */
     data class WindowInfo(
         val packageName: String,
