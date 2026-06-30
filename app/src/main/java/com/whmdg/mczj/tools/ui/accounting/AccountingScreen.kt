@@ -68,6 +68,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedTab: Int = 0, onTabSelect: (Int) -> Unit = {}) {
     val context = LocalContext.current
