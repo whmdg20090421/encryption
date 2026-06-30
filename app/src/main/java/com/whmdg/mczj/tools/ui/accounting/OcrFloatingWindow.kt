@@ -6,6 +6,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
@@ -320,31 +321,61 @@ object OcrFloatingWindow {
             }
 
             // 2. 在截图后立即获取包名并检测（动画前）
-            val pkg = service.topPackage ?: service.getTopPackageFromWindow()
+            val topPkg = service.topPackage ?: service.getTopPackageFromWindow()
+            var pkg = topPkg
+            var searchMode = false
+            var croppedScreenshot: Bitmap? = null
+
+            if (pkg == null || pkg !in BillOcrConfig.supportedApps) {
+                // 包名不在支持列表中，搜索所有窗口找支持的应用
+                val found = service.findSupportedAppWindow(BillOcrConfig.supportedApps)
+                if (found != null) {
+                    val (foundPkg, bounds) = found
+                    // 局部截图：裁剪到目标窗口区域
+                    val safeLeft = bounds.left.coerceIn(0, screenshot.width)
+                    val safeTop = bounds.top.coerceIn(0, screenshot.height)
+                    val safeRight = bounds.right.coerceIn(0, screenshot.width)
+                    val safeBottom = bounds.bottom.coerceIn(0, screenshot.height)
+                    val cropW = safeRight - safeLeft
+                    val cropH = safeBottom - safeTop
+                    if (cropW > 0 && cropH > 0) {
+                        croppedScreenshot = Bitmap.createBitmap(screenshot, safeLeft, safeTop, cropW, cropH)
+                        pkg = foundPkg
+                        searchMode = true
+                    }
+                }
+            }
+
             if (pkg == null || pkg !in BillOcrConfig.supportedApps) {
                 screenshot.recycle()
+                croppedScreenshot?.recycle()
                 val errorMsg = if (pkg == null) "未检测到前台应用"
                                else "当前应用不支持：${BillOcrConfig.getAppName(pkg)}"
                 showResult(context, bubble, density, null, errorMsg, null)
                 return@launch
             }
 
-            // 3. 包名有效，播放动画
-            showScreenshotAnimation(context, bubble, density, screenshot) {
-                // 4. 动画结束后显示转圈
+            // 3. 最终使用的截图（搜索模式用裁剪图，普通模式用全屏截图）
+            val ocrBitmap = croppedScreenshot ?: screenshot
+
+            // 4. 包名有效，播放动画
+            showScreenshotAnimation(context, bubble, density, ocrBitmap) {
+                // 5. 动画结束后显示转圈
                 val progress = bubble.getTag() as? ProgressBar
                 progress?.visibility = View.VISIBLE
 
-                // 5. OCR 识别（try-finally 确保 bitmap 回收）
+                // 6. OCR 识别（try-finally 确保 bitmap 回收）
                 scope?.launch {
                     try {
                         val result = withContext(Dispatchers.IO) {
-                            BillOcrEngine.recognizeFromBitmap(screenshot, pkg)
+                            BillOcrEngine.recognizeFromBitmap(ocrBitmap, pkg!!)
                         }
                         val debugText = if (result.bill == null) result.debugText else null
-                        showResult(context, bubble, density, result.bill, result.error, debugText)
+                        showResult(context, bubble, density, result.bill, result.error, debugText, searchMode)
                     } finally {
-                        screenshot.recycle()
+                        ocrBitmap.recycle()
+                        // 搜索模式下原始截图也需要回收
+                        if (searchMode) screenshot.recycle()
                         progress?.visibility = View.GONE
                     }
                 }
@@ -465,7 +496,8 @@ object OcrFloatingWindow {
         density: Float,
         result: OcrBillResult?,
         error: String?,
-        debugText: String?
+        debugText: String?,
+        searchMode: Boolean = false
     ) {
         val menuWidth = (MENU_WIDTH_DP * density).toInt()
         val padding = (12 * density).toInt()
@@ -480,8 +512,15 @@ object OcrFloatingWindow {
             setPadding(padding, padding, padding, padding)
         }
 
+        // 搜索模式标识
+        if (searchMode) {
+            menu.addView(createText(context, "搜索模式", 0xFFFFAB40.toInt(), 12f))
+        }
+
         if (error != null) {
-            menu.addView(createText(context, error, 0xFFFF5252.toInt(), 14f))
+            menu.addView(createText(context, error, 0xFFFF5252.toInt(), 14f).apply {
+                if (searchMode) setPadding(0, (6 * density).toInt(), 0, 0)
+            })
             // 显示调试信息
             if (debugText != null && debugText.isNotBlank()) {
                 menu.addView(createText(context, "提取到的文字:", 0xFF888888.toInt(), 11f).apply {
@@ -490,7 +529,9 @@ object OcrFloatingWindow {
                 menu.addView(createText(context, debugText, 0xFFAAAAAA.toInt(), 11f))
             }
         } else if (result != null) {
-            menu.addView(createText(context, "识别成功", 0xFF4CAF50.toInt(), 12f))
+            menu.addView(createText(context, "识别成功", 0xFF4CAF50.toInt(), 12f).apply {
+                if (searchMode) setPadding(0, (6 * density).toInt(), 0, 0)
+            })
 
             menu.addView(createText(context,
                 "${result.type}  ¥${String.format("%.2f", result.amount)}",
@@ -510,7 +551,9 @@ object OcrFloatingWindow {
                 setPadding(0, lineSpacing, 0, 0)
             })
         } else {
-            menu.addView(createText(context, "未识别到账单信息", 0xFFFF9800.toInt(), 14f))
+            menu.addView(createText(context, "未识别到账单信息", 0xFFFF9800.toInt(), 14f).apply {
+                if (searchMode) setPadding(0, (6 * density).toInt(), 0, 0)
+            })
         }
 
         // 关闭按钮
