@@ -4222,7 +4222,7 @@ private fun AutomationPage(onBack: () -> Unit) {
                             when {
                                 ocrEnabled && hasAccessibility && hasOverlay -> "已就绪，退出应用后显示悬浮窗"
                                 ocrEnabled -> "需要开启无障碍和悬浮窗权限"
-                                else -> "点击悬浮窗识别支付宝/QQ账单"
+                                else -> "点击悬浮窗识别支付宝/QQ/微信账单"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -4246,7 +4246,6 @@ private fun AutomationPage(onBack: () -> Unit) {
                                 }
                                 ocrEnabled = true
                                 BillOcrConfig.setEnabled(context, true)
-                                OcrFloatingWindow.show(context)
                                 android.widget.Toast.makeText(context, "OCR识别已就绪，退出应用后显示悬浮窗", android.widget.Toast.LENGTH_SHORT).show()
                             } else {
                                 ocrEnabled = false
@@ -4261,7 +4260,7 @@ private fun AutomationPage(onBack: () -> Unit) {
                 if (ocrEnabled) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "切换到支付宝/QQ后，点击悬浮窗进行识别",
+                        "切换到支付宝/QQ/微信后，点击悬浮窗进行识别",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
