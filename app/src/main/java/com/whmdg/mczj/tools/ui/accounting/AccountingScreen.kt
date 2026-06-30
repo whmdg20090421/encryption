@@ -24,7 +24,14 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -270,6 +277,9 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                     onNavigate = onNavigate,
                     refreshTrigger = accountRefreshTrigger
                 )
+            } else if (selectedTab == 2) {
+                // 统计标签页
+                StatisticsTabContent()
             } else if (selectedTab == 3) {
                 // 日历标签页
                 CalendarTabContent()
@@ -1160,6 +1170,590 @@ private fun CalendarTabContent() {
                 }
             }
         }
+    }
+}
+
+// ── 统计标签页 ──
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StatisticsTabContent() {
+    val context = LocalContext.current
+    val themeColor = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
+
+    // 顶部菜单状态
+    var selectedStatTab by remember { mutableIntStateOf(1) } // 0=周报 1=月报 2=年报 3=自定义
+    val statTabs = listOf("周报", "月报", "年报", "自定义")
+
+    // 月份选择状态
+    val today = Calendar.getInstance()
+    var selectedYear by remember { mutableIntStateOf(today.get(Calendar.YEAR)) }
+    var selectedMonth by remember { mutableIntStateOf(today.get(Calendar.MONTH)) }
+    val months = listOf("1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月")
+    val currentMonthIndex = today.get(Calendar.MONTH)
+
+    // 图表切换：0=日 1=周
+    var barChartMode by remember { mutableIntStateOf(0) }
+
+    // 加载记录数据
+    val recordDb = remember { AccountingRecordDb.load(context) }
+    val currentBookName = remember { AccountingRepository.getLastBookName(context) }
+
+    // 当月记录
+    val monthRecords = remember(recordDb, selectedYear, selectedMonth, currentBookName) {
+        recordDb.records.filter { record ->
+            if (record.bookName != currentBookName) return@filter false
+            val cal = Calendar.getInstance().apply { timeInMillis = record.happenedAt }
+            cal.get(Calendar.YEAR) == selectedYear && cal.get(Calendar.MONTH) == selectedMonth
+        }
+    }
+
+    // 汇总数据
+    val totalIncome = remember(monthRecords) {
+        monthRecords.filter { it.type == "收入" && it.reimbursementAccountId == null && !it.excludeFromStats }
+            .sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
+    }
+    val totalExpense = remember(monthRecords) {
+        monthRecords.filter { it.type == "支出" && it.reimbursementAccountId == null && !it.excludeFromStats }
+            .sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
+    }
+    val balance = remember(totalIncome, totalExpense) { totalIncome - totalExpense }
+
+    // 每日支出数据（用于柱状图）
+    val dailyExpenseData = remember(monthRecords) {
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.YEAR, selectedYear)
+            set(Calendar.MONTH, selectedMonth)
+        }
+        val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+        val dailyMap = mutableMapOf<Int, Double>()
+        for (d in 1..daysInMonth) dailyMap[d] = 0.0
+        monthRecords.filter { it.type == "支出" && it.reimbursementAccountId == null && !it.excludeFromStats }
+            .forEach { record ->
+                val cal2 = Calendar.getInstance().apply { timeInMillis = record.happenedAt }
+                val day = cal2.get(Calendar.DAY_OF_MONTH)
+                dailyMap[day] = (dailyMap[day] ?: 0.0) + (record.amount.toDoubleOrNull() ?: 0.0)
+            }
+        dailyMap.toMap()
+    }
+
+    // 每日收入数据（用于折线图）
+    val dailyIncomeData = remember(monthRecords) {
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.YEAR, selectedYear)
+            set(Calendar.MONTH, selectedMonth)
+        }
+        val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+        val dailyMap = mutableMapOf<Int, Double>()
+        for (d in 1..daysInMonth) dailyMap[d] = 0.0
+        monthRecords.filter { it.type == "收入" && it.reimbursementAccountId == null && !it.excludeFromStats }
+            .forEach { record ->
+                val cal2 = Calendar.getInstance().apply { timeInMillis = record.happenedAt }
+                val day = cal2.get(Calendar.DAY_OF_MONTH)
+                dailyMap[day] = (dailyMap[day] ?: 0.0) + (record.amount.toDoubleOrNull() ?: 0.0)
+            }
+        dailyMap.toMap()
+    }
+
+    // 柱状图选中日期
+    var barSelectedDay by remember { mutableIntStateOf(today.get(Calendar.DAY_OF_MONTH)) }
+    // 折线图选中日期
+    var lineSelectedDay by remember { mutableIntStateOf(today.get(Calendar.DAY_OF_MONTH)) }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        // ── 顶部菜单区 ──
+        item {
+            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                // 上排：4个选项 + 更多按钮
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    statTabs.forEachIndexed { index, label ->
+                        val isSelected = selectedStatTab == index
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .then(
+                                    if (isSelected) Modifier.background(
+                                        themeColor.copy(alpha = 0.15f),
+                                        RoundedCornerShape(8.dp)
+                                    ) else Modifier
+                                )
+                                .clickable { selectedStatTab = index }
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                ),
+                                color = if (isSelected) themeColor else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "更多",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                // 下排：年份 + 可滑动月份
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "$selectedYear",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    // 月份横向滑动
+                    val monthScrollState = rememberScrollState()
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(monthScrollState),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        months.forEachIndexed { index, label ->
+                            val isCurrentMonth = index == selectedMonth
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.clickable { selectedMonth = index }
+                            ) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = if (isCurrentMonth) FontWeight.Bold else FontWeight.Normal
+                                    ),
+                                    color = if (isCurrentMonth) themeColor else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (isCurrentMonth) {
+                                    Spacer(Modifier.height(2.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .size(4.dp)
+                                            .background(themeColor, CircleShape)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        item { Spacer(Modifier.height(16.dp)) }
+
+        // ── 数据汇总卡片 ──
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        // 收入
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("收入", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                String.format("%.2f", totalIncome),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color(0xFF4CAF50)
+                            )
+                        }
+                        // 结余
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("结余", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                String.format("%.2f", balance),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = themeColor
+                            )
+                        }
+                        // 支出
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text("支出", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                String.format("%.2f", totalExpense),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color(0xFFEF5350)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+
+        item { Spacer(Modifier.height(16.dp)) }
+
+        // ── 柱状图卡片 ──
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // 头部
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "支出趋势",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.BarChart,
+                            contentDescription = null,
+                            tint = themeColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.weight(1f))
+                        // 胶囊按钮：日/周
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(2.dp)
+                        ) {
+                            Row(modifier = Modifier.padding(2.dp)) {
+                                listOf("日", "周").forEachIndexed { index, label ->
+                                    val selected = barChartMode == index
+                                    Surface(
+                                        onClick = { barChartMode = index },
+                                        shape = RoundedCornerShape(50),
+                                        color = if (selected) themeColor else Color.Transparent,
+                                        modifier = Modifier.padding(horizontal = 1.dp)
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    // 柱状图 Canvas
+                    val barData = dailyExpenseData.toSortedMap()
+                    val maxBarValue = barData.values.maxOrNull()?.let { if (it == 0.0) 1.0 else it } ?: 1.0
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(160.dp)
+                    ) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val chartWidth = size.width - 40.dp.toPx()
+                            val chartHeight = size.height - 20.dp.toPx()
+                            val chartLeft = 40.dp.toPx()
+                            val chartTop = 0f
+                            val barCount = barData.size
+                            if (barCount == 0) return@Canvas
+                            val barWidth = chartWidth / barCount * 0.6f
+                            val barGap = chartWidth / barCount
+
+                            // Y轴刻度线
+                            for (i in 0..4) {
+                                val y = chartTop + chartHeight * (1 - i / 4f)
+                                drawLine(
+                                    color = Color.LightGray.copy(alpha = 0.3f),
+                                    start = Offset(chartLeft, y),
+                                    end = Offset(chartLeft + chartWidth, y),
+                                    strokeWidth = 1.dp.toPx()
+                                )
+                            }
+
+                            // 柱子
+                            barData.entries.forEachIndexed { index, (day, value) ->
+                                val barHeight = (value / maxBarValue * chartHeight).toFloat()
+                                val x = chartLeft + barGap * index + (barGap - barWidth) / 2
+                                val isSelected = day == barSelectedDay
+                                drawRoundRect(
+                                    color = if (isSelected) themeColor else themeColor.copy(alpha = 0.4f),
+                                    topLeft = Offset(x, chartTop + chartHeight - barHeight),
+                                    size = Size(barWidth, barHeight),
+                                    cornerRadius = CornerRadius(3.dp.toPx())
+                                )
+                            }
+                        }
+                        // Y轴刻度文字
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .width(36.dp)
+                                .height(160.dp),
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            for (i in 4 downTo 0) {
+                                Text(
+                                    text = String.format("%.0f", maxBarValue * i / 4),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.End,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                        // X轴刻度文字（每隔几个显示）
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(start = 40.dp)
+                                .fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            barData.keys.forEachIndexed { index, day ->
+                                if (index % 5 == 0 || index == barData.size - 1) {
+                                    Text(
+                                        text = "$day",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                        // 右下浮动标签
+                        val selectedBarValue = barData[barSelectedDay] ?: 0.0
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(bottom = 20.dp)
+                        ) {
+                            Text(
+                                text = "${barSelectedDay}日 ¥${String.format("%.0f", selectedBarValue)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        item { Spacer(Modifier.height(16.dp)) }
+
+        // ── 折线图卡片 ──
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // 头部
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "收入趋势",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    // 折线图 Canvas
+                    val lineData = dailyIncomeData.toSortedMap()
+                    val maxLineValue = lineData.values.maxOrNull()?.let { if (it == 0.0) 1.0 else it } ?: 1.0
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(160.dp)
+                    ) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val chartWidth = size.width - 40.dp.toPx()
+                            val chartHeight = size.height - 20.dp.toPx()
+                            val chartLeft = 40.dp.toPx()
+                            val chartTop = 0f
+                            val pointCount = lineData.size
+                            if (pointCount == 0) return@Canvas
+                            val pointGap = chartWidth / (pointCount - 1).coerceAtLeast(1)
+
+                            // Y轴刻度线
+                            for (i in 0..4) {
+                                val y = chartTop + chartHeight * (1 - i / 4f)
+                                drawLine(
+                                    color = Color.LightGray.copy(alpha = 0.3f),
+                                    start = Offset(chartLeft, y),
+                                    end = Offset(chartLeft + chartWidth, y),
+                                    strokeWidth = 1.dp.toPx()
+                                )
+                            }
+
+                            // 构建折线路径
+                            val linePath = Path()
+                            val areaPath = Path()
+                            val points = lineData.entries.mapIndexed { index, (_, value) ->
+                                val x = chartLeft + pointGap * index
+                                val y = chartTop + chartHeight * (1 - (value / maxLineValue)).toFloat()
+                                Offset(x, y)
+                            }
+                            points.forEachIndexed { index, point ->
+                                if (index == 0) {
+                                    linePath.moveTo(point.x, point.y)
+                                    areaPath.moveTo(point.x, chartTop + chartHeight)
+                                    areaPath.lineTo(point.x, point.y)
+                                } else {
+                                    linePath.lineTo(point.x, point.y)
+                                    areaPath.lineTo(point.x, point.y)
+                                }
+                            }
+                            // 闭合面积
+                            if (points.isNotEmpty()) {
+                                areaPath.lineTo(points.last().x, chartTop + chartHeight)
+                                areaPath.close()
+                            }
+
+                            // 绘制面积填充（淡灰色）
+                            drawPath(
+                                path = areaPath,
+                                color = Color.Gray.copy(alpha = 0.1f)
+                            )
+                            // 绘制折线（主题色）
+                            drawPath(
+                                path = linePath,
+                                color = themeColor,
+                                style = Stroke(width = 2.dp.toPx())
+                            )
+                        }
+                        // Y轴刻度文字
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .width(36.dp)
+                                .height(160.dp),
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            for (i in 4 downTo 0) {
+                                Text(
+                                    text = String.format("%.0f", maxLineValue * i / 4),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.End,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                        // X轴刻度文字
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(start = 40.dp)
+                                .fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            lineData.keys.forEachIndexed { index, day ->
+                                if (index % 5 == 0 || index == lineData.size - 1) {
+                                    Text(
+                                        text = "$day",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                        // 右上浮动信息方块
+                        val selectedLineValue = lineData[lineSelectedDay] ?: 0.0
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 4.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "${selectedMonth + 1}月${lineSelectedDay}日",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "¥${String.format("%.0f", selectedLineValue)}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 底部留白
+        item { Spacer(Modifier.height(80.dp)) }
     }
 }
 
