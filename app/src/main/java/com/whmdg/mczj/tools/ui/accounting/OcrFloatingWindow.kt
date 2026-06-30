@@ -78,6 +78,9 @@ object OcrFloatingWindow {
         }
     }
 
+    /** 悬浮窗是否正在显示 */
+    fun isVisible(): Boolean = bubbleView != null
+
     /** 移除悬浮窗 */
     fun dismiss() {
         scope?.cancel()
@@ -291,7 +294,7 @@ object OcrFloatingWindow {
         val service = MyAccessibilityService.instance
         if (service == null) {
             progress?.visibility = View.GONE
-            showResult(context, bubble, density, null, "无障碍服务未运行")
+            showResult(context, bubble, density, null, "无障碍服务未运行", null)
             return
         }
 
@@ -300,7 +303,11 @@ object OcrFloatingWindow {
                 BillOcrEngine.recognizeNow(service)
             }
             progress?.visibility = View.GONE
-            showResult(context, bubble, density, result, null)
+            // 提取原始文字用于调试
+            val debugText = if (result.bill == null) {
+                service.extractAllText().take(200)
+            } else null
+            showResult(context, bubble, density, result.bill, result.error, debugText)
         }
     }
 
@@ -311,7 +318,8 @@ object OcrFloatingWindow {
         bubble: FrameLayout,
         density: Float,
         result: OcrBillResult?,
-        error: String?
+        error: String?,
+        debugText: String?
     ) {
         val menuWidth = (MENU_WIDTH_DP * density).toInt()
         val padding = (12 * density).toInt()
@@ -328,6 +336,13 @@ object OcrFloatingWindow {
 
         if (error != null) {
             menu.addView(createText(context, error, 0xFFFF5252.toInt(), 14f))
+            // 显示调试信息
+            if (debugText != null && debugText.isNotBlank()) {
+                menu.addView(createText(context, "提取到的文字:", 0xFF888888.toInt(), 11f).apply {
+                    setPadding(0, (8 * density).toInt(), 0, 0)
+                })
+                menu.addView(createText(context, debugText, 0xFFAAAAAA.toInt(), 11f))
+            }
         } else if (result != null) {
             menu.addView(createText(context, "识别成功", 0xFF4CAF50.toInt(), 12f))
 

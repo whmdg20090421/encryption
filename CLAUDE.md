@@ -497,6 +497,37 @@ Screen.AddReimbursementAccount — 添加报销账户
 
 **附件系统**：文件存储于 `AppDataPaths.accountingAttachments()`，支持从相册选取和拍照。删除附件时进入回收站（`attachment_trash` 表），支持恢复和永久清理。账单删除时级联更新回收站状态。
 
+### 悬浮窗 OCR 架构（Overlay + Service + ProcessLifecycleOwner）
+
+采用 **Service 托管悬浮窗 + ProcessLifecycleOwner 驱动生命周期** 的标准分层架构：
+
+```
+ProcessLifecycleOwner（应用级生命周期）
+    │ ON_STOP → 延迟 300ms → startService
+    │ ON_START → 延迟 300ms → stopService
+    ▼
+OcrFloatingService（普通 Service，非前台）
+    │ onCreate → OcrFloatingWindow.show(context)
+    │ onDestroy → OcrFloatingWindow.dismiss()
+    ▼
+OcrFloatingWindow（WindowManager 视图管理）
+    │ TYPE_APPLICATION_OVERLAY
+    │ 状态机：BUBBLE → MENU → LOADING → RESULT
+    ▼
+BillOcrEngine.recognizeNow()（无障碍节点树文字提取 + 关键词 + 正则）
+```
+
+**关键设计决策**：
+
+- **防抖（Debounce）**：`ProcessLifecycleOwner` 的 `onStop`/`onStart` 在 Dialog、PopupWindow、系统权限弹窗出现时会短暂触发。使用 300ms `Handler.postDelayed` 延迟，配合 `cancelPending` 互斥取消，避免悬浮窗闪现。
+- **Service 托管**：悬浮窗 View 的生命周期绑定到 Service 而非 Activity 或 Application。`startService`/`stopService` 是显式生命周期边界，比直接在 Observer 中操作 WindowManager 更可靠（系统保证 `onDestroy` 调用，避免窗口泄漏）。
+- **普通 Service vs 前台 Service**：悬浮窗 Service 不需要常驻通知栏，使用普通 `startService` 即可。`TYPE_APPLICATION_OVERLAY` 不要求前台服务。
+- **ProcessLifecycleOwner vs AccessibilityService 事件**：`TYPE_WINDOW_STATE_CHANGED` 会因悬浮窗自身获得焦点而触发（`packageName == 本应用`），导致自消失问题。`ProcessLifecycleOwner` 基于 Activity 可见性计数，不受 Overlay 窗口焦点影响，是检测应用级前后台切换的正确 API。
+
+**权限**：
+- `SYSTEM_ALERT_WINDOW`：悬浮窗权限，`Settings.canDrawOverlays()` 检测
+- `BIND_ACCESSIBILITY_SERVICE`：无障碍权限，用于节点树文字提取
+
 ### Xposed 模块
 
 - `xposed/XposedInit.kt`：继承 `XposedModule`（libxposed API），`onPackageLoaded()` / `onSystemServerLoaded()` 为 hook 入口

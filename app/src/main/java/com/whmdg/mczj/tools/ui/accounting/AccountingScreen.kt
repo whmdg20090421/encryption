@@ -4188,7 +4188,7 @@ private fun AutomationPage(onBack: () -> Unit) {
                     if ((!hasAccessibility || !hasOverlay) && ocrEnabled) {
                         ocrEnabled = false
                         BillOcrConfig.setEnabled(context, false)
-                        OcrFloatingWindow.dismiss()
+                        OcrFloatingService.stop(context)
                     }
                 }
             }
@@ -4250,7 +4250,7 @@ private fun AutomationPage(onBack: () -> Unit) {
                             } else {
                                 ocrEnabled = false
                                 BillOcrConfig.setEnabled(context, false)
-                                OcrFloatingWindow.dismiss()
+                                OcrFloatingService.stop(context)
                             }
                         }
                     )

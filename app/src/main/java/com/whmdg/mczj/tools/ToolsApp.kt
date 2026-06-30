@@ -33,6 +33,11 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
         AppIconHelper.init(this)
         WebView.setDataDirectorySuffix("app")
 
+        // OCR 悬浮窗：监听应用前后台切换
+        androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(
+            com.whmdg.mczj.tools.ui.accounting.OcrLifecycleObserver(this)
+        )
+
         // WebDAV: 初始化 Client 认证器
         com.whmdg.mczj.tools.fileop.webdav.client.Client.authenticator =
             com.whmdg.mczj.tools.fileop.webdav.WebDavAuthenticator

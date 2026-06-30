@@ -9,17 +9,38 @@ import com.whmdg.mczj.tools.security.MyAccessibilityService
  */
 object BillOcrEngine {
 
-    /** 同步识别当前屏幕，返回结果或 null */
-    fun recognizeNow(service: MyAccessibilityService): OcrBillResult? {
+    /** 识别结果：成功或带原因的失败 */
+    data class RecognizeResult(
+        val bill: OcrBillResult?,
+        val error: String? = null
+    )
+
+    /** 同步识别当前屏幕 */
+    fun recognizeNow(service: MyAccessibilityService): RecognizeResult {
         val text = service.extractAllText()
-        if (text.isBlank()) return null
+        if (text.isBlank()) {
+            return RecognizeResult(null, "未获取到页面文字")
+        }
 
-        val pkg = service.topPackage ?: return null
-        if (pkg !in BillOcrConfig.supportedApps) return null
+        // 优先使用 topPackage（事件更新），回退到从窗口节点获取
+        val pkg = service.topPackage ?: service.getTopPackageFromWindow()
+        if (pkg == null) {
+            return RecognizeResult(null, "未检测到前台应用")
+        }
+        if (pkg !in BillOcrConfig.supportedApps) {
+            return RecognizeResult(null, "当前应用不支持：${BillOcrConfig.getAppName(pkg)}")
+        }
 
-        if (!matchesBillKeywords(text)) return null
+        if (!matchesBillKeywords(text)) {
+            return RecognizeResult(null, "未匹配到账单关键词")
+        }
 
-        return parseBill(text, pkg)
+        val bill = parseBill(text, pkg)
+        if (bill == null) {
+            return RecognizeResult(null, "未解析到金额信息")
+        }
+
+        return RecognizeResult(bill)
     }
 
     // ── 关键词过滤（参考 AutoAccounting AnalysisUtils.inWhitelist） ──

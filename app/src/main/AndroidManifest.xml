@@ -145,6 +145,11 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!-- OCR 悬浮窗 Service -->
+        <service
+            android:name=".ui.accounting.OcrFloatingService"
+            android:exported="false" />
+
         <!-- 文件操作 Service（复制/移动/删除任务执行） -->
         <service
             android:name=".fileop.FileOperationService"
