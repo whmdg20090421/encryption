@@ -132,6 +132,7 @@ dependencies {
 
     // ML Kit OCR 文字识别
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
 
     // WebDAV
     implementation("com.github.bitfireAT:dav4jvm:02fe1a95e6b86e323bec3784d7d2fe2d4081dde6") {

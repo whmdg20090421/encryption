@@ -74,12 +74,12 @@ object BillOcrEngine {
         }
 
         if (!matchesBillKeywords(text)) {
-            return RecognizeResult(null, "未匹配到账单关键词", text.take(200))
+            return RecognizeResult(bill = null, error = "未匹配到账单关键词", debugText = text.take(200))
         }
 
         val bill = parseBill(text, pkg)
         if (bill == null) {
-            return RecognizeResult(null, "未解析到金额信息", text.take(200))
+            return RecognizeResult(bill = null, error = "未解析到金额信息", debugText = text.take(200))
         }
 
         return RecognizeResult(bill)
