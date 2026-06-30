@@ -324,8 +324,9 @@ object OcrFloatingWindow {
             screenshot.recycle()
             progress?.visibility = View.GONE
 
-            // 5. 显示结果
-            showResult(context, bubble, density, result.bill, result.error, null)
+            // 5. 显示结果（失败时显示识别到的文字）
+            val debugText = if (result.bill == null) result.debugText else null
+            showResult(context, bubble, density, result.bill, result.error, debugText)
         }
     }
 

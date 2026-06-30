@@ -17,7 +17,8 @@ object BillOcrEngine {
     /** 识别结果：成功或带原因的失败 */
     data class RecognizeResult(
         val bill: OcrBillResult?,
-        val error: String? = null
+        val error: String? = null,
+        val debugText: String? = null  // 识别到的文字（用于调试）
     )
 
     private val textRecognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
@@ -73,12 +74,12 @@ object BillOcrEngine {
         }
 
         if (!matchesBillKeywords(text)) {
-            return RecognizeResult(null, "未匹配到账单关键词")
+            return RecognizeResult(null, "未匹配到账单关键词", text.take(200))
         }
 
         val bill = parseBill(text, pkg)
         if (bill == null) {
-            return RecognizeResult(null, "未解析到金额信息")
+            return RecognizeResult(null, "未解析到金额信息", text.take(200))
         }
 
         return RecognizeResult(bill)
