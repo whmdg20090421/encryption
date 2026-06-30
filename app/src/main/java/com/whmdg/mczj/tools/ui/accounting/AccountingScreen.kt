@@ -1611,7 +1611,11 @@ private fun StatisticsTabContent() {
 
                     // 折线图 Canvas
                     val lineData = dailyAssetData.toSortedMap()
-                    val maxLineValue = lineData.values.maxOrNull()?.let { if (it == 0.0) 1.0 else it } ?: 1.0
+                    val rawMin = lineData.values.minOrNull() ?: 0.0
+                    val rawMax = lineData.values.maxOrNull() ?: 0.0
+                    val lineAlpha = (rawMax - rawMin) * 0.1
+                    val minLineValue = rawMin - lineAlpha
+                    val maxLineValue = if (rawMax + lineAlpha == minLineValue) minLineValue + 1.0 else rawMax + lineAlpha
                     val lineAnimProgress = remember { Animatable(0f) }
                     LaunchedEffect(lineData) {
                         lineAnimProgress.snapTo(0f)
@@ -1640,10 +1644,11 @@ private fun StatisticsTabContent() {
                             val labelX = chartLeft - 4.dp.toPx()
 
                             // Y轴刻度文字 + 刻度线
+                            val lineRange = maxLineValue - minLineValue
                             for (i in 0..4) {
                                 val y = chartTop + chartHeight * (1 - i / 4f)
                                 drawIntoCanvas { canvas -> canvas.nativeCanvas.drawText(
-                                    String.format("%.0f", maxLineValue * i / 4), labelX, y + 3.dp.toPx(), textPaint
+                                    String.format("%.0f", minLineValue + lineRange * i / 4), labelX, y + 3.dp.toPx(), textPaint
                                 ) }
                                 drawLine(
                                     color = Color.LightGray.copy(alpha = 0.3f),
@@ -1658,7 +1663,7 @@ private fun StatisticsTabContent() {
                             val areaPath = Path()
                             val points = lineData.entries.mapIndexed { index, (_, value) ->
                                 val x = chartLeft + pointGap * index
-                                val y = chartTop + chartHeight * (1 - (value / maxLineValue)).toFloat()
+                                val y = chartTop + chartHeight * (1 - ((value - minLineValue) / lineRange)).toFloat()
                                 Offset(x, y)
                             }
                             points.forEachIndexed { index, point ->
@@ -4168,8 +4173,24 @@ private fun AutomationPage(onBack: () -> Unit) {
         var showOcrResult by remember { mutableStateOf(false) }
         var ocrResult by remember { mutableStateOf<OcrBillResult?>(null) }
 
-        val hasAccessibility = remember {
-            com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isAccessibilityEnabled(context)
+        var hasAccessibility by remember {
+            mutableStateOf(com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isAccessibilityEnabled(context))
+        }
+
+        // 从设置页返回时重新检测无障碍权限
+        DisposableEffect(Unit) {
+            val activity = context as? android.app.Activity
+            val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                    hasAccessibility = com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isAccessibilityEnabled(context)
+                    if (!hasAccessibility && ocrEnabled) {
+                        ocrEnabled = false
+                        BillOcrConfig.setEnabled(context, false)
+                    }
+                }
+            }
+            (activity as? androidx.lifecycle.LifecycleOwner)?.lifecycle?.addObserver(observer)
+            onDispose { (activity as? androidx.lifecycle.LifecycleOwner)?.lifecycle?.removeObserver(observer) }
         }
 
         // 进入页面时检查是否有缓存的识别结果
@@ -4215,14 +4236,18 @@ private fun AutomationPage(onBack: () -> Unit) {
                     Switch(
                         checked = ocrEnabled,
                         onCheckedChange = { newValue ->
-                            if (newValue && !hasAccessibility) {
-                                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                                android.widget.Toast.makeText(context, "请先开启无障碍服务", android.widget.Toast.LENGTH_LONG).show()
-                            }
-                            ocrEnabled = newValue
-                            BillOcrConfig.setEnabled(context, newValue)
-                            if (newValue && hasAccessibility) {
+                            if (newValue) {
+                                if (!hasAccessibility) {
+                                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                                    android.widget.Toast.makeText(context, "请先开启无障碍服务", android.widget.Toast.LENGTH_LONG).show()
+                                    return@Switch
+                                }
+                                ocrEnabled = true
+                                BillOcrConfig.setEnabled(context, true)
                                 android.widget.Toast.makeText(context, "OCR识别已就绪", android.widget.Toast.LENGTH_SHORT).show()
+                            } else {
+                                ocrEnabled = false
+                                BillOcrConfig.setEnabled(context, false)
                             }
                         }
                     )
