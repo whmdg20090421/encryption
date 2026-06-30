@@ -1,7 +1,6 @@
 package com.whmdg.mczj.tools.ui.accounting
 
 import android.content.Context
-import com.whmdg.mczj.tools.AppDataPaths
 import java.util.UUID
 
 /**
@@ -20,18 +19,27 @@ data class OcrBillResult(
 )
 
 /**
- * 账单 OCR 配置持久化
+ * 账单自动识别配置（通过 AccountingRepository settings 表持久化）
  */
 object BillOcrConfig {
-    private const val PREFS = AppDataPaths.PREFS_ACCOUNTING
+    private const val KEY_ENABLED = "bill_ocr_enabled"
+    private const val KEY_MODE = "bill_ocr_mode"
+
+    /** 识别模式 */
+    const val MODE_OCR = "ocr"
+    const val MODE_HOOK = "hook"
 
     fun isEnabled(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean("bill_ocr_enabled", false)
+        AccountingRepository.getSetting(context, KEY_ENABLED) == "true"
 
     fun setEnabled(context: Context, enabled: Boolean) =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putBoolean("bill_ocr_enabled", enabled).apply()
+        AccountingRepository.setSetting(context, KEY_ENABLED, enabled.toString())
+
+    fun getOcrMode(context: Context): String =
+        AccountingRepository.getSetting(context, KEY_MODE) ?: MODE_OCR
+
+    fun setOcrMode(context: Context, mode: String) =
+        AccountingRepository.setSetting(context, KEY_MODE, mode)
 
     /** 支持自动识别的 App */
     val supportedApps = setOf(

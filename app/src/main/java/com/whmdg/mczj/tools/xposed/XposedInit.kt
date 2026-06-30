@@ -16,7 +16,9 @@ class XposedInit(base: XposedContext, param: ModuleLoadedParam) : XposedModule(b
     override fun onPackageLoaded(param: PackageLoadedParam) {
         log("艨艟: 包已加载: ${param.packageName}, first=${param.isFirstPackage}")
 
-        // TODO: 在此处添加 hook 逻辑
+        if (param.packageName == "com.tencent.mm") {
+            com.whmdg.mczj.tools.xposed.hooks.WechatBillHooker.register(this, param)
+        }
     }
 
     override fun onSystemServerLoaded(param: SystemServerLoadedParam) {
