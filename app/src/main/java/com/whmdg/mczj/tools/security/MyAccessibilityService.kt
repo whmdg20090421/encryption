@@ -68,7 +68,7 @@ class MyAccessibilityService : AccessibilityService() {
     /**
      * 截取当前屏幕（Android 11+）
      * 截图数据在内存中，不保存到文件
-     * 注意：返回的是硬件位图，需要调用 toSoftwareBitmap() 转换后才能用于 ML Kit
+     * 注意：返回的是硬件位图，需要在 IO 线程调用 toSoftwareBitmap() 转换
      */
     suspend fun takeScreenshot(): Bitmap? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
@@ -84,7 +84,6 @@ class MyAccessibilityService : AccessibilityService() {
                             result.colorSpace
                         )
                         result.hardwareBuffer.close()
-                        // 直接返回硬件位图，不在主线程做格式转换
                         if (continuation.isActive) {
                             continuation.resume(hardwareBitmap)
                         }
@@ -102,14 +101,15 @@ class MyAccessibilityService : AccessibilityService() {
 
     /**
      * 将硬件位图转换为软件位图（ARGB_8888）
-     * 应在 IO 线程调用
+     * 使用 Bitmap.copy() 方法，标准规范写法
+     * 必须在 IO 线程调用
      */
     fun Bitmap.toSoftwareBitmap(): Bitmap {
         if (config != Bitmap.Config.HARDWARE) return this
-        val softwareBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(softwareBitmap)
-        canvas.drawBitmap(this, 0f, 0f, null)
+        // 使用 copy 方法将硬件位图转为软件位图
+        val softwareBitmap = copy(Bitmap.Config.ARGB_8888, false)
+        // 硬件位图占用显存，用完必须回收
         recycle()
-        return softwareBitmap
+        return softwareBitmap ?: throw IllegalStateException("Failed to convert hardware bitmap to software bitmap")
     }
 }
