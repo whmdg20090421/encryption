@@ -2,8 +2,8 @@ package com.whmdg.mczj.tools.xposed.hooks
 
 import android.content.Context
 import android.content.Intent
-import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedInterface
+import io.github.libxposed.api.XposedModule
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentLinkedQueue
 
@@ -32,19 +32,18 @@ object WebViewBillHooker {
             android.webkit.ValueCallback::class.java
         )
 
-        module.hook(evaluateMethod)
-            .setPriority(XposedModule.PRIORITY_DEFAULT)
-            .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
-            .intercept { chain ->
-                val js = chain.getArgs().toArray()[0] as? String
-                val result = chain.proceed()
-                try {
-                    if (js != null) {
-                        handleEvaluateJavascript(js, module)
-                    }
-                } catch (_: Throwable) {}
-                result
+        module.hook(evaluateMethod, object : XposedInterface.Hooker<java.lang.reflect.Method> {
+            override fun before(callback: XposedInterface.BeforeHookCallback<java.lang.reflect.Method>) {
+                // 不拦截原始调用
             }
+
+            override fun after(callback: XposedInterface.AfterHookCallback<java.lang.reflect.Method>) {
+                val js = callback.getArg<String>(0) ?: return
+                try {
+                    handleEvaluateJavascript(js, module)
+                } catch (_: Throwable) {}
+            }
+        })
     }
 
     private fun handleEvaluateJavascript(js: String, module: XposedModule) {
