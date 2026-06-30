@@ -33,6 +33,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -1292,6 +1293,9 @@ private fun StatisticsTabContent() {
     // 折线图选中日期
     var lineSelectedDay by remember { mutableIntStateOf(today.get(Calendar.DAY_OF_MONTH)) }
 
+    // Canvas 公用变量
+    val axisLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -1496,7 +1500,6 @@ private fun StatisticsTabContent() {
                     // 柱状图 Canvas（正负柱状图：正=绿色，负=红色）
                     val barData = dailyNetData.toSortedMap()
                     val maxAbs = barData.values.maxOfOrNull { kotlin.math.abs(it) }?.let { if (it == 0.0) 1.0 else it } ?: 1.0
-                    val axisLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1525,9 +1528,9 @@ private fun StatisticsTabContent() {
                             val yLabels = listOf(maxAbs, maxAbs / 2, 0.0, -maxAbs / 2, -maxAbs)
                             yLabels.forEachIndexed { i, value ->
                                 val y = chartTop + chartHeight * i / 4f
-                                drawContext.canvas.nativeCanvas.drawText(
+                                drawIntoCanvas { canvas -> canvas.nativeCanvas.drawText(
                                     String.format("%.0f", value), labelX, y + 3.dp.toPx(), textPaint
-                                )
+                                ) }
                                 drawLine(
                                     color = if (i == 2) Color.LightGray.copy(alpha = 0.5f) else Color.LightGray.copy(alpha = 0.2f),
                                     start = Offset(chartLeft, y),
@@ -1640,9 +1643,9 @@ private fun StatisticsTabContent() {
                             // Y轴刻度文字 + 刻度线
                             for (i in 0..4) {
                                 val y = chartTop + chartHeight * (1 - i / 4f)
-                                drawContext.canvas.nativeCanvas.drawText(
+                                drawIntoCanvas { canvas -> canvas.nativeCanvas.drawText(
                                     String.format("%.0f", maxLineValue * i / 4), labelX, y + 3.dp.toPx(), textPaint
-                                )
+                                ) }
                                 drawLine(
                                     color = Color.LightGray.copy(alpha = 0.3f),
                                     start = Offset(chartLeft, y),
