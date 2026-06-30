@@ -32,6 +32,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -269,6 +270,9 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                     onNavigate = onNavigate,
                     refreshTrigger = accountRefreshTrigger
                 )
+            } else if (selectedTab == 3) {
+                // 日历标签页
+                CalendarTabContent()
             } else {
                 // 其他 tab：简单占位
                 LazyColumn(
@@ -666,14 +670,17 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                 shadowElevation = 8.dp
             ) {
                 Row(modifier = Modifier.height(56.dp)) {
-                    // 最左：多选（退出多选模式）
+                    // 最左：全选
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
                             .clickable {
-                                isMultiSelectMode = false
-                                selectedRecordIds = emptySet()
+                                val allIds = allRecords
+                                    .filter { it.bookName == currentBookName }
+                                    .map { it.id }
+                                    .toSet()
+                                selectedRecordIds = if (selectedRecordIds.size == allIds.size) emptySet() else allIds
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -685,14 +692,14 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                                 .padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Checklist,
-                                contentDescription = "多选",
-                                tint = Color.White,
+                                imageVector = Icons.Default.SelectAll,
+                                contentDescription = "全选",
+                                tint = fabThemeColor,
                                 modifier = Modifier.size(22.dp)
                             )
                             Spacer(Modifier.height(1.dp))
                             Text(
-                                text = "多选",
+                                text = "全选",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Normal
@@ -717,7 +724,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                             Icon(
                                 imageVector = Icons.Default.Group,
                                 contentDescription = "组合",
-                                tint = Color.White,
+                                tint = fabThemeColor,
                                 modifier = Modifier.size(22.dp)
                             )
                             Spacer(Modifier.height(1.dp))
@@ -747,7 +754,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                             Icon(
                                 imageVector = Icons.Default.BarChart,
                                 contentDescription = "统计",
-                                tint = Color.White,
+                                tint = fabThemeColor,
                                 modifier = Modifier.size(22.dp)
                             )
                             Spacer(Modifier.height(1.dp))
@@ -780,7 +787,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                             Icon(
                                 imageVector = Icons.Default.Settings,
                                 contentDescription = "设置",
-                                tint = Color.White,
+                                tint = fabThemeColor,
                                 modifier = Modifier.size(22.dp)
                             )
                             Spacer(Modifier.height(1.dp))
@@ -1013,6 +1020,143 @@ private fun AssetTabContent(onAddAccount: () -> Unit, onNavigate: (Screen) -> Un
                         accounts = valuationAccounts,
                         onAccountClick = { onNavigate(Screen.AssetDetail(it.id)) }
                     )
+                }
+            }
+        }
+    }
+}
+
+// ── 日历标签页 ──
+
+@Composable
+private fun CalendarTabContent() {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val screenHeight = configuration.screenHeightDp.dp
+    val calendarHeight = screenHeight * 0.4f
+
+    val today = Calendar.getInstance()
+    val todayYear = today.get(Calendar.YEAR)
+    val todayMonth = today.get(Calendar.MONTH)
+    val todayDay = today.get(Calendar.DAY_OF_MONTH)
+
+    var year by remember { mutableIntStateOf(todayYear) }
+    var month by remember { mutableIntStateOf(todayMonth) }
+    var selectedDay by remember { mutableIntStateOf(todayDay) }
+
+    val weekdays = listOf("一", "二", "三", "四", "五", "六", "日")
+    val themeColor = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = 15.dp)
+    ) {
+        // 年份+月份
+        Text(
+            text = "${year}年${month + 1}月",
+            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+            color = Color.Black,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 15.dp)
+        )
+
+        // 第二排预留空间
+        Spacer(Modifier.height(8.dp))
+
+        // 日历卡片区域
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(calendarHeight)
+                .padding(horizontal = 15.dp)
+        ) {
+            // 星期排头
+            Row(modifier = Modifier.fillMaxWidth()) {
+                weekdays.forEach { day ->
+                    Text(
+                        text = day,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Black,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // 计算当月信息
+            val cal = Calendar.getInstance().apply {
+                set(Calendar.YEAR, year)
+                set(Calendar.MONTH, month)
+                set(Calendar.DAY_OF_MONTH, 1)
+            }
+            val firstDayOfWeek = cal.get(Calendar.DAY_OF_WEEK) // 1=周日, 2=周一...
+            val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+            // 转换为周一起始的偏移量（周日=0, 周一=1...）
+            val startOffset = if (firstDayOfWeek == Calendar.SUNDAY) 6 else firstDayOfWeek - 2
+
+            val totalCells = startOffset + daysInMonth
+            val rows = (totalCells + 6) / 7
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pointerInput(Unit) {
+                        detectHorizontalDragGestures { _, dragAmount ->
+                            if (dragAmount < -50) {
+                                // 左滑：下一个月
+                                if (month == Calendar.DECEMBER) {
+                                    year++; month = Calendar.JANUARY
+                                } else {
+                                    month++
+                                }
+                            } else if (dragAmount > 50) {
+                                // 右滑：上一个月
+                                if (month == Calendar.JANUARY) {
+                                    year--; month = Calendar.DECEMBER
+                                } else {
+                                    month--
+                                }
+                            }
+                        }
+                    },
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                for (row in 0 until rows) {
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        for (col in 0 until 7) {
+                            val dayIndex = row * 7 + col - startOffset
+                            if (dayIndex in 0 until daysInMonth) {
+                                val day = dayIndex + 1
+                                val isSelected = day == selectedDay &&
+                                        year == todayYear && month == todayMonth
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .aspectRatio(1f)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .then(
+                                            if (isSelected) Modifier.background(themeColor)
+                                            else Modifier
+                                        )
+                                        .clickable { selectedDay = day },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "$day",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (isSelected) Color.White else Color.Black,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            } else {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
                 }
             }
         }
