@@ -4170,35 +4170,30 @@ private fun AutomationPage(onBack: () -> Unit) {
         var ocrEnabled by remember {
             mutableStateOf(BillOcrConfig.isEnabled(context))
         }
-        var showOcrResult by remember { mutableStateOf(false) }
-        var ocrResult by remember { mutableStateOf<OcrBillResult?>(null) }
 
         var hasAccessibility by remember {
             mutableStateOf(com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isAccessibilityEnabled(context))
         }
+        var hasOverlay by remember {
+            mutableStateOf(android.provider.Settings.canDrawOverlays(context))
+        }
 
-        // 从设置页返回时重新检测无障碍权限
+        // 从设置页返回时重新检测权限
         DisposableEffect(Unit) {
             val activity = context as? android.app.Activity
             val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
                 if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
                     hasAccessibility = com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isAccessibilityEnabled(context)
-                    if (!hasAccessibility && ocrEnabled) {
+                    hasOverlay = android.provider.Settings.canDrawOverlays(context)
+                    if ((!hasAccessibility || !hasOverlay) && ocrEnabled) {
                         ocrEnabled = false
                         BillOcrConfig.setEnabled(context, false)
+                        OcrFloatingWindow.dismiss()
                     }
                 }
             }
             (activity as? androidx.lifecycle.LifecycleOwner)?.lifecycle?.addObserver(observer)
             onDispose { (activity as? androidx.lifecycle.LifecycleOwner)?.lifecycle?.removeObserver(observer) }
-        }
-
-        // 进入页面时检查是否有缓存的识别结果
-        LaunchedEffect(Unit) {
-            BillOcrEngine.consumeResult()?.let {
-                ocrResult = it
-                showOcrResult = true
-            }
         }
 
         Card(
@@ -4225,9 +4220,9 @@ private fun AutomationPage(onBack: () -> Unit) {
                         )
                         Text(
                             when {
-                                ocrEnabled && hasAccessibility -> "已就绪，识别到账单后自动提醒"
-                                ocrEnabled -> "需要开启无障碍服务"
-                                else -> "自动识别微信/支付宝账单页面"
+                                ocrEnabled && hasAccessibility && hasOverlay -> "已就绪，退出应用后显示悬浮窗"
+                                ocrEnabled -> "需要开启无障碍和悬浮窗权限"
+                                else -> "点击悬浮窗识别支付宝/QQ账单"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -4242,97 +4237,37 @@ private fun AutomationPage(onBack: () -> Unit) {
                                     android.widget.Toast.makeText(context, "请先开启无障碍服务", android.widget.Toast.LENGTH_LONG).show()
                                     return@Switch
                                 }
+                                if (!hasOverlay) {
+                                    val intent = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        android.net.Uri.parse("package:${context.packageName}"))
+                                    context.startActivity(intent)
+                                    android.widget.Toast.makeText(context, "请先开启悬浮窗权限", android.widget.Toast.LENGTH_LONG).show()
+                                    return@Switch
+                                }
                                 ocrEnabled = true
                                 BillOcrConfig.setEnabled(context, true)
-                                android.widget.Toast.makeText(context, "OCR识别已就绪", android.widget.Toast.LENGTH_SHORT).show()
+                                OcrFloatingWindow.show(context)
+                                android.widget.Toast.makeText(context, "OCR识别已就绪，退出应用后显示悬浮窗", android.widget.Toast.LENGTH_SHORT).show()
                             } else {
                                 ocrEnabled = false
                                 BillOcrConfig.setEnabled(context, false)
+                                OcrFloatingWindow.dismiss()
                             }
                         }
                     )
                 }
 
-                // 引擎选择（占位）
+                // 使用说明
                 if (ocrEnabled) {
                     Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "识别引擎：",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            "系统 TextClassifier",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "ML Kit 模型（即将支持）",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
+                    Text(
+                        "切换到支付宝/QQ后，点击悬浮窗进行识别",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
 
-        // 识别结果弹窗
-        if (showOcrResult && ocrResult != null) {
-            AlertDialog(
-                onDismissRequest = { showOcrResult = false },
-                title = { Text("识别结果预览") },
-                text = {
-                    Column {
-                        ResultRow("类型", ocrResult!!.type)
-                        ResultRow("金额", "¥${"%.2f".format(ocrResult!!.amount)}")
-                        ResultRow("商户", ocrResult!!.merchant)
-                        ResultRow("来源", BillOcrConfig.getAppName(ocrResult!!.sourceApp))
-                        ResultRow("置信度", "${(ocrResult!!.confidence * 100).toInt()}%")
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "原始文本：",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            ocrResult!!.rawText.take(300),
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 8,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { showOcrResult = false }) {
-                        Text("确认（暂不导入）")
-                    }
-                }
-            )
-        }
-    }
-}
-
-@Composable
-private fun ResultRow(label: String, value: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp)
-    ) {
-        Text(
-            "$label：",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            value,
-            style = MaterialTheme.typography.bodySmall
-        )
     }
 }

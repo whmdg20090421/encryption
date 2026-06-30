@@ -3,7 +3,8 @@ package com.whmdg.mczj.tools.security
 import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import com.whmdg.mczj.tools.ui.accounting.BillOcrEngine
+import com.whmdg.mczj.tools.ui.accounting.BillOcrConfig
+import com.whmdg.mczj.tools.ui.accounting.OcrFloatingWindow
 
 class MyAccessibilityService : AccessibilityService() {
 
@@ -12,12 +13,22 @@ class MyAccessibilityService : AccessibilityService() {
             private set
     }
 
+    /** 最近一次检测到的前台应用包名 */
+    @Volatile
+    var topPackage: String? = null
+        private set
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        // 如果 OCR 开关已开启，显示悬浮窗
+        if (BillOcrConfig.isEnabled(this)) {
+            OcrFloatingWindow.show(this)
+        }
     }
 
     override fun onDestroy() {
+        OcrFloatingWindow.dismiss()
         instance = null
         super.onDestroy()
     }
@@ -26,7 +37,7 @@ class MyAccessibilityService : AccessibilityService() {
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString() ?: return
             if (pkg != packageName) {
-                BillOcrEngine.onForegroundChanged(this, pkg)
+                topPackage = pkg
             }
         }
     }
@@ -35,7 +46,7 @@ class MyAccessibilityService : AccessibilityService() {
 
     /**
      * 遍历当前窗口节点树，提取所有可见文字。
-     * 用于账单 OCR 识别：读取微信/支付宝账单页面的文字内容。
+     * 用于账单 OCR 识别：读取支付宝/QQ 账单页面的文字内容。
      */
     fun extractAllText(): String {
         val root = rootInActiveWindow ?: return ""

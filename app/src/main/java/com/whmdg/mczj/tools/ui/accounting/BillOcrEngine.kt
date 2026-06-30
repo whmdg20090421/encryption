@@ -1,44 +1,25 @@
 package com.whmdg.mczj.tools.ui.accounting
 
-import android.os.Handler
-import android.os.Looper
 import com.whmdg.mczj.tools.security.MyAccessibilityService
 
 /**
  * 账单 OCR 引擎（本地规则匹配，不联网）。
  *
- * 流程：前台应用变化 → 节点树提取文字 → 关键词过滤 → 正则匹配 → 缓存结果。
- * 参考 AutoAccounting 的 AnalysisUtils.inWhitelist() 和 BillService.parseBillInfo()。
+ * 由悬浮窗主动调用 recognizeNow()，同步提取当前页面文字并匹配账单信息。
  */
 object BillOcrEngine {
 
-    private var lastOcrTime = 0L
-    private var cachedResult: OcrBillResult? = null
-    private const val COOLDOWN_MS = 5000L // 防抖 5 秒
-
-    /** 前台应用变化回调（由 MyAccessibilityService.onAccessibilityEvent 调用） */
-    fun onForegroundChanged(service: MyAccessibilityService, packageName: String) {
-        if (!BillOcrConfig.isEnabled(service)) return
-        if (packageName !in BillOcrConfig.supportedApps) return
-        if (System.currentTimeMillis() - lastOcrTime < COOLDOWN_MS) return
-
-        // 延迟 1.5 秒等待页面渲染完成
-        Handler(Looper.getMainLooper()).postDelayed({
-            processScreen(service, packageName)
-        }, 1500)
-    }
-
-    private fun processScreen(service: MyAccessibilityService, app: String) {
+    /** 同步识别当前屏幕，返回结果或 null */
+    fun recognizeNow(service: MyAccessibilityService): OcrBillResult? {
         val text = service.extractAllText()
-        if (text.isBlank()) return
+        if (text.isBlank()) return null
 
-        // 关键词过滤：不是账单页面则跳过
-        if (!matchesBillKeywords(text)) return
+        val pkg = service.topPackage ?: return null
+        if (pkg !in BillOcrConfig.supportedApps) return null
 
-        // 正则匹配
-        val result = parseBill(text, app) ?: return
-        cachedResult = result
-        lastOcrTime = System.currentTimeMillis()
+        if (!matchesBillKeywords(text)) return null
+
+        return parseBill(text, pkg)
     }
 
     // ── 关键词过滤（参考 AutoAccounting AnalysisUtils.inWhitelist） ──
@@ -89,12 +70,5 @@ object BillOcrEngine {
             confidence = if (merchant.isNotEmpty()) 0.8f else 0.5f,
             matchedRule = "本地规则"
         )
-    }
-
-    /** 获取并清除缓存结果（切回应用时调用） */
-    fun consumeResult(): OcrBillResult? {
-        val r = cachedResult
-        cachedResult = null
-        return r
     }
 }

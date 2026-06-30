@@ -35,13 +35,13 @@ object BillOcrConfig {
 
     /** 支持自动识别的 App */
     val supportedApps = setOf(
-        "com.tencent.mm",               // 微信
-        "com.eg.android.AlipayGphone"   // 支付宝
+        "com.eg.android.AlipayGphone",  // 支付宝
+        "com.tencent.mobileqq"          // QQ
     )
 
     fun getAppName(pkg: String): String = when (pkg) {
-        "com.tencent.mm" -> "微信"
         "com.eg.android.AlipayGphone" -> "支付宝"
+        "com.tencent.mobileqq" -> "QQ"
         else -> pkg
     }
 }
