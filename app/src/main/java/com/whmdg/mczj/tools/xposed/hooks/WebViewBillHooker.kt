@@ -99,7 +99,8 @@ object WebViewBillHooker {
             val context = getContext() ?: return
             val json = JSONObject(result as Map<*, *>).toString()
             val intent = Intent(ACTION_HOOK_BILL).apply {
-                setPackage(context.packageName)
+                // 必须硬编码我们应用的包名，不能用 context.packageName（那是微信的包名）
+                setPackage(WechatBillHooker.APP_PACKAGE)
                 putExtra(EXTRA_BILL_JSON, json)
                 addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
             }
@@ -108,6 +109,9 @@ object WebViewBillHooker {
     }
 
     private fun getContext(): Context? {
+        // 优先使用通过 Hook Instrumentation 获取的 Application 实例
+        WechatBillHooker.application?.let { return it }
+        // 回退到 ActivityThread.currentApplication()
         return try {
             val activityThread = Class.forName("android.app.ActivityThread")
             val method = activityThread.getMethod("currentApplication")
