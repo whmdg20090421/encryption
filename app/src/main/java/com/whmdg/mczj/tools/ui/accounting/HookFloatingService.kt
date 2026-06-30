@@ -4,6 +4,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.os.IBinder
 
 /**
@@ -30,10 +31,14 @@ class HookFloatingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        // 注册广播接收器
+        // 注册广播接收器（跨进程接收微信 Hook 数据，需要 RECEIVER_EXPORTED）
         receiver = HookResultReceiver()
         val filter = IntentFilter(HookResultReceiver.ACTION_HOOK_BILL)
-        registerReceiver(receiver, filter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter)
+        }
         // 显示悬浮窗
         HookFloatingWindow.show(this)
     }
