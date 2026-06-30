@@ -1,7 +1,10 @@
 package com.whmdg.mczj.tools.ui.accounting
 
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
@@ -10,6 +13,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.animation.AccelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -35,6 +39,7 @@ object OcrFloatingWindow {
     private var windowManager: WindowManager? = null
     private var bubbleView: View? = null
     private var menuView: View? = null
+    private var animationView: View? = null
     private var scope: CoroutineScope? = null
     private var state = State.BUBBLE
 
@@ -86,8 +91,10 @@ object OcrFloatingWindow {
         scope?.cancel()
         scope = null
         val wm = windowManager ?: return
+        animationView?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         menuView?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         bubbleView?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        animationView = null
         menuView = null
         bubbleView = null
         state = State.BUBBLE
@@ -287,28 +294,130 @@ object OcrFloatingWindow {
     ) {
         state = State.LOADING
 
-        // 显示转圈
-        val progress = bubble.getTag() as? ProgressBar
-        progress?.visibility = View.VISIBLE
-
         val service = MyAccessibilityService.instance
         if (service == null) {
-            progress?.visibility = View.GONE
             showResult(context, bubble, density, null, "无障碍服务未运行", null)
             return
         }
 
         scope?.launch {
-            val result = withContext(Dispatchers.IO) {
-                BillOcrEngine.recognizeNow(service)
+            // 1. 截图
+            val screenshot = withContext(Dispatchers.IO) {
+                service.takeScreenshot()
             }
+            if (screenshot == null) {
+                showResult(context, bubble, density, null, "截图失败", null)
+                return@launch
+            }
+
+            // 2. 显示截图动画（缩小飞入悬浮窗）
+            showScreenshotAnimation(context, bubble, density, screenshot)
+
+            // 3. 动画结束后显示转圈
+            val progress = bubble.getTag() as? ProgressBar
+            progress?.visibility = View.VISIBLE
+
+            // 4. OCR 识别
+            val result = withContext(Dispatchers.IO) {
+                BillOcrEngine.recognizeFromBitmap(screenshot, service)
+            }
+            screenshot.recycle()
             progress?.visibility = View.GONE
-            // 提取原始文字用于调试
-            val debugText = if (result.bill == null) {
-                service.extractAllText().take(200)
-            } else null
-            showResult(context, bubble, density, result.bill, result.error, debugText)
+
+            // 5. 显示结果
+            showResult(context, bubble, density, result.bill, result.error, null)
         }
+    }
+
+    /**
+     * 截图动画：截图从原始位置缩小飞入悬浮窗
+     */
+    private fun showScreenshotAnimation(
+        context: Context,
+        bubble: FrameLayout,
+        density: Float,
+        bitmap: Bitmap
+    ) {
+        val wm = windowManager ?: return
+        val bubbleLp = bubble.layoutParams as? WindowManager.LayoutParams ?: return
+
+        // 计算悬浮窗屏幕位置
+        val bubbleScreenX = bubbleLp.x
+        val bubbleScreenY = bubbleLp.y
+        val bubbleSize = (BUBBLE_SIZE_DP * density).toInt()
+
+        // 创建全屏透明窗口用于动画
+        val overlay = FrameLayout(context)
+
+        // 截图 ImageView
+        val imageView = ImageView(context).apply {
+            setImageBitmap(bitmap)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+        }
+
+        // 初始大小（屏幕的 80%）
+        val screenWidth = context.resources.displayMetrics.widthPixels
+        val screenHeight = context.resources.displayMetrics.heightPixels
+        val initialWidth = (screenWidth * 0.8f).toInt()
+        val initialHeight = (screenHeight * 0.8f).toInt()
+        val initialX = (screenWidth - initialWidth) / 2
+        val initialY = (screenHeight - initialHeight) / 2
+
+        val imageParams = FrameLayout.LayoutParams(initialWidth, initialHeight).apply {
+            leftMargin = initialX
+            topMargin = initialY
+        }
+        overlay.addView(imageView, imageParams)
+
+        val overlayParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
+
+        try {
+            wm.addView(overlay, overlayParams)
+            animationView = overlay
+        } catch (_: Exception) {
+            return
+        }
+
+        // 动画：缩小 + 移动到悬浮窗位置
+        val targetScale = bubbleSize.toFloat() / initialWidth
+
+        val scaleX = ObjectAnimator.ofFloat(imageView, "scaleX", 1f, targetScale)
+        val scaleY = ObjectAnimator.ofFloat(imageView, "scaleY", 1f, targetScale)
+        val translationX = ObjectAnimator.ofFloat(
+            imageView, "translationX",
+            0f, (bubbleScreenX - initialX).toFloat()
+        )
+        val translationY = ObjectAnimator.ofFloat(
+            imageView, "translationY",
+            0f, (bubbleScreenY - initialY).toFloat()
+        )
+        val alpha = ObjectAnimator.ofFloat(imageView, "alpha", 1f, 0.7f)
+
+        val animatorSet = AnimatorSet().apply {
+            playTogether(scaleX, scaleY, translationX, translationY, alpha)
+            duration = 500
+            interpolator = AccelerateInterpolator()
+        }
+
+        animatorSet.addListener(object : android.animation.AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: android.animation.Animator) {
+                // 移除动画窗口
+                try {
+                    wm.removeView(overlay)
+                } catch (_: Exception) {}
+                animationView = null
+            }
+        })
+
+        animatorSet.start()
     }
 
     // ── 结果展示 ──

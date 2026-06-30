@@ -1,8 +1,14 @@
 package com.whmdg.mczj.tools.security
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
+import android.graphics.Bitmap
+import android.os.Build
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 class MyAccessibilityService : AccessibilityService() {
 
@@ -56,6 +62,39 @@ class MyAccessibilityService : AccessibilityService() {
             val child = node.getChild(i) ?: continue
             traverseNode(child, sb)
             child.recycle()
+        }
+    }
+
+    /**
+     * 截取当前屏幕（Android 11+）
+     * 截图数据在内存中，不保存到文件
+     */
+    suspend fun takeScreenshot(): Bitmap? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+
+        return suspendCancellableCoroutine { continuation ->
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
+                        val bitmap = Bitmap.wrapHardwareBuffer(
+                            result.hardwareBuffer,
+                            result.colorSpace
+                        )
+                        result.hardwareBuffer.close()
+                        if (continuation.isActive) {
+                            continuation.resume(bitmap)
+                        }
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        if (continuation.isActive) {
+                            continuation.resume(null)
+                        }
+                    }
+                }
+            )
         }
     }
 }
