@@ -38,7 +38,7 @@ object WebViewBillHooker {
             }
 
             override fun after(callback: XposedInterface.AfterHookCallback<java.lang.reflect.Method>) {
-                val js = callback.getArg<String>(0) ?: return
+                val js = callback.getArgs()[0] as? String ?: return
                 try {
                     handleEvaluateJavascript(js, module)
                 } catch (_: Throwable) {}
