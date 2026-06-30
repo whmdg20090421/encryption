@@ -120,34 +120,61 @@ object AccountingRepository {
         return notes
     }
 
-    /** 插入一条记录（增量维护记账天数） */
-    fun insertRecord(context: Context, record: AccountingRecord) {
+    /**
+     * 记录写入的唯一入口。
+     * 所有 INSERT/UPDATE/DELETE 操作必须经由此方法，确保月度汇总自动维护。
+     */
+    private fun writeRecord(
+        context: Context,
+        record: AccountingRecord,
+        operation: String,        // "INSERT" / "UPDATE" / "DELETE"
+        oldMonth: Triple<String, Int, Int>? = null  // UPDATE 时旧记录的 (bookName, year, month)
+    ) {
         val db = getDb(context)
-        // 检查当天是否已有记录（插入前）
-        if (!isDateHasRecords(context, record.bookName, record.happenedAt)) {
-            // 新的一天，天数 +1
+        when (operation) {
+            "INSERT" -> db.insertRecord(record)
+            "UPDATE" -> db.updateRecord(record)
+            "DELETE" -> db.deleteRecord(record.id)
+        }
+        // 自动维护月度收支汇总
+        db.recalculateMonthSummary(record.bookName, record.year, record.month)
+        // UPDATE 跨月时，旧月也需要重算
+        if (oldMonth != null && (oldMonth.first != record.bookName || oldMonth.second != record.year || oldMonth.third != record.month)) {
+            db.recalculateMonthSummary(oldMonth.first, oldMonth.second, oldMonth.third)
+        }
+    }
+
+    /** 插入一条记录（增量维护记账天数 + 月度汇总自动更新） */
+    fun insertRecord(context: Context, record: AccountingRecord) {
+        val cal = java.util.Calendar.getInstance().apply { timeInMillis = record.happenedAt }
+        val y = cal.get(java.util.Calendar.YEAR)
+        val m = cal.get(java.util.Calendar.MONTH) + 1
+        val d = cal.get(java.util.Calendar.DAY_OF_MONTH)
+        if (!isDateHasRecords(context, record.bookName, y, m, d)) {
             setSetting(context, KEY_DAY_COUNT, (getDayCount(context) + 1).toString())
         }
         val now = System.currentTimeMillis()
-        val withTime = record.copy(
-            createdAt = record.createdAt ?: now,
-            updatedAt = record.updatedAt ?: now
-        )
-        db.insertRecord(withTime)
-        // 同步更新账户当前余额
+        val withTime = record.copy(year = y, month = m, day = d,
+            createdAt = record.createdAt ?: now, updatedAt = record.updatedAt ?: now)
+        writeRecord(context, withTime, "INSERT")
         updateAccountBalanceOnRecordChange(context, withTime.accountId, withTime.type, withTime.amount, isAdd = true)
     }
 
-    /** 更新一条记录（自动更新 updatedAt，保留 createdAt） */
+    /** 更新一条记录（自动更新 updatedAt + 月度汇总自动更新） */
     fun updateRecord(context: Context, record: AccountingRecord) {
         val oldRecord = getRecordById(context, record.id)
-        val withTime = record.copy(updatedAt = System.currentTimeMillis())
-        getDb(context).updateRecord(withTime)
-        // 如果旧记录存在，先反向扣除旧记录的影响
+        val cal = java.util.Calendar.getInstance().apply { timeInMillis = record.happenedAt }
+        val withTime = record.copy(
+            year = cal.get(java.util.Calendar.YEAR),
+            month = cal.get(java.util.Calendar.MONTH) + 1,
+            day = cal.get(java.util.Calendar.DAY_OF_MONTH),
+            updatedAt = System.currentTimeMillis()
+        )
+        val oldMonth = oldRecord?.let { Triple(it.bookName, it.year, it.month) }
+        writeRecord(context, withTime, "UPDATE", oldMonth)
         if (oldRecord != null) {
             updateAccountBalanceOnRecordChange(context, oldRecord.accountId, oldRecord.type, oldRecord.amount, isAdd = false)
         }
-        // 再应用新记录的影响
         updateAccountBalanceOnRecordChange(context, withTime.accountId, withTime.type, withTime.amount, isAdd = true)
     }
 
@@ -160,28 +187,21 @@ object AccountingRepository {
         )
     }
 
-    /** 删除一条记录（增量维护记账天数 + 附件回收站级联） */
+    /** 删除一条记录（增量维护记账天数 + 附件回收站级联 + 月度汇总自动更新） */
     fun deleteRecord(context: Context, id: String) {
-        val db = getDb(context)
-        // 先查出被删记录的信息
         val record = getRecordById(context, id)
         if (record != null) {
-            // 检查是否为当天最后一笔（排除自身）
-            if (!isDateHasOtherRecords(context, record.bookName, record.happenedAt, id)) {
-                // 当天最后一笔，天数 -1
+            if (!isDateHasOtherRecords(context, record.bookName, record.year, record.month, record.day, id)) {
                 val newCount = maxOf(getDayCount(context) - 1, 0)
                 setSetting(context, KEY_DAY_COUNT, newCount.toString())
             }
-            // 将当前附件移入回收站（状态为 "deleted"，因为账单本身也要删除）
             if (record.attachments.isNotEmpty()) {
                 moveToTrashBatch(context, record.attachments, id)
             }
-            // 级联更新：该账单此前被移除的附件，状态从 "active" 改为 "deleted"
             cascadeUpdateTrashStatus(context, id, "deleted")
-            // 同步更新账户当前余额（反向扣除）
             updateAccountBalanceOnRecordChange(context, record.accountId, record.type, record.amount, isAdd = false)
+            writeRecord(context, record, "DELETE")
         }
-        db.deleteRecord(id)
     }
 
     /** 记录变更时同步更新账户当前余额 */
@@ -206,12 +226,12 @@ object AccountingRepository {
     private fun getRecordById(context: Context, id: String): AccountingRecord? {
         val sqlDb = getDb(context).readableDatabase
         val cursor = sqlDb.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records WHERE id = ?",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records WHERE id = ?",
             arrayOf(id)
         )
         return try {
             if (cursor.moveToFirst()) {
-                val attachmentsJson = cursor.getString(13)
+                val attachmentsJson = cursor.getString(16)
                 val attachments = if (!attachmentsJson.isNullOrEmpty()) {
                     try { Json.decodeFromString<List<AttachmentInfo>>(attachmentsJson) } catch (_: Exception) { emptyList() }
                 } else emptyList()
@@ -224,21 +244,24 @@ object AccountingRepository {
                     subcategoryId = cursor.getString(5),
                     note = cursor.getString(6),
                     happenedAt = cursor.getLong(7),
-                    accountId = cursor.getString(8),
-                    discountBefore = cursor.getString(9),
-                    discountOff = cursor.getString(10),
-                    discountAfter = cursor.getString(11),
-                    reimbursementAccountId = cursor.getString(12),
+                    year = cursor.getInt(8),
+                    month = cursor.getInt(9),
+                    day = cursor.getInt(10),
+                    accountId = cursor.getString(11),
+                    discountBefore = cursor.getString(12),
+                    discountOff = cursor.getString(13),
+                    discountAfter = cursor.getString(14),
+                    reimbursementAccountId = cursor.getString(15),
                     attachments = attachments,
-                    excludeFromStats = cursor.getInt(14) == 1,
-                    excludeFromBudget = cursor.getInt(15) == 1,
-                    reimburseStatus = cursor.getInt(16) == 1,
-                    reimburseAmount = cursor.getDouble(17),
-                    reimburseAfterAmount = cursor.getString(18),
-                    refundAmount = cursor.getDouble(19),
-                    address = cursor.getString(20) ?: "",
-                    createdAt = if (cursor.isNull(21)) null else cursor.getLong(21),
-                    updatedAt = if (cursor.isNull(22)) null else cursor.getLong(22)
+                    excludeFromStats = cursor.getInt(17) == 1,
+                    excludeFromBudget = cursor.getInt(18) == 1,
+                    reimburseStatus = cursor.getInt(19) == 1,
+                    reimburseAmount = cursor.getDouble(20),
+                    reimburseAfterAmount = cursor.getString(21),
+                    refundAmount = cursor.getDouble(22),
+                    address = cursor.getString(23) ?: "",
+                    createdAt = if (cursor.isNull(24)) null else cursor.getLong(24),
+                    updatedAt = if (cursor.isNull(25)) null else cursor.getLong(25)
                 )
             } else null
         } finally {
@@ -270,6 +293,11 @@ object AccountingRepository {
             }
             // 插入或更新所有记录
             for (record in records) {
+                // 从 happenedAt 提取 year/month/day
+                val cal = java.util.Calendar.getInstance().apply { timeInMillis = record.happenedAt }
+                val y = cal.get(java.util.Calendar.YEAR)
+                val m = cal.get(java.util.Calendar.MONTH) + 1
+                val d = cal.get(java.util.Calendar.DAY_OF_MONTH)
                 val cv = ContentValues().apply {
                     put("id", record.id)
                     put("book_name", record.bookName)
@@ -279,6 +307,9 @@ object AccountingRepository {
                     if (record.subcategoryId != null) put("subcategory_id", record.subcategoryId) else putNull("subcategory_id")
                     put("note", record.note)
                     put("happened_at", record.happenedAt)
+                    put("year", y)
+                    put("month", m)
+                    put("day", d)
                     if (record.accountId != null) put("account_id", record.accountId) else putNull("account_id")
                     if (record.discountBefore != null) put("discount_before", record.discountBefore) else putNull("discount_before")
                     if (record.discountOff != null) put("discount_off", record.discountOff) else putNull("discount_off")
@@ -305,6 +336,11 @@ object AccountingRepository {
         } finally {
             sqlDb.endTransaction()
         }
+        // 重算所有涉及月份的收支汇总
+        val affectedMonths = records.map { Triple(it.bookName, it.year, it.month) }.distinct()
+        for ((book, y, m) in affectedMonths) {
+            db.recalculateMonthSummary(book, y, m)
+        }
     }
 
     // ─────────────────────────────────────────────
@@ -327,63 +363,46 @@ object AccountingRepository {
     private fun calcDayCountAll(context: Context): Int {
         val db = getDb(context)
         val sqlDb = db.readableDatabase
-        val cursor = sqlDb.rawQuery("SELECT happened_at FROM records ORDER BY happened_at ASC", null)
-        val cal = java.util.Calendar.getInstance()
-        var count = 0
-        var lastDay = -1
-        try {
-            while (cursor.moveToNext()) {
-                val ts = cursor.getLong(0)
-                cal.timeInMillis = ts
-                val day = cal.get(java.util.Calendar.YEAR) * 10000 +
-                        cal.get(java.util.Calendar.MONTH) * 100 +
-                        cal.get(java.util.Calendar.DAY_OF_MONTH)
-                if (day != lastDay) {
-                    count++
-                    lastDay = day
-                }
-            }
+        val cursor = sqlDb.rawQuery("SELECT COUNT(DISTINCT year * 10000 + month * 100 + day) FROM records WHERE year > 0", null)
+        return try {
+            if (cursor.moveToFirst()) cursor.getInt(0) else 0
         } finally {
             cursor.close()
         }
-        return count
     }
 
     /** 指定账本指定日期是否已有记录 */
-    private fun isDateHasRecords(context: Context, bookName: String, happenedAt: Long): Boolean {
-        val (start, end) = dayRange(happenedAt)
+    private fun isDateHasRecords(context: Context, bookName: String, year: Int, month: Int, day: Int): Boolean {
         val sqlDb = getDb(context).readableDatabase
         val cursor = sqlDb.rawQuery(
-            "SELECT 1 FROM records WHERE book_name = ? AND happened_at BETWEEN ? AND ? LIMIT 1",
-            arrayOf(bookName, start.toString(), end.toString())
+            "SELECT 1 FROM records WHERE book_name = ? AND year = ? AND month = ? AND day = ? LIMIT 1",
+            arrayOf(bookName, year.toString(), month.toString(), day.toString())
         )
         return try { cursor.moveToFirst() } finally { cursor.close() }
     }
 
     /** 指定账本指定日期是否存在除 excludeId 以外的记录 */
-    private fun isDateHasOtherRecords(context: Context, bookName: String, happenedAt: Long, excludeId: String): Boolean {
-        val (start, end) = dayRange(happenedAt)
+    private fun isDateHasOtherRecords(context: Context, bookName: String, year: Int, month: Int, day: Int, excludeId: String): Boolean {
         val sqlDb = getDb(context).readableDatabase
         val cursor = sqlDb.rawQuery(
-            "SELECT 1 FROM records WHERE book_name = ? AND happened_at BETWEEN ? AND ? AND id != ? LIMIT 1",
-            arrayOf(bookName, start.toString(), end.toString(), excludeId)
+            "SELECT 1 FROM records WHERE book_name = ? AND year = ? AND month = ? AND day = ? AND id != ? LIMIT 1",
+            arrayOf(bookName, year.toString(), month.toString(), day.toString(), excludeId)
         )
         return try { cursor.moveToFirst() } finally { cursor.close() }
     }
 
-    /** 将时间戳拆为当天 00:00:00.000 ~ 23:59:59.999 的毫秒范围 */
-    private fun dayRange(happenedAt: Long): Pair<Long, Long> {
-        val cal = java.util.Calendar.getInstance().apply { timeInMillis = happenedAt }
-        val year = cal.get(java.util.Calendar.YEAR)
-        val month = cal.get(java.util.Calendar.MONTH)
-        val day = cal.get(java.util.Calendar.DAY_OF_MONTH)
-        val start = java.util.Calendar.getInstance().apply {
-            set(year, month, day, 0, 0, 0); set(java.util.Calendar.MILLISECOND, 0)
-        }
-        val end = java.util.Calendar.getInstance().apply {
-            set(year, month, day, 23, 59, 59); set(java.util.Calendar.MILLISECOND, 999)
-        }
-        return start.timeInMillis to end.timeInMillis
+    // ─────────────────────────────────────────────
+    // 月度收支汇总（自动维护，业务代码只读）
+    // ─────────────────────────────────────────────
+
+    /** 获取指定账本指定月的收支汇总 */
+    fun getMonthSummary(context: Context, bookName: String, year: Int, month: Int): MonthlySummary {
+        return getDb(context).getMonthSummary(bookName, year, month)
+    }
+
+    /** 获取指定账本所有月度汇总（按年月降序） */
+    fun getAllMonthSummaries(context: Context, bookName: String): List<MonthlySummary> {
+        return getDb(context).getAllMonthSummaries(bookName)
     }
 
     // ─────────────────────────────────────────────

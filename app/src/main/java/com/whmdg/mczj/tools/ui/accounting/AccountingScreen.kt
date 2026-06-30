@@ -14,7 +14,10 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -1192,14 +1195,20 @@ private fun StatisticsTabContent() {
     val months = listOf("1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月")
     val currentMonthIndex = today.get(Calendar.MONTH)
 
-    // 图表切换：0=日 1=周
-    var barChartMode by remember { mutableIntStateOf(0) }
 
     // 加载记录数据
     val recordDb = remember { AccountingRecordDb.load(context) }
     val currentBookName = remember { AccountingRepository.getLastBookName(context) }
 
-    // 当月记录
+    // 月度汇总（从数据库读取）
+    val statSummary = remember(currentBookName, selectedYear, selectedMonth + 1) {
+        AccountingRepository.getMonthSummary(context, currentBookName, selectedYear, selectedMonth + 1)
+    }
+    val totalIncome = remember(statSummary) { statSummary.income }
+    val totalExpense = remember(statSummary) { statSummary.expense }
+    val balance = remember(statSummary) { totalIncome - totalExpense }
+
+    // 当月记录（柱状图/折线图仍需逐条数据）
     val monthRecords = remember(recordDb, selectedYear, selectedMonth, currentBookName) {
         recordDb.records.filter { record ->
             if (record.bookName != currentBookName) return@filter false
@@ -1208,55 +1217,78 @@ private fun StatisticsTabContent() {
         }
     }
 
-    // 汇总数据
-    val totalIncome = remember(monthRecords) {
-        monthRecords.filter { it.type == "收入" && it.reimbursementAccountId == null && !it.excludeFromStats }
-            .sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
-    }
-    val totalExpense = remember(monthRecords) {
-        monthRecords.filter { it.type == "支出" && it.reimbursementAccountId == null && !it.excludeFromStats }
-            .sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
-    }
-    val balance = remember(totalIncome, totalExpense) { totalIncome - totalExpense }
-
-    // 每日支出数据（用于柱状图）
-    val dailyExpenseData = remember(monthRecords) {
+    // 每日收支余额数据（用于柱状图：收入-支出，正=绿色，负=红色）
+    val dailyNetData = remember(monthRecords) {
         val cal = Calendar.getInstance().apply {
             set(Calendar.YEAR, selectedYear)
             set(Calendar.MONTH, selectedMonth)
         }
         val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
-        val dailyMap = mutableMapOf<Int, Double>()
-        for (d in 1..daysInMonth) dailyMap[d] = 0.0
-        monthRecords.filter { it.type == "支出" && it.reimbursementAccountId == null && !it.excludeFromStats }
-            .forEach { record ->
-                val cal2 = Calendar.getInstance().apply { timeInMillis = record.happenedAt }
-                val day = cal2.get(Calendar.DAY_OF_MONTH)
-                dailyMap[day] = (dailyMap[day] ?: 0.0) + (record.amount.toDoubleOrNull() ?: 0.0)
+        val dailyIncome = mutableMapOf<Int, Double>()
+        val dailyExpense = mutableMapOf<Int, Double>()
+        for (d in 1..daysInMonth) { dailyIncome[d] = 0.0; dailyExpense[d] = 0.0 }
+        monthRecords.filter { it.reimbursementAccountId == null && !it.excludeFromStats }.forEach { record ->
+            val cal2 = Calendar.getInstance().apply { timeInMillis = record.happenedAt }
+            val day = cal2.get(Calendar.DAY_OF_MONTH)
+            val amt = record.amount.toDoubleOrNull() ?: 0.0
+            when (record.type) {
+                "收入" -> dailyIncome[day] = (dailyIncome[day] ?: 0.0) + amt
+                "支出" -> dailyExpense[day] = (dailyExpense[day] ?: 0.0) + amt
             }
-        dailyMap.toMap()
+        }
+        (1..daysInMonth).associateWith { d -> (dailyIncome[d] ?: 0.0) - (dailyExpense[d] ?: 0.0) }
     }
 
-    // 每日收入数据（用于折线图）
-    val dailyIncomeData = remember(monthRecords) {
+    // 每日总资产数据（用于折线图）
+    val dailyAssetData = remember(recordDb, selectedYear, selectedMonth, currentBookName) {
+        val accounts = AccountingRepository.getAllAccounts(context)
+        val baseTotal = accounts.sumOf { it.initialAmount }
+
         val cal = Calendar.getInstance().apply {
             set(Calendar.YEAR, selectedYear)
             set(Calendar.MONTH, selectedMonth)
         }
         val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
-        val dailyMap = mutableMapOf<Int, Double>()
-        for (d in 1..daysInMonth) dailyMap[d] = 0.0
-        monthRecords.filter { it.type == "收入" && it.reimbursementAccountId == null && !it.excludeFromStats }
-            .forEach { record ->
-                val cal2 = Calendar.getInstance().apply { timeInMillis = record.happenedAt }
-                val day = cal2.get(Calendar.DAY_OF_MONTH)
-                dailyMap[day] = (dailyMap[day] ?: 0.0) + (record.amount.toDoubleOrNull() ?: 0.0)
+
+        // 月初之前的所有记录（累计到月初的资产变化）
+        val monthStart = cal.timeInMillis
+        val allRecords = recordDb.records.filter { it.bookName == currentBookName }.sortedBy { it.happenedAt }
+        val beforeMonthRecords = allRecords.filter { it.happenedAt < monthStart }
+        val monthStartBalance = baseTotal + beforeMonthRecords.sumOf { r ->
+            val amt = r.amount.toDoubleOrNull() ?: 0.0
+            when (r.type) {
+                "收入" -> amt
+                "支出" -> -amt
+                else -> 0.0
             }
+        }
+
+        // 当月每日变动
+        val dailyDelta = mutableMapOf<Int, Double>()
+        for (d in 1..daysInMonth) dailyDelta[d] = 0.0
+        allRecords.filter { it.happenedAt >= monthStart }.forEach { r ->
+            val cal2 = Calendar.getInstance().apply { timeInMillis = r.happenedAt }
+            if (cal2.get(Calendar.YEAR) == selectedYear && cal2.get(Calendar.MONTH) == selectedMonth) {
+                val day = cal2.get(Calendar.DAY_OF_MONTH)
+                val amt = r.amount.toDoubleOrNull() ?: 0.0
+                dailyDelta[day] = (dailyDelta[day] ?: 0.0) + when (r.type) {
+                    "收入" -> amt
+                    "支出" -> -amt
+                    else -> 0.0
+                }
+            }
+        }
+
+        // 累计每日总资产
+        val dailyMap = mutableMapOf<Int, Double>()
+        var running = monthStartBalance
+        for (d in 1..daysInMonth) {
+            running += (dailyDelta[d] ?: 0.0)
+            dailyMap[d] = running
+        }
         dailyMap.toMap()
     }
 
-    // 柱状图选中日期
-    var barSelectedDay by remember { mutableIntStateOf(today.get(Calendar.DAY_OF_MONTH)) }
     // 折线图选中日期
     var lineSelectedDay by remember { mutableIntStateOf(today.get(Calendar.DAY_OF_MONTH)) }
 
@@ -1457,39 +1489,14 @@ private fun StatisticsTabContent() {
                             tint = themeColor,
                             modifier = Modifier.size(16.dp)
                         )
-                        Spacer(Modifier.weight(1f))
-                        // 胶囊按钮：日/周
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier.padding(2.dp)
-                        ) {
-                            Row(modifier = Modifier.padding(2.dp)) {
-                                listOf("日", "周").forEachIndexed { index, label ->
-                                    val selected = barChartMode == index
-                                    Surface(
-                                        onClick = { barChartMode = index },
-                                        shape = RoundedCornerShape(50),
-                                        color = if (selected) themeColor else Color.Transparent,
-                                        modifier = Modifier.padding(horizontal = 1.dp)
-                                    ) {
-                                        Text(
-                                            text = label,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
                     }
 
                     Spacer(Modifier.height(12.dp))
 
-                    // 柱状图 Canvas
-                    val barData = dailyExpenseData.toSortedMap()
-                    val maxBarValue = barData.values.maxOrNull()?.let { if (it == 0.0) 1.0 else it } ?: 1.0
+                    // 柱状图 Canvas（正负柱状图：正=绿色，负=红色）
+                    val barData = dailyNetData.toSortedMap()
+                    val maxAbs = barData.values.maxOfOrNull { kotlin.math.abs(it) }?.let { if (it == 0.0) 1.0 else it } ?: 1.0
+                    val axisLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1504,50 +1511,44 @@ private fun StatisticsTabContent() {
                             if (barCount == 0) return@Canvas
                             val barWidth = chartWidth / barCount * 0.6f
                             val barGap = chartWidth / barCount
+                            val zeroY = chartTop + chartHeight / 2
 
-                            // Y轴刻度线
-                            for (i in 0..4) {
-                                val y = chartTop + chartHeight * (1 - i / 4f)
+                            val textPaint = android.graphics.Paint().apply {
+                                color = axisLabelColor.hashCode()
+                                textSize = 9.sp.toPx()
+                                textAlign = android.graphics.Paint.Align.RIGHT
+                                isAntiAlias = true
+                            }
+                            val labelX = chartLeft - 4.dp.toPx()
+
+                            // Y轴刻度文字 + 刻度线
+                            val yLabels = listOf(maxAbs, maxAbs / 2, 0.0, -maxAbs / 2, -maxAbs)
+                            yLabels.forEachIndexed { i, value ->
+                                val y = chartTop + chartHeight * i / 4f
+                                drawContext.canvas.nativeCanvas.drawText(
+                                    String.format("%.0f", value), labelX, y + 3.dp.toPx(), textPaint
+                                )
                                 drawLine(
-                                    color = Color.LightGray.copy(alpha = 0.3f),
+                                    color = if (i == 2) Color.LightGray.copy(alpha = 0.5f) else Color.LightGray.copy(alpha = 0.2f),
                                     start = Offset(chartLeft, y),
                                     end = Offset(chartLeft + chartWidth, y),
-                                    strokeWidth = 1.dp.toPx()
+                                    strokeWidth = if (i == 2) 1.dp.toPx() else 0.5.dp.toPx()
                                 )
                             }
 
                             // 柱子
-                            barData.entries.forEachIndexed { index, (day, value) ->
-                                val barHeight = (value / maxBarValue * chartHeight).toFloat()
+                            barData.entries.forEachIndexed { index, (_, value) ->
+                                val barHeight = (kotlin.math.abs(value) / maxAbs * chartHeight / 2).toFloat()
                                 val x = chartLeft + barGap * index + (barGap - barWidth) / 2
-                                val isSelected = day == barSelectedDay
-                                drawRoundRect(
-                                    color = if (isSelected) themeColor else themeColor.copy(alpha = 0.4f),
-                                    topLeft = Offset(x, chartTop + chartHeight - barHeight),
-                                    size = Size(barWidth, barHeight),
-                                    cornerRadius = CornerRadius(3.dp.toPx())
-                                )
+                                val color = if (value >= 0) Color(0xFF4CAF50) else Color(0xFFEF5350)
+                                if (value >= 0) {
+                                    drawRoundRect(color = color, topLeft = Offset(x, zeroY - barHeight), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(3.dp.toPx()))
+                                } else {
+                                    drawRoundRect(color = color, topLeft = Offset(x, zeroY), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(3.dp.toPx()))
+                                }
                             }
                         }
-                        // Y轴刻度文字
-                        Column(
-                            modifier = Modifier
-                                .align(Alignment.CenterStart)
-                                .width(36.dp)
-                                .height(160.dp),
-                            verticalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            for (i in 4 downTo 0) {
-                                Text(
-                                    text = String.format("%.0f", maxBarValue * i / 4),
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.End,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            }
-                        }
-                        // X轴刻度文字（每隔几个显示）
+                        // X轴刻度文字
                         Row(
                             modifier = Modifier
                                 .align(Alignment.BottomStart)
@@ -1564,22 +1565,6 @@ private fun StatisticsTabContent() {
                                     )
                                 }
                             }
-                        }
-                        // 右下浮动标签
-                        val selectedBarValue = barData[barSelectedDay] ?: 0.0
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .padding(bottom = 20.dp)
-                        ) {
-                            Text(
-                                text = "${barSelectedDay}日 ¥${String.format("%.0f", selectedBarValue)}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
                         }
                     }
                 }
@@ -1607,7 +1592,7 @@ private fun StatisticsTabContent() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "收入趋势",
+                            "资产趋势",
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -1623,8 +1608,13 @@ private fun StatisticsTabContent() {
                     Spacer(Modifier.height(12.dp))
 
                     // 折线图 Canvas
-                    val lineData = dailyIncomeData.toSortedMap()
+                    val lineData = dailyAssetData.toSortedMap()
                     val maxLineValue = lineData.values.maxOrNull()?.let { if (it == 0.0) 1.0 else it } ?: 1.0
+                    val lineAnimProgress = remember { Animatable(0f) }
+                    LaunchedEffect(lineData) {
+                        lineAnimProgress.snapTo(0f)
+                        lineAnimProgress.animateTo(1f, animationSpec = tween(durationMillis = 500, easing = LinearEasing))
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1639,9 +1629,20 @@ private fun StatisticsTabContent() {
                             if (pointCount == 0) return@Canvas
                             val pointGap = chartWidth / (pointCount - 1).coerceAtLeast(1)
 
-                            // Y轴刻度线
+                            val textPaint = android.graphics.Paint().apply {
+                                color = axisLabelColor.hashCode()
+                                textSize = 9.sp.toPx()
+                                textAlign = android.graphics.Paint.Align.RIGHT
+                                isAntiAlias = true
+                            }
+                            val labelX = chartLeft - 4.dp.toPx()
+
+                            // Y轴刻度文字 + 刻度线
                             for (i in 0..4) {
                                 val y = chartTop + chartHeight * (1 - i / 4f)
+                                drawContext.canvas.nativeCanvas.drawText(
+                                    String.format("%.0f", maxLineValue * i / 4), labelX, y + 3.dp.toPx(), textPaint
+                                )
                                 drawLine(
                                     color = Color.LightGray.copy(alpha = 0.3f),
                                     start = Offset(chartLeft, y),
@@ -1668,40 +1669,18 @@ private fun StatisticsTabContent() {
                                     areaPath.lineTo(point.x, point.y)
                                 }
                             }
-                            // 闭合面积
                             if (points.isNotEmpty()) {
                                 areaPath.lineTo(points.last().x, chartTop + chartHeight)
                                 areaPath.close()
                             }
 
-                            // 绘制面积填充（淡灰色）
-                            drawPath(
-                                path = areaPath,
-                                color = Color.Gray.copy(alpha = 0.1f)
-                            )
-                            // 绘制折线（主题色）
-                            drawPath(
-                                path = linePath,
-                                color = themeColor,
-                                style = Stroke(width = 2.dp.toPx())
-                            )
-                        }
-                        // Y轴刻度文字
-                        Column(
-                            modifier = Modifier
-                                .align(Alignment.CenterStart)
-                                .width(36.dp)
-                                .height(160.dp),
-                            verticalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            for (i in 4 downTo 0) {
-                                Text(
-                                    text = String.format("%.0f", maxLineValue * i / 4),
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.End,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
+                            // 按动画进度裁剪绘制区域
+                            val clipRight = chartLeft + chartWidth * lineAnimProgress.value
+                            clipRect(left = chartLeft, top = chartTop, right = clipRight, bottom = chartTop + chartHeight) {
+                                // 面积填充（淡灰色）
+                                drawPath(path = areaPath, color = Color.Gray.copy(alpha = 0.1f))
+                                // 折线（主题色）
+                                drawPath(path = linePath, color = themeColor, style = Stroke(width = 2.dp.toPx()))
                             }
                         }
                         // X轴刻度文字
@@ -1722,30 +1701,6 @@ private fun StatisticsTabContent() {
                                 }
                             }
                         }
-                        // 右上浮动信息方块
-                        val selectedLineValue = lineData[lineSelectedDay] ?: 0.0
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(top = 4.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    text = "${selectedMonth + 1}月${lineSelectedDay}日",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "¥${String.format("%.0f", selectedLineValue)}",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
                         }
                     }
                 }
@@ -2968,23 +2923,17 @@ private fun RecordListContent(
 
     val weekdays = arrayOf("日", "一", "二", "三", "四", "五", "六")
 
-    // 本月收支统计
+    // 本月收支统计（从月度汇总表读取）
     val calendar = remember { Calendar.getInstance() }
     val currentYear = calendar.get(Calendar.YEAR)
-    val currentMonth = calendar.get(Calendar.MONTH)
-    val monthlyRecords = remember(recordDb, currentYear, currentMonth) {
-        recordDb.records.filter {
-            val cal = Calendar.getInstance().apply { timeInMillis = it.happenedAt }
-            cal.get(Calendar.YEAR) == currentYear && cal.get(Calendar.MONTH) == currentMonth
-        }
+    val currentMonth = calendar.get(Calendar.MONTH) + 1  // Calendar.MONTH 0-based，数据库 1-based
+    val currentBookName = remember { AccountingRepository.getLastBookName(context) }
+    val monthlySummary = remember(currentBookName, currentYear, currentMonth) {
+        AccountingRepository.getMonthSummary(context, currentBookName, currentYear, currentMonth)
     }
-    val monthlyExpense = remember(monthlyRecords) {
-        monthlyRecords.filter { it.type == "支出" && it.reimbursementAccountId == null && !it.excludeFromStats }.sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
-    }
-    val monthlyIncome = remember(monthlyRecords) {
-        monthlyRecords.filter { it.type == "收入" && it.reimbursementAccountId == null && !it.excludeFromStats }.sumOf { it.amount.toDoubleOrNull() ?: 0.0 }
-    }
-    val monthlyBalance = remember(monthlyIncome, monthlyExpense) { monthlyIncome - monthlyExpense }
+    val monthlyIncome = remember(monthlySummary) { monthlySummary.income }
+    val monthlyExpense = remember(monthlySummary) { monthlySummary.expense }
+    val monthlyBalance = remember(monthlySummary) { monthlyIncome - monthlyExpense }
     // 余剩预算（暂无预算功能，默认0）
     val budgetRemaining = remember { 0.0 }
 

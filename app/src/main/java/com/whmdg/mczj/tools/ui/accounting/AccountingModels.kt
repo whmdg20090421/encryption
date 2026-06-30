@@ -220,6 +220,9 @@ data class AccountingRecord(
     val subcategoryName: String? = null, // 二级分类中文名
     val note: String = "",
     val happenedAt: Long = System.currentTimeMillis(),
+    val year: Int = 0,              // happenedAt 对应的年份
+    val month: Int = 0,             // happenedAt 对应的月份（1-12）
+    val day: Int = 0,               // happenedAt 对应的日（1-31）
     val accountId: String? = null,  // 关联账户 id（可选）
     val discountBefore: String? = null,  // 优惠前金额（可选）
     val discountOff: String? = null,     // 优惠金额（可选）
@@ -316,4 +319,19 @@ val accountTypeConfigs = mapOf(
     "insurance" to AccountTypeConfig("file:///android_asset/icons/insurance.svg", "保险", "valuation"),
     "provident_fund" to AccountTypeConfig("file:///android_asset/icons/social_fund.svg", "公积金", "valuation"),
     "loan" to AccountTypeConfig("file:///android_asset/icons/loan.svg", "贷款", "valuation"),
+)
+
+// ── 月度汇总数据模型 ──
+
+/**
+ * 每个账本每月的收支汇总。
+ * 由 Repository 层在记录变更时自动维护，业务代码无需手动调用。
+ * 过滤条件：reimbursementAccountId IS NULL 且 excludeFromStats = false。
+ */
+data class MonthlySummary(
+    val bookName: String,
+    val year: Int,
+    val month: Int,
+    val income: Double = 0.0,
+    val expense: Double = 0.0
 )

@@ -20,7 +20,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 20
+        private const val DB_VERSION = 22
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -88,6 +88,9 @@ internal class AccountingDatabase private constructor(context: Context) :
                 subcategory_name TEXT,
                 note             TEXT DEFAULT '',
                 happened_at      INTEGER NOT NULL,
+                year             INTEGER NOT NULL DEFAULT 0,
+                month            INTEGER NOT NULL DEFAULT 0,
+                day              INTEGER NOT NULL DEFAULT 0,
                 account_id       TEXT,
                 discount_before         TEXT,
                 discount_off            TEXT,
@@ -107,6 +110,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         """.trimIndent())
         db.execSQL("CREATE INDEX idx_rec_book ON records(book_name)")
         db.execSQL("CREATE INDEX idx_rec_time ON records(happened_at)")
+        db.execSQL("CREATE INDEX idx_rec_book_ymd ON records(book_name, year, month, day)")
 
         db.execSQL("""
             CREATE TABLE accounts (
@@ -141,6 +145,18 @@ internal class AccountingDatabase private constructor(context: Context) :
             CREATE TABLE IF NOT EXISTS color_icons (
                 id   TEXT PRIMARY KEY,
                 name TEXT NOT NULL
+            )
+        """.trimIndent())
+
+        // 月度收支汇总表（由 Repository 自动维护）
+        db.execSQL("""
+            CREATE TABLE monthly_summaries (
+                book_name TEXT NOT NULL,
+                year      INTEGER NOT NULL,
+                month     INTEGER NOT NULL,
+                income    REAL NOT NULL DEFAULT 0,
+                expense   REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (book_name, year, month)
             )
         """.trimIndent())
 
@@ -251,6 +267,43 @@ internal class AccountingDatabase private constructor(context: Context) :
         if (oldVersion < 20) {
             // 修复 CSV 导入创建的分类使用 Material Icons 的问题
             db.execSQL("UPDATE categories SET icon = 'build_in_0233' WHERE icon NOT LIKE 'build_in_%'")
+        }
+        if (oldVersion < 21) {
+            // 新增 year/month/day 列，支持 账本→年→月→日 层级查询
+            db.execSQL("ALTER TABLE records ADD COLUMN year INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE records ADD COLUMN month INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE records ADD COLUMN day INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("CREATE INDEX idx_rec_book_ymd ON records(book_name, year, month, day)")
+            // 从 happened_at 回填 year/month/day
+            db.execSQL("UPDATE records SET year = CAST(strftime('%Y', happened_at / 1000, 'unixepoch', 'localtime') AS INTEGER)")
+            db.execSQL("UPDATE records SET month = CAST(strftime('%m', happened_at / 1000, 'unixepoch', 'localtime') AS INTEGER)")
+            db.execSQL("UPDATE records SET day = CAST(strftime('%d', happened_at / 1000, 'unixepoch', 'localtime') AS INTEGER)")
+        }
+        if (oldVersion < 22) {
+            // 月度收支汇总表
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS monthly_summaries (
+                    book_name TEXT NOT NULL,
+                    year      INTEGER NOT NULL,
+                    month     INTEGER NOT NULL,
+                    income    REAL NOT NULL DEFAULT 0,
+                    expense   REAL NOT NULL DEFAULT 0,
+                    PRIMARY KEY (book_name, year, month)
+                )
+            """.trimIndent())
+            // 全量回填已有记录的月度汇总
+            db.execSQL("""
+                INSERT OR REPLACE INTO monthly_summaries (book_name, year, month, income, expense)
+                SELECT
+                    book_name,
+                    year,
+                    month,
+                    SUM(CASE WHEN type = '收入' AND reimbursement_account_id IS NULL AND exclude_from_stats = 0 THEN CAST(amount AS REAL) ELSE 0 END) AS income,
+                    SUM(CASE WHEN type = '支出' AND reimbursement_account_id IS NULL AND exclude_from_stats = 0 THEN CAST(amount AS REAL) ELSE 0 END) AS expense
+                FROM records
+                WHERE year > 0
+                GROUP BY book_name, year, month
+            """.trimIndent())
         }
     }
 
@@ -536,7 +589,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAllRecords(): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name FROM records ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name FROM records ORDER BY happened_at DESC",
             null
         )
         try {
@@ -552,7 +605,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByBook(bookName: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name FROM records WHERE book_name = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name FROM records WHERE book_name = ? ORDER BY happened_at DESC",
             arrayOf(bookName)
         )
         try {
@@ -577,6 +630,9 @@ internal class AccountingDatabase private constructor(context: Context) :
             if (r.subcategoryName != null) put("subcategory_name", r.subcategoryName) else putNull("subcategory_name")
             put("note", r.note)
             put("happened_at", r.happenedAt)
+            put("year", r.year)
+            put("month", r.month)
+            put("day", r.day)
             if (r.accountId != null) put("account_id", r.accountId) else putNull("account_id")
             if (r.discountBefore != null) put("discount_before", r.discountBefore) else putNull("discount_before")
             if (r.discountOff != null) put("discount_off", r.discountOff) else putNull("discount_off")
@@ -600,7 +656,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     }
 
     private fun cursorToRecord(c: android.database.Cursor): AccountingRecord {
-        val attachmentsJson = c.getString(13)
+        val attachmentsJson = c.getString(16)
         val attachments = if (!attachmentsJson.isNullOrEmpty()) {
             try { Json.decodeFromString<List<AttachmentInfo>>(attachmentsJson) } catch (_: Exception) { emptyList() }
         } else emptyList()
@@ -613,23 +669,26 @@ internal class AccountingDatabase private constructor(context: Context) :
             subcategoryId = c.getString(5),  // 可能为 null
             note = c.getString(6) ?: "",
             happenedAt = c.getLong(7),
-            accountId = c.getString(8),  // 可能为 null
-            discountBefore = c.getString(9),  // 可能为 null
-            discountOff = c.getString(10),  // 可能为 null
-            discountAfter = c.getString(11),  // 可能为 null
-            reimbursementAccountId = c.getString(12),  // 可能为 null
+            year = c.getInt(8),
+            month = c.getInt(9),
+            day = c.getInt(10),
+            accountId = c.getString(11),  // 可能为 null
+            discountBefore = c.getString(12),  // 可能为 null
+            discountOff = c.getString(13),  // 可能为 null
+            discountAfter = c.getString(14),  // 可能为 null
+            reimbursementAccountId = c.getString(15),  // 可能为 null
             attachments = attachments,
-            excludeFromStats = c.getInt(14) == 1,
-            excludeFromBudget = c.getInt(15) == 1,
-            reimburseStatus = c.getInt(16) == 1,
-            reimburseAmount = c.getDouble(17),
-            reimburseAfterAmount = c.getString(18),
-            refundAmount = c.getDouble(19),
-            address = c.getString(20) ?: "",
-            createdAt = if (c.isNull(21)) null else c.getLong(21),
-            updatedAt = if (c.isNull(22)) null else c.getLong(22),
-            categoryName = c.getString(23) ?: "",
-            subcategoryName = c.getString(24)
+            excludeFromStats = c.getInt(17) == 1,
+            excludeFromBudget = c.getInt(18) == 1,
+            reimburseStatus = c.getInt(19) == 1,
+            reimburseAmount = c.getDouble(20),
+            reimburseAfterAmount = c.getString(21),
+            refundAmount = c.getDouble(22),
+            address = c.getString(23) ?: "",
+            createdAt = if (c.isNull(24)) null else c.getLong(24),
+            updatedAt = if (c.isNull(25)) null else c.getLong(25),
+            categoryName = c.getString(26) ?: "",
+            subcategoryName = c.getString(27)
         )
     }
 
@@ -640,7 +699,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByReimbursementAccount(reimbAccountId: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
             arrayOf(reimbAccountId)
         )
         try {
@@ -651,6 +710,60 @@ internal class AccountingDatabase private constructor(context: Context) :
             cursor.close()
         }
         return records
+    }
+
+    // ─────────────────────────────────────────────
+    // 月度收支汇总（自动维护）
+    // ─────────────────────────────────────────────
+
+    /** 重算指定账本指定月的收支汇总并写入 monthly_summaries */
+    fun recalculateMonthSummary(bookName: String, year: Int, month: Int) {
+        val db = writableDatabase
+        db.execSQL("""
+            INSERT OR REPLACE INTO monthly_summaries (book_name, year, month, income, expense)
+            SELECT
+                ?,
+                ?,
+                ?,
+                COALESCE(SUM(CASE WHEN type = '收入' AND reimbursement_account_id IS NULL AND exclude_from_stats = 0 THEN CAST(amount AS REAL) END), 0),
+                COALESCE(SUM(CASE WHEN type = '支出' AND reimbursement_account_id IS NULL AND exclude_from_stats = 0 THEN CAST(amount AS REAL) END), 0)
+            FROM records
+            WHERE book_name = ? AND year = ? AND month = ?
+        """.trimIndent(), arrayOf(bookName, year, month, bookName, year, month))
+    }
+
+    /** 获取指定账本指定月的收支汇总 */
+    fun getMonthSummary(bookName: String, year: Int, month: Int): MonthlySummary {
+        val cursor = readableDatabase.rawQuery(
+            "SELECT income, expense FROM monthly_summaries WHERE book_name = ? AND year = ? AND month = ?",
+            arrayOf(bookName, year.toString(), month.toString())
+        )
+        return try {
+            if (cursor.moveToFirst()) {
+                MonthlySummary(bookName, year, month, cursor.getDouble(0), cursor.getDouble(1))
+            } else {
+                MonthlySummary(bookName, year, month)
+            }
+        } finally {
+            cursor.close()
+        }
+    }
+
+    /** 获取指定账本所有月度汇总（按年月降序） */
+    fun getAllMonthSummaries(bookName: String): List<MonthlySummary> {
+        val result = mutableListOf<MonthlySummary>()
+        val cursor = readableDatabase.rawQuery(
+            "SELECT year, month, income, expense FROM monthly_summaries WHERE book_name = ? ORDER BY year DESC, month DESC",
+            arrayOf(bookName)
+        )
+        try {
+            while (cursor.moveToNext()) {
+                result.add(MonthlySummary(bookName, cursor.getInt(0), cursor.getInt(1), cursor.getDouble(2), cursor.getDouble(3)))
+            }
+        } finally {
+            cursor.close()
+        }
+        return result
     }
 
     // ─────────────────────────────────────────────
@@ -919,7 +1032,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         // records
         val records = mutableListOf<ExportRecord>()
         val recCursor = db.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name FROM records",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name FROM records",
             null
         )
         try {
@@ -1228,6 +1341,11 @@ internal class AccountingDatabase private constructor(context: Context) :
                     if (subCatName.isNotEmpty()) put("subcategory_name", subCatName) else putNull("subcategory_name")
                     put("note", note)
                     put("happened_at", happenedAt)
+                    // 从 happenedAt 提取 year/month/day
+                    val cal = java.util.Calendar.getInstance().apply { timeInMillis = happenedAt }
+                    put("year", cal.get(java.util.Calendar.YEAR))
+                    put("month", cal.get(java.util.Calendar.MONTH) + 1)
+                    put("day", cal.get(java.util.Calendar.DAY_OF_MONTH))
                     val aId = accNameToId[accName]
                     if (aId != null) put("account_id", aId) else if (accName.isNotEmpty()) put("account_id", accName) else putNull("account_id")
                     if (discountBefore != null) put("discount_before", discountBefore) else putNull("discount_before")
@@ -1394,6 +1512,11 @@ internal class AccountingDatabase private constructor(context: Context) :
                     if (subCatId != null) put("subcategory_id", subCatId) else putNull("subcategory_id")
                     put("note", note)
                     put("happened_at", happenedAt)
+                    // 从 happenedAt 提取 year/month/day
+                    val cal = java.util.Calendar.getInstance().apply { timeInMillis = happenedAt }
+                    put("year", cal.get(java.util.Calendar.YEAR))
+                    put("month", cal.get(java.util.Calendar.MONTH) + 1)
+                    put("day", cal.get(java.util.Calendar.DAY_OF_MONTH))
                     val aId = accNameToId[accName]
                     if (aId != null) put("account_id", aId) else if (accName.isNotEmpty()) put("account_id", accName) else putNull("account_id")
                     if (discountBefore != null) put("discount_before", discountBefore) else putNull("discount_before")
@@ -1630,6 +1753,11 @@ internal class AccountingDatabase private constructor(context: Context) :
                     put("amount", r.amount); put("category_id", r.categoryId)
                     if (r.subcategoryId != null) put("subcategory_id", r.subcategoryId) else putNull("subcategory_id")
                     put("note", r.note); put("happened_at", r.happenedAt)
+                    // 从 happenedAt 提取 year/month/day
+                    val cal = java.util.Calendar.getInstance().apply { timeInMillis = r.happenedAt }
+                    put("year", cal.get(java.util.Calendar.YEAR))
+                    put("month", cal.get(java.util.Calendar.MONTH) + 1)
+                    put("day", cal.get(java.util.Calendar.DAY_OF_MONTH))
                     if (r.accountId != null) put("account_id", r.accountId) else putNull("account_id")
                     if (r.discountBefore != null) put("discount_before", r.discountBefore) else putNull("discount_before")
                     if (r.discountOff != null) put("discount_off", r.discountOff) else putNull("discount_off")
