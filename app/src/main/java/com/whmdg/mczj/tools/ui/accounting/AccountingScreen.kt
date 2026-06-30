@@ -32,7 +32,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -58,6 +59,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.whmdg.mczj.tools.ui.Screen
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -80,6 +83,9 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
     var isMultiSelectMode by remember { mutableStateOf(false) }
     var selectedRecordIds by remember { mutableStateOf(setOf<String>()) }
     val allRecords = remember { AccountingRecordDb.load(context).records }
+    // 导航栏顶部Y坐标（dp，用于定位FAB）
+    var navBarTopYDp by remember { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
 
     // 切换标签时重置子页面状态
     LaunchedEffect(selectedTab) {
@@ -271,19 +277,29 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
             }
 
             // 右下角按钮（首页=记一笔，资产=添加账户，其他tab不显示）— 多选时向右滑出
-            val navBarPadding = WindowInsets.navigationBars.asPaddingValues()
+            // 通过 navBarTopYDp 动态计算 FAB 位置，确保在导航栏上方
+            var fabParentBottomYDp by remember { mutableStateOf(0.dp) }
             AnimatedVisibility(
                 visible = !isMultiSelectMode && (selectedTab == 0 || selectedTab == 1),
                 exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
                 enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
-                modifier = Modifier.align(Alignment.BottomEnd)
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .onGloballyPositioned { coordinates ->
+                        val bottomY = coordinates.positionInWindow().y + coordinates.size.height
+                        fabParentBottomYDp = (bottomY / density.density).dp
+                    }
             ) {
+                val fabBottomPadding = if (navBarTopYDp > 0.dp) {
+                    fabParentBottomYDp - navBarTopYDp + 15.dp
+                } else {
+                    25.dp
+                }
                 if (selectedTab == 0) {
                     FloatingActionButton(
                         onClick = { onNavigate(Screen.AddAccounting(currentBookName)) },
                         modifier = Modifier
-                            .padding(end = 25.dp, bottom = 25.dp)
-                            .padding(bottom = navBarPadding.calculateBottomPadding()),
+                            .padding(end = 25.dp, bottom = fabBottomPadding),
                         containerColor = fabThemeColor
                     ) {
                         Icon(Icons.Default.NoteAdd, contentDescription = "记一笔", tint = Color.White)
@@ -292,8 +308,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
                     FloatingActionButton(
                         onClick = { showAccountTypeDialog = true },
                         modifier = Modifier
-                            .padding(end = 25.dp, bottom = 25.dp)
-                            .padding(bottom = navBarPadding.calculateBottomPadding()),
+                            .padding(end = 25.dp, bottom = fabBottomPadding),
                         containerColor = fabThemeColor
                     ) {
                         Icon(Icons.Default.Add, contentDescription = "添加账户", tint = Color.White)
@@ -564,6 +579,9 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
         modifier = Modifier
             .fillMaxWidth()
             .align(Alignment.BottomCenter)
+            .onGloballyPositioned { coordinates ->
+                navBarTopYDp = (coordinates.positionInWindow().y / density.density).dp
+            }
     ) {
         Box(
             modifier = Modifier
@@ -2259,13 +2277,15 @@ private fun RecordListContent(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .combinedClickable(
-                                            onClick = {
-                                                if (isMultiSelectMode) onToggleSelection(record.id)
-                                                else onNavigate(Screen.AccountingDetail(bookName, record.id))
-                                            },
-                                            onLongClick = { onLongPress(record.id) }
-                                        )
+                                        .pointerInput(record.id) {
+                                            detectTapGestures(
+                                                onTap = {
+                                                    if (isMultiSelectMode) onToggleSelection(record.id)
+                                                    else onNavigate(Screen.AccountingDetail(bookName, record.id))
+                                                },
+                                                onLongPress = { onLongPress(record.id) }
+                                            )
+                                        }
                                         .padding(horizontal = 16.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -2436,13 +2456,15 @@ private fun RecordListContent(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .combinedClickable(
-                                            onClick = {
-                                                if (isMultiSelectMode) onToggleSelection(record.id)
-                                                else onNavigate(Screen.AccountingDetail(bookName, record.id))
-                                            },
-                                            onLongClick = { onLongPress(record.id) }
-                                        )
+                                        .pointerInput(record.id) {
+                                            detectTapGestures(
+                                                onTap = {
+                                                    if (isMultiSelectMode) onToggleSelection(record.id)
+                                                    else onNavigate(Screen.AccountingDetail(bookName, record.id))
+                                                },
+                                                onLongPress = { onLongPress(record.id) }
+                                            )
+                                        }
                                         .padding(horizontal = 16.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
