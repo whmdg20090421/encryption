@@ -91,9 +91,16 @@ object OcrFloatingWindow {
         scope?.cancel()
         scope = null
         val wm = windowManager ?: return
-        animationView?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-        menuView?.let { try { wm.removeView(it) } catch (_: Exception) {} }
-        bubbleView?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        // 移除所有视图
+        animationView?.let {
+            try { wm.removeView(it) } catch (_: Exception) {}
+        }
+        menuView?.let {
+            try { wm.removeView(it) } catch (_: Exception) {}
+        }
+        bubbleView?.let {
+            try { wm.removeView(it) } catch (_: Exception) {}
+        }
         animationView = null
         menuView = null
         bubbleView = null
@@ -311,22 +318,24 @@ object OcrFloatingWindow {
             }
 
             // 2. 显示截图动画（缩小飞入悬浮窗）
-            showScreenshotAnimation(context, bubble, density, screenshot)
+            showScreenshotAnimation(context, bubble, density, screenshot) {
+                // 3. 动画结束后显示转圈
+                val progress = bubble.getTag() as? ProgressBar
+                progress?.visibility = View.VISIBLE
 
-            // 3. 动画结束后显示转圈
-            val progress = bubble.getTag() as? ProgressBar
-            progress?.visibility = View.VISIBLE
+                // 4. OCR 识别
+                scope?.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        BillOcrEngine.recognizeFromBitmap(screenshot, service)
+                    }
+                    screenshot.recycle()
+                    progress?.visibility = View.GONE
 
-            // 4. OCR 识别
-            val result = withContext(Dispatchers.IO) {
-                BillOcrEngine.recognizeFromBitmap(screenshot, service)
+                    // 5. 显示结果（失败时显示识别到的文字）
+                    val debugText = if (result.bill == null) result.debugText else null
+                    showResult(context, bubble, density, result.bill, result.error, debugText)
+                }
             }
-            screenshot.recycle()
-            progress?.visibility = View.GONE
-
-            // 5. 显示结果（失败时显示识别到的文字）
-            val debugText = if (result.bill == null) result.debugText else null
-            showResult(context, bubble, density, result.bill, result.error, debugText)
         }
     }
 
@@ -337,7 +346,8 @@ object OcrFloatingWindow {
         context: Context,
         bubble: FrameLayout,
         density: Float,
-        bitmap: Bitmap
+        bitmap: Bitmap,
+        onAnimationEnd: () -> Unit
     ) {
         val wm = windowManager ?: return
         val bubbleLp = bubble.layoutParams as? WindowManager.LayoutParams ?: return
@@ -410,11 +420,26 @@ object OcrFloatingWindow {
 
         animatorSet.addListener(object : android.animation.AnimatorListenerAdapter() {
             override fun onAnimationEnd(animation: android.animation.Animator) {
+                // 先清除 ImageView 的 bitmap 引用，避免 recycled bitmap 异常
+                imageView.setImageDrawable(null)
                 // 移除动画窗口
                 try {
                     wm.removeView(overlay)
                 } catch (_: Exception) {}
                 animationView = null
+                // 回调通知动画结束
+                onAnimationEnd()
+            }
+
+            override fun onAnimationCancel(animation: android.animation.Animator) {
+                // 动画被取消时也要清理
+                imageView.setImageDrawable(null)
+                try {
+                    wm.removeView(overlay)
+                } catch (_: Exception) {}
+                animationView = null
+                // 动画被取消时回收 bitmap
+                bitmap.recycle()
             }
         })
 
