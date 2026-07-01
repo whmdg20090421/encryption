@@ -18,6 +18,9 @@ class MyAccessibilityService : AccessibilityService() {
         var instance: MyAccessibilityService? = null
             private set
 
+        /** 缓存最新 AccessibilityEvent 的 className，供 BillOcrEngine 使用 */
+        var lastClassName: String? = null
+
         private val SYSTEM_PACKAGES = setOf(
             "com.android.systemui",
             "com.android.settings",
@@ -39,7 +42,9 @@ class MyAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        event?.className?.toString()?.let { lastClassName = it }
+    }
 
     override fun onInterrupt() {}
 
