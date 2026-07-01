@@ -66,7 +66,7 @@ class MyAccessibilityService : AccessibilityService() {
                 if (now - lastAutoRecognizeTime > AUTO_RECOGNIZE_COOLDOWN_MS) {
                     lastAutoRecognizeTime = now
                     Handler(Looper.getMainLooper()).post {
-                        autoRecognize(pkg)
+                        pkg?.let { autoRecognize(it) }
                     }
                 }
             }
