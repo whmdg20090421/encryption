@@ -5,10 +5,14 @@ import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import com.whmdg.mczj.tools.ui.accounting.BillOcrEngine
+import com.whmdg.mczj.tools.ui.accounting.OcrFloatingWindow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
@@ -30,6 +34,15 @@ class MyAccessibilityService : AccessibilityService() {
             "com.google.android.gms",
             "com.google.android.googlequicksearchbox"
         )
+
+        private val BILL_PACKAGES = setOf(
+            "com.tencent.mm",
+            "com.eg.android.AlipayGphone"
+        )
+
+        /** 防抖：上次自动识别的时间戳 */
+        private var lastAutoRecognizeTime = 0L
+        private const val AUTO_RECOGNIZE_COOLDOWN_MS = 5000L
     }
 
     override fun onServiceConnected() {
@@ -44,6 +57,33 @@ class MyAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event?.className?.toString()?.let { lastClassName = it }
+
+        // 自动检测：悬浮窗可见时，检测到微信/支付宝页面变化自动识别
+        if (event != null && OcrFloatingWindow.isVisible()) {
+            val pkg = event.packageName?.toString()
+            if (pkg in BILL_PACKAGES) {
+                val now = System.currentTimeMillis()
+                if (now - lastAutoRecognizeTime > AUTO_RECOGNIZE_COOLDOWN_MS) {
+                    lastAutoRecognizeTime = now
+                    Handler(Looper.getMainLooper()).post {
+                        autoRecognize(pkg)
+                    }
+                }
+            }
+        }
+    }
+
+    /** 自动识别：从 windows 列表获取目标应用根节点，执行识别 */
+    private fun autoRecognize(packageName: String) {
+        val root = getRootForPackage(packageName) ?: return
+        val texts = mutableListOf<String>()
+        traverseNode(root, texts)
+        if (texts.isEmpty()) return
+
+        val result = BillOcrEngine.recognizeNowWithTexts(this, packageName, texts)
+        if (result != null) {
+            OcrFloatingWindow.showAutoResult(this, result)
+        }
     }
 
     override fun onInterrupt() {}
@@ -75,6 +115,26 @@ class MyAccessibilityService : AccessibilityService() {
         val pkg = root.packageName?.toString()
         if (pkg != null && pkg != packageName && pkg !in SYSTEM_PACKAGES) {
             return pkg
+        }
+        return null
+    }
+
+    /** 从 windows 列表获取指定包名的根节点（避免获取到自身悬浮窗节点） */
+    fun getRootForPackage(targetPackage: String): AccessibilityNodeInfo? {
+        val allWindows = windows
+        if (allWindows != null) {
+            for (window in allWindows) {
+                val root = window.root ?: continue
+                val pkg = root.packageName?.toString()
+                if (pkg == targetPackage) {
+                    return root
+                }
+            }
+        }
+        // 回退：如果 rootInActiveWindow 的包名匹配
+        val fallback = rootInActiveWindow
+        if (fallback != null && fallback.packageName?.toString() == targetPackage) {
+            return fallback
         }
         return null
     }

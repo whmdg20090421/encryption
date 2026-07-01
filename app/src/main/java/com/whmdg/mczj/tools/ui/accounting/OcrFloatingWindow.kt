@@ -323,6 +323,14 @@ object OcrFloatingWindow {
 
     // ── 确认弹窗 ──
 
+    /** 自动识别结果展示（由无障碍事件触发） */
+    fun showAutoResult(context: Context, result: OcrBillInfo) {
+        Handler(Looper.getMainLooper()).post {
+            state = State.CONFIRM
+            showConfirmPopup(context, result)
+        }
+    }
+
     private fun showConfirmPopup(context: Context, info: OcrBillInfo) {
         val wm = windowManager ?: return
 

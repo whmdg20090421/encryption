@@ -61,37 +61,9 @@ object BillOcrEngine {
         return false
     }
 
-    /** 对应 c.c()：查找第 n 次出现的索引 */
-    private fun findNthIndex(list: List<String>, keyword: String, n: Int, exact: Boolean): Int {
-        var count = 1
-        for (i in list.indices) {
-            val item = list[i]
-            val match = if (exact) item == keyword else item.contains(keyword)
-            if (match) {
-                if (count >= n) return i
-                count++
-            }
-        }
-        return -1
-    }
-
     /** 对应 c.d()：查找第一次出现的索引 */
     private fun findIndex(list: List<String>, keyword: String, exact: Boolean): Int {
         for (i in list.indices) {
-            val item = list[i]
-            if (exact) {
-                if (item == keyword) return i
-            } else {
-                if (item.contains(keyword)) return i
-            }
-        }
-        return -1
-    }
-
-    /** 对应 c.e()：从指定位置开始查找 */
-    private fun findIndexFrom(list: List<String>, keyword: String, from: Int, exact: Boolean): Int {
-        if (from >= list.size - 1) return -1
-        for (i in from until list.size) {
             val item = list[i]
             if (exact) {
                 if (item == keyword) return i
@@ -113,14 +85,6 @@ object BillOcrEngine {
             }
         }
         return -1
-    }
-
-    /** 对应 c.o()：检查 hashMap 中是否有 key 以指定前缀开头 */
-    private fun startsWithMatch(hashMap: HashMap<String, Boolean>, prefix: String): Boolean {
-        for (key in hashMap.keys) {
-            if (key.startsWith(prefix)) return true
-        }
-        return false
     }
 
     // ── 节点遍历方法 ──
@@ -272,49 +236,13 @@ object BillOcrEngine {
     private var wechatScanTime = 0L          // this.j：扫码时间戳
     private var wechatIsScanMode = false     // this.k：是否扫一扫模式
 
-    /** 对应 p.q()：检查是否是微信支持的 Activity */
-    private fun wechatActivityMatch(className: String): Boolean {
-        val supportedActivities = listOf(
-            "com.tencent.mm.ui.LauncherUI",
-            "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
-            "com.tencent.mm.plugin.webview.ui.tools.WebViewUI",
-            "com.tencent.mm.framework.app.UIPageFragmentActivity",
-            "com.tencent.mm.plugin.remittance.ui.RemittanceBusiUI",
-            "com.tencent.mm.plugin.remittance.ui.RemittanceUI",
-            "com.tencent.mm.plugin.offline.ui.WalletOfflineCoinPurseUI",
-            "com.tencent.mm.plugin.wallet_index.ui.WalletBrandUI",
-            "com.tencent.mm.plugin.luckymoney.ui.LuckyMoneyPrepareUI",
-            "com.tencent.mm.plugin.luckymoney.ui.LuckyMoneyDetailUI",
-            "com.tencent.mm.plugin.luckymoney.ui.LuckyMoneyNotHookReceiveUI",
-            "com.tencent.mm.plugin.wallet_index.ui.OrderHandlerUI",
-            "com.tencent.mm.plugin.remittance.ui.RemittanceDetailUI",
-            "com.tencent.mm.plugin.wallet_core.ui.WalletOrderInfoNewUI",
-            "com.tencent.mm.plugin.lite.ui.WxaLiteAppTransparentLiteUI",
-            "com.tencent.mm.plugin.aa.ui.PaylistAAUI",
-            "com.tencent.mm.plugin.appbrand.ui.AppBrandUI00",
-            "com.tencent.mm.plugin.appbrand.ui.AppBrandPluginUI",
-            "com.tencent.mm.plugin.scanner.ui.BaseScanUI"
-        )
-        return className in supportedActivities
-    }
-
-    /** 对应 p.u()：微信页面类型判断 + 状态管理（主入口） */
-    fun wechatProcess(service: MyAccessibilityService, className: String): OcrBillInfo? {
-        // 对应 p.u() 开头的 className 匹配逻辑
-        // 注意：反编译代码中 LauncherUI 重置需要 object != null
-        if (className == "com.tencent.mm.ui.LauncherUI") {
-            val root = service.rootInActiveWindow
-            if (root != null) {
-                // 重置所有状态
-                wechatPageType = 0
-                wechatNeedRecognize = false
-                wechatInRecognizeMode = false
-                wechatIsGroupCollect = false
-            }
-            return null
-        }
-
-        // 直接标记 g=true 的 Activity 列表（对应 p.u() block20）
+    /** 使用已提取文本的微信处理入口（自动识别用） */
+    private fun wechatProcessWithTexts(
+        service: MyAccessibilityService,
+        className: String,
+        texts: List<String>
+    ): OcrBillInfo? {
+        // 简化 className 匹配：仅设置 g=true，跳过需要 rootInActiveWindow 的检测
         val directRecognizeActivities = listOf(
             "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
             "com.tencent.mm.plugin.webview.ui.tools.WebViewUI",
@@ -334,69 +262,11 @@ object BillOcrEngine {
             "com.tencent.mm.plugin.appbrand.ui.AppBrandUI00"
         )
 
-        when {
-            className in directRecognizeActivities -> {
-                wechatInRecognizeMode = true
-                if (className == "com.tencent.mm.plugin.aa.ui.PaylistAAUI") {
-                    wechatIsGroupCollect = true
-                }
-            }
-            className == "com.tencent.mm.plugin.scanner.ui.BaseScanUI" -> {
-                wechatIsScanMode = true
-            }
-            className == "com.tencent.mm.plugin.appbrand.ui.AppBrandPluginUI" -> {
-                wechatIsMiniProgram = true
-            }
+        if (className in directRecognizeActivities || className == "com.tencent.mm.ui.LauncherUI") {
+            wechatInRecognizeMode = true
         }
 
-        // 扫码/小程序后的识别模式检测
-        if (wechatIsScanMode && !wechatInRecognizeMode) {
-            val root = service.rootInActiveWindow
-            if (root != null) {
-                val found = root.findAccessibilityNodeInfosByText("支付成功") ||
-                    root.findAccessibilityNodeInfosByText("付款方式")
-                if (found.isNotEmpty()) {
-                    wechatInRecognizeMode = true
-                }
-            }
-        }
-
-        if (wechatIsMiniProgram && !wechatInRecognizeMode) {
-            val root = service.rootInActiveWindow
-            if (root != null) {
-                // 反编译代码此处调用 this.g() → c.i()，仅提取 text
-                val texts = extractTextsOnly(root)
-                if (texts.contains("当前状态") && texts.contains("交易单号")) {
-                    wechatInRecognizeMode = true
-                }
-            }
-        }
-
-        // 检测到微信主页 → 重置状态
-        if ((wechatIsScanMode || wechatIsMiniProgram) && !wechatInRecognizeMode) {
-            val root = service.rootInActiveWindow
-            if (root != null) {
-                val found1 = root.findAccessibilityNodeInfosByText("通讯录")
-                val found2 = root.findAccessibilityNodeInfosByText("发现")
-                val found3 = root.findAccessibilityNodeInfosByText("微信")
-                if (found1.isNotEmpty() && found2.isNotEmpty() && found3.isNotEmpty()) {
-                    wechatIsScanMode = false
-                    wechatIsMiniProgram = false
-                    wechatPageType = 0
-                    wechatNeedRecognize = false
-                    wechatInRecognizeMode = false
-                    wechatIsGroupCollect = false
-                    return null
-                }
-            }
-        }
-
-        // g=true 时提取文本并判断页面类型
         if (!wechatInRecognizeMode) return null
-
-        val root = service.rootInActiveWindow ?: return null
-        val texts = extractTextsAndDescriptions(root)
-        if (texts.isEmpty()) return null
 
         val textMap = buildTextMap(texts)
 
@@ -537,21 +407,31 @@ object BillOcrEngine {
         val isRedPacket = containsText(texts, "的红包", false)
 
         // 分发到具体处理器（对应 p.s() 逻辑）
-        // 注意：反编译代码中 s() 仅在 this.a == 1 时处理支付，
-        // 其他页面类型（3,4,10,11）在 s() 中不处理，走收款/红包分支。
+        // 反编译代码 s() 中：
+        // - n10=1 时分发：pageType==1 需检查支付成功条件，其他 pageType 直接分发
+        // - n10=0 时跳过，走收款/红包分支
         var result: OcrBillInfo? = null
 
         if (wechatNeedRecognize) {
-            // 对应 s() 中 n10 != 0 的分支：仅当 pageType == 1 时处理支付
-            if (wechatPageType == 1) {
-                // 先验证支付成功条件（对应 s() 中 n10 的赋值条件）
-                val isPaySuccess = (textMap.containsKey("付款成功") || textMap.containsKey("支付成功")) &&
+            val shouldDispatch = if (wechatPageType == 1) {
+                // pageType 1 需检查支付成功条件（对应 s() 中 n10 的赋值）
+                (textMap.containsKey("付款成功") || textMap.containsKey("支付成功")) &&
                     !textMap.containsKey("当前状态")
-                if (isPaySuccess) {
-                    result = wechatPaySuccess(texts, wechatPayMethod)
+            } else {
+                // pageType 3,4,10,11 直接分发（对应 s() 中 n10 默认为 1）
+                true
+            }
+
+            if (shouldDispatch) {
+                result = when (wechatPageType) {
+                    1 -> wechatPaySuccess(texts, wechatPayMethod)
+                    3 -> wechatDetail(texts)
+                    4 -> wechatGroupCollect(texts)
+                    10 -> wechatRecharge(texts, wechatRechargeMethod)
+                    11 -> wechatTransfer(texts)
+                    else -> null
                 }
             }
-            // pageType 3,4,10,11 不在 s() 中处理，走下面的收款/红包分支
         }
 
         // 收款检测（对应 s() 中 n11 != 0 的分支）
@@ -1459,19 +1339,12 @@ object BillOcrEngine {
         "网商银行转账", "还款成功", "余额宝-单次转入", "余额宝-转出到余额"
     )
 
-    /** 对应 b.q()：检查是否是支付宝支持的 Activity */
-    private fun alipayActivityMatch(className: String): Boolean {
-        return className == "com.eg.android.AlipayGphone" && (
-            className == "com.eg.android.AlipayGphone.AlipayLogin" ||
-                className == "com.alipay.android.msp.ui.views.MspContainerActivity" ||
-                className == "com.alipay.android.msp.ui.views.MspUniRenderActivity" ||
-                className == "com.alipay.android.phone.discovery.envelope.get.SnsCouponDetailActivity"
-            )
-    }
-
-    /** 对应 b.w()：支付宝页面类型判断 + 状态管理（主入口） */
-    fun alipayProcess(service: MyAccessibilityService, className: String): OcrBillInfo? {
-        // 对应 b.w() 开头的 className 匹配逻辑
+    private fun alipayProcessWithTexts(
+        service: MyAccessibilityService,
+        className: String,
+        texts: List<String>
+    ): OcrBillInfo? {
+        // className 状态管理（对应 b.w() 开头的匹配逻辑）
         if (className == "com.eg.android.AlipayGphone.AlipayLogin") {
             alipayPageType = 0
             alipayNeedRecognize = false
@@ -1479,7 +1352,6 @@ object BillOcrEngine {
             return null
         }
 
-        // 直接标记 b=true 的 Activity
         if (!alipayIsNfcMode &&
             (className == "com.alipay.android.msp.ui.views.MspContainerActivity" ||
                 className == "com.alipay.android.msp.ui.views.MspUniRenderActivity" ||
@@ -1489,7 +1361,6 @@ object BillOcrEngine {
             return null
         }
 
-        // NFC 相关 Activity
         when (className) {
             "com.alipay.android.phone.nfcpay.ui.NfcPayActivity",
             "com.alipay.android.phone.businesscommon.ucdp.nfc.activity.NResPageActivity" -> {
@@ -1501,10 +1372,7 @@ object BillOcrEngine {
             }
         }
 
-        val root = service.rootInActiveWindow ?: return null
-        val texts = extractTextsOnly(root)
         if (texts.isEmpty()) return null
-
         val textMap = buildTextMap(texts)
 
         // NFC 模式检测
@@ -1572,7 +1440,6 @@ object BillOcrEngine {
         ) {
             alipayPageType = 6
             alipayNeedRecognize = true
-            // 检查是否是真正的详情页（排除"更多"等）
             if (textMap.containsKey("交易详情")) {
                 val idx = texts.indexOf("交易详情")
                 if (idx > 0 && idx < texts.size - 1) {
@@ -1614,15 +1481,8 @@ object BillOcrEngine {
             alipayScanTime = System.currentTimeMillis()
         }
 
-        // 分发到具体处理器（对应 b.y() 逻辑）
-        // 反编译代码中 y() 有复杂的分支逻辑：
-        // 1. n10（处理支付）：this.a==2 时，如果 textMap 不含任何成功关键词 → n10=0
-        // 2. bl4（转账成功）
-        // 3. bl5（已收款）
-        // 4. bl2（红包）
         if (!alipayNeedRecognize) return null
 
-        // 对应 y() 中 n10 的判断：this.a==2 时检查成功关键词
         var shouldProcess = true
         if (alipayPageType == 2) {
             val hasSuccessKeyword = textMap.containsKey("支付成功") || textMap.containsKey("转账成功") ||
@@ -1642,7 +1502,7 @@ object BillOcrEngine {
 
         if (shouldProcess) {
             result = when (alipayPageType) {
-                2, 6, 7 -> alipayPaySuccess(texts) // r() 方法同时处理 2, 6, 7
+                2, 6, 7 -> alipayPaySuccess(texts)
                 9 -> alipayRecharge(texts)
                 10 -> alipayTransfer(texts)
                 11 -> alipayTransferDetail(texts)
@@ -1650,19 +1510,16 @@ object BillOcrEngine {
             }
         }
 
-        // 对应 y() 中 bl4 分支：转账成功
         if (result == null && textMap.containsKey("转账成功")) {
             result = alipayTransfer(texts)
         }
 
-        // 对应 y() 中 bl5 分支：已收款（仅 this.a==2 时）
         if (result == null && alipayPageType == 2 &&
             (textMap.containsKey("已收款") || textMap.containsKey("资金待入账") || textMap.containsKey("你已收款"))
         ) {
             result = alipayPaySuccess(texts)
         }
 
-        // 对应 y() 中 bl2 分支：红包
         if (result == null) {
             val isRedPacket = textMap.containsKey("支付宝红包") || textMap.containsKey("查看红包记录") ||
                 textMap.containsKey("查看红包") || containsText(texts, "红包金额", false) ||
@@ -2021,12 +1878,6 @@ object BillOcrEngine {
         return null
     }
 
-    /** 对应 b.s()：支付宝详情页提取 */
-    private fun alipayDetail(texts: List<String>): OcrBillInfo? {
-        // 详情页逻辑与支付成功页基本相同，使用相同的提取逻辑
-        return alipayPaySuccess(texts)
-    }
-
     /** 对应 b.v()：支付宝转账页提取 */
     private fun alipayTransfer(texts: List<String>): OcrBillInfo? {
         if (texts.isEmpty()) return null
@@ -2233,46 +2084,6 @@ object BillOcrEngine {
         return null
     }
 
-    /** 对应 b.t()：支付宝信用卡还款提取 */
-    private fun alipayCreditCard(texts: List<String>): OcrBillInfo? {
-        if (texts.isEmpty()) return null
-
-        val bill = OcrBillInfo()
-        bill.transfer = true
-        bill.origin = "支付宝"
-
-        for (i in texts.indices) {
-            val text = texts[i]
-
-            if ("实付金额" == text && i < texts.size - 2) {
-                val cleanText = texts[i + 2]
-                    .replace("￥", "").replace(",", "").replace("支出", "").replace("元", "")
-                if (isAmount(cleanText)) {
-                    bill.number = "${Math.abs(toDouble(cleanText))}"
-                }
-            }
-
-            if ("还款信用卡" == text && i < texts.size - 1) {
-                val cardText = texts[i + 1]
-                val toAsset = if (cardText.contains("(") && cardText.contains(")")) {
-                    cardText.substring(cardText.indexOf("(") + 1, cardText.lastIndexOf(")")).replace(".", "")
-                } else {
-                    cardText.replace(".", "")
-                }
-                bill.toAsset = toAsset
-                bill.fromAsset = "支付宝"
-            }
-        }
-
-        if (bill.fromAsset.isNotEmpty()) bill.fromAsset = bill.fromAsset.trim()
-        if (bill.toAsset.isNotEmpty()) bill.toAsset = bill.toAsset.trim()
-
-        if (bill.number.isNotEmpty()) {
-            return bill
-        }
-        return null
-    }
-
     /** 对应 b.z()：支付宝红包提取 */
     private fun alipayRedPacket(texts: List<String>): OcrBillInfo? {
         val bill = OcrBillInfo()
@@ -2362,30 +2173,6 @@ object BillOcrEngine {
         return null
     }
 
-    /** 支付宝收款页提取（对应 b.java 中的收款逻辑） */
-    private fun alipayReceipt(texts: List<String>): OcrBillInfo? {
-        if (texts.isEmpty()) return null
-
-        val bill = OcrBillInfo()
-        bill.origin = "支付宝"
-        bill.asset = "支付宝"
-
-        for (i in texts.indices) {
-            val text = texts[i]
-
-            // "收款时间"
-            if ("收款时间" == text && i < texts.size - 1) {
-                val time = parseTime(texts[i + 1])
-                if (time != -1L) {
-                    bill.time = time
-                    bill.income = true
-                }
-            }
-        }
-
-        return null
-    }
-
     /** 支付宝转账详情页提取 */
     private fun alipayTransferDetail(texts: List<String>): OcrBillInfo? {
         // 转账详情页逻辑与转账页基本相同
@@ -2397,17 +2184,46 @@ object BillOcrEngine {
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * 主入口：获取前台包名 → 提取文本 → 按包名分发到微信/支付宝处理器
-     * 对应 SelectToSpeakService 的入口逻辑
+     * 主入口：直接从无障碍节点树提取文本，搜索关键词识别账单
+     * 不做包名匹配，对应原版 SelectToSpeakService 的处理逻辑
      */
     fun recognizeNow(service: MyAccessibilityService): OcrBillInfo? {
-        val packageName = service.getTopPackageFromWindow() ?: return null
-        // className 从 MyAccessibilityService 缓存获取
+        val root = service.rootInActiveWindow ?: return null
+        val packageName = root.packageName?.toString() ?: return null
         val className = MyAccessibilityService.lastClassName ?: ""
 
         return when (packageName) {
-            "com.tencent.mm" -> wechatProcess(service, className)
-            "com.eg.android.AlipayGphone" -> alipayProcess(service, className)
+            "com.tencent.mm" -> {
+                // 微信处理器使用 text + contentDescription（对应 c.m() → c.n()）
+                val texts = extractTextsAndDescriptions(root)
+                if (texts.isEmpty()) return null
+                wechatProcessWithTexts(service, className, texts)
+            }
+            "com.eg.android.AlipayGphone" -> {
+                // 支付宝处理器仅使用 text（对应 c.g() → c.i()）
+                val texts = extractTextsOnly(root)
+                if (texts.isEmpty()) return null
+                alipayProcessWithTexts(service, className, texts)
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * 自动识别入口：使用已提取的文本进行识别（避免重复提取）
+     * 用于无障碍事件自动触发的场景
+     */
+    fun recognizeNowWithTexts(
+        service: MyAccessibilityService,
+        packageName: String,
+        texts: List<String>
+    ): OcrBillInfo? {
+        if (texts.isEmpty()) return null
+        val className = MyAccessibilityService.lastClassName ?: ""
+
+        return when (packageName) {
+            "com.tencent.mm" -> wechatProcessWithTexts(service, className, texts)
+            "com.eg.android.AlipayGphone" -> alipayProcessWithTexts(service, className, texts)
             else -> null
         }
     }
