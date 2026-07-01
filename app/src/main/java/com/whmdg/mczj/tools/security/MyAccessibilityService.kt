@@ -43,11 +43,12 @@ class MyAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
-    fun extractAllText(): String {
-        val root = rootInActiveWindow ?: return ""
-        val sb = StringBuilder()
-        traverseNode(root, sb)
-        return sb.toString()
+    /** 提取当前窗口所有文本（保留顺序，用于账单识别） */
+    fun extractAllTexts(): List<String> {
+        val root = rootInActiveWindow ?: return emptyList()
+        val texts = mutableListOf<String>()
+        traverseNode(root, texts)
+        return texts
     }
 
     /** 从窗口列表获取前台应用包名（优先 TYPE_APPLICATION 窗口，过滤系统包名） */
@@ -96,12 +97,13 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun traverseNode(node: AccessibilityNodeInfo, sb: StringBuilder) {
-        node.text?.let { if (it.isNotBlank()) sb.appendLine(it) }
-        node.contentDescription?.let { if (it.isNotBlank()) sb.appendLine(it) }
+    /** 遍历节点树，提取文本到列表（保留顺序） */
+    private fun traverseNode(node: AccessibilityNodeInfo, texts: MutableList<String>) {
+        node.text?.let { if (it.isNotBlank()) texts.add(it.toString()) }
+        node.contentDescription?.let { if (it.isNotBlank()) texts.add(it.toString()) }
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            traverseNode(child, sb)
+            traverseNode(child, texts)
             child.recycle()
         }
     }
