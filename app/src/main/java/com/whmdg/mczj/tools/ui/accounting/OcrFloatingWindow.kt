@@ -292,6 +292,8 @@ object OcrFloatingWindow {
         state = State.LOADING
         // 显示气泡上的进度条
         bubbleView?.getTag()?.let { (it as? ProgressBar)?.visibility = View.VISIBLE }
+        // 手动识别时抑制自动识别
+        MyAccessibilityService.suppressAutoRecognize()
 
         Handler(Looper.getMainLooper()).post {
             try {
@@ -400,6 +402,8 @@ object OcrFloatingWindow {
             if (info.toAsset.isNotEmpty()) fields.add("转入" to info.toAsset)
         }
         if (info.discount.isNotEmpty()) fields.add("优惠" to info.discount)
+        if (info.transactionId.isNotEmpty()) fields.add("交易单号" to info.transactionId)
+        if (info.merchantOrderId.isNotEmpty()) fields.add("商户单号" to info.merchantOrderId)
 
         for ((label, value) in fields) {
             card.addView(LinearLayout(context).apply {

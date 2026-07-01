@@ -1244,9 +1244,12 @@ private fun StatisticsTabContent() {
 
     // 每日总资产数据（用于折线图）
     // 从当前总资产反推：月初资产 = 当前总资产 - 本月所有变动，再逐日累加
+    // 基准 = 总资产（净资产 + 待报销金额），未报销账单不计入变动
     val dailyAssetData = remember(recordDb, selectedYear, selectedMonth, currentBookName) {
         val accounts = AccountingRepository.getAllAccounts(context)
         val currentTotal = accounts.sumOf { it.currentBalance }
+        val (reimbPending, _) = AccountingRepository.getReimburseTotals(context)
+        val totalAll = currentTotal + reimbPending
 
         val cal = Calendar.getInstance().apply {
             set(Calendar.YEAR, selectedYear)
@@ -1254,13 +1257,14 @@ private fun StatisticsTabContent() {
         }
         val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
 
-        // 当月每日变动
+        // 当月每日变动（排除未报销账单，保留已报销账单）
         val dailyDelta = mutableMapOf<Int, Double>()
         for (d in 1..daysInMonth) dailyDelta[d] = 0.0
         var monthTotalDelta = 0.0
         recordDb.records.filter { r ->
             r.bookName == currentBookName &&
-            r.reimbursementAccountId == null && !r.excludeFromStats
+            (r.reimbursementAccountId == null || r.reimburseStatus) &&
+            !r.excludeFromStats
         }.forEach { r ->
             val cal2 = Calendar.getInstance().apply { timeInMillis = r.happenedAt }
             if (cal2.get(Calendar.YEAR) == selectedYear && cal2.get(Calendar.MONTH) == selectedMonth) {
@@ -1277,7 +1281,7 @@ private fun StatisticsTabContent() {
         }
 
         // 月初资产 = 当前总资产 - 本月累计变动
-        val monthStartBalance = currentTotal - monthTotalDelta
+        val monthStartBalance = totalAll - monthTotalDelta
 
         // 累计每日总资产
         val dailyMap = mutableMapOf<Int, Double>()
@@ -1496,9 +1500,15 @@ private fun StatisticsTabContent() {
 
                     Spacer(Modifier.height(12.dp))
 
-                    // 柱状图 Canvas（正负柱状图：正=绿色，负=红色）
+                    // 柱状图 Canvas（正负柱状图：正=绿色，负=红色，IQR 异常值顶满+标注）
                     val barData = dailyNetData.toSortedMap()
-                    val maxAbs = barData.values.maxOfOrNull { kotlin.math.abs(it) }?.let { if (it == 0.0) 1.0 else it } ?: 1.0
+                    val absValues = barData.values.map { kotlin.math.abs(it) }.sorted()
+                    val q1 = absValues.getOrElse(absValues.size / 4) { 0.0 }
+                    val q3 = absValues.getOrElse(absValues.size * 3 / 4) { 0.0 }
+                    val iqr = q3 - q1
+                    val outlierThreshold = (q3 + 1.5 * iqr) * 1.1
+                    val normalMax = absValues.filter { it <= outlierThreshold }.maxOrNull()
+                    val maxAbs = if (normalMax != null && normalMax > 0.0) normalMax else (if (outlierThreshold > 0.0) outlierThreshold else 1.0)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1523,6 +1533,14 @@ private fun StatisticsTabContent() {
                             }
                             val labelX = chartLeft - 4.dp.toPx()
 
+                            // 异常值标注画笔
+                            val outlierTextPaint = android.graphics.Paint().apply {
+                                color = axisLabelColor.hashCode()
+                                textSize = 8.sp.toPx()
+                                textAlign = android.graphics.Paint.Align.CENTER
+                                isAntiAlias = true
+                            }
+
                             // Y轴刻度文字 + 刻度线
                             val yLabels = listOf(maxAbs, maxAbs / 2, 0.0, -maxAbs / 2, -maxAbs)
                             yLabels.forEachIndexed { i, value ->
@@ -1540,13 +1558,29 @@ private fun StatisticsTabContent() {
 
                             // 柱子
                             barData.entries.forEachIndexed { index, (_, value) ->
-                                val barHeight = (kotlin.math.abs(value) / maxAbs * chartHeight / 2).toFloat()
+                                val isOutlier = kotlin.math.abs(value) > outlierThreshold
                                 val x = chartLeft + barGap * index + (barGap - barWidth) / 2
                                 val color = if (value >= 0) Color(0xFF4CAF50) else Color(0xFFEF5350)
-                                if (value >= 0) {
-                                    drawRoundRect(color = color, topLeft = Offset(x, zeroY - barHeight), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(3.dp.toPx()))
+                                if (isOutlier) {
+                                    // 异常值：柱子顶满图表，顶部标注实际金额
+                                    if (value >= 0) {
+                                        drawRoundRect(color = color, topLeft = Offset(x, chartTop), size = Size(barWidth, chartHeight / 2f), cornerRadius = CornerRadius(3.dp.toPx()))
+                                        drawIntoCanvas { canvas -> canvas.nativeCanvas.drawText(
+                                            String.format("%.0f", value), x + barWidth / 2, chartTop - 2.dp.toPx(), outlierTextPaint
+                                        ) }
+                                    } else {
+                                        drawRoundRect(color = color, topLeft = Offset(x, zeroY), size = Size(barWidth, chartHeight / 2f), cornerRadius = CornerRadius(3.dp.toPx()))
+                                        drawIntoCanvas { canvas -> canvas.nativeCanvas.drawText(
+                                            String.format("%.0f", value), x + barWidth / 2, chartTop + chartHeight + 10.dp.toPx(), outlierTextPaint
+                                        ) }
+                                    }
                                 } else {
-                                    drawRoundRect(color = color, topLeft = Offset(x, zeroY), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(3.dp.toPx()))
+                                    val barHeight = (kotlin.math.abs(value) / maxAbs * chartHeight / 2).toFloat()
+                                    if (value >= 0) {
+                                        drawRoundRect(color = color, topLeft = Offset(x, zeroY - barHeight), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(3.dp.toPx()))
+                                    } else {
+                                        drawRoundRect(color = color, topLeft = Offset(x, zeroY), size = Size(barWidth, barHeight), cornerRadius = CornerRadius(3.dp.toPx()))
+                                    }
                                 }
                             }
                         }
@@ -1613,9 +1647,18 @@ private fun StatisticsTabContent() {
                     val lineData = dailyAssetData.toSortedMap()
                     val rawMin = lineData.values.minOrNull() ?: 0.0
                     val rawMax = lineData.values.maxOrNull() ?: 0.0
-                    val lineAlpha = (rawMax - rawMin) * 0.1
-                    val minLineValue = rawMin - lineAlpha
-                    val maxLineValue = if (rawMax + lineAlpha == minLineValue) minLineValue + 1.0 else rawMax + lineAlpha
+                    val rawRange = rawMax - rawMin
+                    val lineAlpha = rawRange * 0.1
+                    val minLineValue: Double
+                    val maxLineValue: Double
+                    if (rawRange < 20) {
+                        val current = lineData.values.lastOrNull() ?: rawMin
+                        minLineValue = current - 10.0
+                        maxLineValue = current + 10.0
+                    } else {
+                        minLineValue = rawMin - lineAlpha
+                        maxLineValue = rawMax + lineAlpha
+                    }
                     val lineAnimProgress = remember { Animatable(0f) }
                     LaunchedEffect(lineData) {
                         lineAnimProgress.snapTo(0f)
@@ -1658,7 +1701,7 @@ private fun StatisticsTabContent() {
                                 )
                             }
 
-                            // 构建折线路径
+                            // 构建平滑曲线路径（Catmull-Rom → 三次贝塞尔）
                             val linePath = Path()
                             val areaPath = Path()
                             val points = lineData.entries.mapIndexed { index, (_, value) ->
@@ -1666,17 +1709,22 @@ private fun StatisticsTabContent() {
                                 val y = chartTop + chartHeight * (1 - ((value - minLineValue) / lineRange)).toFloat()
                                 Offset(x, y)
                             }
-                            points.forEachIndexed { index, point ->
-                                if (index == 0) {
-                                    linePath.moveTo(point.x, point.y)
-                                    areaPath.moveTo(point.x, chartTop + chartHeight)
-                                    areaPath.lineTo(point.x, point.y)
-                                } else {
-                                    linePath.lineTo(point.x, point.y)
-                                    areaPath.lineTo(point.x, point.y)
-                                }
-                            }
                             if (points.isNotEmpty()) {
+                                linePath.moveTo(points[0].x, points[0].y)
+                                areaPath.moveTo(points[0].x, chartTop + chartHeight)
+                                areaPath.lineTo(points[0].x, points[0].y)
+                                for (i in 0 until points.size - 1) {
+                                    val p0 = points[(i - 1).coerceAtLeast(0)]
+                                    val p1 = points[i]
+                                    val p2 = points[i + 1]
+                                    val p3 = points[(i + 2).coerceAtMost(points.size - 1)]
+                                    val cp1x = p1.x + (p2.x - p0.x) / 6f
+                                    val cp1y = p1.y + (p2.y - p0.y) / 6f
+                                    val cp2x = p2.x - (p3.x - p1.x) / 6f
+                                    val cp2y = p2.y - (p3.y - p1.y) / 6f
+                                    linePath.cubicTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y)
+                                    areaPath.cubicTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y)
+                                }
                                 areaPath.lineTo(points.last().x, chartTop + chartHeight)
                                 areaPath.close()
                             }

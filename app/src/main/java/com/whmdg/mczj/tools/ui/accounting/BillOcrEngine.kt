@@ -22,7 +22,9 @@ data class OcrBillInfo(
     var toAsset: String = "",       // 转入账户
     var time: Long = 0L,            // 时间戳
     var discount: String = "",      // 优惠金额
-    var serviceCharge: Double = 0.0 // 服务费
+    var serviceCharge: Double = 0.0, // 服务费
+    var transactionId: String = "",  // 交易单号（自动记账专用）
+    var merchantOrderId: String = "" // 商户单号（自动记账专用）
 )
 
 /**
@@ -563,6 +565,16 @@ object BillOcrEngine {
             if ("保存收款码" == text) {
                 bill.income = true
                 n10 = 1
+                continue
+            }
+
+            // ── 交易单号 / 商户单号 ──
+            if ("交易单号" == text && i < texts.size - 1) {
+                bill.transactionId = texts[i + 1]
+                continue
+            }
+            if ("商户单号" == text && i < texts.size - 1) {
+                bill.merchantOrderId = texts[i + 1]
                 continue
             }
         }
@@ -1847,6 +1859,16 @@ object BillOcrEngine {
                 if (isAmount(cleanText) && bill.number.isNotEmpty()) {
                     bill.discount = formatDiscount(toDouble(cleanText) - toDouble(bill.number))
                 }
+            }
+
+            // ── 交易单号 / 商户单号（支付宝）──
+            if (("交易订单号" == text || "交易单号" == text) && i < texts.size - 1) {
+                bill.transactionId = texts[i + 1]
+                continue
+            }
+            if (("商户订单号" == text || "商户单号" == text) && i < texts.size - 1) {
+                bill.merchantOrderId = texts[i + 1]
+                continue
             }
         }
 

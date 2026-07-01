@@ -43,6 +43,11 @@ class MyAccessibilityService : AccessibilityService() {
         /** 防抖：上次自动识别的时间戳 */
         private var lastAutoRecognizeTime = 0L
         private const val AUTO_RECOGNIZE_COOLDOWN_MS = 5000L
+
+        /** 手动识别时调用，抑制自动识别 */
+        fun suppressAutoRecognize() {
+            lastAutoRecognizeTime = System.currentTimeMillis()
+        }
     }
 
     override fun onServiceConnected() {
