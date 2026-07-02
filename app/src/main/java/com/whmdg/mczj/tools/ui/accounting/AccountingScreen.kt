@@ -4307,6 +4307,7 @@ private fun AutomationPage(onBack: () -> Unit) {
                                 }
                                 ocrEnabled = true
                                 BillOcrConfig.setEnabled(context, true)
+                                OcrFloatingService.start(context)
                             } else {
                                 ocrEnabled = false
                                 BillOcrConfig.setEnabled(context, false)

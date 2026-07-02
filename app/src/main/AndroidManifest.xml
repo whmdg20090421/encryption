@@ -157,7 +157,8 @@
         <!-- OCR 悬浮窗 Service -->
         <service
             android:name=".ui.accounting.OcrFloatingService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- Hook 模式悬浮窗 Service -->
         <service
