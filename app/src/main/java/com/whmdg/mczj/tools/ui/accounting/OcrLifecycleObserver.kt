@@ -14,11 +14,20 @@ import androidx.lifecycle.LifecycleOwner
  */
 class OcrLifecycleObserver(private val context: Context) : DefaultLifecycleObserver {
 
+    companion object {
+        private const val DELAY_MS = 300L
+        /** 应用是否在前台，供 OcrFloatingService.toggleReceiver 查询 */
+        @Volatile
+        var isAppInForeground = true
+            private set
+    }
+
     private val handler = Handler(Looper.getMainLooper())
     private var pendingShow: Runnable? = null
     private var pendingHide: Runnable? = null
 
     override fun onStart(owner: LifecycleOwner) {
+        isAppInForeground = true
         // 应用回到前台：取消待显示，延迟隐藏悬浮窗
         cancelPendingShow()
         pendingHide = Runnable {
@@ -27,6 +36,7 @@ class OcrLifecycleObserver(private val context: Context) : DefaultLifecycleObser
     }
 
     override fun onStop(owner: LifecycleOwner) {
+        isAppInForeground = false
         // 应用切到后台：取消待隐藏，延迟显示悬浮窗
         cancelPendingHide()
         if (!BillOcrConfig.isEnabled(context)) return
@@ -48,7 +58,4 @@ class OcrLifecycleObserver(private val context: Context) : DefaultLifecycleObser
         pendingHide = null
     }
 
-    companion object {
-        private const val DELAY_MS = 300L
-    }
 }

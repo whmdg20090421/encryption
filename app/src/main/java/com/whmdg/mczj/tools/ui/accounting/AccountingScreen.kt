@@ -4245,6 +4245,8 @@ private fun AutomationPage(onBack: () -> Unit) {
                 if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
                     hasAccessibility = com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isAccessibilityEnabled(context)
                     hasOverlay = android.provider.Settings.canDrawOverlays(context)
+                    // 同步通知栏 toggle 状态
+                    ocrEnabled = BillOcrConfig.isEnabled(context)
                     // 权限不足时自动关闭
                     if (ocrEnabled && (!hasAccessibility || !hasOverlay)) {
                         ocrEnabled = false

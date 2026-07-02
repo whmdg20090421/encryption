@@ -108,8 +108,10 @@ class OcrFloatingService : Service() {
                         // 禁用：关闭悬浮窗
                         OcrFloatingWindow.dismiss()
                     } else {
-                        // 启用：显示悬浮窗
-                        OcrFloatingWindow.show(context)
+                        // 启用：仅在后台时显示悬浮窗（前台会被 observer 立即 dismiss）
+                        if (!OcrLifecycleObserver.isAppInForeground) {
+                            OcrFloatingWindow.show(context)
+                        }
                     }
                     updateNotification()
                 }
@@ -117,7 +119,7 @@ class OcrFloatingService : Service() {
         }
         val filter = IntentFilter(ACTION_TOGGLE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(toggleReceiver, filter, RECEIVER_NOT_EXPORTED)
+            registerReceiver(toggleReceiver, filter, RECEIVER_EXPORTED)
         } else {
             registerReceiver(toggleReceiver, filter)
         }
