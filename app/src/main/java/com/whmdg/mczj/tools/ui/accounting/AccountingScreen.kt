@@ -175,7 +175,7 @@ fun AccountingScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit, selectedT
         ) {
             // 内容区：根据 selectedTab 显示不同内容
             if (selectedTab == 4) {
-                MinePageContent(bookName = currentBookName, onSubPageChange = { isInSubPage = it })
+                MinePageContent(bookName = currentBookName, onSubPageChange = { isInSubPage = it }, refreshTrigger = accountRefreshTrigger)
             } else if (selectedTab == 0) {
                 // 首页：记录列表
                 RecordListContent(
@@ -1506,7 +1506,7 @@ private fun StatisticsTabContent() {
                     val q1 = absValues.getOrElse(absValues.size / 4) { 0.0 }
                     val q3 = absValues.getOrElse(absValues.size * 3 / 4) { 0.0 }
                     val iqr = q3 - q1
-                    val outlierThreshold = (q3 + 1.5 * iqr) * 1.1
+                    val outlierThreshold = (q3 + 1.5 * iqr) * 1.25
                     val normalMax = absValues.filter { it <= outlierThreshold }.maxOrNull()
                     val maxAbs = if (normalMax != null && normalMax > 0.0) normalMax else (if (outlierThreshold > 0.0) outlierThreshold else 1.0)
                     Box(
@@ -1718,10 +1718,10 @@ private fun StatisticsTabContent() {
                                     val p1 = points[i]
                                     val p2 = points[i + 1]
                                     val p3 = points[(i + 2).coerceAtMost(points.size - 1)]
-                                    val cp1x = p1.x + (p2.x - p0.x) / 6f
-                                    val cp1y = p1.y + (p2.y - p0.y) / 6f
-                                    val cp2x = p2.x - (p3.x - p1.x) / 6f
-                                    val cp2y = p2.y - (p3.y - p1.y) / 6f
+                                    val cp1x = p1.x + (p2.x - p0.x) / 8f
+                                    val cp1y = p1.y + (p2.y - p0.y) / 8f
+                                    val cp2x = p2.x - (p3.x - p1.x) / 8f
+                                    val cp2y = p2.y - (p3.y - p1.y) / 8f
                                     linePath.cubicTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y)
                                     areaPath.cubicTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y)
                                 }
@@ -2078,7 +2078,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
 
 /** "我的"页面头部卡片：头像 + 诗意短句 + 签名 + 统计 */
 @Composable
-private fun MineHeaderCard(bookName: String) {
+private fun MineHeaderCard(bookName: String, refreshTrigger: Int = 0) {
     val context = LocalContext.current
     var avatarPath by remember { mutableStateOf(AccountingRepository.getAvatarPath(context)) }
     var nickname by remember { mutableStateOf(AccountingRepository.getNickname(context)) }
@@ -2100,9 +2100,9 @@ private fun MineHeaderCard(bookName: String) {
     }
 
     // 统计数据
-    val records = remember(bookName) { AccountingRepository.getRecordsByBook(context, bookName) }
+    val records = remember(bookName, refreshTrigger) { AccountingRepository.getRecordsByBook(context, bookName) }
     val totalRecords = records.size
-    val dayCount = remember { AccountingRepository.getDayCount(context) }
+    val dayCount = remember(refreshTrigger) { AccountingRepository.getDayCount(context) }
 
     // 签名编辑弹窗
     if (showNicknameDialog) {
@@ -2319,7 +2319,7 @@ private fun MineHeaderCard(bookName: String) {
 /** "我的"页面内容：个性化设置 → 分类管理 → 分类图标 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MinePageContent(bookName: String = "", onSubPageChange: (Boolean) -> Unit = {}) {
+private fun MinePageContent(bookName: String = "", onSubPageChange: (Boolean) -> Unit = {}, refreshTrigger: Int = 0) {
     val context = LocalContext.current
     // 页面栈：emptyList = 主页面，listOf("个性化设置") = 个性化页面，listOf("个性化设置","分类管理") = 分类管理页
     var pageStack by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -2377,7 +2377,7 @@ private fun MinePageContent(bookName: String = "", onSubPageChange: (Boolean) ->
             // "我的"主页
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 item { Spacer(Modifier.height(16.dp)) }
-                item { MineHeaderCard(bookName = bookName) }
+                item { MineHeaderCard(bookName = bookName, refreshTrigger = refreshTrigger) }
                 item { Spacer(Modifier.height(8.dp)) }
                 item {
                     SettingCard(
@@ -2405,7 +2405,19 @@ private fun MinePageContent(bookName: String = "", onSubPageChange: (Boolean) ->
                         onClick = { pageStack = listOf("数据自动化") }
                     )
                 }
+                item { Spacer(Modifier.height(12.dp)) }
+                item {
+                    SettingCard(
+                        icon = Icons.Outlined.Cloud,
+                        title = "云同步",
+                        subtitle = "WebDAV 数据同步",
+                        onClick = { pageStack = listOf("云同步") }
+                    )
+                }
             }
+        }
+        pageStack == listOf("云同步") -> {
+            CloudSyncScreen(onBack = { pageStack = emptyList() })
         }
         pageStack == listOf("数据管理") -> {
             // 数据管理页 — 入口卡片

@@ -150,7 +150,7 @@ object AccountingRepository {
         val y = cal.get(java.util.Calendar.YEAR)
         val m = cal.get(java.util.Calendar.MONTH) + 1
         val d = cal.get(java.util.Calendar.DAY_OF_MONTH)
-        if (!isDateHasRecords(context, record.bookName, y, m, d)) {
+        if (!isDateHasRecords(context, y, m, d)) {
             setSetting(context, KEY_DAY_COUNT, (getDayCount(context) + 1).toString())
         }
         val now = System.currentTimeMillis()
@@ -158,6 +158,7 @@ object AccountingRepository {
             createdAt = record.createdAt ?: now, updatedAt = record.updatedAt ?: now)
         writeRecord(context, withTime, "INSERT")
         updateAccountBalanceOnRecordChange(context, withTime.accountId, withTime.type, withTime.amount, isAdd = true)
+        autoSyncIfNeeded(context)
     }
 
     /** 更新一条记录（自动更新 updatedAt + 月度汇总自动更新） */
@@ -176,6 +177,7 @@ object AccountingRepository {
             updateAccountBalanceOnRecordChange(context, oldRecord.accountId, oldRecord.type, oldRecord.amount, isAdd = false)
         }
         updateAccountBalanceOnRecordChange(context, withTime.accountId, withTime.type, withTime.amount, isAdd = true)
+        autoSyncIfNeeded(context)
     }
 
     /** 仅更新记录的地址字段（异步定位完成后调用） */
@@ -191,7 +193,7 @@ object AccountingRepository {
     fun deleteRecord(context: Context, id: String) {
         val record = getRecordById(context, id)
         if (record != null) {
-            if (!isDateHasOtherRecords(context, record.bookName, record.year, record.month, record.day, id)) {
+            if (!isDateHasOtherRecords(context, record.year, record.month, record.day, id)) {
                 val newCount = maxOf(getDayCount(context) - 1, 0)
                 setSetting(context, KEY_DAY_COUNT, newCount.toString())
             }
@@ -201,6 +203,7 @@ object AccountingRepository {
             cascadeUpdateTrashStatus(context, id, "deleted")
             updateAccountBalanceOnRecordChange(context, record.accountId, record.type, record.amount, isAdd = false)
             writeRecord(context, record, "DELETE")
+            autoSyncIfNeeded(context)
         }
     }
 
@@ -372,21 +375,22 @@ object AccountingRepository {
     }
 
     /** 指定账本指定日期是否已有记录 */
-    private fun isDateHasRecords(context: Context, bookName: String, year: Int, month: Int, day: Int): Boolean {
+    /** 任意账本在指定日期是否存在记录 */
+    private fun isDateHasRecords(context: Context, year: Int, month: Int, day: Int): Boolean {
         val sqlDb = getDb(context).readableDatabase
         val cursor = sqlDb.rawQuery(
-            "SELECT 1 FROM records WHERE book_name = ? AND year = ? AND month = ? AND day = ? LIMIT 1",
-            arrayOf(bookName, year.toString(), month.toString(), day.toString())
+            "SELECT 1 FROM records WHERE year = ? AND month = ? AND day = ? LIMIT 1",
+            arrayOf(year.toString(), month.toString(), day.toString())
         )
         return try { cursor.moveToFirst() } finally { cursor.close() }
     }
 
-    /** 指定账本指定日期是否存在除 excludeId 以外的记录 */
-    private fun isDateHasOtherRecords(context: Context, bookName: String, year: Int, month: Int, day: Int, excludeId: String): Boolean {
+    /** 任意账本在指定日期是否存在除 excludeId 以外的记录 */
+    private fun isDateHasOtherRecords(context: Context, year: Int, month: Int, day: Int, excludeId: String): Boolean {
         val sqlDb = getDb(context).readableDatabase
         val cursor = sqlDb.rawQuery(
-            "SELECT 1 FROM records WHERE book_name = ? AND year = ? AND month = ? AND day = ? AND id != ? LIMIT 1",
-            arrayOf(bookName, year.toString(), month.toString(), day.toString(), excludeId)
+            "SELECT 1 FROM records WHERE year = ? AND month = ? AND day = ? AND id != ? LIMIT 1",
+            arrayOf(year.toString(), month.toString(), day.toString(), excludeId)
         )
         return try { cursor.moveToFirst() } finally { cursor.close() }
     }
@@ -868,6 +872,167 @@ object AccountingRepository {
     /** 级联更新：当账单被删除时，将关联回收站条目的 originalRecordStatus 改为 "deleted" */
     fun cascadeUpdateTrashStatus(context: Context, recordId: String, newStatus: String) {
         getDb(context).updateTrashEntryRecordStatus(recordId, newStatus)
+    }
+
+    // ─────────────────────────────────────────────
+    // 云同步（WebDAV）
+    // ─────────────────────────────────────────────
+
+    private const val KEY_WEBDAV_URL = "webdav_url"
+    private const val KEY_WEBDAV_USERNAME = "webdav_username"
+    private const val KEY_WEBDAV_PASSWORD = "webdav_password"
+    private const val KEY_WEBDAV_AUTO_SYNC = "webdav_auto_sync"
+    private const val KEY_WEBDAV_LAST_SYNC = "webdav_last_sync"
+    private const val KEY_WEBDAV_REMOTE_DIR = "webdav_remote_dir"
+
+    fun getWebDavConfig(context: Context): Triple<String, String, String> {
+        val url = getSetting(context, KEY_WEBDAV_URL) ?: ""
+        val username = getSetting(context, KEY_WEBDAV_USERNAME) ?: ""
+        val password = getSetting(context, KEY_WEBDAV_PASSWORD) ?: ""
+        return Triple(url, username, password)
+    }
+
+    fun setWebDavConfig(context: Context, url: String, username: String, password: String) {
+        setSetting(context, KEY_WEBDAV_URL, url)
+        setSetting(context, KEY_WEBDAV_USERNAME, username)
+        setSetting(context, KEY_WEBDAV_PASSWORD, password)
+    }
+
+    fun getWebDavAutoSync(context: Context): Boolean {
+        return getSetting(context, KEY_WEBDAV_AUTO_SYNC) == "true"
+    }
+
+    fun setWebDavAutoSync(context: Context, enabled: Boolean) {
+        setSetting(context, KEY_WEBDAV_AUTO_SYNC, if (enabled) "true" else "false")
+    }
+
+    fun getWebDavLastSync(context: Context): String? {
+        return getSetting(context, KEY_WEBDAV_LAST_SYNC)
+    }
+
+    fun setWebDavLastSync(context: Context, timestamp: String) {
+        setSetting(context, KEY_WEBDAV_LAST_SYNC, timestamp)
+    }
+
+    fun getWebDavRemoteDir(context: Context): String {
+        return getSetting(context, KEY_WEBDAV_REMOTE_DIR) ?: "记账本备份"
+    }
+
+    fun setWebDavRemoteDir(context: Context, dir: String) {
+        setSetting(context, KEY_WEBDAV_REMOTE_DIR, dir)
+    }
+
+    /** 构建 WebDavServerConfig 并注册到全局 Authenticator */
+    private fun buildWebDavClient(context: Context): com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient? {
+        val (url, username, password) = getWebDavConfig(context)
+        if (url.isBlank() || username.isBlank()) return null
+        // 解析 URL：https://host:port/path
+        val uri = java.net.URI(url)
+        val scheme = uri.scheme ?: "https"
+        val host = uri.host ?: return null
+        val port = if (uri.port > 0) uri.port else if (scheme == "https") 443 else 80
+        val protocol = if (scheme == "https") "davs" else "dav"
+        val relativePath = uri.path?.trimStart('/')?.trimEnd('/') ?: ""
+        val config = com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig(
+            name = "记账云同步",
+            protocol = protocol,
+            host = host,
+            port = port,
+            username = username,
+            password = password,
+            authType = "password",
+            relativePath = relativePath
+        )
+        // 注册到全局 Authenticator
+        com.whmdg.mczj.tools.fileop.webdav.WebDavAuthenticator.addTransientServer(config)
+        return com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient(config)
+    }
+
+    /** 测试 WebDAV 连接 */
+    fun testWebDavConnection(context: Context): String {
+        return try {
+            val client = buildWebDavClient(context) ?: return "请先填写服务器地址和账号"
+            client.testConnection()
+            "连接成功"
+        } catch (e: Exception) {
+            "连接失败：${e.message}"
+        }
+    }
+
+    /** 上传记账数据到 WebDAV */
+    fun uploadToWebDav(context: Context): String {
+        return try {
+            val client = buildWebDavClient(context) ?: return "请先配置 WebDAV"
+            // 导出 JSON
+            val json = getDb(context).exportToJson()
+            // 写入临时文件
+            val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
+                .format(java.util.Date())
+            val fileName = "记账本备份_${timestamp}.json"
+            val tempFile = File(context.cacheDir, fileName)
+            tempFile.writeText(json, Charsets.UTF_8)
+            try {
+                // 确保远程目录存在
+                val remoteDir = getWebDavRemoteDir(context)
+                try { client.mkdir(remoteDir) } catch (_: Exception) {}
+                // 上传
+                val remotePath = "$remoteDir/$fileName"
+                client.uploadFile(tempFile, remotePath) {}
+                // 记录同步时间
+                val syncTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+                    .format(java.util.Date())
+                setWebDavLastSync(context, syncTime)
+                "上传成功：$fileName"
+            } finally {
+                tempFile.delete()
+            }
+        } catch (e: Exception) {
+            "上传失败：${e.message}"
+        }
+    }
+
+    /** 从 WebDAV 下载并导入记账数据 */
+    fun downloadFromWebDav(context: Context): String {
+        return try {
+            val client = buildWebDavClient(context) ?: return "请先配置 WebDAV"
+            val remoteDir = getWebDavRemoteDir(context)
+            // 列出远程文件
+            val files = try {
+                client.listChildren(remoteDir)
+            } catch (_: Exception) {
+                return "远程目录不存在或无法访问"
+            }
+            if (files.isNullOrEmpty()) return "云端没有备份文件"
+            // 找最新的 json 文件
+            val latest = files.filter { it.name.endsWith(".json") && !it.isDirectory }
+                .maxByOrNull { it.lastModified } ?: return "云端没有备份文件"
+            // 下载到临时文件
+            val tempFile = File(context.cacheDir, latest.name)
+            try {
+                client.downloadFile(latest.remotePath, tempFile) {}
+                // 导入
+                val json = tempFile.readText(Charsets.UTF_8)
+                getDb(context).importFromJson(json)
+                val syncTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+                    .format(java.util.Date())
+                setWebDavLastSync(context, syncTime)
+                "下载成功：${latest.name}"
+            } finally {
+                tempFile.delete()
+            }
+        } catch (e: Exception) {
+            "下载失败：${e.message}"
+        }
+    }
+
+    /** 自动同步（供记录变更后调用） */
+    fun autoSyncIfNeeded(context: Context) {
+        if (!getWebDavAutoSync(context)) return
+        val (url, username, _) = getWebDavConfig(context)
+        if (url.isBlank() || username.isBlank()) return
+        Thread {
+            uploadToWebDav(context)
+        }.start()
     }
 
     // 内部工具
