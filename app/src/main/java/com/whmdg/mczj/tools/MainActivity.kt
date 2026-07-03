@@ -42,6 +42,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // 注册 Activity 引用，供其他模块使用
+        com.whmdg.mczj.tools.ui.ActivityRef.currentActivity = this
+
         // Native 层崩溃监控（通过 pipe 传递崩溃信息到 Java 层）
         CrashMonitor.init(this)
         DiagnosticLog.log("MainActivity", "NativeCrashMonitor 已安装")
