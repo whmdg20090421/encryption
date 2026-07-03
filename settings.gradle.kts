@@ -24,9 +24,9 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "工具箱"
-include(":app")
-include(":core")
-include(":accounting")
-include(":others")
+include(":APP:app")
+include(":APP:core")
+include(":APP:Models:accounting")
+include(":APP:Models:others")
 include(":libs:libxposed-api")
  

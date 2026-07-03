@@ -7,8 +7,8 @@
     python tools/gen_password_hashes.py
 
 输出:
-    app/src/main/cpp/hashes.inc   —— XOR 编码后的哈希常量（直接 #include）
-    app/src/main/cpp/obf_key.h   —— OBF_KEY[32] 宏定义（编译期固定）
+    APP/core/src/main/cpp/hashes.inc   —— XOR 编码后的哈希常量（直接 #include）
+    APP/core/src/main/cpp/obf_key.h   —— OBF_KEY[32] 宏定义（编译期固定）
 
 参数 (与 C 层保持一致):
     time_cost=2, memory_cost_kb=65536, parallelism=2, hash_len=32, salt_len=16
@@ -41,7 +41,7 @@ KEYS = [
 # ── 路径 ──
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-CPP_DIR = os.path.join(PROJECT_ROOT, "app", "src", "main", "cpp")
+CPP_DIR = os.path.join(PROJECT_ROOT, "APP", "core", "src", "main", "cpp")
 HASHES_INC = os.path.join(CPP_DIR, "hashes.inc")
 OBF_KEY_H = os.path.join(CPP_DIR, "obf_key.h")
 

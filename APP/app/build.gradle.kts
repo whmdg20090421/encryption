@@ -32,7 +32,7 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = rootProject.file("app/release-keystore.jks")
+            storeFile = rootProject.file("APP/app/release-keystore.jks")
             storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
             keyAlias = System.getenv("KEY_ALIAS") ?: ""
             keyPassword = System.getenv("KEY_PASSWORD") ?: ""
@@ -76,9 +76,9 @@ kotlin {
 }
 
 dependencies {
-    implementation(project(":core"))
-    implementation(project(":accounting"))
-    implementation(project(":others"))
+    implementation(project(":APP:core"))
+    implementation(project(":APP:Models:accounting"))
+    implementation(project(":APP:Models:others"))
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)

@@ -32,8 +32,8 @@ kotlin {
 }
 
 dependencies {
-    implementation(project(":core"))
-    implementation(project(":others"))
+    implementation(project(":APP:core"))
+    implementation(project(":APP:Models:others"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.material3)
     implementation("androidx.compose.material:material-icons-extended:1.6.0")

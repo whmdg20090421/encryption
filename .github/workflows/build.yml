@@ -101,9 +101,9 @@ jobs:
             echo "::error::Secret KEYSTORE_B64 is empty."
             exit 1
           fi
-          echo "$KEYSTORE_B64" | base64 -d > app/release-keystore.jks
-          ls -la app/release-keystore.jks
-          file app/release-keystore.jks || true
+          echo "$KEYSTORE_B64" | base64 -d > APP/app/release-keystore.jks
+          ls -la APP/app/release-keystore.jks
+          file APP/app/release-keystore.jks || true
 
       - name: Build Release APK (arm64-v8a only)
         env:
@@ -111,19 +111,19 @@ jobs:
           KEY_ALIAS:         ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
         run: |
-          ./gradlew :app:assembleRelease --build-cache --stacktrace
+          ./gradlew :APP:app:assembleRelease --build-cache --stacktrace
 
       - name: Locate APK
         id: locate
         run: |
-          APK=$(find app/build/outputs/apk/release -name '*arm64-v8a*release*.apk' | head -n 1)
+          APK=$(find APP/app/build/outputs/apk/release -name '*arm64-v8a*release*.apk' | head -n 1)
           if [ -z "$APK" ]; then
             echo "::warning::Did not find ABI-tagged file. Falling back to any release apk."
-            APK=$(find app/build/outputs/apk/release -name '*release*.apk' | head -n 1)
+            APK=$(find APP/app/build/outputs/apk/release -name '*release*.apk' | head -n 1)
           fi
           if [ -z "$APK" ]; then
             echo "::error::No APK produced!"
-            ls -la app/build/outputs/apk/release || true
+            ls -la APP/app/build/outputs/apk/release || true
             exit 1
           fi
           echo "Apk path: $APK"
