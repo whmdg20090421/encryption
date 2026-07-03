@@ -35,6 +35,7 @@ import com.whmdg.mczj.tools.encryption.core.Argon2idKdf
 import com.whmdg.mczj.tools.encryption.data.Argon2Params
 import com.whmdg.mczj.tools.encryption.data.KdfType
 import com.whmdg.mczj.tools.encryption.data.StorageLocation
+import com.whmdg.mczj.tools.ui.ErrorDialog
 import com.whmdg.mczj.tools.encryption.services.VaultService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch

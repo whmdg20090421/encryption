@@ -30,6 +30,7 @@ import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import com.whmdg.mczj.tools.encryption.services.CryptoService
 import com.whmdg.mczj.tools.encryption.services.EncryptionTaskManager
 import com.whmdg.mczj.tools.encryption.services.VaultSession
+import com.whmdg.mczj.tools.ui.ErrorDialog
 import com.whmdg.mczj.tools.ui.encryption.EncryptionProgressIcon
 import com.whmdg.mczj.tools.ui.encryption.EncryptionProgressPanel
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox

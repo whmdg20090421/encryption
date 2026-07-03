@@ -12,7 +12,8 @@ fun EncryptionModuleScreen(
     vaultService: VaultService,
     onBack: () -> Unit
 ) {
-    val settings = remember { EncryptionSettings(androidx.compose.ui.platform.LocalContext.current) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val settings = remember { EncryptionSettings(context) }
     var backStack by remember { mutableStateOf(listOf<EncryptionRoute>(EncryptionRoute.Home)) }
     val currentRoute = backStack.lastOrNull() ?: EncryptionRoute.Home
 
@@ -36,7 +37,7 @@ fun EncryptionModuleScreen(
     fun screenToRoute(screen: Screen): EncryptionRoute? = when (screen) {
         is Screen.VaultCreate -> EncryptionRoute.VaultCreate
         is Screen.VaultOpen -> EncryptionRoute.VaultOpen(screen.session.vaultDir.absolutePath)
-        is Screen.VaultChangePassword -> EncryptionRoute.VaultChangePassword(screen.vault.path)
+        is Screen.VaultChangePassword -> EncryptionRoute.VaultChangePassword(screen.vault.relativePath)
         else -> null
     }
 

@@ -12,7 +12,11 @@ import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.util.FormatUtils
 import com.whmdg.mczj.tools.util.AppIconHelper
 import com.whmdg.mczj.tools.util.ArchiveBrowser
+import com.whmdg.mczj.tools.ui.ErrorDialog
 import com.whmdg.mczj.tools.ui.FileEntry
+import com.whmdg.mczj.tools.ui.Screen
+import com.whmdg.mczj.tools.ui.encryption.EncryptionSettings
+import com.whmdg.mczj.tools.ui.isDebugAuth
 
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.ImageBitmap
