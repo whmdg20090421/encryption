@@ -1142,6 +1142,36 @@ fun EncryptionSettingsTab(settings: EncryptionSettings) {
 }
 
 @Composable
+private fun SettingsSection(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    GlowSection(
+        title = title,
+        icon = icon,
+        content = content
+    )
+}
+
+@Composable
+private fun CompactSettingsToggle(
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    GlowToggleItem(
+        title = title,
+        subtitle = subtitle,
+        icon = icon,
+        checked = checked,
+        onCheckedChange = onCheckedChange
+    )
+}
+
+@Composable
 fun VaultInfoRow(label: String, value: String) {
     val isDarkMode = LocalIsDarkMode.current
     val labelColor = if (isDarkMode) Color(0x9964B4D2) else Color(0x9964748B)
