@@ -17,6 +17,8 @@ import com.whmdg.mczj.tools.ui.FileEntry
 import com.whmdg.mczj.tools.ui.Screen
 import com.whmdg.mczj.tools.ui.encryption.EncryptionSettings
 import com.whmdg.mczj.tools.ui.isDebugAuth
+import com.whmdg.mczj.tools.util.FileAccessLevel
+import com.whmdg.mczj.tools.auth.PasswordDialog
 
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.ImageBitmap

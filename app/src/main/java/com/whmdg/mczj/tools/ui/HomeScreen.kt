@@ -96,6 +96,8 @@ import com.whmdg.mczj.tools.ui.components.GlowListItem
 import com.whmdg.mczj.tools.ui.components.GlowToggleItem
 import com.whmdg.mczj.tools.ui.components.glowEffect
 import com.whmdg.mczj.tools.ui.security.SecurityModuleScreen
+import com.whmdg.mczj.tools.ui.security.AuthManagementScreen
+import com.whmdg.mczj.tools.ui.security.PermissionGuideViewModel
 import com.whmdg.mczj.tools.ui.encryption.EncryptionModuleScreen
 import com.whmdg.mczj.tools.ui.filemanager.FileManagerModuleScreen
 import com.whmdg.mczj.tools.ui.download.DownloaderModuleScreen
