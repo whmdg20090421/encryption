@@ -2408,10 +2408,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             )
                         }
                     }
-                    if (info.error != null) {
+                    val errorText = info.error
+                    if (errorText != null) {
                         Spacer(Modifier.height(4.dp))
                         Text("错误:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
-                        Text(info.error, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.error)
+                        Text(errorText, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.error)
                     }
                 }
             },

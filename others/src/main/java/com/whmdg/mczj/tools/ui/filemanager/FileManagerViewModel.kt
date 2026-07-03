@@ -14,6 +14,7 @@ import androidx.lifecycle.viewModelScope
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.ui.FileEntry
 import com.whmdg.mczj.tools.ui.Screen
+import com.whmdg.mczj.tools.ui.SizeCalcManager
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier

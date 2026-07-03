@@ -161,7 +161,7 @@ object ArchiveBrowser {
     // ── 缓存序列化 ──
 
     @Serializable
-    internal data class CacheArchiveNode(
+    data class CacheArchiveNode(
         val name: String,
         val isDirectory: Boolean,
         val size: Long = 0,
@@ -170,7 +170,7 @@ object ArchiveBrowser {
     )
 
     @Serializable
-    internal data class ArchiveSessionCache(
+    data class ArchiveSessionCache(
         val archivePath: String,
         val archiveName: String,
         val root: CacheArchiveNode,
@@ -208,7 +208,7 @@ object ArchiveBrowser {
         }
     }
 
-    internal fun loadSessionCache(context: Context): Pair<ArchiveSessionCache, String>? {
+    fun loadSessionCache(context: Context): Pair<ArchiveSessionCache, String>? {
         val file = File(AppDataPaths.fileManager(context), CACHE_FILE_NAME)
         if (!file.exists()) return null
         return try {
@@ -227,7 +227,7 @@ object ArchiveBrowser {
         try { File(AppDataPaths.fileManager(context), CACHE_FILE_NAME).delete() } catch (_: Exception) {}
     }
 
-    internal fun restoreSession(cache: ArchiveSessionCache): ArchiveSession {
+    fun restoreSession(cache: ArchiveSessionCache): ArchiveSession {
         val root = fromCacheNode(cache.root)
         val node = if (cache.currentPath == cache.archivePath) root
             else findNode(root, cache.currentPath, cache.archivePath) ?: root
