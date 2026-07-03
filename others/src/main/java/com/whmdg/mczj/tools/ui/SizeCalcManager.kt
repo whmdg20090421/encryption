@@ -25,41 +25,41 @@ import java.io.File
 object SizeCalcManager {
     /** 0f ~ 1f，进度 = scannedCount / totalCount */
     var progress by mutableFloatStateOf(0f)
-        internal set
+        set
     /** 当前正在处理的目录名 */
     var currentFolder by mutableStateOf("")
-        internal set
+        set
     /** BFS 已扫描的目录数 */
     var scannedCount by mutableIntStateOf(0)
-        internal set
+        set
     /** 总目录数（find 统计） */
     var totalCount by mutableIntStateOf(0)
-        internal set
+        set
     /** 是否正在计算（从 begin 到 finish） */
     var isCalculating by mutableStateOf(false)
         private set
 
     /** 状态提示（持久显示：正在统计/进度/完成/报错） */
     var statusMessage by mutableStateOf<String?>(null)
-        internal set
+        set
     /** 统计完成后显示的大小 */
     var completedSize by mutableLongStateOf(-1L)
-        internal set
+        set
     /** 统计完成后的树形数据 */
     var completedTree by mutableStateOf<SizeTreeNode?>(null)
-        internal set
+        set
 
     /** 报错弹窗 */
     var loadError by mutableStateOf<Throwable?>(null)
-        internal set
+        set
 
     /** Binder 冷却倒计时（秒），0 = 未在冷却 */
     var binderCooldownSeconds by mutableIntStateOf(0)
-        internal set
+        set
 
     /** 是否弹出"保存进度？"对话框 */
     var pendingSaveDialog by mutableStateOf(false)
-        internal set
+        set
 
     /** 用户请求取消 */
     @Volatile
