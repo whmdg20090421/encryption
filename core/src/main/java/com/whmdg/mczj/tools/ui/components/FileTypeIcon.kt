@@ -21,7 +21,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
-import com.whmdg.mczj.tools.R
+import com.whmdg.mczj.tools.core.R
 
 /** 文件类型分类 */
 enum class FileCategory {

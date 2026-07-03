@@ -12,6 +12,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.auth.PasswordDialog
 import com.whmdg.mczj.tools.auth.PermissionManager
+import com.whmdg.mczj.tools.ui.featureDisplayName
+import com.whmdg.mczj.tools.ui.isDebugAuth
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)

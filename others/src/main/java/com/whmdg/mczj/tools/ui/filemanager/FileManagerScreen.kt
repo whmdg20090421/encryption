@@ -12,6 +12,7 @@ import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.util.FormatUtils
 import com.whmdg.mczj.tools.util.AppIconHelper
 import com.whmdg.mczj.tools.util.ArchiveBrowser
+import com.whmdg.mczj.tools.ui.FileEntry
 
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.ImageBitmap
@@ -108,17 +109,6 @@ enum class FocusedPanel { LEFT, RIGHT }
 enum class CreateMode { FILE, FOLDER }
 enum class SortField { NAME, SIZE, MODIFIED, CREATED }
 enum class SortOrder { ASC, DESC }
-
-data class FileEntry(
-    val path: String,
-    val name: String,
-    val isDirectory: Boolean,
-    val permission: String = "",
-    val size: Long = 0,
-    val lastModified: Long = 0,
-    val createdAt: Long = 0,
-    val compressedSize: Long = 0
-)
 
 @kotlinx.serialization.Serializable
 data class QuickAccessEntry(
