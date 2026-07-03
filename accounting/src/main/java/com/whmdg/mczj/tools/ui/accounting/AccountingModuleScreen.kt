@@ -2,8 +2,11 @@ package com.whmdg.mczj.tools.ui.accounting
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.whmdg.mczj.tools.ui.Screen
 
 /**
@@ -13,7 +16,7 @@ import com.whmdg.mczj.tools.ui.Screen
 @Composable
 fun AccountingModuleScreen(onBack: () -> Unit) {
     val backStack = remember { mutableStateListOf<AccountingRoute>(AccountingRoute.Home) }
-    var selectedTab by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    var selectedTab by remember { mutableIntStateOf(0) }
 
     BackHandler {
         if (backStack.size > 1) backStack.removeLast() else onBack()

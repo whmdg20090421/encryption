@@ -6,11 +6,9 @@
 package com.whmdg.mczj.tools.fileop.webdav.client
 
 import at.bitfire.dav4jvm.DavResource
-import at.bitfire.dav4jvm.DavResourceAccessor
 import at.bitfire.dav4jvm.QuotedStringUtils
 import at.bitfire.dav4jvm.ResponseCallback
 import at.bitfire.dav4jvm.exception.DavException
-import at.bitfire.dav4jvm.exception.HttpException
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Headers
@@ -53,7 +51,7 @@ fun DavResource.getRangeCompat(
         .also {
             checkStatus(it)
             if (it.code != HttpURLConnection.HTTP_PARTIAL) {
-                throw HttpException(it)
+                throw IOException("Expected HTTP 206 Partial Content, got ${it.code}")
             }
         }
         .body!!.byteStream()
@@ -203,13 +201,29 @@ fun DavResource.putRangeCompat(
     }
 }
 
-@Throws(HttpException::class)
-private fun DavResource.checkStatus(response: Response) {
-    DavResourceAccessor.checkStatus(this, response)
+@Throws(IOException::class)
+private fun checkStatus(response: Response) {
+    if (!response.isSuccessful) {
+        throw IOException("WebDAV HTTP ${response.code}: ${response.message}")
+    }
 }
 
-private fun DavResource.followRedirects(sendRequest: () -> Response): Response =
-    DavResourceAccessor.followRedirects(this, sendRequest)
+private fun DavResource.followRedirects(sendRequest: () -> Response): Response {
+    var response = sendRequest()
+    var redirects = 0
+    while (response.code in 301..308 && redirects < 10) {
+        val locationHeader = response.header("Location") ?: break
+        val redirectUrl = response.request.url.resolve(locationHeader) ?: break
+        response.close()
+        val builder = response.request.newBuilder().url(redirectUrl)
+        if (response.code in 301..302) {
+            builder.get()
+        }
+        response = httpClient.newCall(builder.build()).execute()
+        redirects++
+    }
+    return response
+}
 
 private fun ByteBuffer.toRequestBody(contentType: MediaType? = null): RequestBody {
     val contentLength = remaining().toLong()

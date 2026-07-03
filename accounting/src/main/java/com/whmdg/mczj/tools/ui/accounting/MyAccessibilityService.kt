@@ -65,18 +65,28 @@ class MyAccessibilityService : AccessibilityService(), AccessibilityServiceBridg
     override fun extractAllTexts(): List<String> {
         val root = rootInActiveWindow ?: return emptyList()
         val texts = mutableListOf<String>()
-        fun traverse(node: AccessibilityNodeInfo) {
-            node.text?.toString()?.let { if (it.isNotBlank()) texts.add(it) }
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { child -> traverse(child); child.recycle() }
-            }
-        }
-        traverse(root)
+        traverseNode(root, texts)
         return texts
     }
 
     override fun getTopPackageFromWindow(): String? {
-        return windows.firstOrNull()?.root?.packageName?.toString()
+        val allWindows = windows
+        if (allWindows != null) {
+            for (window in allWindows) {
+                if (window.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
+                    val pkg = window.root?.packageName?.toString()
+                    if (pkg != null && pkg != packageName && pkg !in SYSTEM_PACKAGES) {
+                        return pkg
+                    }
+                }
+            }
+        }
+        val root = rootInActiveWindow ?: return null
+        val pkg = root.packageName?.toString()
+        if (pkg != null && pkg != packageName && pkg !in SYSTEM_PACKAGES) {
+            return pkg
+        }
+        return null
     }
 
     override fun suppressAutoRecognize() {
@@ -118,37 +128,6 @@ class MyAccessibilityService : AccessibilityService(), AccessibilityServiceBridg
     }
 
     override fun onInterrupt() {}
-
-    /** 提取当前窗口所有文本（保留顺序，用于账单识别） */
-    fun extractAllTexts(): List<String> {
-        val root = rootInActiveWindow ?: return emptyList()
-        val texts = mutableListOf<String>()
-        traverseNode(root, texts)
-        return texts
-    }
-
-    /** 从窗口列表获取前台应用包名（优先 TYPE_APPLICATION 窗口，过滤系统包名） */
-    fun getTopPackageFromWindow(): String? {
-        // 优先遍历窗口列表，找 TYPE_APPLICATION 类型的非系统应用窗口
-        val allWindows = windows
-        if (allWindows != null) {
-            for (window in allWindows) {
-                if (window.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
-                    val pkg = window.root?.packageName?.toString()
-                    if (pkg != null && pkg != packageName && pkg !in SYSTEM_PACKAGES) {
-                        return pkg
-                    }
-                }
-            }
-        }
-        // 回退：rootInActiveWindow
-        val root = rootInActiveWindow ?: return null
-        val pkg = root.packageName?.toString()
-        if (pkg != null && pkg != packageName && pkg !in SYSTEM_PACKAGES) {
-            return pkg
-        }
-        return null
-    }
 
     /** 从 windows 列表获取指定包名的根节点（避免获取到自身悬浮窗节点） */
     fun getRootForPackage(targetPackage: String): AccessibilityNodeInfo? {

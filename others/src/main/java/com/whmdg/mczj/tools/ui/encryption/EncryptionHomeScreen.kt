@@ -1141,3 +1141,33 @@ fun EncryptionSettingsTab(settings: EncryptionSettings) {
     }
 }
 
+@Composable
+fun VaultInfoRow(label: String, value: String) {
+    val isDarkMode = LocalIsDarkMode.current
+    val labelColor = if (isDarkMode) Color(0x9964B4D2) else Color(0x9964748B)
+    val valueColor = if (isDarkMode) Color(0xFFA8D4F0) else Color(0xFF0EA5E9)
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            color = labelColor,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            letterSpacing = 0.03.em
+        )
+        Text(
+            text = value,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = valueColor,
+            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+

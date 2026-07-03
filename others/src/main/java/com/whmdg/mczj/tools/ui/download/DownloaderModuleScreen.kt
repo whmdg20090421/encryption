@@ -2,6 +2,8 @@ package com.whmdg.mczj.tools.ui.download
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
+import com.whmdg.mczj.tools.ui.download.Deviant.DeviantDownloaderScreen
+import com.whmdg.mczj.tools.ui.download.Deviant.DeviantLoginScreen
 
 @Composable
 fun DownloaderModuleScreen(
@@ -36,25 +38,25 @@ fun DownloaderModuleScreen(
         is DownloaderRoute.FADownloader -> {
             FADownloaderScreen(
                 onBack = { navigateBack() },
-                onNavigate = { /* Handle navigation to FALogin */ }
+                onLogin = { navigateTo(DownloaderRoute.FALogin) }
             )
         }
         is DownloaderRoute.FALogin -> {
             FALoginScreen(
                 onBack = { navigateBack() },
-                onLoginSuccess = { /* Handle login success */ }
+                onLoginSuccess = { _, _ -> navigateBack() }
             )
         }
         is DownloaderRoute.DeviantDownloader -> {
             DeviantDownloaderScreen(
                 onBack = { navigateBack() },
-                onNavigate = { /* Handle navigation to DeviantLogin */ }
+                onLogin = { navigateTo(DownloaderRoute.DeviantLogin) }
             )
         }
         is DownloaderRoute.DeviantLogin -> {
             DeviantLoginScreen(
                 onBack = { navigateBack() },
-                onLoginSuccess = { /* Handle login success */ }
+                onLoginSuccess = { _ -> navigateBack() }
             )
         }
     }
