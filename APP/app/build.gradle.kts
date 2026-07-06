@@ -41,7 +41,7 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            // isMinifyEnabled = true      // R8 字节码优化太慢，暂不启用
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             val envOk = System.getenv("KEYSTORE_PASSWORD")?.isNotEmpty() == true &&
