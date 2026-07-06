@@ -81,6 +81,52 @@ jobs:
           fi
           echo "=== 检查通过 ==="
 
+      - name: Check unused Gradle dependencies
+        run: |
+          echo "=== 未使用 Gradle 依赖检查 ==="
+          WARN_COUNT=0
+
+          # 依赖坐标 → import 包名 映射
+          # 格式: "group:artifact" → "import.package.prefix"
+          declare -A DEP_MAP
+          DEP_MAP["androidx.compose.material:material-icons-extended"]="androidx.compose.material.icons"
+          DEP_MAP["org.bouncycastle:bcprov-jdk18on"]="org.bouncycastle"
+          DEP_MAP["com.squareup.okhttp3:okhttp"]="okhttp3"
+          DEP_MAP["com.thegrizzlylabs:sardine-android"]="com.thegrizzlylabs.sardine"
+          DEP_MAP["io.github.sunrise4ever:shizuku-api"]="rikka.shizuku"
+          DEP_MAP["io.github.sunrise4ever:shizuku-provider"]="rikka.shizuku"
+          DEP_MAP["com.jaredrummler:colorpicker"]="com.jaredrummler.colorpicker"
+          DEP_MAP["me.zhanghai.android.fastscroll"]="me.zhanghai.android.fastscroll"
+
+          for bfile in $(find . -name "build.gradle.kts" -not -path "*/build/*"); do
+            MODULE_DIR=$(dirname "$bfile")
+            # 跳过没有 src 目录的模块
+            [ -d "$MODULE_DIR/src" ] || continue
+
+            while IFS= read -r dep; do
+              # 提取 group:artifact（去掉版本号和引号）
+              ga=$(echo "$dep" | sed 's/.*implementation("//' | sed 's/").*//' | sed 's/:[^:]*$//' | sed 's/:[0-9][0-9.]*//')
+              # 只检查硬编码依赖（libs. 由版本目录管理，跳过）
+              echo "$dep" | grep -q 'libs\.' && continue
+
+              pkg="${DEP_MAP[$ga]}"
+              [ -z "$pkg" ] && continue
+
+              # 检查模块内是否有 Kotlin 文件 import 了该包
+              found=$(grep -rl "import ${pkg}" "$MODULE_DIR/src" --include="*.kt" 2>/dev/null | head -1)
+              if [ -z "$found" ]; then
+                echo "::warning file=$bfile::依赖 $ga 可能未被使用（未找到 import ${pkg}*）"
+                WARN_COUNT=$((WARN_COUNT + 1))
+              fi
+            done < <(grep 'implementation("' "$bfile" | grep -v '//.*implementation')
+          done
+
+          if [ "$WARN_COUNT" -eq 0 ]; then
+            echo "未发现未使用的硬编码依赖"
+          else
+            echo "::warning::共发现 $WARN_COUNT 个可能未使用的依赖，请检查上方 warning"
+          fi
+
       - name: Cache pip packages
         uses: actions/cache@v4
         with:

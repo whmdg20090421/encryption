@@ -72,6 +72,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.awaitPointerEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -102,6 +103,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.animation.core.Animatable
@@ -4624,24 +4627,56 @@ private fun FileEntryRow(
                 .height(60.dp)
                 .offset { IntOffset(swipeOffset.value.roundToInt(), 0) }
                 .pointerInput(Unit) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            coroutineScope.launch {
-                                val threshold = rowWidth * 0.25f
-                                if (abs(swipeOffset.value) >= threshold) {
-                                    onSwipe(swipeOffset.value)
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val pointerId = down.id
+                        var cumulativeX = 0f
+                        val slop = 30f // 最小水平位移，避免误触
+                        var started = false
+
+                        while (true) {
+                            val event = awaitPointerEvent(pass = PointerEventPass.Main)
+                            val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                            if (change.pressed) {
+                                val dx = change.position.x - change.previousPosition.x
+                                // 忽略多指触控
+                                if (event.changes.count { it.pressed } > 1) {
+                                    change.consume()
+                                    break
                                 }
-                                swipeOffset.animateTo(0f, spring(stiffness = Spring.StiffnessMedium))
-                            }
-                        },
-                        onHorizontalDrag = { change, dragAmount ->
-                            change.consume()
-                            coroutineScope.launch {
-                                val maxOffset = rowWidth * 0.5f
-                                swipeOffset.snapTo((swipeOffset.value + dragAmount).coerceIn(-maxOffset, maxOffset))
+                                if (!started) {
+                                    cumulativeX += dx
+                                    if (abs(cumulativeX) >= slop) {
+                                        started = true
+                                        change.consume()
+                                        coroutineScope.launch {
+                                            val maxOffset = rowWidth * 0.5f
+                                            swipeOffset.snapTo((cumulativeX).coerceIn(-maxOffset, maxOffset))
+                                        }
+                                    }
+                                } else {
+                                    change.consume()
+                                    coroutineScope.launch {
+                                        val maxOffset = rowWidth * 0.5f
+                                        swipeOffset.snapTo((swipeOffset.value + dx).coerceIn(-maxOffset, maxOffset))
+                                    }
+                                }
+                            } else {
+                                // 手指抬起
+                                if (started) {
+                                    change.consume()
+                                    coroutineScope.launch {
+                                        val threshold = rowWidth * 0.25f
+                                        if (abs(swipeOffset.value) >= threshold) {
+                                            onSwipe(swipeOffset.value)
+                                        }
+                                        swipeOffset.animateTo(0f, spring(stiffness = Spring.StiffnessMedium))
+                                    }
+                                }
+                                break
                             }
                         }
-                    )
+                    }
                 }
                 .combinedClickable(onClick = onClick, onLongClick = onLongClick)
                 .padding(horizontal = 16.dp, vertical = 2.5.dp)

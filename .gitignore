@@ -21,3 +21,4 @@ apk_output/
 artifact.zip
 AUTH_SYSTEM_REVIEW.md
 *.apk
+tmp
