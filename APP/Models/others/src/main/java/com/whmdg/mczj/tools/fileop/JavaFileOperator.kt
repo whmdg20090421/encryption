@@ -1,5 +1,6 @@
 package com.whmdg.mczj.tools.fileop
 
+import com.whmdg.mczj.tools.util.DirEntry
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -62,13 +63,13 @@ class JavaFileOperator : FileOperator {
 
     override fun isDirectory(path: String): Boolean = File(path).isDirectory
 
-    override fun listChildren(path: String): List<FileChildInfo>? {
+    override fun listChildren(path: String): List<DirEntry>? {
         val dir = File(path)
         if (!dir.isDirectory || !dir.canRead()) return null
         val children = dir.listFiles() ?: return null
         return children.map { f ->
             val isDir = f.isDirectory
-            FileChildInfo(
+            DirEntry(
                 name = f.name,
                 path = f.absolutePath,
                 isDir = isDir,

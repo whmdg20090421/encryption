@@ -1,6 +1,7 @@
 package com.whmdg.mczj.tools.fileop
 
 import android.content.Context
+import com.whmdg.mczj.tools.util.DirEntry
 import com.whmdg.mczj.tools.util.FileAccessLevel
 import java.io.File
 
@@ -36,7 +37,7 @@ interface FileOperator {
     fun isDirectory(path: String): Boolean
 
     /** 列出目录子项。返回 null 表示无法访问。 */
-    fun listChildren(path: String): List<FileChildInfo>?
+    fun listChildren(path: String): List<DirEntry>?
 
     /** 获取文件大小（字节）。目录返回 0。 */
     fun fileSize(path: String): Long
@@ -56,14 +57,3 @@ interface FileOperator {
         }
     }
 }
-
-/**
- * 统一的子项信息，供 walkFileTree 使用。
- */
-data class FileChildInfo(
-    val name: String,
-    val path: String,
-    val isDir: Boolean,
-    val size: Long,
-    val mtime: Long
-)

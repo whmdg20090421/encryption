@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.fileop
 
 import android.content.Context
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+import com.whmdg.mczj.tools.util.DirEntry
 import com.whmdg.mczj.tools.util.SevenZipCommand
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -71,7 +72,7 @@ class ShellFileOperator(
         return exitCode == 0
     }
 
-    override fun listChildren(path: String): List<FileChildInfo>? {
+    override fun listChildren(path: String): List<DirEntry>? {
         val normalized = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
         val escaped = SevenZipCommand.escape(normalized)
         val command = "ls -lAp $escaped"
@@ -83,7 +84,7 @@ class ShellFileOperator(
         if (exitCode != 0 && stdout.isBlank()) return null
 
         val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-        val entries = mutableListOf<FileChildInfo>()
+        val entries = mutableListOf<DirEntry>()
         for (raw in stdout.lines()) {
             val line = raw.trimEnd('\r')
             if (line.isBlank() || line.startsWith("total ")) continue
@@ -109,7 +110,7 @@ class ShellFileOperator(
             val mtime = try {
                 fmt.parse("${parts[5]} ${parts[6]}")?.time ?: 0L
             } catch (_: Exception) { 0L }
-            entries.add(FileChildInfo(name, childPath, isDir, if (isDir) 0L else size, mtime))
+            entries.add(DirEntry(name, childPath, isDir, if (isDir) 0L else size, mtime))
         }
         return entries
     }
