@@ -1663,7 +1663,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         var dirCount = 0
         var fileCount = 0
 
-        if (useShizuku || useRoot) {
+        if (useRoot) {  // ponytail: listWithLs 仅在 shell 引擎可用时调用，useRoot=true 时用长格式解析
             // 收集软链接，批量检测目标类型
             val symlinks = mutableMapOf<String, String>()
             for (raw in lines) {
@@ -1720,7 +1720,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 entries.add(FileEntry(childPath, name, isDir, perm, sz, modified))
             }
         }
-        DiagnosticLog.log(tag, "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
+        DiagnosticLog.log("LsShell", "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
 
         val sorted = entries.sortedWith(
             compareByDescending<FileEntry> { it.isDirectory }
@@ -2018,10 +2018,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         // 2. 应用 UID（≥10000）：通过 pm list packages -U 获取包名+UID
         if (isRootEngine) {
-            val (stdout, _, exit) = try {
+            val stdout = try {
                 ShellExecutor.execute(Permission.ROOT, "pm list packages -U", debug = true)
-            } catch (_: Exception) { Triple("", "", -1) }
-            if (exit == 0 && stdout.isNotBlank()) {
+            } catch (_: Exception) { "" }
+            if (stdout.isNotBlank()) {
                 stdout.lines().forEach { line ->
                     // 格式: "package:com.example.app uid:10123"
                     val pkg = line.removePrefix("package:").substringBefore(" ").trim()
@@ -2046,10 +2046,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         // 应用 GID：pm list packages -G
         if (isRootEngine) {
-            val (stdout, _, exit) = try {
+            val stdout = try {
                 ShellExecutor.execute(Permission.ROOT, "pm list packages -G", debug = true)
-            } catch (_: Exception) { Triple("", "", -1) }
-            if (exit == 0 && stdout.isNotBlank()) {
+            } catch (_: Exception) { "" }
+            if (stdout.isNotBlank()) {
                 stdout.lines().forEach { line ->
                     val pkg = line.removePrefix("package:").substringBefore(" ").trim()
                     val gidStr = line.substringAfter("gid:", "").trim()
