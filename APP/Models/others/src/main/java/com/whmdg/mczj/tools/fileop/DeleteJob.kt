@@ -130,10 +130,9 @@ class DeleteJob(
                 // 尝试 shell 删除
                 try {
                     val escaped = SevenZipCommand.escape(entry.path)
-                    val (_, stderr, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("rm -f $escaped")
-                    if (exitCode != 0) {
-                        throw IOException("删除失败: $stderr")
-                    }
+                    com.whmdg.mczj.tools.security.ShellExecutor.execute(
+                        com.whmdg.mczj.tools.security.Permission.ROOT, "rm -f $escaped"
+                    )
                 } catch (e: Exception) {
                     if (e is IOException) throw e
                     throw IOException("删除失败: ${e.message}")
@@ -153,10 +152,9 @@ class DeleteJob(
             // 尝试 shell 删除
             try {
                 val escaped = SevenZipCommand.escape(file.absolutePath)
-                val (_, stderr, exitCode) = SpecialPermissionVerifier.executeRootCommandFull("rm -rf $escaped")
-                if (exitCode != 0) {
-                    throw IOException("删除失败: $stderr")
-                }
+                com.whmdg.mczj.tools.security.ShellExecutor.execute(
+                    com.whmdg.mczj.tools.security.Permission.ROOT, "rm -rf $escaped"
+                )
             } catch (e: Exception) {
                 if (e is IOException) throw e
                 throw IOException("删除失败: ${e.message}")

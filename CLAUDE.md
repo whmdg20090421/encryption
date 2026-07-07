@@ -121,6 +121,7 @@ app/src/main/java/com/whmdg/mczj/tools/
 │       ├── CryptoService.kt           # 高级加密/解密文件入/出保险箱
 │       └── EncryptionTaskManager.kt   # 加密任务队列管理（并发控制/进度回调）
 ├── security/
+│   ├── ShellExecutor.kt               # 统一 shell 执行入口（Permission 枚举 + 参数校验 + 错误抛出）
 │   ├── TeeManager.kt                  # Android Keystore RSA TEE + 生物识别快速解锁
 │   ├── SpecialPermissionVerifier.kt   # 检测 & 提权运行（无障碍/ADB/管理员/Root）
 │   ├── ShizukuAuthorizer.kt           # Shizuku 授权（privileged shell 命令执行）
@@ -342,6 +343,23 @@ UI 门控：LocalPermissionGate (CompositionLocal<Boolean>)
 2. 首次解锁成功后，用**公钥**静默加密密码，Hex 存入 `SharedPreferences("tee_passwords")`
 3. 再次打开时用**私钥**（需指纹验证）解密 → 自动开箱
 
+### ShellExecutor 统一执行入口
+
+所有 shell 命令必须通过 `ShellExecutor.execute()` 执行，禁止直接调用 `Runtime.exec`、`ProcessBuilder`、`Shell.cmd`。
+
+```
+ShellExecutor.execute(permission, command, debug)
+    ├── Permission.APPLICANT → Runtime.exec("sh", "-c", cmd)（应用自身 uid）
+    ├── Permission.ADB → 自动路由：Shizuku 可用 → Shizuku，否则 → 应用 shell
+    ├── Permission.ROOT → libsu Shell.cmd()（需 Magisk 授权）
+    ├── Permission.MAX → 读 SharedPreferences 获取最高已授权权限
+    └── Permission.MIN → = Permission.APPLICANT
+
+ShellException(command, permission, stderr, exitCode) → 任何失败抛出异常
+```
+
+**权限选择原则**：必须 root 才能执行的命令（rm、chmod、chown、chattr、pm、dumpsys）→ `Permission.ROOT`；权限由上层决定的 → `Permission.MAX`；普通命令 → `Permission.MIN`。
+
 ### 文件管理器 Shell 路由
 
 文件管理器采用**最高权限优先**策略：有 Shell 引擎（Root/Shizuku）时所有操作优先走 Shell，失败才回退 Java File API。
@@ -356,7 +374,7 @@ FileManagerViewModel
 
 FileAccessor（FolderSizeCalculator 使用）
     ├── NormalAccessor → Java File API
-    └── ShellAccessor → executeShizukuCommand / executeRootCommandFull
+    └── ShellAccessor → ShellExecutor.execute(Permission.MAX, cmd)
 ```
 
 **关键实现细节**：
@@ -572,6 +590,7 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 - **禁止主动使用 dp 限制尺寸**：UI 组件的尺寸约束必须使用百分比（`weight`、`fillMaxWidth`、`fillMaxHeight`）或相对于屏幕/父容器的方案，禁止使用 `Modifier.size(Xdp)`、`Modifier.width(Xdp)`、`Modifier.height(Xdp)` 等硬编码 dp 限制组件大小。除非用户明确指定"用 XX dp"，才能使用 dp 值。间距（`Spacer`、`padding`、`spacedBy`）不受此限制。
 - **使用官方接口**：涉及日期、时间、数学、格式化等计算时，优先使用平台/语言官方 API（如 `Calendar.isLeapYear(year)`），不要自己写算法判断，避免边界情况遗漏。
 - **Card 内边距**：卡片默认使用 `padding(horizontal = 16.dp, vertical = 12.dp)`，不要用过大的内边距（如 24dp），避免文字离卡片边缘太远显得空旷。
+- **外部参数不可信**：函数必须自行校验传入参数的合法性，不依赖调用方保证。例如 ShellExecutor 接收 Permission 枚举，执行前必须校验对应权限是否真正可用，不能假设调用方已做过检查。校验失败时通过 DiagnosticLog 记录并抛出异常，由 UI 层统一通过 ErrorDialog 弹窗展示，便于开发阶段发现问题并修复传入参数。
 
 ### 认证安全
 - `NativeAuth` 的 JNI 层使用内嵌 Argon2 验证密码，派生密钥仅在内存中短暂存在

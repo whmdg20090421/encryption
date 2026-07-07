@@ -1,10 +1,11 @@
 package com.whmdg.mczj.tools.util
 
 import android.content.Context
-import android.util.Base64
 import android.util.Log
 import com.whmdg.mczj.tools.AppDataPaths
-import com.whmdg.mczj.tools.security.ShizukuAuthorizer
+import com.whmdg.mczj.tools.security.Permission
+import com.whmdg.mczj.tools.security.ShellException
+import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.ui.FileEntry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -611,75 +612,27 @@ object ArchiveBrowser {
     private const val COMMAND_TIMEOUT_MS = 30_000L
 
     /** 执行 shell 命令，返回 (stdout, stderr, exitCode)。
-     *  路径已由 SevenZipCommand.escape() 用单引号包裹，可安全传递给任何 shell。 */
+     *  路径已由 SevenZipCommand.escape() 用单引号包裹，可安全传递给任何 shell。
+     *  委托给 ShellExecutor 执行。 */
     private suspend fun executeCommand(
         cmd: String,
         permissionLevel: String,
         context: Context
     ): Triple<String, String, Int> = withContext(Dispatchers.IO) {
-        val process = when (permissionLevel) {
-            "ROOT" -> {
-                Log.d(TAG, "ROOT 执行: $cmd")
-                ProcessBuilder("su", "-c", cmd)
-                    .redirectErrorStream(false)
-                    .start()
+        val permission = when (permissionLevel) {
+            "ROOT" -> Permission.ROOT
+            "SHIZUKU" -> Permission.ADB
+            else -> Permission.APPLICANT
+        }
+        try {
+            val stdout = withTimeout(COMMAND_TIMEOUT_MS) {
+                ShellExecutor.execute(permission, cmd, debug = true)
             }
-            "SHIZUKU" -> {
-                val service = ShizukuAuthorizer.getShellService()
-                    ?: throw IllegalStateException("Shizuku UserService 未连接")
-                Log.d(TAG, "SHIZUKU 执行: $cmd")
-                val result = withTimeout(COMMAND_TIMEOUT_MS) { service.execute(cmd) }
-                val parts = result.split("\n")
-                val stdout = if (parts.size >= 1 && parts[0].isNotEmpty()) {
-                    String(Base64.decode(parts[0], Base64.NO_WRAP), Charsets.UTF_8)
-                } else ""
-                val stderr = if (parts.size >= 2 && parts[1].isNotEmpty()) {
-                    String(Base64.decode(parts[1], Base64.NO_WRAP), Charsets.UTF_8)
-                } else ""
-                val exitCode = parts.getOrNull(2)?.trim()?.toIntOrNull() ?: -1
-                return@withContext Triple(stdout, stderr, exitCode)
-            }
-            else -> {
-                Log.d(TAG, "NORMAL 执行: $cmd")
-                ProcessBuilder("sh", "-c", cmd)
-                    .redirectErrorStream(false)
-                    .start()
-            }
+            Triple(stdout, "", 0)
+        } catch (e: ShellException) {
+            Triple("", "${e.message}\n${e.stderr}", e.exitCode)
+        } catch (e: Exception) {
+            Triple("", e.message ?: "Shell 执行异常", -1)
         }
-        // 并发读取 stdout/stderr，避免管道缓冲区满导致死锁
-        val stdoutBuf = StringBuilder()
-        val stderrBuf = StringBuilder()
-        val tOut = Thread {
-            try {
-                process.inputStream.bufferedReader().use { r ->
-                    val buf = CharArray(8192)
-                    var n: Int
-                    while (r.read(buf).also { n = it } != -1) stdoutBuf.append(buf, 0, n)
-                }
-            } catch (_: Exception) {}
-        }
-        val tErr = Thread {
-            try {
-                process.errorStream.bufferedReader().use { r ->
-                    val buf = CharArray(8192)
-                    var n: Int
-                    while (r.read(buf).also { n = it } != -1) stderrBuf.append(buf, 0, n)
-                }
-            } catch (_: Exception) {}
-        }
-        tOut.start(); tErr.start()
-        // 超时看门狗
-        val watchdog = Thread {
-            try {
-                Thread.sleep(COMMAND_TIMEOUT_MS)
-                process.destroyForcibly()
-            } catch (_: Exception) {}
-        }
-        watchdog.isDaemon = true
-        watchdog.start()
-        val exitCode = process.waitFor()
-        watchdog.interrupt()
-        tOut.join(5000); tErr.join(5000)
-        Triple(stdoutBuf.toString().trimEnd(), stderrBuf.toString().trimEnd(), exitCode)
     }
 }

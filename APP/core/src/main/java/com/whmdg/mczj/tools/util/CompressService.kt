@@ -79,16 +79,15 @@ object CompressService {
 
         // 4. 按权限路径执行
         try {
-            when (permissionLevel) {
-                "ROOT" -> executeWithProcessBuilder(
-                    arrayOf("su", "-c", cmd), totalBytes, totalFiles, cancelFlag, callback
-                )
-                "SHIZUKU" -> executeViaShizuku(
-                    context, cmd, totalBytes, totalFiles, cancelFlag, callback
-                )
-                else -> executeWithProcessBuilder(
-                    arrayOf("sh", "-c", cmd), totalBytes, totalFiles, cancelFlag, callback
-                )
+            val permission = when (permissionLevel) {
+                "ROOT" -> com.whmdg.mczj.tools.security.Permission.ROOT
+                "SHIZUKU" -> null  // Shizuku 走 AIDL streaming
+                else -> com.whmdg.mczj.tools.security.Permission.APPLICANT
+            }
+            if (permission != null) {
+                executeWithShellStreaming(permission, cmd, totalBytes, totalFiles, cancelFlag, callback)
+            } else {
+                executeViaShizuku(context, cmd, totalBytes, totalFiles, cancelFlag, callback)
             }
             callback.onComplete(true, options.outputPath, null)
         } catch (e: CancellationException) {
@@ -121,16 +120,15 @@ object CompressService {
         Log.d(TAG, "解压命令: $cmd")
 
         try {
-            when (permissionLevel) {
-                "ROOT" -> executeExtractWithProcessBuilder(
-                    arrayOf("su", "-c", cmd), options.fileSizes, options.totalUncompressedBytes, cancelFlag, callback
-                )
-                "SHIZUKU" -> executeExtractViaShizuku(
-                    context, cmd, options.fileSizes, options.totalUncompressedBytes, cancelFlag, callback
-                )
-                else -> executeExtractWithProcessBuilder(
-                    arrayOf("sh", "-c", cmd), options.fileSizes, options.totalUncompressedBytes, cancelFlag, callback
-                )
+            val permission = when (permissionLevel) {
+                "ROOT" -> com.whmdg.mczj.tools.security.Permission.ROOT
+                "SHIZUKU" -> null  // Shizuku 走 AIDL streaming
+                else -> com.whmdg.mczj.tools.security.Permission.APPLICANT
+            }
+            if (permission != null) {
+                executeExtractWithShellStreaming(permission, cmd, options.fileSizes, options.totalUncompressedBytes, cancelFlag, callback)
+            } else {
+                executeExtractViaShizuku(context, cmd, options.fileSizes, options.totalUncompressedBytes, cancelFlag, callback)
             }
             callback.onComplete(true, options.outputDir, null)
         } catch (e: CancellationException) {
@@ -151,101 +149,43 @@ object CompressService {
     }
 
     /**
-     * ProcessBuilder 执行（普通/Root 权限）。
-     * 实时逐行读取 stdout 解析进度。
+     * Shell 流式执行（普通/Root 权限）。
+     * 通过 ShellExecutor.executeStreaming 实现，解析 7zzs -bsp1 进度输出。
      */
-    private suspend fun executeWithProcessBuilder(
-        command: Array<String>,
+    private suspend fun executeWithShellStreaming(
+        permission: com.whmdg.mczj.tools.security.Permission,
+        cmd: String,
         totalBytes: Long,
         totalFiles: Int,
         cancelFlag: AtomicBoolean,
         callback: ProgressCallback
     ) = withContext(Dispatchers.IO) {
-        val process = ProcessBuilder(*command)
-            .redirectErrorStream(true)  // stderr 合并到 stdout
-            .start()
-
-        try {
-            // 后台线程逐行读取 stdout
-            val readerThread = Thread {
-                try {
-                    process.inputStream.bufferedReader().use { reader ->
-                        var line: String?
-                        while (reader.readLine().also { line = it } != null) {
-                            if (cancelFlag.get()) break
-                            parseProgressLine(line!!, totalBytes, totalFiles, callback)
-                        }
-                    }
-                } catch (_: Exception) {}
-            }
-            readerThread.start()
-
-            // 等待进程完成（协程可取消）
-            while (process.isAlive) {
-                if (cancelFlag.get() || !isActive) {
-                    process.destroyForcibly()
-                    break
-                }
-                delay(100)
-            }
-
-            readerThread.join(5000)
-            val exitCode = process.waitFor()
-
-            if (cancelFlag.get()) throw CancellationException("用户取消")
-            if (exitCode != 0) throw RuntimeException("7zzs 退出码: $exitCode")
-        } catch (e: CancellationException) {
-            process.destroyForcibly()
-            throw e
-        }
+        com.whmdg.mczj.tools.security.ShellExecutor.executeStreaming(
+            permission = permission,
+            command = cmd,
+            onOutputLine = { line -> parseProgressLine(line, totalBytes, totalFiles, callback) },
+            cancelFlag = cancelFlag
+        )
     }
 
     /**
-     * 解压专用 ProcessBuilder 执行（普通/Root 权限）。
-     * 使用 parseExtractProgressLine() 实现真实字节级进度。
+     * Shell 流式解压执行（普通/Root 权限）。
+     * 通过 ShellExecutor.executeStreaming 实现，使用 parseExtractProgressLine() 计算真实字节级进度。
      */
-    private suspend fun executeExtractWithProcessBuilder(
-        command: Array<String>,
+    private suspend fun executeExtractWithShellStreaming(
+        permission: com.whmdg.mczj.tools.security.Permission,
+        cmd: String,
         fileSizes: List<Long>,
         totalBytes: Long,
         cancelFlag: AtomicBoolean,
         callback: ProgressCallback
     ) = withContext(Dispatchers.IO) {
-        val process = ProcessBuilder(*command)
-            .redirectErrorStream(true)
-            .start()
-
-        try {
-            val readerThread = Thread {
-                try {
-                    process.inputStream.bufferedReader().use { reader ->
-                        var line: String?
-                        while (reader.readLine().also { line = it } != null) {
-                            if (cancelFlag.get()) break
-                            parseExtractProgressLine(line!!, fileSizes, totalBytes, callback)
-                        }
-                    }
-                } catch (_: Exception) {}
-            }
-            readerThread.start()
-
-            while (process.isAlive) {
-                if (cancelFlag.get() || !isActive) {
-                    process.destroyForcibly()
-                    break
-                }
-                delay(100)
-            }
-
-            readerThread.join(5000)
-            val exitCode = process.waitFor()
-
-            if (cancelFlag.get()) throw CancellationException("用户取消")
-            if (exitCode != 0) throw RuntimeException("7zzs 退出码: $exitCode")
-        } catch (e: CancellationException) {
-            process.destroyForcibly()
-            throw e
-        }
+        com.whmdg.mczj.tools.security.ShellExecutor.executeStreaming(
+            permission = permission,
+            command = cmd,
+            onOutputLine = { line -> parseExtractProgressLine(line, fileSizes, totalBytes, callback) },
+            cancelFlag = cancelFlag
+        )
     }
 
     /**

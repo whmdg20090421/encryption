@@ -17,6 +17,9 @@ import com.whmdg.mczj.tools.ui.Screen
 import com.whmdg.mczj.tools.ui.SizeCalcManager
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
+import com.whmdg.mczj.tools.security.Permission
+import com.whmdg.mczj.tools.security.ShellException
+import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.ArchiveBrowser
 import com.whmdg.mczj.tools.util.CompressService
@@ -285,14 +288,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun shellPathExists(path: String): Boolean {
         if (!hasShellEngine) return File(path).exists()
         val escaped = SevenZipCommand.escape(path)
-        val (_, _, exit) = try {
-            when {
-                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -e $escaped")
-                SpecialPermissionVerifier.isShizukuAuthorized(getApplication()) -> SpecialPermissionVerifier.executeShizukuCommand("test -e $escaped")
-                else -> return File(path).exists()
-            }
-        } catch (_: Exception) { return false }
-        return exit == 0
+        return try {
+            ShellExecutor.execute(Permission.MAX, "test -e $escaped")
+            true
+        } catch (_: Exception) { false }
     }
 
     /**
@@ -301,14 +300,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun shellIsDirectory(path: String): Boolean {
         if (!hasShellEngine) return File(path).isDirectory
         val escaped = SevenZipCommand.escape(path)
-        val (_, _, exit) = try {
-            when {
-                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull("test -d $escaped")
-                SpecialPermissionVerifier.isShizukuAuthorized(getApplication()) -> SpecialPermissionVerifier.executeShizukuCommand("test -d $escaped")
-                else -> return File(path).isDirectory
-            }
-        } catch (_: Exception) { return false }
-        return exit == 0
+        return try {
+            ShellExecutor.execute(Permission.MAX, "test -d $escaped")
+            true
+        } catch (_: Exception) { false }
     }
 
     /**
@@ -357,14 +352,17 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 根据当前引擎执行 shell 命令（Root 优先，回退 Shizuku）。
-     * 用于受保护路径的文件操作。
+     * 委托给 ShellExecutor.execute(Permission.MAX)。
+     * 保留 Triple 返回类型供调用方解构使用。
      */
     private fun executeShell(cmd: String): Triple<String, String, Int> {
-        val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
-        return when {
-            isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(cmd)
-            useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(cmd)
-            else -> Triple("", "无可用权限引擎", -1)
+        return try {
+            val stdout = ShellExecutor.execute(Permission.MAX, cmd, debug = true)
+            Triple(stdout, "", 0)
+        } catch (e: ShellException) {
+            Triple("", "${e.message}\n${e.stderr}", e.exitCode)
+        } catch (e: Exception) {
+            Triple("", e.message ?: "Shell 执行异常", -1)
         }
     }
 
@@ -411,28 +409,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
         val command = "ls $flags $escapedPath"
 
-        val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
-        val (stdout, stderr, exitCode) = try {
-            when {
-                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(command)
-                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(command)
-                else -> {
-                    lastShellStderr = "无可用权限引擎"
-                    return emptyList()
-                }
-            }
+        val stdout = try {
+            ShellExecutor.execute(Permission.MAX, command, debug = true)
+        } catch (e: ShellException) {
+            DiagnosticLog.log("ShellLs", "执行失败: ${e.stderr}")
+            lastShellStderr = e.stderr.ifBlank { e.message ?: "执行失败" }
+            return emptyList()
         } catch (e: Throwable) {
             DiagnosticLog.log("ShellLs", "执行异常: ${e.message}")
             lastShellStderr = e.message ?: "执行异常"
             return emptyList()
         }
 
-        DiagnosticLog.log("ShellLs", "cmd=$command exit=$exitCode out=${stdout.length} err=${stderr.length}")
-        if (exitCode != 0 && stdout.isBlank()) {
-            DiagnosticLog.log("ShellLs", "失败: $stderr")
-            lastShellStderr = stderr
-            return emptyList()
-        }
+        DiagnosticLog.log("ShellLs", "cmd=$command out=${stdout.length}字符")
         lastShellStderr = ""
 
         val entries = mutableListOf<FileEntry>()
@@ -1519,15 +1508,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? {
         val escapedPath = SevenZipCommand.escape(dirPath)
         val cmd = "ls -lap $escapedPath"
-        val useShizuku = !isRootEngine && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
-        val (stdout, _, exitCode) = try {
-            when {
-                isRootEngine -> SpecialPermissionVerifier.executeRootCommandFull(cmd)
-                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(cmd)
-                else -> return null
-            }
+        val stdout = try {
+            ShellExecutor.execute(Permission.MAX, cmd, debug = true)
         } catch (_: Exception) { return null }
-        if (exitCode != 0 || stdout.isBlank()) return null
+        if (stdout.isBlank()) return null
 
         val entries = mutableListOf<FileEntry>()
 
@@ -1638,11 +1622,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val normalizedDisplayPath = if (displayPath == "/") "/" else displayPath.trimEnd('/').ifEmpty { "/" }
         val escapedPath = SevenZipCommand.escape(normalizedPath)
 
-        // 判断是否使用 Shizuku（ADB 权限 + Shizuku 在线）
-        val useShizuku = !useRoot && SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
-
         // Root/Shizuku 使用长格式 ls -lap 以获取文件大小和时间戳
-        val lsFlags = if (useShizuku || useRoot) {
+        val lsFlags = if (useRoot) {
             buildString {
                 append("-l")
                 if (showHidden) append("a")
@@ -1652,19 +1633,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (showHidden) "-1Ap" else "-1p"
         }
         val command = "ls $lsFlags $escapedPath"
-        val tag = when {
-            useRoot -> "LsRoot"
-            useShizuku -> "LsShizuku"
-            else -> "LsShell"
-        }
-        DiagnosticLog.log(tag, "命令: $command")
+        DiagnosticLog.log("LsShell", "命令: $command")
 
-        val (stdout, stderr, exitCode) = try {
-            when {
-                useRoot -> SpecialPermissionVerifier.executeRootCommandFull(command)
-                useShizuku -> SpecialPermissionVerifier.executeShizukuCommand(command)
-                else -> SpecialPermissionVerifier.executeShellCommandFull(command)
-            }
+        val stdout = try {
+            ShellExecutor.execute(Permission.MAX, command, debug = true)
         } catch (e: Throwable) {
             val isApkAssetsNoise = e is java.io.IOException && (
                 e.stackTrace.any { it.className == "android.content.res.ApkAssets" } ||
@@ -1672,19 +1644,18 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         (e.message?.contains(".apk from fd") == true)
             )
             if (isApkAssetsNoise) {
-                DiagnosticLog.log(tag, "忽略 hook 注入的 ApkAssets 噪声: ${e.message}")
+                DiagnosticLog.log("LsShell", "忽略 hook 注入的 ApkAssets 噪声: ${e.message}")
                 return emptyList()
             }
-            DiagnosticLog.log(tag, "execute 抛错: ${e.javaClass.simpleName}: ${e.message}")
+            DiagnosticLog.log("LsShell", "execute 抛错: ${e.javaClass.simpleName}: ${e.message}")
             loadError = if (e is Exception) e else RuntimeException(e)
             return emptyList()
         }
-        DiagnosticLog.log(tag, "exit=$exitCode stdout=${stdout.length}字符 stderr=${stderr.length}字符")
-        if (stderr.isNotBlank()) DiagnosticLog.log(tag, "stderr: ${stderr.take(500)}")
-        if (stdout.isNotBlank()) DiagnosticLog.log(tag, "stdout 前 500: ${stdout.take(500)}")
+        DiagnosticLog.log("LsShell", "stdout=${stdout.length}字符")
+        if (stdout.isNotBlank()) DiagnosticLog.log("LsShell", "stdout 前 500: ${stdout.take(500)}")
 
-        if (exitCode != 0 && stdout.isBlank()) {
-            loadError = SecurityException("ls 失败 (exit $exitCode): ${stderr.ifBlank { "(无 stderr)" }}")
+        if (stdout.isBlank()) {
+            loadError = SecurityException("ls 失败: 输出为空")
             return emptyList()
         }
 
@@ -2048,7 +2019,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 2. 应用 UID（≥10000）：通过 pm list packages -U 获取包名+UID
         if (isRootEngine) {
             val (stdout, _, exit) = try {
-                SpecialPermissionVerifier.executeRootCommandFull("pm list packages -U")
+                ShellExecutor.execute(Permission.ROOT, "pm list packages -U", debug = true)
             } catch (_: Exception) { Triple("", "", -1) }
             if (exit == 0 && stdout.isNotBlank()) {
                 stdout.lines().forEach { line ->
@@ -2076,7 +2047,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 应用 GID：pm list packages -G
         if (isRootEngine) {
             val (stdout, _, exit) = try {
-                SpecialPermissionVerifier.executeRootCommandFull("pm list packages -G")
+                ShellExecutor.execute(Permission.ROOT, "pm list packages -G", debug = true)
             } catch (_: Exception) { Triple("", "", -1) }
             if (exit == 0 && stdout.isNotBlank()) {
                 stdout.lines().forEach { line ->
@@ -2121,28 +2092,20 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun applyPermissions(path: String, mode: Int, uid: Int, gid: Int, originalMode: Int, originalUid: Int, originalGid: Int): String? {
         val escapedPath = SevenZipCommand.escape(path)
+        val rollbackOctal = String.format("%o", originalMode and 0x1FF)
 
         // chmod
         val octal = String.format("%o", mode and 0x1FF)
-        val (_, chmodErr, chmodExit) = try {
-            SpecialPermissionVerifier.executeRootCommandFull("chmod $octal $escapedPath")
+        try {
+            ShellExecutor.execute(Permission.ROOT, "chmod $octal $escapedPath")
         } catch (e: Exception) { return "chmod 执行异常: ${e.message}" }
-        if (chmodExit != 0) return "chmod 失败 (exit $chmodExit): $chmodErr"
 
         // chown
-        val (_, chownErr, chownExit) = try {
-            SpecialPermissionVerifier.executeRootCommandFull("chown $uid:$gid $escapedPath")
+        try {
+            ShellExecutor.execute(Permission.ROOT, "chown $uid:$gid $escapedPath")
         } catch (e: Exception) {
-            // 回滚 chmod
-            val rollbackOctal = String.format("%o", originalMode and 0x1FF)
-            try { SpecialPermissionVerifier.executeRootCommandFull("chmod $rollbackOctal $escapedPath") } catch (_: Exception) {}
+            try { ShellExecutor.execute(Permission.ROOT, "chmod $rollbackOctal $escapedPath") } catch (_: Exception) {}
             return "chown 执行异常: ${e.message}"
-        }
-        if (chownExit != 0) {
-            // 回滚 chmod
-            val rollbackOctal = String.format("%o", originalMode and 0x1FF)
-            try { SpecialPermissionVerifier.executeRootCommandFull("chmod $rollbackOctal $escapedPath") } catch (_: Exception) {}
-            return "chown 失败 (exit $chownExit): $chownErr"
         }
 
         return null
@@ -2226,16 +2189,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 需要移除的标志
         val toRemove = originalSet - desiredFlags
         if (toAdd.isNotEmpty()) {
-            val (_, err, exit) = try {
-                SpecialPermissionVerifier.executeRootCommandFull("chattr +${toAdd.joinToString("")} $escaped")
-            } catch (e: Exception) { return "chattr 执行异常: ${e.message}" }
-            if (exit != 0) return "chattr +${toAdd.joinToString("")} 失败: $err"
+            try {
+                ShellExecutor.execute(Permission.ROOT, "chattr +${toAdd.joinToString("")} $escaped")
+            } catch (e: Exception) { return "chattr +${toAdd.joinToString("")} 执行异常: ${e.message}" }
         }
         if (toRemove.isNotEmpty()) {
-            val (_, err, exit) = try {
-                SpecialPermissionVerifier.executeRootCommandFull("chattr -${toRemove.joinToString("")} $escaped")
-            } catch (e: Exception) { return "chattr 执行异常: ${e.message}" }
-            if (exit != 0) return "chattr -${toRemove.joinToString("")} 失败: $err"
+            try {
+                ShellExecutor.execute(Permission.ROOT, "chattr -${toRemove.joinToString("")} $escaped")
+            } catch (e: Exception) { return "chattr -${toRemove.joinToString("")} 执行异常: ${e.message}" }
         }
         return null
     }

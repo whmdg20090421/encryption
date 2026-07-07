@@ -174,81 +174,66 @@ object SpecialPermissionVerifier {
     }
 
     /**
-     * 以 Root 权限执行 shell 命令并返回输出（通过 libsu）
+     * 以 Root 权限执行 shell 命令并返回输出。
+     * 委托给 ShellExecutor 执行，失败时抛出 ShellException。
      */
     fun executeRootCommand(command: String): String {
-        val result = Shell.cmd(command).exec()
-        if (!result.isSuccess) {
-            val err = result.getErr().joinToString("\n").trimEnd()
-            throw SecurityException("Root 命令执行失败 (exit ${result.getCode()}): $err")
-        }
-        return result.getOut().joinToString("\n").trimEnd()
+        return ShellExecutor.execute(Permission.ROOT, command)
     }
 
     /**
-     * 以普通 app 权限执行 shell 命令，并行读取 stdout 和 stderr，不抛错。
-     * 返回 (stdout, stderr, exitCode)。app 进程 SELinux 域允许 exec /system/bin/sh。
+     * 以普通 app 权限执行 shell 命令，返回 (stdout, stderr, exitCode)。
+     * 委托给 ShellExecutor 执行。
      */
     fun executeShellCommandFull(command: String): Triple<String, String, Int> {
-        val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
-        val stdoutBuf = StringBuilder()
-        val stderrBuf = StringBuilder()
-        val tOut = Thread {
-            try {
-                process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
-                    lines.forEach { stdoutBuf.appendLine(it) }
-                }
-            } catch (_: Exception) {}
-        }.apply { start() }
-        val tErr = Thread {
-            try {
-                process.errorStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
-                    lines.forEach { stderrBuf.appendLine(it) }
-                }
-            } catch (_: Exception) {}
-        }.apply { start() }
-
-        process.waitFor()
-        tOut.join(2000)
-        tErr.join(2000)
-
-        return Triple(
-            stdoutBuf.toString().trimEnd(),
-            stderrBuf.toString().trimEnd(),
-            process.exitValue()
-        )
-    }
-
-    /**
-     * 通过 Shizuku 执行 shell 命令（以 shell UID 运行，拥有 MANAGE_APP_OPS_MODES 等权限）
-     */
-    fun executeShizukuCommand(command: String): Triple<String, String, Int> {
-        return ShizukuAuthorizer.executeCommand(command)
-    }
-
-    /**
-     * 以 Root 权限执行 shell 命令，不抛错（通过 libsu）。
-     * 返回 (stdout, stderr, exitCode)
-     */
-    fun executeRootCommandFull(command: String): Triple<String, String, Int> {
         return try {
-            val result = Shell.cmd(command).exec()
-            Triple(
-                result.getOut().joinToString("\n").trimEnd(),
-                result.getErr().joinToString("\n").trimEnd(),
-                result.getCode()
-            )
+            val stdout = ShellExecutor.execute(Permission.APPLICANT, command, debug = true)
+            Triple(stdout, "", 0)
+        } catch (e: ShellException) {
+            Triple("", "${e.message}\n${e.stderr}", e.exitCode)
         } catch (e: Exception) {
             Triple("", e.message ?: "Shell 执行异常", -1)
         }
     }
 
     /**
-     * 以 Root 权限执行 shell 命令，不关心输出，仅判断成功/失败（通过 libsu）
+     * 通过 Shizuku 执行 shell 命令（以 shell UID 运行）。
+     * 委托给 ShellExecutor 执行。
+     */
+    fun executeShizukuCommand(command: String): Triple<String, String, Int> {
+        return try {
+            val stdout = ShellExecutor.execute(Permission.ADB, command, debug = true)
+            Triple(stdout, "", 0)
+        } catch (e: ShellException) {
+            Triple("", "${e.message}\n${e.stderr}", e.exitCode)
+        } catch (e: Exception) {
+            Triple("", e.message ?: "Shell 执行异常", -1)
+        }
+    }
+
+    /**
+     * 以 Root 权限执行 shell 命令，不抛错。
+     * 委托给 ShellExecutor 执行。
+     */
+    fun executeRootCommandFull(command: String): Triple<String, String, Int> {
+        return try {
+            val stdout = ShellExecutor.execute(Permission.ROOT, command, debug = true)
+            Triple(stdout, "", 0)
+        } catch (e: ShellException) {
+            Triple("", "${e.message}\n${e.stderr}", e.exitCode)
+        } catch (e: Exception) {
+            Triple("", e.message ?: "Shell 执行异常", -1)
+        }
+    }
+
+    /**
+     * 以 Root 权限执行 shell 命令，仅判断成功/失败。
+     * 委托给 ShellExecutor 执行。
      */
     fun executeRootCommandSilent(command: String): Boolean {
         return try {
-            Shell.cmd(command).exec().isSuccess
+            ShellExecutor.execute(Permission.ROOT, command)
+            true
         } catch (_: Exception) {
             false
         }

@@ -364,17 +364,22 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
                                     onClick = {
                                         val pkg = selectedApp?.packageName ?: return@FilledTonalIconButton
                                         coroutineScope.launch {
-                                            val result = withContext(Dispatchers.IO) {
-                                                SpecialPermissionVerifier.executeRootCommandFull("pm reset-permissions $pkg")
-                                            }
-                                            if (result.third == 0) loadAppPermissions(pkg) else {
-                                                val stderr = result.second.lowercase()
+                                            try {
+                                                withContext(Dispatchers.IO) {
+                                                    com.whmdg.mczj.tools.security.ShellExecutor.execute(
+                                                        com.whmdg.mczj.tools.security.Permission.ROOT,
+                                                        "pm reset-permissions $pkg"
+                                                    )
+                                                }
+                                                loadAppPermissions(pkg)
+                                            } catch (e: Exception) {
+                                                val msg = (e.message ?: "").lowercase()
                                                 errorMessage = when {
-                                                    stderr.contains("permission denied") ||
-                                                    stderr.contains("insufficient") ||
-                                                    stderr.contains("not allowed") ->
+                                                    msg.contains("permission denied") ||
+                                                    msg.contains("insufficient") ||
+                                                    msg.contains("not allowed") ->
                                                         "当前应用所获得权限不足，无法进行此操作。"
-                                                    else -> "重置失败: ${result.second}"
+                                                    else -> "重置失败: ${e.message}"
                                                 }
                                                 showError = true
                                             }
@@ -496,27 +501,35 @@ fun AppPermissionsScreen(onBack: () -> Unit) {
                                                         val pkg = selectedApp?.packageName ?: return@launch
                                                         val expectedGranted = !permission.granted
                                                         val action = if (permission.granted) "revoke" else "grant"
-                                                        val result = withContext(Dispatchers.IO) {
-                                                            SpecialPermissionVerifier.executeRootCommandFull("pm $action $pkg ${permission.rawName}")
-                                                        }
-                                                        if (result.third != 0) {
-                                                            val stderr = result.second.lowercase()
+                                                        try {
+                                                            withContext(Dispatchers.IO) {
+                                                                com.whmdg.mczj.tools.security.ShellExecutor.execute(
+                                                                    com.whmdg.mczj.tools.security.Permission.ROOT,
+                                                                    "pm $action $pkg ${permission.rawName}"
+                                                                )
+                                                            }
+                                                        } catch (e: Exception) {
+                                                            val msg = (e.message ?: "").lowercase()
                                                             errorMessage = when {
-                                                                stderr.contains("permission denied") ||
-                                                                stderr.contains("insufficient") ||
-                                                                stderr.contains("not allowed") ->
+                                                                msg.contains("permission denied") ||
+                                                                msg.contains("insufficient") ||
+                                                                msg.contains("not allowed") ->
                                                                     "当前应用所获得权限不足，无法进行此操作。"
-                                                                else -> "修改失败: ${result.second}"
+                                                                else -> "修改失败: ${e.message}"
                                                             }
                                                             showError = true
                                                             return@launch
                                                         }
                                                         // 等待 0.2 秒后验证权限状态
                                                         kotlinx.coroutines.delay(200)
-                                                        val verifyResult = withContext(Dispatchers.IO) {
-                                                            SpecialPermissionVerifier.executeRootCommandFull("dumpsys package $pkg | grep '${permission.rawName}'")
-                                                        }
-                                                        val verifyOutput = verifyResult.first
+                                                        val verifyOutput = try {
+                                                            withContext(Dispatchers.IO) {
+                                                                com.whmdg.mczj.tools.security.ShellExecutor.execute(
+                                                                    com.whmdg.mczj.tools.security.Permission.ROOT,
+                                                                    "dumpsys package $pkg | grep '${permission.rawName}'"
+                                                                )
+                                                            }
+                                                        } catch (_: Exception) { "" }
                                                         val actuallyGranted = verifyOutput.contains("granted=true")
                                                         if (actuallyGranted == expectedGranted) {
                                                             // 生效，更新 UI
@@ -1068,12 +1081,12 @@ private suspend fun readAppOpsState(packageName: String, context: Context): Map<
     val result = mutableMapOf<String, String>()
     try {
         val cmd = "appops get $packageName"
-        val output = when {
-            SpecialPermissionVerifier.isRootAvailable() -> SpecialPermissionVerifier.executeRootCommandFull(cmd)
-            SpecialPermissionVerifier.isShizukuAuthorized(context) -> SpecialPermissionVerifier.executeShizukuCommand(cmd)
-            else -> SpecialPermissionVerifier.executeShellCommandFull(cmd)
-        }
-        val lines = output.first.split("\n")
+        val stdout = try {
+            com.whmdg.mczj.tools.security.ShellExecutor.execute(
+                com.whmdg.mczj.tools.security.Permission.MAX, cmd
+            )
+        } catch (_: Exception) { return@withContext result }
+        val lines = stdout.split("\n")
         for (line in lines) {
             val trimmed = line.trim()
             if (trimmed.isBlank()) continue
@@ -1100,12 +1113,12 @@ private suspend fun readAppOpsState(packageName: String, context: Context): Map<
 private suspend fun readSingleOpState(packageName: String, opName: String, context: Context): String = withContext(Dispatchers.IO) {
     try {
         val cmd = "appops get $packageName $opName"
-        val output = when {
-            SpecialPermissionVerifier.isRootAvailable() -> SpecialPermissionVerifier.executeRootCommandFull(cmd)
-            SpecialPermissionVerifier.isShizukuAuthorized(context) -> SpecialPermissionVerifier.executeShizukuCommand(cmd)
-            else -> SpecialPermissionVerifier.executeShellCommandFull(cmd)
-        }
-        val text = output.first.trim()
+        val stdout = try {
+            com.whmdg.mczj.tools.security.ShellExecutor.execute(
+                com.whmdg.mczj.tools.security.Permission.MAX, cmd
+            )
+        } catch (_: Exception) { return@withContext "" }
+        val text = stdout.trim()
         when {
             text.contains("allow") -> "allow"
             text.contains("ignore") -> "ignore"
@@ -1122,14 +1135,10 @@ private suspend fun setAppOpsMode(packageName: String, opName: String, mode: Str
     try {
         val cmd = "appops set $packageName $opName $mode"
         // appops 命令需要 root 或 shell(Shizuku) 权限，自动检测并优先使用 root
-        val shizukuAvailable = com.whmdg.mczj.tools.security.ShizukuAuthorizer.isShizukuServiceRunning() &&
-                com.whmdg.mczj.tools.security.ShizukuAuthorizer.hasShizukuPermission()
-        val result = when {
-            useRoot || SpecialPermissionVerifier.isRootAvailable() -> SpecialPermissionVerifier.executeRootCommandFull(cmd)
-            shizukuAvailable -> SpecialPermissionVerifier.executeShizukuCommand(cmd)
-            else -> SpecialPermissionVerifier.executeShellCommandFull(cmd)
-        }
-        result.third == 0
+        val permission = if (useRoot) com.whmdg.mczj.tools.security.Permission.ROOT
+            else com.whmdg.mczj.tools.security.Permission.MAX
+        com.whmdg.mczj.tools.security.ShellExecutor.execute(permission, cmd)
+        true
     } catch (_: Exception) { false }
 }
 

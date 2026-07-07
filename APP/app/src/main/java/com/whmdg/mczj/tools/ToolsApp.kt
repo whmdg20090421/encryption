@@ -11,6 +11,7 @@ import okio.Path.Companion.toPath
 import com.topjohnwu.superuser.Shell
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.AppIconHelper
+import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
 
@@ -24,6 +25,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        ShellExecutor.init(this)
         // libsu: 配置全局 root shell（首次 Shell.cmd() 时懒创建，后续复用）
         Shell.setDefaultBuilder(Shell.Builder.create()
             .setFlags(Shell.FLAG_MOUNT_MASTER)

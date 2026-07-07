@@ -24,6 +24,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
+import com.whmdg.mczj.tools.security.Permission
+import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.fileop.FileOperationManager
 import com.whmdg.mczj.tools.fileop.DeleteEntry
@@ -345,8 +347,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
         if (!isDebugMode && vm.isRootEngine) {
             try {
-                val mntNs = com.whmdg.mczj.tools.security.SpecialPermissionVerifier
-                    .executeRootCommand("readlink /proc/self/ns/mnt")
+                val mntNs = ShellExecutor.execute(Permission.ROOT, "readlink /proc/self/ns/mnt")
                 Toast.makeText(context, "root 已就位，当前挂载空间为：$mntNs", Toast.LENGTH_LONG).show()
             } catch (_: Exception) {
                 Toast.makeText(context, "挂载空间异常，请检查，有可能 root 权限不可用", Toast.LENGTH_LONG).show()
@@ -2278,8 +2279,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
             // 获取挂载命名空间信息
             val mountInfo = try {
-                val selfNs = SpecialPermissionVerifier.executeRootCommand("stat -c '%i' /proc/self/ns/mnt")
-                val initNs = SpecialPermissionVerifier.executeRootCommand("stat -c '%i' /proc/1/ns/mnt")
+                val selfNs = ShellExecutor.execute(Permission.ROOT, "stat -c '%i' /proc/self/ns/mnt")
+                val initNs = ShellExecutor.execute(Permission.ROOT, "stat -c '%i' /proc/1/ns/mnt")
                 val sameNs = selfNs.trim() == initNs.trim()
                 "Root 权限已就绪\n当前挂载命名空间: self=${selfNs.trim()} init=${initNs.trim()} 同一namespace=$sameNs"
             } catch (e: Exception) {
@@ -4630,22 +4631,29 @@ private fun FileEntryRow(
                         val down = awaitFirstDown(requireUnconsumed = false)
                         val pointerId = down.id
                         var cumulativeX = 0f
+                        var cumulativeY = 0f
                         val slop = 30f // 最小水平位移，避免误触
                         var started = false
+                        var rejected = false // 垂直意图大于水平，放弃横向手势
 
                         while (true) {
                             val event = awaitPointerEvent(pass = PointerEventPass.Main)
                             val change = event.changes.firstOrNull { it.id == pointerId } ?: break
                             if (change.pressed) {
                                 val dx = change.position.x - change.previousPosition.x
+                                val dy = change.position.y - change.previousPosition.y
                                 // 忽略多指触控
                                 if (event.changes.count { it.pressed } > 1) {
                                     change.consume()
                                     break
                                 }
-                                if (!started) {
+                                if (!started && !rejected) {
                                     cumulativeX += dx
-                                    if (abs(cumulativeX) >= slop) {
+                                    cumulativeY += dy
+                                    // 垂直位移超过水平位移 → 用户在上下滑动，不触发横向手势
+                                    if (abs(cumulativeY) > abs(cumulativeX) && abs(cumulativeY) > slop) {
+                                        rejected = true
+                                    } else if (abs(cumulativeX) >= slop) {
                                         started = true
                                         change.consume()
                                         coroutineScope.launch {
@@ -4653,7 +4661,7 @@ private fun FileEntryRow(
                                             swipeOffset.snapTo((cumulativeX).coerceIn(-maxOffset, maxOffset))
                                         }
                                     }
-                                } else {
+                                } else if (started) {
                                     change.consume()
                                     coroutineScope.launch {
                                         val maxOffset = rowWidth * 0.5f

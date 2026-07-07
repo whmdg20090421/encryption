@@ -904,20 +904,12 @@ private fun connectToWifi(context: Context, ssid: String, password: String, secu
     }
 
     // 根据权限选择执行方式
-    val result = when {
-        SpecialPermissionVerifier.isRootAvailable() -> {
-            SpecialPermissionVerifier.executeRootCommandFull(connectCmd)
-        }
-        SpecialPermissionVerifier.isShizukuAuthorized(context) -> {
-            SpecialPermissionVerifier.executeShizukuCommand(connectCmd)
-        }
-        else -> {
-            SpecialPermissionVerifier.executeShellCommandFull(connectCmd)
-        }
-    }
-
-    val (stdout, stderr, exitCode) = result
-    return exitCode == 0
+    return try {
+        com.whmdg.mczj.tools.security.ShellExecutor.execute(
+            com.whmdg.mczj.tools.security.Permission.MAX, connectCmd
+        )
+        true
+    } catch (_: Exception) { false }
 }
 
 /** 保存已连接的WiFi密码 */
@@ -968,13 +960,17 @@ private fun loadSavedWifiNetworks(context: Context): List<WifiPasswordEntry> {
         throw SecurityException("需要 Root 权限才能查看已保存的 WiFi 密码")
     }
 
-    val (stdout, stderr, exitCode) =
-        com.whmdg.mczj.tools.security.SpecialPermissionVerifier.executeRootCommandFull(
+    val stdout = try {
+        com.whmdg.mczj.tools.security.ShellExecutor.execute(
+            com.whmdg.mczj.tools.security.Permission.ROOT,
             "cat /data/misc/apexdata/com.android.wifi/WifiConfigStore.xml"
         )
+    } catch (e: Exception) {
+        throw Exception("命令执行失败: ${e.message}")
+    }
 
-    if (exitCode != 0 || stdout.isEmpty()) {
-        throw Exception("命令执行失败 (exit=$exitCode): $stderr")
+    if (stdout.isEmpty()) {
+        throw Exception("命令执行失败: 输出为空")
     }
 
     return parseWifiConfigStoreXml(stdout)

@@ -1,6 +1,8 @@
 package com.whmdg.mczj.tools.util
 
 import android.content.Context
+import com.whmdg.mczj.tools.security.Permission
+import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import java.io.File
 import java.text.SimpleDateFormat
@@ -61,10 +63,14 @@ private class ShellAccessor(
 ) : FileAccessor {
 
     override fun exec(command: String): Triple<String, String, Int> {
-        return if (useRoot) {
-            SpecialPermissionVerifier.executeRootCommandFull(command)
-        } else {
-            SpecialPermissionVerifier.executeShizukuCommand(command)
+        val perm = if (useRoot) Permission.ROOT else Permission.ADB
+        return try {
+            val stdout = ShellExecutor.execute(perm, command, debug = true)
+            Triple(stdout, "", 0)
+        } catch (e: com.whmdg.mczj.tools.security.ShellException) {
+            Triple("", "${e.message}\n${e.stderr}", e.exitCode)
+        } catch (e: Exception) {
+            Triple("", e.message ?: "Shell 执行异常", -1)
         }
     }
 

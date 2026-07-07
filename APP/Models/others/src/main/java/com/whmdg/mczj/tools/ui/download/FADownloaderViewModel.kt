@@ -430,9 +430,11 @@ class FADownloaderViewModel(application: Application) : AndroidViewModel(applica
 
     private fun pingHost(host: String): Boolean {
         return try {
-            val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -W 3 $host")
-            val exitCode = process.waitFor()
-            exitCode == 0
+            com.whmdg.mczj.tools.security.ShellExecutor.execute(
+                com.whmdg.mczj.tools.security.Permission.MIN,
+                "ping -c 1 -W 3 $host"
+            )
+            true
         } catch (_: Exception) {
             false
         }

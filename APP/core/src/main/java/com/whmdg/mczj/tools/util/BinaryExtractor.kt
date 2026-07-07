@@ -2,6 +2,8 @@ package com.whmdg.mczj.tools.util
 
 import android.content.Context
 import com.whmdg.mczj.tools.AppDataPaths
+import com.whmdg.mczj.tools.security.Permission
+import com.whmdg.mczj.tools.security.ShellExecutor
 import java.io.File
 
 /**
@@ -21,10 +23,11 @@ object BinaryExtractor {
         if (!src.exists()) throw IllegalStateException("7zzs 二进制缺失，请重新安装应用")
 
         src.copyTo(target, overwrite = true)
-        val exitCode = Runtime.getRuntime()
-            .exec(arrayOf("chmod", "755", target.absolutePath))
-            .waitFor()
-        if (exitCode != 0) throw IllegalStateException("无法准备压缩工具")
+        try {
+            ShellExecutor.execute(Permission.MIN, "chmod 755 ${SevenZipCommand.escape(target.absolutePath)}")
+        } catch (e: Exception) {
+            throw IllegalStateException("无法准备压缩工具: ${e.message}")
+        }
 
         return target
     }
