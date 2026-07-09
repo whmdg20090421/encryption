@@ -1,13 +1,10 @@
 package com.whmdg.mczj.tools.ui.accounting
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,12 +21,59 @@ fun AssetHistoryScreen(accountId: String, onBack: () -> Unit) {
     val context = LocalContext.current
     val dateTimeFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
 
-    var adjustments by remember { mutableStateOf<List<BalanceAdjustment>>(emptyList()) }
-    var editMode by remember { mutableStateOf(false) }
-    var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    data class BalanceEntry(
+        val recordId: String,
+        val time: Long,
+        val typeName: String,
+        val note: String,
+        val delta: Double,
+        val balance: Double
+    )
+
+    var entries by remember { mutableStateOf<List<BalanceEntry>>(emptyList()) }
 
     LaunchedEffect(accountId) {
-        adjustments = AccountingRepository.getAdjustmentsByAccount(context, accountId)
+        val account = AccountingRepository.getAllAccounts(context).find { it.id == accountId } ?: return@LaunchedEffect
+        val records = AccountingRepository.getRecordsByAccount(context, accountId)
+            .sortedBy { it.happenedAt }
+
+        val result = mutableListOf<BalanceEntry>()
+        var running = account.initialAmount
+
+        for (r in records) {
+            val amount = r.amount.toDoubleOrNull() ?: 0.0
+            val delta = when (r.type) {
+                "支出" -> -amount
+                "收入" -> amount
+                "转账" -> if (r.accountId == accountId) -amount else amount
+                "存款" -> -amount
+                else -> 0.0
+            }
+            running += delta
+            result.add(BalanceEntry(
+                recordId = r.id,
+                time = r.happenedAt,
+                typeName = r.type,
+                note = r.note.ifEmpty { r.subcategoryName ?: r.categoryName },
+                delta = delta,
+                balance = running
+            ))
+        }
+
+        // 追加手动调整（如果有）：当余额与最后一条记录计算值不一致时
+        val finalBalance = account.currentBalance
+        if (result.isEmpty() || kotlin.math.abs(result.last().balance - finalBalance) > 0.01) {
+            result.add(BalanceEntry(
+                recordId = "",
+                time = System.currentTimeMillis(),
+                typeName = "手动调整",
+                note = "余额调整",
+                delta = finalBalance - running,
+                balance = finalBalance
+            ))
+        }
+
+        entries = result.reversed()
     }
 
     Scaffold(
@@ -37,111 +81,64 @@ fun AssetHistoryScreen(accountId: String, onBack: () -> Unit) {
             TopAppBar(
                 title = { Text("资产明细") },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        if (editMode) { editMode = false; selectedIds = emptySet() } else onBack()
-                    }) {
+                    IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                actions = {
-                    if (!editMode) {
-                        TextButton(onClick = { editMode = true }) { Text("编辑") }
                     }
                 }
             )
-        },
-        bottomBar = {
-            if (editMode) {
-                BottomAppBar(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        TextButton(onClick = {
-                            selectedIds = if (selectedIds.size == adjustments.size) emptySet()
-                            else adjustments.map { it.id }.toSet()
-                        }) {
-                            Text(if (selectedIds.size == adjustments.size) "取消全选" else "全选")
-                        }
-                        TextButton(
-                            onClick = {
-                                selectedIds.forEach { id ->
-                                    AccountingRepository.deleteAdjustment(context, id)
-                                }
-                                adjustments = AccountingRepository.getAdjustmentsByAccount(context, accountId)
-                                selectedIds = emptySet()
-                                editMode = false
-                            },
-                            enabled = selectedIds.isNotEmpty()
-                        ) {
-                            Text("删除(${selectedIds.size})", color = if (selectedIds.isNotEmpty()) MaterialTheme.colorScheme.error else Color.Gray)
-                        }
-                        TextButton(onClick = { editMode = false; selectedIds = emptySet() }) {
-                            Text("完成")
-                        }
-                    }
-                }
-            }
         }
     ) { innerPadding ->
-        if (adjustments.isEmpty()) {
+        if (entries.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize().padding(innerPadding),
                 contentAlignment = Alignment.Center
             ) {
-                Text("暂无余额调整记录", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("暂无资产变动记录", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(innerPadding)
             ) {
-                items(adjustments, key = { it.id }) { adj ->
-                    val isSelected = adj.id in selectedIds
+                items(entries, key = { "${it.recordId}_${it.time}" }) { entry ->
                     ListItem(
                         headlineContent = {
                             Text(
-                                text = adj.reason.ifEmpty { "余额调整" },
+                                text = entry.typeName,
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         },
                         supportingContent = {
-                            Text(
-                                text = dateTimeFormat.format(Date(adj.createdAt)),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Column {
+                                Text(
+                                    text = dateTimeFormat.format(Date(entry.time)),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (entry.note.isNotEmpty()) {
+                                    Text(
+                                        text = entry.note,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
                         },
                         trailingContent = {
                             Column(horizontalAlignment = Alignment.End) {
-                                val deltaStr = if (adj.delta >= 0) "+${String.format("%.2f", adj.delta)}" else String.format("%.2f", adj.delta)
+                                val deltaStr = if (entry.delta >= 0) "+${String.format("%.2f", entry.delta)}" else String.format("%.2f", entry.delta)
                                 Text(
                                     text = deltaStr,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = if (adj.delta >= 0) Color(0xFF4CAF50) else Color(0xFFEF5350)
+                                    color = if (entry.delta >= 0) Color(0xFF4CAF50) else Color(0xFFEF5350)
                                 )
                                 Text(
-                                    text = "余额: ${String.format("%.2f", adj.newBalance)}",
+                                    text = "余额: ${String.format("%.2f", entry.balance)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                        },
-                        leadingContent = if (editMode) {
-                            {
-                                Checkbox(
-                                    checked = isSelected,
-                                    onCheckedChange = {
-                                        selectedIds = if (isSelected) selectedIds - adj.id else selectedIds + adj.id
-                                    }
-                                )
-                            }
-                        } else null,
-                        modifier = if (editMode) Modifier.fillMaxWidth().clickable {
-                            selectedIds = if (isSelected) selectedIds - adj.id else selectedIds + adj.id
-                        } else Modifier.fillMaxWidth()
+                        }
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
                 }

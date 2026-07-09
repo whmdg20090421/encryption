@@ -351,19 +351,6 @@ data class MonthlySummary(
     val expense: Double = 0.0
 )
 
-// ── 余额调整日志 ──
-
-data class BalanceAdjustment(
-    val id: String,
-    val accountId: String,
-    val recordId: String? = null,
-    val oldBalance: Double,
-    val newBalance: Double,
-    val delta: Double,
-    val reason: String = "",
-    val createdAt: Long
-)
-
 // ── 定期存款 ──
 
 data class FixedDeposit(

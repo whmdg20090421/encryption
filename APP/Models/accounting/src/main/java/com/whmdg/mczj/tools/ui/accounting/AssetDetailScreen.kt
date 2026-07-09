@@ -21,6 +21,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -89,10 +90,11 @@ fun AssetDetailScreen(accountId: String, onBack: () -> Unit, onNavigate: (Screen
                         IconButton(onClick = { showMenu = true }) {
                             Icon(Icons.Default.MoreVert, contentDescription = "更多")
                         }
+                        val screenWidth = LocalConfiguration.current.screenWidthDp.dp
                         DropdownMenu(
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false },
-                            modifier = Modifier.wrapContentWidth()
+                            modifier = Modifier.width(screenWidth * 0.4f)
                         ) {
                             DropdownMenuItem(
                                 text = { Text("流水对账") },
@@ -490,16 +492,6 @@ fun AssetDetailScreen(accountId: String, onBack: () -> Unit, onNavigate: (Screen
                         val oldBalance = currentAccount.currentBalance
                         val updated = currentAccount.copy(currentBalance = newBalance)
                         AccountingRepository.updateAccount(context, updated)
-                        // 写入余额调整日志
-                        AccountingRepository.insertBalanceAdjustment(context, BalanceAdjustment(
-                            id = java.util.UUID.randomUUID().toString(),
-                            accountId = accountId,
-                            oldBalance = oldBalance,
-                            newBalance = newBalance,
-                            delta = newBalance - oldBalance,
-                            reason = "手动调整",
-                            createdAt = System.currentTimeMillis()
-                        ))
                         refreshAccount()
                     }
                     showChangeAmountDialog = false

@@ -163,20 +163,6 @@ internal class AccountingDatabase private constructor(context: Context) :
             )
         """.trimIndent())
 
-        // 余额调整日志表（v24）
-        db.execSQL("""
-            CREATE TABLE balance_adjustments (
-                id          TEXT PRIMARY KEY,
-                account_id  TEXT NOT NULL,
-                record_id   TEXT,
-                old_balance REAL NOT NULL,
-                new_balance REAL NOT NULL,
-                delta       REAL NOT NULL,
-                reason      TEXT DEFAULT '',
-                created_at  INTEGER NOT NULL
-            )
-        """.trimIndent())
-
         // 定期存款扩展表（v24）
         db.execSQL("""
             CREATE TABLE fixed_deposits (
@@ -348,19 +334,6 @@ internal class AccountingDatabase private constructor(context: Context) :
         if (oldVersion < 24) {
             // records 表新增转入账户列（转账专用）
             db.execSQL("ALTER TABLE records ADD COLUMN target_account_id TEXT")
-            // 余额调整日志表
-            db.execSQL("""
-                CREATE TABLE balance_adjustments (
-                    id          TEXT PRIMARY KEY,
-                    account_id  TEXT NOT NULL,
-                    record_id   TEXT,
-                    old_balance REAL NOT NULL,
-                    new_balance REAL NOT NULL,
-                    delta       REAL NOT NULL,
-                    reason      TEXT DEFAULT '',
-                    created_at  INTEGER NOT NULL
-                )
-            """.trimIndent())
             // 定期存款扩展表
             db.execSQL("""
                 CREATE TABLE fixed_deposits (
@@ -1200,28 +1173,6 @@ internal class AccountingDatabase private constructor(context: Context) :
             accCursor.close()
         }
 
-        // balance_adjustments
-        val adjustments = mutableListOf<ExportBalanceAdjustment>()
-        val adjCursor = db.rawQuery(
-            "SELECT id, account_id, record_id, old_balance, new_balance, delta, reason, created_at FROM balance_adjustments", null
-        )
-        try {
-            while (adjCursor.moveToNext()) {
-                adjustments.add(ExportBalanceAdjustment(
-                    id = adjCursor.getString(0),
-                    accountId = adjCursor.getString(1),
-                    recordId = adjCursor.getString(2),
-                    oldBalance = adjCursor.getDouble(3),
-                    newBalance = adjCursor.getDouble(4),
-                    delta = adjCursor.getDouble(5),
-                    reason = adjCursor.getString(6) ?: "",
-                    createdAt = adjCursor.getLong(7)
-                ))
-            }
-        } finally {
-            adjCursor.close()
-        }
-
         // fixed_deposits
         val deposits = mutableListOf<ExportFixedDeposit>()
         val depCursor = db.rawQuery(
@@ -1253,7 +1204,6 @@ internal class AccountingDatabase private constructor(context: Context) :
             categories = categories,
             records = records,
             accounts = accounts,
-            balanceAdjustments = adjustments,
             fixedDeposits = deposits
         )
 
@@ -1897,7 +1847,6 @@ internal class AccountingDatabase private constructor(context: Context) :
             db.delete("accounts", null, null)
             db.delete("categories", null, null)
             db.delete("settings", null, null)
-            db.delete("balance_adjustments", null, null)
             db.delete("fixed_deposits", null, null)
 
             for (s in data.settings) {
@@ -1946,19 +1895,6 @@ internal class AccountingDatabase private constructor(context: Context) :
                     put("note", a.note); put("created_at", a.createdAt); put("updated_at", a.updatedAt)
                 }
                 db.insertWithOnConflict("accounts", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
-            }
-            for (adj in data.balanceAdjustments) {
-                val cv = ContentValues().apply {
-                    put("id", adj.id)
-                    put("account_id", adj.accountId)
-                    put("record_id", adj.recordId)
-                    put("old_balance", adj.oldBalance)
-                    put("new_balance", adj.newBalance)
-                    put("delta", adj.delta)
-                    put("reason", adj.reason)
-                    put("created_at", adj.createdAt)
-                }
-                db.insertWithOnConflict("balance_adjustments", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
             for (dep in data.fixedDeposits) {
                 val cv = ContentValues().apply {
@@ -2043,18 +1979,6 @@ private data class ExportAccount(
 )
 
 @Serializable
-private data class ExportBalanceAdjustment(
-    val id: String,
-    val accountId: String,
-    val recordId: String? = null,
-    val oldBalance: Double,
-    val newBalance: Double,
-    val delta: Double,
-    val reason: String = "",
-    val createdAt: Long
-)
-
-@Serializable
 private data class ExportFixedDeposit(
     val id: String,
     val recordId: String,
@@ -2078,6 +2002,5 @@ private data class ExportData(
     val categories: List<ExportCategory> = emptyList(),
     val records: List<ExportRecord> = emptyList(),
     val accounts: List<ExportAccount> = emptyList(),
-    val balanceAdjustments: List<ExportBalanceAdjustment> = emptyList(),
     val fixedDeposits: List<ExportFixedDeposit> = emptyList()
 )

@@ -1036,55 +1036,6 @@ object AccountingRepository {
     }
 
     // ─────────────────────────────────────────────
-    // 余额调整日志 (Balance Adjustments)
-    // ─────────────────────────────────────────────
-
-    fun insertBalanceAdjustment(context: Context, adjustment: BalanceAdjustment) {
-        val db = getDb(context).writableDatabase
-        val cv = ContentValues().apply {
-            put("id", adjustment.id)
-            put("account_id", adjustment.accountId)
-            put("record_id", adjustment.recordId)
-            put("old_balance", adjustment.oldBalance)
-            put("new_balance", adjustment.newBalance)
-            put("delta", adjustment.delta)
-            put("reason", adjustment.reason)
-            put("created_at", adjustment.createdAt)
-        }
-        db.insertWithOnConflict("balance_adjustments", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
-    }
-
-    fun getAdjustmentsByAccount(context: Context, accountId: String): List<BalanceAdjustment> {
-        val db = getDb(context).readableDatabase
-        val cursor = db.rawQuery(
-            "SELECT id, account_id, record_id, old_balance, new_balance, delta, reason, created_at FROM balance_adjustments WHERE account_id = ? ORDER BY created_at DESC",
-            arrayOf(accountId)
-        )
-        val list = mutableListOf<BalanceAdjustment>()
-        try {
-            while (cursor.moveToNext()) {
-                list.add(BalanceAdjustment(
-                    id = cursor.getString(0),
-                    accountId = cursor.getString(1),
-                    recordId = cursor.getString(2),
-                    oldBalance = cursor.getDouble(3),
-                    newBalance = cursor.getDouble(4),
-                    delta = cursor.getDouble(5),
-                    reason = cursor.getString(6) ?: "",
-                    createdAt = cursor.getLong(7)
-                ))
-            }
-        } finally {
-            cursor.close()
-        }
-        return list
-    }
-
-    fun deleteAdjustment(context: Context, id: String) {
-        getDb(context).writableDatabase.delete("balance_adjustments", "id = ?", arrayOf(id))
-    }
-
-    // ─────────────────────────────────────────────
     // 定期存款 (Fixed Deposits)
     // ─────────────────────────────────────────────
 
