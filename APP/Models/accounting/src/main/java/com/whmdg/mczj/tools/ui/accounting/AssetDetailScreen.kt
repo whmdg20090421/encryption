@@ -490,9 +490,27 @@ fun AssetDetailScreen(accountId: String, onBack: () -> Unit, onNavigate: (Screen
                     val newBalance = newAmount.toDoubleOrNull()
                     if (newBalance != null) {
                         val oldBalance = currentAccount.currentBalance
-                        val updated = currentAccount.copy(currentBalance = newBalance)
-                        AccountingRepository.updateAccount(context, updated)
-                        refreshAccount()
+                        val delta = newBalance - oldBalance
+                        if (kotlin.math.abs(delta) > 0.005) {
+                            val now = System.currentTimeMillis()
+                            AccountingRepository.saveRecord(context, AccountingRecord(
+                                bookName = AccountingRepository.getLastBookName(context),
+                                type = "调整",
+                                amount = String.format("%.2f", delta),
+                                categoryId = "C001",
+                                subcategoryId = "C001_01",
+                                categoryName = "调整",
+                                subcategoryName = "手动调整",
+                                note = "余额调整",
+                                happenedAt = now,
+                                accountId = accountId,
+                                excludeFromStats = true,
+                                excludeFromBudget = true,
+                                createdAt = now,
+                                updatedAt = now
+                            ))
+                            refreshAccount()
+                        }
                     }
                     showChangeAmountDialog = false
                 }) { Text("保存") }

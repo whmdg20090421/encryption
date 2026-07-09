@@ -325,6 +325,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             discountOff = discountOff,
             discountAfter = discountAfter,
             reimbursementAccountId = selectedReimbursementId,
+            reimburseAfterAmount = if (currentType == "支出" && selectedReimbursementId != null) finalAmount else null,
             attachments = attachments,
             excludeFromStats = excludeFromStats,
             excludeFromBudget = excludeFromBudget,

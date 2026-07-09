@@ -224,8 +224,10 @@ object AccountingRepository {
             }
             "支出" -> {
                 if (record.accountId == null) return
+                // 优先用 reimburseAfterAmount（报销后实际净支出）
+                val effectiveAmount = record.reimburseAfterAmount?.toDoubleOrNull() ?: amountVal
                 db.execSQL("UPDATE accounts SET current_balance = current_balance - ?, updated_at = ? WHERE id = ?",
-                    arrayOf(amountVal * sign, now, record.accountId))
+                    arrayOf(effectiveAmount * sign, now, record.accountId))
             }
             "转账" -> {
                 // 转出账户减少，转入账户增加
@@ -242,6 +244,12 @@ object AccountingRepository {
                 // 存款：资金从账户流出（类似支出）
                 if (record.accountId == null) return
                 db.execSQL("UPDATE accounts SET current_balance = current_balance - ?, updated_at = ? WHERE id = ?",
+                    arrayOf(amountVal * sign, now, record.accountId))
+            }
+            "调整" -> {
+                // 手动调整：amount 存储的是差值（可正可负），直接加减
+                if (record.accountId == null) return
+                db.execSQL("UPDATE accounts SET current_balance = current_balance + ?, updated_at = ? WHERE id = ?",
                     arrayOf(amountVal * sign, now, record.accountId))
             }
         }

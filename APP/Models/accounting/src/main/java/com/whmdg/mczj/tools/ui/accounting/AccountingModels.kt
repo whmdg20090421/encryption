@@ -28,7 +28,7 @@ data class AccountingCategoryDb(
 ) {
     companion object {
         /** 当前默认数据版本，递增此值触发重新释放 */
-        private const val CURRENT_VERSION = 5
+        private const val CURRENT_VERSION = 6
 
         fun empty() = AccountingCategoryDb()
 
@@ -138,6 +138,11 @@ data class AccountingCategoryDb(
                             AccountingCategory("D001_01", "定期存款", "build_in_0181"),
                             AccountingCategory("D001_02", "活期存款", "build_in_0184")
                         ))
+                    ),
+                    "调整" to listOf(
+                        AccountingCategory("C001", "调整", "build_in_0240", listOf(
+                            AccountingCategory("C001_01", "手动调整", "build_in_0240")
+                        ))
                     )
                 )
             )
@@ -147,7 +152,7 @@ data class AccountingCategoryDb(
         /** 从 SQLite 加载分类数据 */
         fun load(context: Context): AccountingCategoryDb {
             val page = "记账页"
-            val types = listOf("支出", "收入", "转账", "债务", "存款")
+            val types = listOf("支出", "收入", "转账", "债务", "存款", "调整")
             val pages = mutableMapOf<String, Map<String, List<AccountingCategory>>>()
             val typeMap = mutableMapOf<String, List<AccountingCategory>>()
             for (type in types) {

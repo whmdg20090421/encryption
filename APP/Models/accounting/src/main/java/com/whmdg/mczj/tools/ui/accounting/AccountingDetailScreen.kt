@@ -152,20 +152,15 @@ fun AccountingDetailScreen(
                     onClick = {
                         if (currentAccount != null) {
                             val amt = reimburseAmount.toDoubleOrNull() ?: 0.0
-                            // 更新账户余额
-                            AccountingRepository.updateAccount(
-                                context,
-                                currentAccount.copy(
-                                    currentBalance = currentAccount.currentBalance + amt,
-                                    updatedAt = System.currentTimeMillis()
-                                )
-                            )
-                            // 更新账单报销状态
+                            val originalAmount = record.amount.toDoubleOrNull() ?: 0.0
+                            val afterAmount = originalAmount - amt
+                            // 更新账单报销状态（saveRecord 自动处理余额变动）
                             AccountingRepository.saveRecord(
                                 context,
                                 record.copy(
                                     reimburseStatus = true,
-                                    reimburseAmount = amt
+                                    reimburseAmount = amt,
+                                    reimburseAfterAmount = String.format("%.2f", afterAmount)
                                 )
                             )
                         }

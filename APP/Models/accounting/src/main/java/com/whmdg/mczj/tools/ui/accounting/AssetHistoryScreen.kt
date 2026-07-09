@@ -34,8 +34,12 @@ fun AssetHistoryScreen(accountId: String, onBack: () -> Unit) {
 
     LaunchedEffect(accountId) {
         val account = AccountingRepository.getAllAccounts(context).find { it.id == accountId } ?: return@LaunchedEffect
-        val records = AccountingRepository.getRecordsByAccount(context, accountId)
-            .sortedBy { it.happenedAt }
+        // 普通记录（收入/支出/存款，account_id = 此账户）
+        val normalRecords = AccountingRepository.getRecordsByAccount(context, accountId)
+        // 转账记录（此账户作为转出或转入）
+        val transferRecords = AccountingRepository.getTransfersByAccount(context, accountId)
+        // 合并去重
+        val records = (normalRecords + transferRecords).distinctBy { it.id }.sortedBy { it.happenedAt }
 
         val result = mutableListOf<BalanceEntry>()
         var running = account.initialAmount
@@ -45,8 +49,9 @@ fun AssetHistoryScreen(accountId: String, onBack: () -> Unit) {
             val delta = when (r.type) {
                 "支出" -> -amount
                 "收入" -> amount
-                "转账" -> if (r.accountId == accountId) -amount else amount
+                "转账" -> if (r.targetAccountId == accountId) amount else -amount
                 "存款" -> -amount
+                "调整" -> amount  // amount 本身带符号（正=增加，负=减少）
                 else -> 0.0
             }
             running += delta
@@ -58,19 +63,18 @@ fun AssetHistoryScreen(accountId: String, onBack: () -> Unit) {
                 delta = delta,
                 balance = running
             ))
-        }
-
-        // 追加手动调整（如果有）：当余额与最后一条记录计算值不一致时
-        val finalBalance = account.currentBalance
-        if (result.isEmpty() || kotlin.math.abs(result.last().balance - finalBalance) > 0.01) {
-            result.add(BalanceEntry(
-                recordId = "",
-                time = System.currentTimeMillis(),
-                typeName = "手动调整",
-                note = "余额调整",
-                delta = finalBalance - running,
-                balance = finalBalance
-            ))
+            // 报销：支出类型且已报销时，追加一条报销入账
+            if (r.type == "支出" && r.reimburseStatus && r.reimburseAmount > 0) {
+                running += r.reimburseAmount
+                result.add(BalanceEntry(
+                    recordId = "${r.id}_reimburse",
+                    time = r.updatedAt ?: r.happenedAt,
+                    typeName = "报销",
+                    note = r.note.ifEmpty { r.subcategoryName ?: r.categoryName },
+                    delta = r.reimburseAmount,
+                    balance = running
+                ))
+            }
         }
 
         entries = result.reversed()
