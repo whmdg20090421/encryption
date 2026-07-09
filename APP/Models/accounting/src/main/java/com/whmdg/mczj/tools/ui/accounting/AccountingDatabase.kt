@@ -20,7 +20,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 23
+        private const val DB_VERSION = 24
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -92,6 +92,7 @@ internal class AccountingDatabase private constructor(context: Context) :
                 month            INTEGER NOT NULL DEFAULT 0,
                 day              INTEGER NOT NULL DEFAULT 0,
                 account_id       TEXT,
+                target_account_id      TEXT,
                 discount_before         TEXT,
                 discount_off            TEXT,
                 discount_after          TEXT,
@@ -159,6 +160,38 @@ internal class AccountingDatabase private constructor(context: Context) :
                 income    REAL NOT NULL DEFAULT 0,
                 expense   REAL NOT NULL DEFAULT 0,
                 PRIMARY KEY (book_name, year, month)
+            )
+        """.trimIndent())
+
+        // 余额调整日志表（v24）
+        db.execSQL("""
+            CREATE TABLE balance_adjustments (
+                id          TEXT PRIMARY KEY,
+                account_id  TEXT NOT NULL,
+                record_id   TEXT,
+                old_balance REAL NOT NULL,
+                new_balance REAL NOT NULL,
+                delta       REAL NOT NULL,
+                reason      TEXT DEFAULT '',
+                created_at  INTEGER NOT NULL
+            )
+        """.trimIndent())
+
+        // 定期存款扩展表（v24）
+        db.execSQL("""
+            CREATE TABLE fixed_deposits (
+                id             TEXT PRIMARY KEY,
+                record_id      TEXT NOT NULL,
+                principal      REAL NOT NULL,
+                interest_rate  REAL NOT NULL,
+                term_value     INTEGER NOT NULL,
+                term_unit      TEXT NOT NULL,
+                start_date     INTEGER NOT NULL,
+                maturity_date  INTEGER NOT NULL,
+                status         TEXT NOT NULL DEFAULT 'active',
+                income_bill_id TEXT,
+                note           TEXT DEFAULT '',
+                created_at     INTEGER NOT NULL
             )
         """.trimIndent())
 
@@ -311,6 +344,42 @@ internal class AccountingDatabase private constructor(context: Context) :
             // 新增交易单号和商户单号（自动记账专用）
             db.execSQL("ALTER TABLE records ADD COLUMN transaction_id TEXT DEFAULT ''")
             db.execSQL("ALTER TABLE records ADD COLUMN merchant_order_id TEXT DEFAULT ''")
+        }
+        if (oldVersion < 24) {
+            // records 表新增转入账户列（转账专用）
+            db.execSQL("ALTER TABLE records ADD COLUMN target_account_id TEXT")
+            // 余额调整日志表
+            db.execSQL("""
+                CREATE TABLE balance_adjustments (
+                    id          TEXT PRIMARY KEY,
+                    account_id  TEXT NOT NULL,
+                    record_id   TEXT,
+                    old_balance REAL NOT NULL,
+                    new_balance REAL NOT NULL,
+                    delta       REAL NOT NULL,
+                    reason      TEXT DEFAULT '',
+                    created_at  INTEGER NOT NULL
+                )
+            """.trimIndent())
+            // 定期存款扩展表
+            db.execSQL("""
+                CREATE TABLE fixed_deposits (
+                    id             TEXT PRIMARY KEY,
+                    record_id      TEXT NOT NULL,
+                    principal      REAL NOT NULL,
+                    interest_rate  REAL NOT NULL,
+                    term_value     INTEGER NOT NULL,
+                    term_unit      TEXT NOT NULL,
+                    start_date     INTEGER NOT NULL,
+                    maturity_date  INTEGER NOT NULL,
+                    status         TEXT NOT NULL DEFAULT 'active',
+                    income_bill_id TEXT,
+                    note           TEXT DEFAULT '',
+                    created_at     INTEGER NOT NULL
+                )
+            """.trimIndent())
+            // 插入新的默认分类（转账子分类 + 存款子分类）
+            insertDefaultCategoriesToDb(db)
         }
     }
 
@@ -596,7 +665,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAllRecords(): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records ORDER BY happened_at DESC",
             null
         )
         try {
@@ -612,8 +681,40 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByBook(bookName: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records WHERE book_name = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records WHERE book_name = ? ORDER BY happened_at DESC",
             arrayOf(bookName)
+        )
+        try {
+            while (cursor.moveToNext()) {
+                records.add(cursorToRecord(cursor))
+            }
+        } finally {
+            cursor.close()
+        }
+        return records
+    }
+
+    fun getRecordsByAccount(accountId: String): List<AccountingRecord> {
+        val records = mutableListOf<AccountingRecord>()
+        val cursor = readableDatabase.rawQuery(
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records WHERE account_id = ? ORDER BY happened_at DESC",
+            arrayOf(accountId)
+        )
+        try {
+            while (cursor.moveToNext()) {
+                records.add(cursorToRecord(cursor))
+            }
+        } finally {
+            cursor.close()
+        }
+        return records
+    }
+
+    fun getTransfersByAccount(accountId: String): List<AccountingRecord> {
+        val records = mutableListOf<AccountingRecord>()
+        val cursor = readableDatabase.rawQuery(
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records WHERE type = '转账' AND (account_id = ? OR target_account_id = ?) ORDER BY happened_at DESC",
+            arrayOf(accountId, accountId)
         )
         try {
             while (cursor.moveToNext()) {
@@ -641,6 +742,7 @@ internal class AccountingDatabase private constructor(context: Context) :
             put("month", r.month)
             put("day", r.day)
             if (r.accountId != null) put("account_id", r.accountId) else putNull("account_id")
+            if (r.targetAccountId != null) put("target_account_id", r.targetAccountId) else putNull("target_account_id")
             if (r.discountBefore != null) put("discount_before", r.discountBefore) else putNull("discount_before")
             if (r.discountOff != null) put("discount_off", r.discountOff) else putNull("discount_off")
             if (r.discountAfter != null) put("discount_after", r.discountAfter) else putNull("discount_after")
@@ -682,24 +784,25 @@ internal class AccountingDatabase private constructor(context: Context) :
             month = c.getInt(9),
             day = c.getInt(10),
             accountId = c.getString(11),  // 可能为 null
-            discountBefore = c.getString(12),  // 可能为 null
-            discountOff = c.getString(13),  // 可能为 null
-            discountAfter = c.getString(14),  // 可能为 null
-            reimbursementAccountId = c.getString(15),  // 可能为 null
+            targetAccountId = c.getString(12),  // 可能为 null
+            discountBefore = c.getString(13),  // 可能为 null
+            discountOff = c.getString(14),  // 可能为 null
+            discountAfter = c.getString(15),  // 可能为 null
+            reimbursementAccountId = c.getString(16),  // 可能为 null
             attachments = attachments,
-            excludeFromStats = c.getInt(17) == 1,
-            excludeFromBudget = c.getInt(18) == 1,
-            reimburseStatus = c.getInt(19) == 1,
-            reimburseAmount = c.getDouble(20),
-            reimburseAfterAmount = c.getString(21),
-            refundAmount = c.getDouble(22),
-            address = c.getString(23) ?: "",
-            createdAt = if (c.isNull(24)) null else c.getLong(24),
-            updatedAt = if (c.isNull(25)) null else c.getLong(25),
-            categoryName = c.getString(26) ?: "",
-            subcategoryName = c.getString(27),
-            transactionId = c.getString(28) ?: "",
-            merchantOrderId = c.getString(29) ?: ""
+            excludeFromStats = c.getInt(18) == 1,
+            excludeFromBudget = c.getInt(19) == 1,
+            reimburseStatus = c.getInt(20) == 1,
+            reimburseAmount = c.getDouble(21),
+            reimburseAfterAmount = c.getString(22),
+            refundAmount = c.getDouble(23),
+            address = c.getString(24) ?: "",
+            createdAt = if (c.isNull(25)) null else c.getLong(25),
+            updatedAt = if (c.isNull(26)) null else c.getLong(26),
+            categoryName = c.getString(27) ?: "",
+            subcategoryName = c.getString(28),
+            transactionId = c.getString(29) ?: "",
+            merchantOrderId = c.getString(30) ?: ""
         )
     }
 
@@ -710,7 +813,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByReimbursementAccount(reimbAccountId: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
             arrayOf(reimbAccountId)
         )
         try {
@@ -1043,7 +1146,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         // records
         val records = mutableListOf<ExportRecord>()
         val recCursor = db.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records",
             null
         )
         try {
@@ -1097,11 +1200,61 @@ internal class AccountingDatabase private constructor(context: Context) :
             accCursor.close()
         }
 
+        // balance_adjustments
+        val adjustments = mutableListOf<ExportBalanceAdjustment>()
+        val adjCursor = db.rawQuery(
+            "SELECT id, account_id, record_id, old_balance, new_balance, delta, reason, created_at FROM balance_adjustments", null
+        )
+        try {
+            while (adjCursor.moveToNext()) {
+                adjustments.add(ExportBalanceAdjustment(
+                    id = adjCursor.getString(0),
+                    accountId = adjCursor.getString(1),
+                    recordId = adjCursor.getString(2),
+                    oldBalance = adjCursor.getDouble(3),
+                    newBalance = adjCursor.getDouble(4),
+                    delta = adjCursor.getDouble(5),
+                    reason = adjCursor.getString(6) ?: "",
+                    createdAt = adjCursor.getLong(7)
+                ))
+            }
+        } finally {
+            adjCursor.close()
+        }
+
+        // fixed_deposits
+        val deposits = mutableListOf<ExportFixedDeposit>()
+        val depCursor = db.rawQuery(
+            "SELECT id, record_id, principal, interest_rate, term_value, term_unit, start_date, maturity_date, status, income_bill_id, note, created_at FROM fixed_deposits", null
+        )
+        try {
+            while (depCursor.moveToNext()) {
+                deposits.add(ExportFixedDeposit(
+                    id = depCursor.getString(0),
+                    recordId = depCursor.getString(1),
+                    principal = depCursor.getDouble(2),
+                    interestRate = depCursor.getDouble(3),
+                    termValue = depCursor.getInt(4),
+                    termUnit = depCursor.getString(5),
+                    startDate = depCursor.getLong(6),
+                    maturityDate = depCursor.getLong(7),
+                    status = depCursor.getString(8),
+                    incomeBillId = depCursor.getString(9),
+                    note = depCursor.getString(10) ?: "",
+                    createdAt = depCursor.getLong(11)
+                ))
+            }
+        } finally {
+            depCursor.close()
+        }
+
         val exportData = ExportData(
             settings = settings,
             categories = categories,
             records = records,
-            accounts = accounts
+            accounts = accounts,
+            balanceAdjustments = adjustments,
+            fixedDeposits = deposits
         )
 
         val json = Json { prettyPrint = true; encodeDefaults = true }
@@ -1438,7 +1591,7 @@ internal class AccountingDatabase private constructor(context: Context) :
                 }
 
                 val type = col("类型") ?: continue
-                if (type != "支出" && type != "收入" && type != "转账" && type != "债务") continue
+                if (type != "支出" && type != "收入" && type != "转账" && type != "债务" && type != "存款") continue
                 val amountRaw = col("金额") ?: continue
                 val amount = try {
                     kotlin.math.abs(amountRaw.replace("[¥$,，]".toRegex(), "").toDouble())
@@ -1744,6 +1897,8 @@ internal class AccountingDatabase private constructor(context: Context) :
             db.delete("accounts", null, null)
             db.delete("categories", null, null)
             db.delete("settings", null, null)
+            db.delete("balance_adjustments", null, null)
+            db.delete("fixed_deposits", null, null)
 
             for (s in data.settings) {
                 val cv = ContentValues().apply { put("key", s.key); put("value", s.value) }
@@ -1791,6 +1946,36 @@ internal class AccountingDatabase private constructor(context: Context) :
                     put("note", a.note); put("created_at", a.createdAt); put("updated_at", a.updatedAt)
                 }
                 db.insertWithOnConflict("accounts", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            for (adj in data.balanceAdjustments) {
+                val cv = ContentValues().apply {
+                    put("id", adj.id)
+                    put("account_id", adj.accountId)
+                    put("record_id", adj.recordId)
+                    put("old_balance", adj.oldBalance)
+                    put("new_balance", adj.newBalance)
+                    put("delta", adj.delta)
+                    put("reason", adj.reason)
+                    put("created_at", adj.createdAt)
+                }
+                db.insertWithOnConflict("balance_adjustments", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            for (dep in data.fixedDeposits) {
+                val cv = ContentValues().apply {
+                    put("id", dep.id)
+                    put("record_id", dep.recordId)
+                    put("principal", dep.principal)
+                    put("interest_rate", dep.interestRate)
+                    put("term_value", dep.termValue)
+                    put("term_unit", dep.termUnit)
+                    put("start_date", dep.startDate)
+                    put("maturity_date", dep.maturityDate)
+                    put("status", dep.status)
+                    put("income_bill_id", dep.incomeBillId)
+                    put("note", dep.note)
+                    put("created_at", dep.createdAt)
+                }
+                db.insertWithOnConflict("fixed_deposits", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
 
             // 计算当前余额（兼容旧导出数据）
@@ -1858,11 +2043,41 @@ private data class ExportAccount(
 )
 
 @Serializable
+private data class ExportBalanceAdjustment(
+    val id: String,
+    val accountId: String,
+    val recordId: String? = null,
+    val oldBalance: Double,
+    val newBalance: Double,
+    val delta: Double,
+    val reason: String = "",
+    val createdAt: Long
+)
+
+@Serializable
+private data class ExportFixedDeposit(
+    val id: String,
+    val recordId: String,
+    val principal: Double,
+    val interestRate: Double,
+    val termValue: Int,
+    val termUnit: String,
+    val startDate: Long,
+    val maturityDate: Long,
+    val status: String = "active",
+    val incomeBillId: String? = null,
+    val note: String = "",
+    val createdAt: Long
+)
+
+@Serializable
 private data class ExportData(
     val version: Int = 1,
     val exportedAt: Long = System.currentTimeMillis(),
     val settings: List<ExportSetting> = emptyList(),
     val categories: List<ExportCategory> = emptyList(),
     val records: List<ExportRecord> = emptyList(),
-    val accounts: List<ExportAccount> = emptyList()
+    val accounts: List<ExportAccount> = emptyList(),
+    val balanceAdjustments: List<ExportBalanceAdjustment> = emptyList(),
+    val fixedDeposits: List<ExportFixedDeposit> = emptyList()
 )

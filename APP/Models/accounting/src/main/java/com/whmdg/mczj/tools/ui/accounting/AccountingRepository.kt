@@ -1035,6 +1035,190 @@ object AccountingRepository {
         }.start()
     }
 
+    // ─────────────────────────────────────────────
+    // 余额调整日志 (Balance Adjustments)
+    // ─────────────────────────────────────────────
+
+    fun insertBalanceAdjustment(context: Context, adjustment: BalanceAdjustment) {
+        val db = getDb(context).writableDatabase
+        val cv = ContentValues().apply {
+            put("id", adjustment.id)
+            put("account_id", adjustment.accountId)
+            put("record_id", adjustment.recordId)
+            put("old_balance", adjustment.oldBalance)
+            put("new_balance", adjustment.newBalance)
+            put("delta", adjustment.delta)
+            put("reason", adjustment.reason)
+            put("created_at", adjustment.createdAt)
+        }
+        db.insertWithOnConflict("balance_adjustments", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun getAdjustmentsByAccount(context: Context, accountId: String): List<BalanceAdjustment> {
+        val db = getDb(context).readableDatabase
+        val cursor = db.rawQuery(
+            "SELECT id, account_id, record_id, old_balance, new_balance, delta, reason, created_at FROM balance_adjustments WHERE account_id = ? ORDER BY created_at DESC",
+            arrayOf(accountId)
+        )
+        val list = mutableListOf<BalanceAdjustment>()
+        try {
+            while (cursor.moveToNext()) {
+                list.add(BalanceAdjustment(
+                    id = cursor.getString(0),
+                    accountId = cursor.getString(1),
+                    recordId = cursor.getString(2),
+                    oldBalance = cursor.getDouble(3),
+                    newBalance = cursor.getDouble(4),
+                    delta = cursor.getDouble(5),
+                    reason = cursor.getString(6) ?: "",
+                    createdAt = cursor.getLong(7)
+                ))
+            }
+        } finally {
+            cursor.close()
+        }
+        return list
+    }
+
+    fun deleteAdjustment(context: Context, id: String) {
+        getDb(context).writableDatabase.delete("balance_adjustments", "id = ?", arrayOf(id))
+    }
+
+    // ─────────────────────────────────────────────
+    // 定期存款 (Fixed Deposits)
+    // ─────────────────────────────────────────────
+
+    fun insertFixedDeposit(context: Context, deposit: FixedDeposit) {
+        val db = getDb(context).writableDatabase
+        val cv = ContentValues().apply {
+            put("id", deposit.id)
+            put("record_id", deposit.recordId)
+            put("principal", deposit.principal)
+            put("interest_rate", deposit.interestRate)
+            put("term_value", deposit.termValue)
+            put("term_unit", deposit.termUnit)
+            put("start_date", deposit.startDate)
+            put("maturity_date", deposit.maturityDate)
+            put("status", deposit.status)
+            if (deposit.incomeBillId != null) put("income_bill_id", deposit.incomeBillId) else putNull("income_bill_id")
+            put("note", deposit.note)
+            put("created_at", deposit.createdAt)
+        }
+        db.insertWithOnConflict("fixed_deposits", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun getFixedDepositsByAccount(context: Context, accountId: String): List<FixedDeposit> {
+        val db = getDb(context).readableDatabase
+        val cursor = db.rawQuery(
+            """SELECT fd.id, fd.record_id, fd.principal, fd.interest_rate, fd.term_value,
+                      fd.term_unit, fd.start_date, fd.maturity_date, fd.status,
+                      fd.income_bill_id, fd.note, fd.created_at
+               FROM fixed_deposits fd
+               JOIN records r ON fd.record_id = r.id
+               WHERE r.account_id = ? AND r.type = '存款'
+               ORDER BY fd.created_at DESC""",
+            arrayOf(accountId)
+        )
+        val list = mutableListOf<FixedDeposit>()
+        try {
+            while (cursor.moveToNext()) {
+                list.add(FixedDeposit(
+                    id = cursor.getString(0),
+                    recordId = cursor.getString(1),
+                    principal = cursor.getDouble(2),
+                    interestRate = cursor.getDouble(3),
+                    termValue = cursor.getInt(4),
+                    termUnit = cursor.getString(5),
+                    startDate = cursor.getLong(6),
+                    maturityDate = cursor.getLong(7),
+                    status = cursor.getString(8),
+                    incomeBillId = cursor.getString(9),
+                    note = cursor.getString(10) ?: "",
+                    createdAt = cursor.getLong(11)
+                ))
+            }
+        } finally {
+            cursor.close()
+        }
+        return list
+    }
+
+    fun updateFixedDeposit(context: Context, deposit: FixedDeposit) {
+        val db = getDb(context).writableDatabase
+        val cv = ContentValues().apply {
+            put("principal", deposit.principal)
+            put("interest_rate", deposit.interestRate)
+            put("term_value", deposit.termValue)
+            put("term_unit", deposit.termUnit)
+            put("start_date", deposit.startDate)
+            put("maturity_date", deposit.maturityDate)
+            put("status", deposit.status)
+            if (deposit.incomeBillId != null) put("income_bill_id", deposit.incomeBillId) else putNull("income_bill_id")
+            put("note", deposit.note)
+        }
+        db.update("fixed_deposits", cv, "id = ?", arrayOf(deposit.id))
+    }
+
+    fun deleteFixedDeposit(context: Context, id: String) {
+        val db = getDb(context).writableDatabase
+        // 先查出关联的 record_id
+        val cursor = db.rawQuery("SELECT record_id FROM fixed_deposits WHERE id = ?", arrayOf(id))
+        val recordId = try { if (cursor.moveToFirst()) cursor.getString(0) else null } finally { cursor.close() }
+        db.delete("fixed_deposits", "id = ?", arrayOf(id))
+        if (recordId != null) {
+            db.delete("records", "id = ?", arrayOf(recordId))
+        }
+    }
+
+    fun getMaturedDeposits(context: Context, accountId: String): List<FixedDeposit> {
+        val db = getDb(context).readableDatabase
+        val now = System.currentTimeMillis()
+        val cursor = db.rawQuery(
+            """SELECT fd.id, fd.record_id, fd.principal, fd.interest_rate, fd.term_value,
+                      fd.term_unit, fd.start_date, fd.maturity_date, fd.status,
+                      fd.income_bill_id, fd.note, fd.created_at
+               FROM fixed_deposits fd
+               JOIN records r ON fd.record_id = r.id
+               WHERE r.account_id = ? AND r.type = '存款' AND fd.status = 'active' AND fd.maturity_date <= ?
+               ORDER BY fd.maturity_date ASC""",
+            arrayOf(accountId, now.toString())
+        )
+        val list = mutableListOf<FixedDeposit>()
+        try {
+            while (cursor.moveToNext()) {
+                list.add(FixedDeposit(
+                    id = cursor.getString(0),
+                    recordId = cursor.getString(1),
+                    principal = cursor.getDouble(2),
+                    interestRate = cursor.getDouble(3),
+                    termValue = cursor.getInt(4),
+                    termUnit = cursor.getString(5),
+                    startDate = cursor.getLong(6),
+                    maturityDate = cursor.getLong(7),
+                    status = cursor.getString(8),
+                    incomeBillId = cursor.getString(9),
+                    note = cursor.getString(10) ?: "",
+                    createdAt = cursor.getLong(11)
+                ))
+            }
+        } finally {
+            cursor.close()
+        }
+        return list
+    }
+
+    // ─────────────────────────────────────────────
+    // 转账记录查询 (Transfer Records)
+    // ─────────────────────────────────────────────
+
+    fun getRecordsByAccount(context: Context, accountId: String): List<AccountingRecord> {
+        return getDb(context).getRecordsByAccount(accountId)
+    }
+
+    fun getTransfersByAccount(context: Context, accountId: String): List<AccountingRecord> {
+        return getDb(context).getTransfersByAccount(accountId)
+    }
+
     // 内部工具
     // ─────────────────────────────────────────────
 

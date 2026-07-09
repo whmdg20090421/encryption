@@ -125,8 +125,20 @@ data class AccountingCategoryDb(
                 "记账页" to mapOf(
                     "支出" to expenseCategories,
                     "收入" to incomeCategories,
-                    "转账" to emptyList(),
-                    "债务" to emptyList()
+                    "转账" to listOf(
+                        AccountingCategory("T001", "转账", "build_in_0279", listOf(
+                            AccountingCategory("T001_01", "普通转账", "build_in_0274"),
+                            AccountingCategory("T001_02", "跨行转账", "build_in_0277"),
+                            AccountingCategory("T001_03", "手续费", "build_in_0236")
+                        ))
+                    ),
+                    "债务" to emptyList(),
+                    "存款" to listOf(
+                        AccountingCategory("D001", "存款", "build_in_0180", listOf(
+                            AccountingCategory("D001_01", "定期存款", "build_in_0181"),
+                            AccountingCategory("D001_02", "活期存款", "build_in_0184")
+                        ))
+                    )
                 )
             )
             return AccountingCategoryDb(version = 1, pages = pages)
@@ -135,7 +147,7 @@ data class AccountingCategoryDb(
         /** 从 SQLite 加载分类数据 */
         fun load(context: Context): AccountingCategoryDb {
             val page = "记账页"
-            val types = listOf("支出", "收入", "转账", "债务")
+            val types = listOf("支出", "收入", "转账", "债务", "存款")
             val pages = mutableMapOf<String, Map<String, List<AccountingCategory>>>()
             val typeMap = mutableMapOf<String, List<AccountingCategory>>()
             for (type in types) {
@@ -224,6 +236,7 @@ data class AccountingRecord(
     val month: Int = 0,             // happenedAt 对应的月份（1-12）
     val day: Int = 0,               // happenedAt 对应的日（1-31）
     val accountId: String? = null,  // 关联账户 id（可选）
+    val targetAccountId: String? = null,  // 转入账户 id（仅 type="转账" 时使用）
     val discountBefore: String? = null,  // 优惠前金额（可选）
     val discountOff: String? = null,     // 优惠金额（可选）
     val discountAfter: String? = null,   // 优惠后金额（可选）
@@ -336,4 +349,34 @@ data class MonthlySummary(
     val month: Int,
     val income: Double = 0.0,
     val expense: Double = 0.0
+)
+
+// ── 余额调整日志 ──
+
+data class BalanceAdjustment(
+    val id: String,
+    val accountId: String,
+    val recordId: String? = null,
+    val oldBalance: Double,
+    val newBalance: Double,
+    val delta: Double,
+    val reason: String = "",
+    val createdAt: Long
+)
+
+// ── 定期存款 ──
+
+data class FixedDeposit(
+    val id: String,
+    val recordId: String,
+    val principal: Double,
+    val interestRate: Double,
+    val termValue: Int,
+    val termUnit: String,
+    val startDate: Long,
+    val maturityDate: Long,
+    val status: String = "active",
+    val incomeBillId: String? = null,
+    val note: String = "",
+    val createdAt: Long
 )

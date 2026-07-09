@@ -72,7 +72,7 @@ import java.util.Calendar
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? = null) {
-    val types = listOf("支出", "收入", "转账", "债务")
+    val types = listOf("支出", "收入", "转账", "债务", "存款")
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // 初始化 AI 预测器
@@ -139,6 +139,12 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     val selectedAccount = selectedAccountId?.let { accountMap[it] }
     val selectedAccountName = selectedAccount?.name ?: "账户"
     val selectedAccountSvg = selectedAccount?.let { accountTypeConfigs[it.type]?.svgPath }
+
+    // 转账目标账户选择
+    var targetAccountId by remember { mutableStateOf<String?>(editingRecord?.targetAccountId) }
+    var showTargetAccountDialog by remember { mutableStateOf(false) }
+    val targetAccount = targetAccountId?.let { accountMap[it] }
+    val targetAccountName = targetAccount?.name ?: "转入账户"
 
     // 报销账户选择
     val reimbursementAccounts = remember { AccountingRepository.getReimbursementAccounts(context) }
@@ -314,6 +320,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             note = note,
             happenedAt = cal.timeInMillis,
             accountId = selectedAccountId,
+            targetAccountId = if (currentType == "转账") targetAccountId else null,
             discountBefore = discountBefore,
             discountOff = discountOff,
             discountAfter = discountAfter,
@@ -324,22 +331,44 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
             createdAt = editingRecord?.createdAt ?: now,
             updatedAt = now
         )
+        // 转账强制不计入收支统计
+        val finalRecord = if (currentType == "转账") record.copy(excludeFromStats = true) else record
         val db = AccountingRecordDb.load(context)
         if (editingRecord != null) {
-            db.update(record).save(context)
+            db.update(finalRecord).save(context)
         } else {
-            db.add(record).save(context)
+            db.add(finalRecord).save(context)
+        }
+        // 转账余额处理：转出账户 -amount，转入账户 +amount
+        if (currentType == "转账" && editingRecord == null) {
+            val amountVal = finalAmount.toDoubleOrNull() ?: 0.0
+            if (selectedAccountId != null) {
+                val fromAccount = accountMap[selectedAccountId!!]
+                if (fromAccount != null) {
+                    AccountingRepository.updateAccount(context, fromAccount.copy(
+                        currentBalance = fromAccount.currentBalance - amountVal
+                    ))
+                }
+            }
+            if (targetAccountId != null) {
+                val toAccount = accountMap[targetAccountId!!]
+                if (toAccount != null) {
+                    AccountingRepository.updateAccount(context, toAccount.copy(
+                        currentBalance = toAccount.currentBalance + amountVal
+                    ))
+                }
+            }
         }
         // AI 训练：用当前记录更新模型
         if (note.isNotEmpty()) {
-            NotePredictor.train(context, record)
+            NotePredictor.train(context, finalRecord)
         }
         // 保存本次使用的账户 id
         if (selectedAccountId != null) {
             AccountingRepository.setLastAccountId(context, selectedAccountId!!)
         }
         // 异步获取定位并写入地址（不阻塞 UI）
-        val recordId = record.id
+        val recordId = finalRecord.id
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             fetchLocationAndSave(context, recordId)
         }
@@ -785,7 +814,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         Text("%02d:%02d".format(selectedHour, selectedMinute), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                // 支付账户
+                // 支付账户（转账时显示"转出账户"）
                 Row(
                     modifier = Modifier.weight(1f).clickable { showAccountDialog = true },
                     horizontalArrangement = Arrangement.Center,
@@ -795,7 +824,26 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                         AsyncImage(model = selectedAccountSvg, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(Modifier.width(4.dp))
                     }
-                    Text(selectedAccountName, style = MaterialTheme.typography.labelSmall, color = if (selectedAccount != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                    val label = if (currentType == "转账") {
+                        if (selectedAccount != null) "出:${selectedAccountName}" else "转出账户"
+                    } else selectedAccountName
+                    Text(label, style = MaterialTheme.typography.labelSmall, color = if (selectedAccount != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                // 转入账户（仅转账类型显示）
+                if (currentType == "转账") {
+                    Row(
+                        modifier = Modifier.weight(1f).clickable { showTargetAccountDialog = true },
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val targetSvg = targetAccount?.let { accountTypeConfigs[it.type]?.svgPath }
+                        if (targetSvg != null) {
+                            AsyncImage(model = targetSvg, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(4.dp))
+                        }
+                        val targetLabel = if (targetAccount != null) "入:${targetAccountName}" else "转入账户"
+                        Text(targetLabel, style = MaterialTheme.typography.labelSmall, color = if (targetAccount != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
                 // 优惠
                 Row(
@@ -1049,6 +1097,66 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                                 .clickable {
                                     selectedAccountId = account.id
                                     showAccountDialog = false
+                                }
+                                .background(
+                                    if (isSelected) iconThemeColor.copy(alpha = 0.3f)
+                                    else Color.Transparent
+                                )
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (svgPath != null) {
+                                AsyncImage(
+                                    model = svgPath,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(Modifier.width(12.dp))
+                            }
+                            Text(
+                                text = account.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "${String.format("%.2f", account.currentBalance)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 转入账户选择弹窗
+        if (showTargetAccountDialog) {
+            ModalBottomSheet(
+                onDismissRequest = { showTargetAccountDialog = false },
+                containerColor = MaterialTheme.colorScheme.surface
+            ) {
+                Text(
+                    "选择转入账户",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = screenHeight * 0.4f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(bottom = 16.dp)
+                ) {
+                    accounts.filter { it.id != selectedAccountId }.forEach { account ->
+                        val isSelected = targetAccountId == account.id
+                        val svgPath = accountTypeConfigs[account.type]?.svgPath
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    targetAccountId = account.id
+                                    showTargetAccountDialog = false
                                 }
                                 .background(
                                     if (isSelected) iconThemeColor.copy(alpha = 0.3f)

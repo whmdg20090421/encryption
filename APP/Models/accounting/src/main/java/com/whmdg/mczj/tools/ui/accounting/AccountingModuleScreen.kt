@@ -30,7 +30,10 @@ fun AccountingModuleScreen(onBack: () -> Unit) {
         is AccountingRoute.ReimbursementDetail -> Screen.Accounting
         is AccountingRoute.AddReimbursementAccount -> Screen.Accounting
         is AccountingRoute.AssetDetail -> Screen.Accounting
-        else -> Screen.Accounting
+        is AccountingRoute.CapitalFlow -> Screen.Accounting
+        is AccountingRoute.AssetHistory -> Screen.Accounting
+        is AccountingRoute.TransferList -> Screen.Accounting
+        is AccountingRoute.FixedDepositManager -> Screen.Accounting
     }
 
     // Screen → AccountingRoute 转换（用于接收现有 Screen 函数的 onNavigate 回调）
@@ -41,6 +44,10 @@ fun AccountingModuleScreen(onBack: () -> Unit) {
         is Screen.ReimbursementAccountDetail -> AccountingRoute.ReimbursementDetail(screen.accountId)
         is Screen.AddReimbursementAccount -> AccountingRoute.AddReimbursementAccount
         is Screen.AssetDetail -> AccountingRoute.AssetDetail(screen.accountId)
+        is Screen.CapitalFlow -> AccountingRoute.CapitalFlow(screen.accountId)
+        is Screen.AssetHistory -> AccountingRoute.AssetHistory(screen.accountId)
+        is Screen.TransferList -> AccountingRoute.TransferList(screen.accountId)
+        is Screen.FixedDepositManager -> AccountingRoute.FixedDepositManager(screen.accountId)
         else -> null
     }
 
@@ -87,6 +94,22 @@ fun AccountingModuleScreen(onBack: () -> Unit) {
             accountId = current.accountId,
             onBack = { backStack.removeLast() },
             onNavigate = navigateFromScreen
+        )
+        is AccountingRoute.CapitalFlow -> CapitalFlowScreen(
+            accountId = current.accountId,
+            onBack = { backStack.removeLast() }
+        )
+        is AccountingRoute.AssetHistory -> AssetHistoryScreen(
+            accountId = current.accountId,
+            onBack = { backStack.removeLast() }
+        )
+        is AccountingRoute.TransferList -> TransferListScreen(
+            accountId = current.accountId,
+            onBack = { backStack.removeLast() }
+        )
+        is AccountingRoute.FixedDepositManager -> FixedDepositScreen(
+            accountId = current.accountId,
+            onBack = { backStack.removeLast() }
         )
     }
 }

@@ -11,4 +11,8 @@ sealed class AccountingRoute {
     data class ReimbursementDetail(val accountId: String) : AccountingRoute()
     object AddReimbursementAccount : AccountingRoute()
     data class AssetDetail(val accountId: String) : AccountingRoute()
+    data class CapitalFlow(val accountId: String) : AccountingRoute()
+    data class AssetHistory(val accountId: String) : AccountingRoute()
+    data class TransferList(val accountId: String) : AccountingRoute()
+    data class FixedDepositManager(val accountId: String) : AccountingRoute()
 }

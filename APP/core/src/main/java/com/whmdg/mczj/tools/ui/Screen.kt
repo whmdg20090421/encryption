@@ -91,6 +91,10 @@ open class Screen {
     data class ReimbursementAccountDetail(val accountId: String) : Screen()
     object AddReimbursementAccount : Screen()
     data class AssetDetail(val accountId: String) : Screen()
+    data class CapitalFlow(val accountId: String) : Screen()
+    data class AssetHistory(val accountId: String) : Screen()
+    data class TransferList(val accountId: String) : Screen()
+    data class FixedDepositManager(val accountId: String) : Screen()
 }
 
 enum class ModuleId {
