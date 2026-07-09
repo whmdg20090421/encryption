@@ -24,6 +24,7 @@ fun AccountingModuleScreen(onBack: () -> Unit) {
 
     // AccountingRoute → Screen 转换（用于传给现有 Screen 函数的 onNavigate）
     fun routeToScreen(route: AccountingRoute): Screen = when (route) {
+        is AccountingRoute.Home -> Screen.Accounting
         is AccountingRoute.Detail -> Screen.Accounting // placeholder, 不会真正用到
         is AccountingRoute.AddRecord -> Screen.Accounting
         is AccountingRoute.ReimbursementAccount -> Screen.Accounting

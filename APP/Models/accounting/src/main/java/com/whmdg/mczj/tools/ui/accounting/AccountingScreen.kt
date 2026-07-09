@@ -1912,8 +1912,6 @@ private fun AccountGroupCard(
 
 // ── 账户卡片 ──
 
-@Composable
-
 /** "我的"页面头部卡片：头像 + 诗意短句 + 签名 + 统计 */
 @Composable
 private fun MineHeaderCard(bookName: String, refreshTrigger: Int = 0) {
@@ -3408,13 +3406,6 @@ private fun CategoryIconStylePage() {
                 }
             }
         }
-    }
-}
-
-            dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) { Text("取消") }
-            }
-        )
     }
 }
 
