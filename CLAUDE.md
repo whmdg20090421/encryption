@@ -4,8 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 工具使用规范
 
-- **严禁使用 Explore 工具**，所有需要探索/查找代码的任务，必须直接使用 Agent(任务描述) 完成
-- 不要将 Explore 作为 Agent 的前置步骤单独调用
+- **严禁使用 Explore 工具**，包括以下所有形式：
+  - `Agent(subagent_type="Explore")` — 拒绝
+  - 任何将 Explore 作为 Agent 的前置步骤单独调用 — 拒绝
+- 所有需要探索/查找代码的任务，直接使用 `Agent(description, prompt)` 完成（不带 subagent_type，走默认 general-purpose agent）
+- 简单查找优先用 `Bash(grep/find)` + `Read`
 
 ## 代码查找规范
 

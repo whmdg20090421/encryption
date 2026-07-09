@@ -144,39 +144,40 @@ object AccountingRepository {
         }
     }
 
-    /** 插入一条记录（增量维护记账天数 + 月度汇总自动更新） */
-    fun insertRecord(context: Context, record: AccountingRecord) {
+    /**
+     * 保存一条记录（新建 + 编辑统一入口）。
+     * 自动判断：record 已存在 → 编辑（先回退旧余额再应用新余额）；不存在 → 新建。
+     * 同步维护：记账天数、月度汇总、账户余额、附件回收站级联。
+     */
+    fun saveRecord(context: Context, record: AccountingRecord) {
+        val oldRecord = getRecordById(context, record.id)
+        val isEdit = oldRecord != null
+
         val cal = java.util.Calendar.getInstance().apply { timeInMillis = record.happenedAt }
         val y = cal.get(java.util.Calendar.YEAR)
         val m = cal.get(java.util.Calendar.MONTH) + 1
         val d = cal.get(java.util.Calendar.DAY_OF_MONTH)
-        if (!isDateHasRecords(context, y, m, d)) {
+
+        // 新建：增量维护记账天数
+        if (!isEdit && !isDateHasRecords(context, y, m, d)) {
             setSetting(context, KEY_DAY_COUNT, (getDayCount(context) + 1).toString())
         }
+
         val now = System.currentTimeMillis()
         val withTime = record.copy(year = y, month = m, day = d,
-            createdAt = record.createdAt ?: now, updatedAt = record.updatedAt ?: now)
-        writeRecord(context, withTime, "INSERT")
-        updateAccountBalanceOnRecordChange(context, withTime.accountId, withTime.type, withTime.amount, isAdd = true)
-        autoSyncIfNeeded(context)
-    }
+            createdAt = record.createdAt ?: now,
+            updatedAt = if (isEdit) now else (record.updatedAt ?: now))
 
-    /** 更新一条记录（自动更新 updatedAt + 月度汇总自动更新） */
-    fun updateRecord(context: Context, record: AccountingRecord) {
-        val oldRecord = getRecordById(context, record.id)
-        val cal = java.util.Calendar.getInstance().apply { timeInMillis = record.happenedAt }
-        val withTime = record.copy(
-            year = cal.get(java.util.Calendar.YEAR),
-            month = cal.get(java.util.Calendar.MONTH) + 1,
-            day = cal.get(java.util.Calendar.DAY_OF_MONTH),
-            updatedAt = System.currentTimeMillis()
-        )
         val oldMonth = oldRecord?.let { Triple(it.bookName, it.year, it.month) }
-        writeRecord(context, withTime, "UPDATE", oldMonth)
+        writeRecord(context, withTime, if (isEdit) "UPDATE" else "INSERT", oldMonth)
+
+        // 编辑：先回退旧记录的余额影响
         if (oldRecord != null) {
-            updateAccountBalanceOnRecordChange(context, oldRecord.accountId, oldRecord.type, oldRecord.amount, isAdd = false)
+            updateAccountBalanceOnRecordChange(context, oldRecord, isAdd = false)
         }
-        updateAccountBalanceOnRecordChange(context, withTime.accountId, withTime.type, withTime.amount, isAdd = true)
+        // 应用新记录的余额影响
+        updateAccountBalanceOnRecordChange(context, withTime, isAdd = true)
+
         autoSyncIfNeeded(context)
     }
 
@@ -201,7 +202,7 @@ object AccountingRepository {
                 moveToTrashBatch(context, record.attachments, id)
             }
             cascadeUpdateTrashStatus(context, id, "deleted")
-            updateAccountBalanceOnRecordChange(context, record.accountId, record.type, record.amount, isAdd = false)
+            updateAccountBalanceOnRecordChange(context, record, isAdd = false)
             writeRecord(context, record, "DELETE")
             autoSyncIfNeeded(context)
         }
@@ -209,27 +210,48 @@ object AccountingRepository {
 
     /** 记录变更时同步更新账户当前余额 */
     private fun updateAccountBalanceOnRecordChange(
-        context: Context, accountId: String?, type: String, amount: String, isAdd: Boolean
+        context: Context, record: AccountingRecord, isAdd: Boolean
     ) {
-        if (accountId == null) return
-        val amountVal = amount.toDoubleOrNull() ?: return
-        val delta = when (type) {
-            "收入" -> if (isAdd) amountVal else -amountVal
-            "支出" -> if (isAdd) -amountVal else amountVal
-            else -> return  // 转账、债务等不直接影响余额
-        }
+        val amountVal = record.amount.toDoubleOrNull() ?: return
+        val sign = if (isAdd) 1.0 else -1.0
         val db = getDb(context).writableDatabase
-        db.execSQL(
-            "UPDATE accounts SET current_balance = current_balance + ?, updated_at = ? WHERE id = ?",
-            arrayOf(delta, System.currentTimeMillis(), accountId)
-        )
+        val now = System.currentTimeMillis()
+        when (record.type) {
+            "收入" -> {
+                if (record.accountId == null) return
+                db.execSQL("UPDATE accounts SET current_balance = current_balance + ?, updated_at = ? WHERE id = ?",
+                    arrayOf(amountVal * sign, now, record.accountId))
+            }
+            "支出" -> {
+                if (record.accountId == null) return
+                db.execSQL("UPDATE accounts SET current_balance = current_balance - ?, updated_at = ? WHERE id = ?",
+                    arrayOf(amountVal * sign, now, record.accountId))
+            }
+            "转账" -> {
+                // 转出账户减少，转入账户增加
+                if (record.accountId != null) {
+                    db.execSQL("UPDATE accounts SET current_balance = current_balance - ?, updated_at = ? WHERE id = ?",
+                        arrayOf(amountVal * sign, now, record.accountId))
+                }
+                if (record.targetAccountId != null) {
+                    db.execSQL("UPDATE accounts SET current_balance = current_balance + ?, updated_at = ? WHERE id = ?",
+                        arrayOf(amountVal * sign, now, record.targetAccountId))
+                }
+            }
+            "存款" -> {
+                // 存款：资金从账户流出（类似支出）
+                if (record.accountId == null) return
+                db.execSQL("UPDATE accounts SET current_balance = current_balance - ?, updated_at = ? WHERE id = ?",
+                    arrayOf(amountVal * sign, now, record.accountId))
+            }
+        }
     }
 
     /** 按 ID 查单条记录 */
-    private fun getRecordById(context: Context, id: String): AccountingRecord? {
+    fun getRecordById(context: Context, id: String): AccountingRecord? {
         val sqlDb = getDb(context).readableDatabase
         val cursor = sqlDb.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records WHERE id = ?",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records WHERE id = ?",
             arrayOf(id)
         )
         return try {
@@ -251,20 +273,21 @@ object AccountingRepository {
                     month = cursor.getInt(9),
                     day = cursor.getInt(10),
                     accountId = cursor.getString(11),
-                    discountBefore = cursor.getString(12),
-                    discountOff = cursor.getString(13),
-                    discountAfter = cursor.getString(14),
-                    reimbursementAccountId = cursor.getString(15),
+                    targetAccountId = cursor.getString(12),
+                    discountBefore = cursor.getString(13),
+                    discountOff = cursor.getString(14),
+                    discountAfter = cursor.getString(15),
+                    reimbursementAccountId = cursor.getString(16),
                     attachments = attachments,
-                    excludeFromStats = cursor.getInt(17) == 1,
-                    excludeFromBudget = cursor.getInt(18) == 1,
-                    reimburseStatus = cursor.getInt(19) == 1,
-                    reimburseAmount = cursor.getDouble(20),
-                    reimburseAfterAmount = cursor.getString(21),
-                    refundAmount = cursor.getDouble(22),
-                    address = cursor.getString(23) ?: "",
-                    createdAt = if (cursor.isNull(24)) null else cursor.getLong(24),
-                    updatedAt = if (cursor.isNull(25)) null else cursor.getLong(25)
+                    excludeFromStats = cursor.getInt(18) == 1,
+                    excludeFromBudget = cursor.getInt(19) == 1,
+                    reimburseStatus = cursor.getInt(20) == 1,
+                    reimburseAmount = cursor.getDouble(21),
+                    reimburseAfterAmount = cursor.getString(22),
+                    refundAmount = cursor.getDouble(23),
+                    address = cursor.getString(24) ?: "",
+                    createdAt = if (cursor.isNull(25)) null else cursor.getLong(25),
+                    updatedAt = if (cursor.isNull(26)) null else cursor.getLong(26)
                 )
             } else null
         } finally {

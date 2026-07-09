@@ -265,7 +265,7 @@ fun FixedDepositScreen(accountId: String, onBack: () -> Unit) {
                         val now = System.currentTimeMillis()
 
                         // 插入 record（type="存款"）
-                        AccountingRepository.insertRecord(context, AccountingRecord(
+                        AccountingRepository.saveRecord(context, AccountingRecord(
                             id = recordId,
                             bookName = AccountingRepository.getLastBookName(context),
                             type = "存款",
@@ -296,14 +296,7 @@ fun FixedDepositScreen(accountId: String, onBack: () -> Unit) {
                             createdAt = now
                         ))
 
-                        // 扣除账户余额（本金从账户中划出）
-                        val allAccounts = AccountingRepository.getAllAccounts(context)
-                        val account = allAccounts.find { it.id == accountId }
-                        if (account != null) {
-                            AccountingRepository.updateAccount(context, account.copy(
-                                currentBalance = account.currentBalance - p
-                            ))
-                        }
+                        // ponytail: insertRecord 已处理存款类型余额扣除，无需手动扣款
 
                         reload()
                     }
@@ -341,19 +334,20 @@ fun FixedDepositScreen(accountId: String, onBack: () -> Unit) {
                     maturedDeposits.forEach { deposit ->
                         val years = if (deposit.termUnit == "年") deposit.termValue.toDouble() else deposit.termValue / 12.0
                         val interest = deposit.principal * deposit.interestRate / 100.0 * years
+                        val totalReturn = deposit.principal + interest
 
-                        // 生成收入账单
+                        // 生成收入账单（本金+利息一起归还到账户）
                         val incomeId = java.util.UUID.randomUUID().toString()
-                        AccountingRepository.insertRecord(context, AccountingRecord(
+                        AccountingRepository.saveRecord(context, AccountingRecord(
                             id = incomeId,
                             bookName = AccountingRepository.getLastBookName(context),
                             type = "收入",
-                            amount = String.format("%.2f", interest),
+                            amount = String.format("%.2f", totalReturn),
                             categoryId = "B001",
                             subcategoryId = "B001_03",
                             categoryName = "收入",
                             subcategoryName = "其他",
-                            note = "定期存款到期利息",
+                            note = "定期存款到期归还（本金${deposit.principal}+利息${String.format("%.2f", interest)}）",
                             happenedAt = now,
                             accountId = accountId,
                             excludeFromStats = false,
@@ -361,19 +355,11 @@ fun FixedDepositScreen(accountId: String, onBack: () -> Unit) {
                             updatedAt = now
                         ))
 
-                        // 更新存款状态 + 本金归还到账户
+                        // 更新存款状态
                         AccountingRepository.updateFixedDeposit(context, deposit.copy(
                             status = "matured",
                             incomeBillId = incomeId
                         ))
-
-                        val allAccounts = AccountingRepository.getAllAccounts(context)
-                        val account = allAccounts.find { it.id == accountId }
-                        if (account != null) {
-                            AccountingRepository.updateAccount(context, account.copy(
-                                currentBalance = account.currentBalance + deposit.principal + interest
-                            ))
-                        }
                     }
                     reload()
                     showMaturityDialog = false

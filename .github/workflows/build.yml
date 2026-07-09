@@ -2,12 +2,6 @@ name: Build arm64-v8a Release APK
 
 on:
   workflow_dispatch:
-    inputs:
-      no_cache:
-        description: '禁用构建缓存（全量重编译）'
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   build:
@@ -31,14 +25,7 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          cache-disabled: ${{ inputs.no_cache }}
-
-      - name: Clear Gradle caches
-        if: ${{ inputs.no_cache }}
-        run: |
-          rm -rf ~/.gradle/caches
-          rm -rf ~/.gradle/build-cache
-          echo "Gradle caches cleared"
+          cache-disabled: false
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
@@ -170,11 +157,7 @@ jobs:
           KEY_ALIAS:         ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
         run: |
-          CACHE_FLAG="--build-cache"
-          if [ "${{ inputs.no_cache }}" = "true" ]; then
-            CACHE_FLAG="--no-build-cache --no-configuration-cache"
-          fi
-          ./gradlew :APP:app:assembleRelease $CACHE_FLAG --stacktrace
+          ./gradlew :APP:app:assembleRelease --build-cache --stacktrace
 
       - name: Locate APK
         id: locate

@@ -225,6 +225,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var createName by remember { mutableStateOf("") }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var hideToolbarForDelete by remember { mutableStateOf(false) }
+    var showDeleteProgress by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
     var recycleBinEnabled by remember { mutableStateOf(true) }
     var showForceDeleteDialog by remember { mutableStateOf(false) }
@@ -392,8 +394,102 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
-    // 返回手势：压缩包 → 回上一级或退出压缩包，WebDAV → 回上一级或退出，回收站内 → 回上一级或退出回收站，子目录 → 回上一级，根目录 → 退出文件管理器
+    // ── 弹窗栈式管理：每个弹窗用 registerOverlay 注册，BackHandler 只调栈顶 ──
+    data class OverlayEntry(val id: String, val cleanup: () -> Unit)
+    val overlayStack = remember { mutableStateListOf<OverlayEntry>() }
+
+    /** 弹窗打开时调用：压入清理函数。弹窗关闭时自动移除。 */
+    fun registerOverlay(id: String, cleanup: () -> Unit) {
+        overlayStack.removeAll { it.id == id }
+        overlayStack.add(OverlayEntry(id, cleanup))
+    }
+    fun unregisterOverlay(id: String) { overlayStack.removeAll { it.id == id } }
+
+    // 各弹窗注册到 overlayStack（新增弹窗在此处加一组 DisposableEffect）
+    DisposableEffect(selectedEntry != null || hideToolbarForDelete) {
+        if (selectedEntry != null) registerOverlay("toolbar") { selectedEntry = null; hideToolbarForDelete = false }
+        else unregisterOverlay("toolbar")
+        onDispose {}
+    }
+    DisposableEffect(showDeleteDialog) {
+        if (showDeleteDialog) registerOverlay("delete") { showDeleteDialog = false; hideToolbarForDelete = false }
+        else unregisterOverlay("delete")
+        onDispose {}
+    }
+    DisposableEffect(showDeleteProgress) {
+        if (showDeleteProgress) registerOverlay("deleteProgress") { showDeleteProgress = false; selectedEntry = null; hideToolbarForDelete = false }
+        else unregisterOverlay("deleteProgress")
+        onDispose {}
+    }
+    DisposableEffect(showForceDeleteDialog) {
+        if (showForceDeleteDialog) registerOverlay("forceDelete") { showForceDeleteDialog = false; forceDeleteEntry = null }
+        else unregisterOverlay("forceDelete")
+        onDispose {}
+    }
+    DisposableEffect(showPermanentDeleteDialog) {
+        if (showPermanentDeleteDialog) registerOverlay("permanentDelete") { showPermanentDeleteDialog = false; permanentDeleteTarget = null; permanentDeleteMultiNames = emptyList() }
+        else unregisterOverlay("permanentDelete")
+        onDispose {}
+    }
+    DisposableEffect(showRenameDialog) {
+        if (showRenameDialog) registerOverlay("rename") { showRenameDialog = false }
+        else unregisterOverlay("rename")
+        onDispose {}
+    }
+    DisposableEffect(showPropertyDialog) {
+        if (showPropertyDialog) registerOverlay("property") { showPropertyDialog = false; propertyEntry = null }
+        else unregisterOverlay("property")
+        onDispose {}
+    }
+    DisposableEffect(showPermissionEditor) {
+        if (showPermissionEditor) registerOverlay("permission") { showPermissionEditor = false }
+        else unregisterOverlay("permission")
+        onDispose {}
+    }
+    DisposableEffect(showApkDialog) {
+        if (showApkDialog) registerOverlay("apk") { showApkDialog = false }
+        else unregisterOverlay("apk")
+        onDispose {}
+    }
+    DisposableEffect(showCompressDialog) {
+        if (showCompressDialog) registerOverlay("compress") { showCompressDialog = false; showCompressProgress = false }
+        else unregisterOverlay("compress")
+        onDispose {}
+    }
+    DisposableEffect(showExtractDialog) {
+        if (showExtractDialog) registerOverlay("extract") { showExtractDialog = false; showExtractProgress = false }
+        else unregisterOverlay("extract")
+        onDispose {}
+    }
+    DisposableEffect(showExtractPasswordDialog) {
+        if (showExtractPasswordDialog) registerOverlay("extractPwd") { showExtractPasswordDialog = false }
+        else unregisterOverlay("extractPwd")
+        onDispose {}
+    }
+    DisposableEffect(showAddQaDialog) {
+        if (showAddQaDialog) registerOverlay("addQa") { showAddQaDialog = false }
+        else unregisterOverlay("addQa")
+        onDispose {}
+    }
+    DisposableEffect(showQaTypeSelector) {
+        if (showQaTypeSelector) registerOverlay("qaType") { showQaTypeSelector = false }
+        else unregisterOverlay("qaType")
+        onDispose {}
+    }
+    DisposableEffect(showWebDavEditDialog) {
+        if (showWebDavEditDialog) registerOverlay("webDavEdit") { showWebDavEditDialog = false }
+        else unregisterOverlay("webDavEdit")
+        onDispose {}
+    }
+
+    // 返回手势：栈顶弹窗 → 关闭，压缩包 → 回上一级或退出，WebDAV → 回上一级或退出，回收站 → 回上一级或退出，子目录 → 回上一级，根目录 → 退出
     BackHandler {
+        if (overlayStack.isNotEmpty()) {
+            val top = overlayStack.last()
+            top.cleanup()
+            unregisterOverlay(top.id)
+            return@BackHandler
+        }
         if (vm.isInArchiveMode) {
             if (!vm.archiveGoUp()) {
                 vm.exitArchive()
@@ -1821,7 +1917,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
             // ── 长按工具栏悬浮窗（带淡入淡出） ──
             AnimatedVisibility(
-                visible = selectedEntry != null,
+                visible = selectedEntry != null && !hideToolbarForDelete,
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
@@ -2091,8 +2187,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable {
-                                            if (isMultiSelect) showDeleteDialog = true
-                                            else selectedEntry?.let { showDeleteDialog = true }
+                                            if (isMultiSelect) {
+                                                hideToolbarForDelete = true
+                                                showDeleteDialog = true
+                                            } else selectedEntry?.let {
+                                                hideToolbarForDelete = true
+                                                showDeleteDialog = true
+                                            }
                                         }
                                         .padding(vertical = 16.dp),
                                     contentAlignment = Alignment.Center
@@ -2658,6 +2759,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteDialog = false
+                    showDeleteProgress = true
                     val deleteEntries = if (delMultiSelect) {
                         delSelectedEntries.map { entry ->
                             DeleteEntry(entry.path, entry.name, entry.isDirectory, entry.size)
@@ -2677,17 +2779,48 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     } else {
                         rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
                     }
-                    selectedEntry = null
                 }) {
                     Text("确定")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) {
+                TextButton(onClick = {
+                    showDeleteDialog = false
+                    hideToolbarForDelete = false
+                }) {
                     Text("取消")
                 }
             }
         )
+    }
+
+    // ── 删除进度对话框 ──
+    if (showDeleteProgress) {
+        val isMultiDel = if (vm.focusedPanel == FocusedPanel.LEFT) leftSelectedPaths.size > 1 else rightSelectedPaths.size > 1
+        AlertDialog(
+            onDismissRequest = { /* 不可手动关闭 */ },
+            title = { Text("删除") },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        if (isMultiDel) "正在删除..."
+                        else "正在删除「${selectedEntry?.name ?: ""}」"
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = {}
+        )
+        // 删除完成（progress 变为 null）→ 自动关闭对话框、清除状态
+        LaunchedEffect(fileOpManagerProgress) {
+            if (fileOpManagerProgress == null) {
+                showDeleteProgress = false
+                selectedEntry = null
+                hideToolbarForDelete = false
+            }
+        }
     }
 
     // ── 强制删除确认对话框（移动到回收站失败时） ──

@@ -33,11 +33,6 @@ fun TransferListScreen(accountId: String, onBack: () -> Unit) {
         accountsMap = accounts.associate { it.id to it.name }
     }
 
-    val allAccounts = remember { mutableStateOf<List<AccountingAccount>>(emptyList()) }
-    LaunchedEffect(Unit) {
-        allAccounts.value = AccountingRepository.getAllAccounts(context)
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -74,31 +69,8 @@ fun TransferListScreen(accountId: String, onBack: () -> Unit) {
                         }
                         TextButton(
                             onClick = {
-                                // 删除选中的转账记录并撤销余额变动
                                 selectedIds.forEach { id ->
-                                    val record = transfers.find { it.id == id }
-                                    if (record != null) {
-                                        val amount = record.amount.toDoubleOrNull() ?: 0.0
-                                        // 撤销转出：转出账户 +amount
-                                        if (record.accountId != null) {
-                                            val fromAccount = allAccounts.value.find { it.id == record.accountId }
-                                            if (fromAccount != null) {
-                                                AccountingRepository.updateAccount(context, fromAccount.copy(
-                                                    currentBalance = fromAccount.currentBalance + amount
-                                                ))
-                                            }
-                                        }
-                                        // 撤销转入：转入账户 -amount
-                                        if (record.targetAccountId != null) {
-                                            val toAccount = allAccounts.value.find { it.id == record.targetAccountId }
-                                            if (toAccount != null) {
-                                                AccountingRepository.updateAccount(context, toAccount.copy(
-                                                    currentBalance = toAccount.currentBalance - amount
-                                                ))
-                                            }
-                                        }
-                                        AccountingRepository.deleteRecord(context, id)
-                                    }
+                                    AccountingRepository.deleteRecord(context, id)
                                 }
                                 transfers = AccountingRepository.getTransfersByAccount(context, accountId)
                                 selectedIds = emptySet()

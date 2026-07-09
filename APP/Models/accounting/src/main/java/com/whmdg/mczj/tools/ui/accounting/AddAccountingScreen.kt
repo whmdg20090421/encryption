@@ -333,32 +333,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
         )
         // 转账强制不计入收支统计
         val finalRecord = if (currentType == "转账") record.copy(excludeFromStats = true) else record
-        val db = AccountingRecordDb.load(context)
-        if (editingRecord != null) {
-            db.update(finalRecord).save(context)
-        } else {
-            db.add(finalRecord).save(context)
-        }
-        // 转账余额处理：转出账户 -amount，转入账户 +amount
-        if (currentType == "转账" && editingRecord == null) {
-            val amountVal = finalAmount.toDoubleOrNull() ?: 0.0
-            if (selectedAccountId != null) {
-                val fromAccount = accountMap[selectedAccountId!!]
-                if (fromAccount != null) {
-                    AccountingRepository.updateAccount(context, fromAccount.copy(
-                        currentBalance = fromAccount.currentBalance - amountVal
-                    ))
-                }
-            }
-            if (targetAccountId != null) {
-                val toAccount = accountMap[targetAccountId!!]
-                if (toAccount != null) {
-                    AccountingRepository.updateAccount(context, toAccount.copy(
-                        currentBalance = toAccount.currentBalance + amountVal
-                    ))
-                }
-            }
-        }
+        AccountingRepository.saveRecord(context, finalRecord)
         // AI 训练：用当前记录更新模型
         if (note.isNotEmpty()) {
             NotePredictor.train(context, finalRecord)

@@ -161,7 +161,7 @@ fun AccountingDetailScreen(
                                 )
                             )
                             // 更新账单报销状态
-                            AccountingRepository.updateRecord(
+                            AccountingRepository.saveRecord(
                                 context,
                                 record.copy(
                                     reimburseStatus = true,
