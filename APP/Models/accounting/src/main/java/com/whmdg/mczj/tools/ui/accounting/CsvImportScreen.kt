@@ -4,20 +4,24 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -28,7 +32,7 @@ import kotlinx.coroutines.withContext
 // 数据模型
 // ─────────────────────────────────────────────
 
-private data class AccountMappingInfo(val type: String, val keepName: Boolean, val newName: String)
+private data class AccountMappingInfo(val type: String, val keepName: Boolean, val newName: String, val initialBalance: String = "")
 
 private data class FieldDef(val key: String, val label: String)
 
@@ -718,6 +722,11 @@ private fun AccountMappingStep(
         "custom" to "自定义"
     )
 
+    // 展开状态：默认全部展开
+    val expandedStates = remember { mutableStateMapOf<String, Boolean>().apply { distinctAccounts.forEach { put(it, true) } } }
+    // 校验错误状态
+    val validationErrors = remember { mutableStateMapOf<String, Boolean>() }
+
     Column(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.weight(1f),
@@ -734,15 +743,48 @@ private fun AccountMappingStep(
             items(distinctAccounts) { csvAccName ->
                 val info = accountMapping[csvAccName]
                 val isMatched = existingAccounts.any { it.name == csvAccName }
+                val isExpanded = expandedStates[csvAccName] ?: true
+                val hasError = validationErrors[csvAccName] ?: false
+
+                // 判断余额是否已输入且合法
+                val balanceValid = info?.initialBalance?.toDoubleOrNull() != null
+                val borderColor = if (isMatched) {
+                    MaterialTheme.colorScheme.outline
+                } else if (isExpanded) {
+                    if (hasError) MaterialTheme.colorScheme.error else Color.Red
+                } else {
+                    if (balanceValid) Color(0xFF4CAF50) else Color.Red
+                }
 
                 Card(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .border(2.dp, borderColor, RoundedCornerShape(8.dp)),
                     shape = RoundedCornerShape(8.dp),
                     colors = CardDefaults.cardColors(
                         containerColor = if (isMatched)
                             MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
                         else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                    )
+                    ),
+                    onClick = {
+                        if (!isMatched) {
+                            // 点击卡片头部：校验并切换展开/收起
+                            if (isExpanded) {
+                                // 准备收起：校验余额
+                                if (balanceValid) {
+                                    expandedStates[csvAccName] = false
+                                    validationErrors[csvAccName] = false
+                                } else {
+                                    validationErrors[csvAccName] = true
+                                }
+                            } else {
+                                // 收起状态：点击展开
+                                expandedStates[csvAccName] = true
+                                validationErrors[csvAccName] = false
+                            }
+                        }
+                    }
                 ) {
                     Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                         // CSV 账户名
@@ -759,7 +801,7 @@ private fun AccountMappingStep(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary
                             )
-                        } else if (info != null) {
+                        } else if (info != null && isExpanded) {
                             Spacer(Modifier.height(8.dp))
 
                             // 账户类型选择
@@ -820,6 +862,35 @@ private fun AccountMappingStep(
                                     shape = RoundedCornerShape(8.dp),
                                     textStyle = MaterialTheme.typography.bodySmall,
                                     singleLine = true
+                                )
+                            }
+
+                            Spacer(Modifier.height(8.dp))
+
+                            // 余额输入框
+                            OutlinedTextField(
+                                value = info.initialBalance,
+                                onValueChange = {
+                                    accountMapping[csvAccName] = info.copy(initialBalance = it)
+                                    validationErrors[csvAccName] = false
+                                },
+                                label = { Text("余额") },
+                                suffix = { Text("元") },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                                textStyle = MaterialTheme.typography.bodySmall,
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                isError = hasError
+                            )
+
+                            // 校验错误提示
+                            if (hasError) {
+                                Text(
+                                    "请输入余额",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.padding(top = 4.dp)
                                 )
                             }
                         }
@@ -1195,6 +1266,24 @@ private fun doImport(
 
     // 全量重算报销统计
     AccountingRepository.recalculateReimburseTotals(context)
+
+    // 设置用户指定的初始金额
+    for ((csvAccName, info) in accountMapping) {
+        val balanceStr = info.initialBalance
+        if (balanceStr.isEmpty()) continue
+        val userBalance = balanceStr.toDoubleOrNull() ?: continue
+        val finalName = if (info.keepName) csvAccName else info.newName.ifEmpty { csvAccName }
+        val account = AccountingRepository.getAllAccounts(context).find { it.name == finalName } ?: continue
+        // 反推初始金额：initial_amount = 用户余额 - income + expense
+        val initialAmount = userBalance - account.income + account.expense
+        AccountingRepository.updateAccount(context, account.copy(
+            initialAmount = initialAmount,
+            currentBalance = userBalance
+        ))
+    }
+
+    // 全量重算每笔账单的滚动余额（需在初始金额设置完成后）
+    AccountingRepository.recalculateAllBalances(context)
 
     // 统计导入条数
     val countCursor = db.readableDatabase.rawQuery("SELECT COUNT(*) FROM records", null)

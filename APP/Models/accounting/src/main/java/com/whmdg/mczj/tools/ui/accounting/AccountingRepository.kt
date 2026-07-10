@@ -147,9 +147,10 @@ object AccountingRepository {
     /**
      * 保存一条记录（新建 + 编辑统一入口）。
      * 自动判断：record 已存在 → 编辑（先回退旧余额再应用新余额）；不存在 → 新建。
-     * 同步维护：记账天数、月度汇总、账户余额、附件回收站级联。
+     * 同步维护：记账天数、月度汇总、账户余额、每笔账单余额、附件回收站级联。
      */
     fun saveRecord(context: Context, record: AccountingRecord) {
+        val db = getDb(context)
         val oldRecord = getRecordById(context, record.id)
         val isEdit = oldRecord != null
 
@@ -164,9 +165,29 @@ object AccountingRepository {
         }
 
         val now = System.currentTimeMillis()
+
+        // 计算此笔账单的滚动余额
+        val computedBalance = if (record.accountId != null) {
+            val accCursor = db.readableDatabase.rawQuery(
+                "SELECT initial_amount FROM accounts WHERE id = ?", arrayOf(record.accountId)
+            )
+            val initialAmount = try {
+                if (accCursor.moveToFirst()) accCursor.getDouble(0) else 0.0
+            } finally { accCursor.close() }
+
+            val prevBalance = db.getPreviousBalance(record.accountId, record.happenedAt, record.id)
+                ?: initialAmount
+
+            val delta = db.computeRecordDeltaPublic(record)
+            prevBalance + delta
+        } else {
+            0.0
+        }
+
         val withTime = record.copy(year = y, month = m, day = d,
             createdAt = record.createdAt ?: now,
-            updatedAt = if (isEdit) now else (record.updatedAt ?: now))
+            updatedAt = if (isEdit) now else (record.updatedAt ?: now),
+            balance = computedBalance)
 
         val oldMonth = oldRecord?.let { Triple(it.bookName, it.year, it.month) }
         writeRecord(context, withTime, if (isEdit) "UPDATE" else "INSERT", oldMonth)
@@ -177,6 +198,11 @@ object AccountingRepository {
         }
         // 应用新记录的余额影响
         updateAccountBalanceOnRecordChange(context, withTime, isAdd = true)
+
+        // 编辑：从该记录开始重算后续账单的余额（增量级联）
+        if (isEdit) {
+            db.recalculateBalancesFromRecord(context, record.id)
+        }
 
         autoSyncIfNeeded(context)
     }
@@ -190,7 +216,7 @@ object AccountingRepository {
         )
     }
 
-    /** 删除一条记录（增量维护记账天数 + 附件回收站级联 + 月度汇总自动更新） */
+    /** 删除一条记录（增量维护记账天数 + 附件回收站级联 + 月度汇总自动更新 + 余额级联重算） */
     fun deleteRecord(context: Context, id: String) {
         val record = getRecordById(context, id)
         if (record != null) {
@@ -203,6 +229,10 @@ object AccountingRepository {
             }
             cascadeUpdateTrashStatus(context, id, "deleted")
             updateAccountBalanceOnRecordChange(context, record, isAdd = false)
+            // 先重算后续账单余额（记录还存在），再删除
+            if (record.accountId != null) {
+                getDb(context).recalculateBalancesFromRecord(context, id)
+            }
             writeRecord(context, record, "DELETE")
             autoSyncIfNeeded(context)
         }
@@ -259,7 +289,7 @@ object AccountingRepository {
     fun getRecordById(context: Context, id: String): AccountingRecord? {
         val sqlDb = getDb(context).readableDatabase
         val cursor = sqlDb.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at FROM records WHERE id = ?",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id, balance FROM records WHERE id = ?",
             arrayOf(id)
         )
         return try {
@@ -295,7 +325,12 @@ object AccountingRepository {
                     refundAmount = cursor.getDouble(23),
                     address = cursor.getString(24) ?: "",
                     createdAt = if (cursor.isNull(25)) null else cursor.getLong(25),
-                    updatedAt = if (cursor.isNull(26)) null else cursor.getLong(26)
+                    updatedAt = if (cursor.isNull(26)) null else cursor.getLong(26),
+                    categoryName = cursor.getString(27) ?: "",
+                    subcategoryName = cursor.getString(28),
+                    transactionId = cursor.getString(29) ?: "",
+                    merchantOrderId = cursor.getString(30) ?: "",
+                    balance = if (cursor.columnCount > 31 && !cursor.isNull(31)) cursor.getDouble(31) else 0.0
                 )
             } else null
         } finally {
@@ -697,6 +732,17 @@ object AccountingRepository {
     /** 导入后重算账户余额 */
     fun recalculateBalances(context: Context, replaceMode: Boolean) {
         getDb(context).recalculateBalances(replaceMode)
+    }
+
+    /** 全量重算所有账单的 balance 字段（滚动余额） */
+    fun recalculateAllBalances(context: Context) {
+        val db = getDb(context)
+        db.recalculateAllBalances(db.writableDatabase)
+    }
+
+    /** 获取指定账户最近一笔账单的余额（账户详情卡片显示用），无记录时返回 null */
+    fun getLatestBalance(context: Context, accountId: String): Double? {
+        return getDb(context).getLatestBalance(accountId)
     }
 
     /** 导入后全量重算报销统计 */

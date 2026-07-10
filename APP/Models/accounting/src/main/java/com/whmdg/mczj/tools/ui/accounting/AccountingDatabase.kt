@@ -20,7 +20,7 @@ internal class AccountingDatabase private constructor(context: Context) :
 
     companion object {
         private const val DB_NAME = "accounting.db"
-        private const val DB_VERSION = 24
+        private const val DB_VERSION = 25
         private const val TAG = "AccountingDatabase"
 
         @Volatile
@@ -108,7 +108,8 @@ internal class AccountingDatabase private constructor(context: Context) :
                 transaction_id TEXT DEFAULT '',
                 merchant_order_id TEXT DEFAULT '',
                 created_at INTEGER,
-                updated_at INTEGER
+                updated_at INTEGER,
+                balance REAL NOT NULL DEFAULT 0
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX idx_rec_book ON records(book_name)")
@@ -353,6 +354,12 @@ internal class AccountingDatabase private constructor(context: Context) :
             """.trimIndent())
             // 插入新的默认分类（转账子分类 + 存款子分类）
             insertDefaultCategoriesToDb(db)
+        }
+        if (oldVersion < 25) {
+            // records 表新增每笔账单的余额字段
+            db.execSQL("ALTER TABLE records ADD COLUMN balance REAL NOT NULL DEFAULT 0")
+            // 全量重算所有账单的余额
+            recalculateAllBalances(db)
         }
     }
 
@@ -638,7 +645,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getAllRecords(): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id, balance FROM records ORDER BY happened_at DESC",
             null
         )
         try {
@@ -654,7 +661,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByBook(bookName: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records WHERE book_name = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id, balance FROM records WHERE book_name = ? ORDER BY happened_at DESC",
             arrayOf(bookName)
         )
         try {
@@ -670,7 +677,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByAccount(accountId: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records WHERE account_id = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id, balance FROM records WHERE account_id = ? ORDER BY happened_at DESC",
             arrayOf(accountId)
         )
         try {
@@ -686,7 +693,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getTransfersByAccount(accountId: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records WHERE type = '转账' AND (account_id = ? OR target_account_id = ?) ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id, balance FROM records WHERE type = '转账' AND (account_id = ? OR target_account_id = ?) ORDER BY happened_at DESC",
             arrayOf(accountId, accountId)
         )
         try {
@@ -736,6 +743,7 @@ internal class AccountingDatabase private constructor(context: Context) :
             put("merchant_order_id", r.merchantOrderId)
             if (r.createdAt != null) put("created_at", r.createdAt) else putNull("created_at")
             if (r.updatedAt != null) put("updated_at", r.updatedAt) else putNull("updated_at")
+            put("balance", r.balance)
         }
     }
 
@@ -775,7 +783,8 @@ internal class AccountingDatabase private constructor(context: Context) :
             categoryName = c.getString(27) ?: "",
             subcategoryName = c.getString(28),
             transactionId = c.getString(29) ?: "",
-            merchantOrderId = c.getString(30) ?: ""
+            merchantOrderId = c.getString(30) ?: "",
+            balance = if (c.columnCount > 31 && !c.isNull(31)) c.getDouble(31) else 0.0
         )
     }
 
@@ -786,7 +795,7 @@ internal class AccountingDatabase private constructor(context: Context) :
     fun getRecordsByReimbursementAccount(reimbAccountId: String): List<AccountingRecord> {
         val records = mutableListOf<AccountingRecord>()
         val cursor = readableDatabase.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id, balance FROM records WHERE reimbursement_account_id = ? ORDER BY happened_at DESC",
             arrayOf(reimbAccountId)
         )
         try {
@@ -1119,7 +1128,7 @@ internal class AccountingDatabase private constructor(context: Context) :
         // records
         val records = mutableListOf<ExportRecord>()
         val recCursor = db.rawQuery(
-            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id FROM records",
+            "SELECT id, book_name, type, amount, category_id, subcategory_id, note, happened_at, year, month, day, account_id, target_account_id, discount_before, discount_off, discount_after, reimbursement_account_id, attachments, exclude_from_stats, exclude_from_budget, reimburse_status, reimburse_amount, reimburse_after_amount, refund_amount, address, created_at, updated_at, category_name, subcategory_name, transaction_id, merchant_order_id, balance FROM records",
             null
         )
         try {
@@ -1733,9 +1742,10 @@ internal class AccountingDatabase private constructor(context: Context) :
             val delta = income - expense
 
             if (replaceMode) {
+                // initial_amount 保持为0（第1673行已清零），只重算收支和当前余额
                 db.execSQL(
-                    "UPDATE accounts SET initial_amount = ?, income = ?, expense = ?, current_balance = ?, updated_at = ? WHERE id = ?",
-                    arrayOf(delta, income, expense, delta, now, accId)
+                    "UPDATE accounts SET income = ?, expense = ?, current_balance = ?, updated_at = ? WHERE id = ?",
+                    arrayOf(income, expense, delta, now, accId)
                 )
             } else {
                 db.execSQL(
@@ -1821,6 +1831,189 @@ internal class AccountingDatabase private constructor(context: Context) :
         }
         if (buffer.isNotEmpty()) merged.add(buffer.toString())
         return merged
+    }
+
+    // ─────────────────────────────────────────────
+    // 余额计算（滚动余额：balance = previous_balance + delta）
+    // ─────────────────────────────────────────────
+
+    /**
+     * 计算单条记录的余额 delta（公开版本，供 Repository 层调用）。
+     * 支出=-amount, 收入=+amount, 转账=±amount, 存款=-amount, 调整=signed amount。
+     * 报销账单使用 reimburseAfterAmount 计算实际 delta。
+     */
+    fun computeRecordDeltaPublic(r: AccountingRecord): Double {
+        val amountVal = r.amount.toDoubleOrNull() ?: 0.0
+        return when (r.type) {
+            "收入" -> amountVal
+            "支出" -> {
+                if (r.reimbursementAccountId != null) {
+                    r.reimburseAfterAmount?.toDoubleOrNull() ?: (-amountVal)
+                } else {
+                    -amountVal
+                }
+            }
+            "转账" -> -amountVal
+            "存款" -> -amountVal
+            "调整" -> amountVal
+            else -> 0.0
+        }
+    }
+
+    /**
+     * 全量重算所有账户下所有账单的 balance 字段。
+     * 用于 DB 升级（v24→v25）和导入后重算。
+     * 每个账户按 happened_at ASC 逐条计算：balance = initial_amount + Σ(delta)。
+     */
+    fun recalculateAllBalances(db: SQLiteDatabase) {
+        val accCursor = db.rawQuery("SELECT id, initial_amount FROM accounts", null)
+        val accounts = mutableListOf<Pair<String, Double>>()
+        try {
+            while (accCursor.moveToNext()) {
+                accounts.add(Pair(accCursor.getString(0), accCursor.getDouble(1)))
+            }
+        } finally {
+            accCursor.close()
+        }
+
+        for ((accId, initialAmount) in accounts) {
+            recalculateAccountBalance(db, accId, initialAmount)
+        }
+    }
+
+    /**
+     * 从指定账单开始，重算该账户后续所有账单的 balance。
+     * 用于报销状态变更等场景的增量更新。
+     */
+    fun recalculateBalancesFromRecord(context: Context, recordId: String) {
+        val record = getRecordById(recordId) ?: return
+        val accId = record.accountId ?: return
+        val db = writableDatabase
+
+        // 获取账户初始金额
+        val accCursor = db.rawQuery("SELECT initial_amount FROM accounts WHERE id = ?", arrayOf(accId))
+        val initialAmount = try {
+            if (accCursor.moveToFirst()) accCursor.getDouble(0) else 0.0
+        } finally { accCursor.close() }
+
+        // 获取该账户当前最大 balance（作为上一笔余额）
+        val prevBalance = if (record.happenedAt > 0) {
+            val prevCursor = db.rawQuery(
+                "SELECT balance FROM records WHERE account_id = ? AND happened_at < ? AND id != ? ORDER BY happened_at DESC LIMIT 1",
+                arrayOf(accId, record.happenedAt.toString(), recordId)
+            )
+            try {
+                if (prevCursor.moveToFirst()) prevCursor.getDouble(0)
+                else initialAmount  // 没有更早的记录，用初始金额
+            } finally { prevCursor.close() }
+        } else {
+            initialAmount
+        }
+
+        // 获取此记录及之后的所有记录（按时间升序）
+        val cursor = db.rawQuery(
+            """SELECT id, type, amount, reimbursement_account_id, reimburse_after_amount, account_id, target_account_id
+               FROM records
+               WHERE (account_id = ? OR target_account_id = ?) AND happened_at >= ?
+               ORDER BY happened_at ASC, created_at ASC""",
+            arrayOf(accId, accId, record.happenedAt.toString())
+        )
+
+        var runningBalance = prevBalance
+        try {
+            while (cursor.moveToNext()) {
+                val rId = cursor.getString(0)
+                val rType = cursor.getString(1)
+                val rAmount = cursor.getString(2).toDoubleOrNull() ?: 0.0
+                val rReimbAccId = cursor.getString(3)
+                val rReimbAfter = cursor.getString(4)
+                val rAccId = cursor.getString(5)
+                val rTargetAccId = cursor.getString(6)
+
+                val delta = when (rType) {
+                    "收入" -> rAmount
+                    "支出" -> {
+                        if (rReimbAccId != null) {
+                            rReimbAfter?.toDoubleOrNull() ?: (-rAmount)
+                        } else {
+                            -rAmount
+                        }
+                    }
+                    "转账" -> if (rAccId == accId) -rAmount else rAmount
+                    "存款" -> -rAmount
+                    "调整" -> rAmount
+                    else -> 0.0
+                }
+                runningBalance += delta
+                db.execSQL("UPDATE records SET balance = ? WHERE id = ?", arrayOf(runningBalance, rId))
+            }
+        } finally {
+            cursor.close()
+        }
+    }
+
+    /** 获取指定账户最近一笔账单的余额（账户详情卡片显示用） */
+    fun getLatestBalance(accountId: String): Double? {
+        val cursor = readableDatabase.rawQuery(
+            "SELECT balance FROM records WHERE account_id = ? ORDER BY happened_at DESC, created_at DESC LIMIT 1",
+            arrayOf(accountId)
+        )
+        return try {
+            if (cursor.moveToFirst()) cursor.getDouble(0) else null
+        } finally { cursor.close() }
+    }
+
+    /** 从指定记录获取上一笔余额（用于 saveRecord 计算新记录的 balance） */
+    fun getPreviousBalance(accountId: String, beforeTimestamp: Long, excludeId: String): Double? {
+        val cursor = readableDatabase.rawQuery(
+            "SELECT balance FROM records WHERE account_id = ? AND happened_at < ? AND id != ? ORDER BY happened_at DESC LIMIT 1",
+            arrayOf(accountId, beforeTimestamp.toString(), excludeId)
+        )
+        return try {
+            if (cursor.moveToFirst()) cursor.getDouble(0) else null
+        } finally { cursor.close() }
+    }
+
+    private fun recalculateAccountBalance(db: SQLiteDatabase, accId: String, initialAmount: Double) {
+        val cursor = db.rawQuery(
+            """SELECT id, type, amount, reimbursement_account_id, reimburse_after_amount, account_id, target_account_id
+               FROM records
+               WHERE account_id = ? OR target_account_id = ?
+               ORDER BY happened_at ASC, created_at ASC""",
+            arrayOf(accId, accId)
+        )
+
+        var runningBalance = initialAmount
+        try {
+            while (cursor.moveToNext()) {
+                val rId = cursor.getString(0)
+                val rType = cursor.getString(1)
+                val rAmount = cursor.getString(2).toDoubleOrNull() ?: 0.0
+                val rReimbAccId = cursor.getString(3)
+                val rReimbAfter = cursor.getString(4)
+                val rAccId = cursor.getString(5)
+                val rTargetAccId = cursor.getString(6)
+
+                val delta = when (rType) {
+                    "收入" -> rAmount
+                    "支出" -> {
+                        if (rReimbAccId != null) {
+                            rReimbAfter?.toDoubleOrNull() ?: (-rAmount)
+                        } else {
+                            -rAmount
+                        }
+                    }
+                    "转账" -> if (rAccId == accId) -rAmount else rAmount
+                    "存款" -> -rAmount
+                    "调整" -> rAmount
+                    else -> 0.0
+                }
+                runningBalance += delta
+                db.execSQL("UPDATE records SET balance = ? WHERE id = ?", arrayOf(runningBalance, rId))
+            }
+        } finally {
+            cursor.close()
+        }
     }
 
     fun validateImportData(jsonString: String) {

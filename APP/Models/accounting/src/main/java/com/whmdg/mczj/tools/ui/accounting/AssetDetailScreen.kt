@@ -52,6 +52,9 @@ fun AssetDetailScreen(accountId: String, onBack: () -> Unit, onNavigate: (Screen
 
     val currentAccount = account!!
 
+    // 最近一笔账单的滚动余额（直接从 DB 读取，不重算）
+    var latestBalance by remember { mutableStateOf(AccountingRepository.getLatestBalance(context, accountId)) }
+
     // 菜单状态
     var showMenu by remember { mutableStateOf(false) }
     // 弹窗状态
@@ -65,6 +68,7 @@ fun AssetDetailScreen(accountId: String, onBack: () -> Unit, onNavigate: (Screen
     // 刷新账户数据
     fun refreshAccount() {
         account = AccountingRepository.getAllAccounts(context).find { it.id == accountId }
+        latestBalance = AccountingRepository.getLatestBalance(context, accountId)
     }
 
     Scaffold(
@@ -632,7 +636,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("余额", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
                             Text(
-                                "${String.format("%.2f", account.currentBalance)}",
+                                "${String.format("%.2f", latestBalance ?: currentAccount.currentBalance)}",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White
                             )
@@ -668,7 +672,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                         verticalAlignment = Alignment.Bottom
                     ) {
                         Text(
-                            "${String.format("%.2f", account.currentBalance)}",
+                            "${String.format("%.2f", latestBalance ?: currentAccount.currentBalance)}",
                             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                             color = Color.White
                         )

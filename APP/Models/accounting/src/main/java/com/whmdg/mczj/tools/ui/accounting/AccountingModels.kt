@@ -257,7 +257,8 @@ data class AccountingRecord(
     val transactionId: String = "",          // 交易单号（自动记账专用，微信/支付宝）
     val merchantOrderId: String = "",        // 商户单号（自动记账专用，微信/支付宝）
     val createdAt: Long? = null,             // 账单创建时间（首次创建后锁定）
-    val updatedAt: Long? = null              // 最后修改时间（编辑/退款/报销保存时更新）
+    val updatedAt: Long? = null,             // 最后修改时间（编辑/退款/报销保存时更新）
+    val balance: Double = 0.0                // 此笔账单发生后的账户余额
 )
 
 /**

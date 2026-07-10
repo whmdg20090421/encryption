@@ -2654,8 +2654,14 @@ private fun MinePageContent(bookName: String = "", onSubPageChange: (Boolean) ->
                 TextButton(onClick = {
                     showImportConfirm = false
                     try {
-                        if (importUseCsv) AccountingRepository.importCsv(context, importUri!!)
-                        else AccountingRepository.importData(context, importUri!!)
+                        if (importUseCsv) {
+                            AccountingRepository.importCsv(context, importUri!!)
+                            AccountingRepository.recalculateBalances(context, true)
+                            AccountingRepository.recalculateAllBalances(context)
+                        } else {
+                            AccountingRepository.importData(context, importUri!!)
+                            AccountingRepository.recalculateAllBalances(context)
+                        }
                         showImportDone = true
                     } catch (_: Exception) {
                         importError = if (importUseCsv) "该CSV文件数据格式不正确或已损坏。"
