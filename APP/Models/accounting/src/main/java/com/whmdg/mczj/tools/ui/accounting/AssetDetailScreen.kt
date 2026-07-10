@@ -197,7 +197,7 @@ fun AssetDetailScreen(accountId: String, onBack: () -> Unit, onNavigate: (Screen
             // 账户卡片
             item {
                 Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    AccountCard(account = currentAccount, showStats = currentAccount.category == "tradable")
+                    AccountCard(account = currentAccount, showStats = currentAccount.category == "tradable", latestBalance = latestBalance)
                 }
             }
 
@@ -548,7 +548,7 @@ fun AssetDetailScreen(accountId: String, onBack: () -> Unit, onNavigate: (Screen
 // ── 账户卡片 ──
 
 @Composable
-private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
+private fun AccountCard(account: AccountingAccount, showStats: Boolean, latestBalance: Double? = null) {
     val context = LocalContext.current
     val config = accountTypeConfigs[account.type]
     val themeColor = remember {
@@ -636,7 +636,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("余额", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.8f))
                             Text(
-                                "${String.format("%.2f", latestBalance ?: currentAccount.currentBalance)}",
+                                "${String.format("%.2f", latestBalance ?: account.currentBalance)}",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                 color = Color.White
                             )
@@ -672,7 +672,7 @@ private fun AccountCard(account: AccountingAccount, showStats: Boolean) {
                         verticalAlignment = Alignment.Bottom
                     ) {
                         Text(
-                            "${String.format("%.2f", latestBalance ?: currentAccount.currentBalance)}",
+                            "${String.format("%.2f", latestBalance ?: account.currentBalance)}",
                             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                             color = Color.White
                         )

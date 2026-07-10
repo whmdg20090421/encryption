@@ -1886,9 +1886,17 @@ internal class AccountingDatabase private constructor(context: Context) :
      * 用于报销状态变更等场景的增量更新。
      */
     fun recalculateBalancesFromRecord(context: Context, recordId: String) {
-        val record = getRecordById(recordId) ?: return
-        val accId = record.accountId ?: return
         val db = writableDatabase
+        // 直接查 records 表获取 account_id 和 happened_at
+        val infoCursor = db.rawQuery(
+            "SELECT account_id, happened_at FROM records WHERE id = ?", arrayOf(recordId)
+        )
+        val (accId, happenedAt) = try {
+            if (infoCursor.moveToFirst()) {
+                Pair(infoCursor.getString(0), infoCursor.getLong(1))
+            } else return
+        } finally { infoCursor.close() }
+        if (accId == null) return
 
         // 获取账户初始金额
         val accCursor = db.rawQuery("SELECT initial_amount FROM accounts WHERE id = ?", arrayOf(accId))
@@ -1897,10 +1905,10 @@ internal class AccountingDatabase private constructor(context: Context) :
         } finally { accCursor.close() }
 
         // 获取该账户当前最大 balance（作为上一笔余额）
-        val prevBalance = if (record.happenedAt > 0) {
+        val prevBalance = if (happenedAt > 0) {
             val prevCursor = db.rawQuery(
                 "SELECT balance FROM records WHERE account_id = ? AND happened_at < ? AND id != ? ORDER BY happened_at DESC LIMIT 1",
-                arrayOf(accId, record.happenedAt.toString(), recordId)
+                arrayOf(accId, happenedAt.toString(), recordId)
             )
             try {
                 if (prevCursor.moveToFirst()) prevCursor.getDouble(0)
@@ -1916,7 +1924,7 @@ internal class AccountingDatabase private constructor(context: Context) :
                FROM records
                WHERE (account_id = ? OR target_account_id = ?) AND happened_at >= ?
                ORDER BY happened_at ASC, created_at ASC""",
-            arrayOf(accId, accId, record.happenedAt.toString())
+            arrayOf(accId, accId, happenedAt.toString())
         )
 
         var runningBalance = prevBalance
