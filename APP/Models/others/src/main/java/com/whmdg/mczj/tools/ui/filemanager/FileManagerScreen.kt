@@ -2485,7 +2485,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text("文件名  ${sevenZipDialogEntry.fileName}", style = MaterialTheme.typography.bodyMedium)
-                        Text("大小    ${FormatUtils.formatSize(sevenZipDialogEntry.fileSize)}", style = MaterialTheme.typography.bodyMedium)
+                        Text("大小    ${FormatUtils.formatBytes(sevenZipDialogEntry.fileSize)}", style = MaterialTheme.typography.bodyMedium)
                         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),

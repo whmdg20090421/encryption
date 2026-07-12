@@ -151,9 +151,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var pendingExternalEntry by mutableStateOf<FileEntry?>(null)
     var pendingApkEntry by mutableStateOf<FileEntry?>(null)
     var sevenZipInfo by mutableStateOf<ArchiveBrowser.SevenZipInfo?>(null)
-        private set
     var sevenZipAnalyzing by mutableStateOf(false)
-        private set
 
     private val recycleBinJson = kotlinx.serialization.json.Json {
         ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true
