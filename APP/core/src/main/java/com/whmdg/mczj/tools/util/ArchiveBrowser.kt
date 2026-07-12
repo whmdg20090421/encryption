@@ -130,7 +130,8 @@ object ArchiveBrowser {
         val headerEncrypted: Boolean,   // 头部加密（文件名不可见）
         val contentEncrypted: Boolean,  // 内容加密
         val isCorrupted: Boolean,       // 文件损坏
-        val errorMessage: String? = null
+        val errorMessage: String? = null,
+        val diagnosticInfo: String = "" // 检测失败时的原始诊断数据
     )
 
     /**
@@ -160,14 +161,19 @@ object ArchiveBrowser {
                     SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = false)
                 merged.contains("Cannot open encrypted archive", ignoreCase = true) ->
                     SevenZipInfo(fileName, fileSize, headerEncrypted = true, contentEncrypted = true, isCorrupted = false)
-                merged.contains("Cannot open the file as", ignoreCase = true) ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "文件损坏，无法识别为 7z 格式")
-                else ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "未知错误 (exitCode=$exitCode)")
+                merged.contains("Cannot open the file as", ignoreCase = true) -> {
+                    val diag = "exitCode=$exitCode\npath=$archivePath\npermission=$permissionLevel\n---\n$merged"
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "文件损坏，无法识别为 7z 格式", diagnosticInfo = diag)
+                }
+                else -> {
+                    val diag = "exitCode=$exitCode\npath=$archivePath\npermission=$permissionLevel\n---\n$merged"
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "未知错误 (exitCode=$exitCode)", diagnosticInfo = diag)
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "7z 分析失败", e)
-            SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = e.message ?: "分析失败")
+            val diag = "path=$archivePath\npermission=$permissionLevel\nexception=${e.javaClass.simpleName}\n${e.stackTraceToString()}"
+            SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = e.message ?: "分析失败", diagnosticInfo = diag)
         }
     }
 

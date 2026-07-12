@@ -2465,6 +2465,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     // ── 7z 信息弹窗 ──
     val sevenZipDialogEntry = vm.sevenZipInfo
     if (sevenZipDialogEntry != null || vm.sevenZipAnalyzing) {
+        val context = LocalContext.current
         AlertDialog(
             onDismissRequest = { if (!vm.sevenZipAnalyzing) vm.sevenZipInfo = null },
             title = { Text("7z 压缩包信息", fontWeight = FontWeight.Bold) },
@@ -2544,15 +2545,38 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 modifier = Modifier.padding(top = 4.dp)
                             )
                         }
+                        // 检测失败时显示诊断信息
+                        val diag = sevenZipDialogEntry.diagnosticInfo
+                        if (sevenZipDialogEntry.isCorrupted && diag.isNotBlank()) {
+                            Text(
+                                diag,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
                     }
                 }
             },
             confirmButton = {
+                if (sevenZipDialogEntry != null && sevenZipDialogEntry.isCorrupted && sevenZipDialogEntry.diagnosticInfo.isNotBlank()) {
+                    TextButton(
+                        onClick = {
+                            val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            cb.setPrimaryClip(android.content.ClipData.newPlainText("7z diagnostic", sevenZipDialogEntry.diagnosticInfo))
+                        },
+                        enabled = !vm.sevenZipAnalyzing
+                    ) {
+                        Text("复制")
+                    }
+                }
+            },
+            dismissButton = {
                 TextButton(
                     onClick = { vm.sevenZipInfo = null },
                     enabled = !vm.sevenZipAnalyzing
                 ) {
-                    Text("关闭")
+                    Text("取消")
                 }
             }
         )
