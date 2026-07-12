@@ -57,6 +57,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.rememberScrollState
@@ -731,8 +732,8 @@ fun VaultsListTab(
                     // 时长选项展开列表
                     AnimatedVisibility(
                         visible = showTimerPicker,
-                        enter = fadeIn() + expandVertically(),
-                        exit = fadeOut() + shrinkVertically()
+                        enter = fadeIn(tween(200)) + expandVertically(tween(200)),
+                        exit = fadeOut(tween(150)) + shrinkVertically(tween(150))
                     ) {
                         Column(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                             listOf(0 to "立即锁定", 5 to "5 分钟", 15 to "15 分钟", 30 to "30 分钟", 60 to "1 小时")

@@ -258,7 +258,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var compressTotalBytes by remember { mutableStateOf(0L) }
     var compressOutputPath by remember { mutableStateOf("") }
     var compressUseAes by remember { mutableStateOf(encSettings.compressUseAes) }
+    var compressEncryptNames by remember { mutableStateOf(false) }
     var compressOutputToOtherPanel by remember { mutableStateOf(false) }
+    var showCompressPasswordHint by remember { mutableStateOf(false) }
     var compressError by remember { mutableStateOf<Throwable?>(null) }
 
     // ── 解压对话框 ──
@@ -2290,6 +2292,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                 compressEntries = entries
                                                 compressOutputToOtherPanel = false
                                                 compressUseAes = encSettings.compressUseAes
+                                                compressEncryptNames = false
                                                 showCompressDialog = true
                                             }
                                             selectedEntry = null
@@ -4069,36 +4072,46 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
                         // ZIP 使用 AES-256 加密（默认关闭，使用 ZipCrypto）
                         if (selectedFormat == "zip") {
-                            val isEnabled = compressPassword.isNotEmpty()
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        "使用 AES-256 加密",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (isEnabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                                    )
-                                    Switch(
-                                        checked = compressUseAes,
-                                        onCheckedChange = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("使用 AES-256 加密", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Switch(
+                                    checked = compressUseAes,
+                                    onCheckedChange = {
+                                        if (compressPassword.isEmpty()) {
+                                            showCompressPasswordHint = true
+                                        } else {
                                             compressUseAes = it
                                             encSettings.setCompressUseAes(it)
-                                        },
-                                        enabled = isEnabled,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                }
-                                if (!isEnabled) {
-                                    Text(
-                                        "加密未启用",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-                                        modifier = Modifier.padding(start = 0.dp, top = 2.dp)
-                                    )
-                                }
+                                        }
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                        }
+
+                        // 7z 加密文件名（-mhe=on，隐藏文件列表）
+                        if (selectedFormat == "7z") {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("加密文件名", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Switch(
+                                    checked = compressEncryptNames,
+                                    onCheckedChange = {
+                                        if (compressPassword.isEmpty()) {
+                                            showCompressPasswordHint = true
+                                        } else {
+                                            compressEncryptNames = it
+                                        }
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                )
                             }
                         }
 
@@ -4138,6 +4151,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         level = compressLevel,
                                         password = compressPassword,
                                         useAes = compressUseAes,
+                                        encryptNames = compressEncryptNames,
                                         onProgress = { info ->
                                             compressProgress = info.progress
                                             compressBytesProcessed = info.bytesProcessed
@@ -4165,6 +4179,20 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 }
             }
         }
+    }
+
+    // ── 压缩加密需密码提示 ──
+    if (showCompressPasswordHint) {
+        AlertDialog(
+            onDismissRequest = { showCompressPasswordHint = false },
+            title = { Text("需要密码") },
+            text = { Text("请先输入密码后再启用加密选项。") },
+            confirmButton = {
+                TextButton(onClick = { showCompressPasswordHint = false }) {
+                    Text("关闭")
+                }
+            }
+        )
     }
 
     // ── 压缩进度面板 ──

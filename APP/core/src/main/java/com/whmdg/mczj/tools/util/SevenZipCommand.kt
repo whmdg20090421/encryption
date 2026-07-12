@@ -54,6 +54,10 @@ object SevenZipCommand {
             if (options.format == "zip" && options.useAes) {
                 cmd.append(" -mem=AES256")
             }
+            // 7z 加密文件名（头部加密，隐藏文件列表）
+            if (options.format == "7z" && options.encryptNames) {
+                cmd.append(" -mhe=on")
+            }
         }
 
         // 进度输出 + stderr 合并到 stdout

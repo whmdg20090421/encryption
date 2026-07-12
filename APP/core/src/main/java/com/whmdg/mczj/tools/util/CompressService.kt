@@ -26,6 +26,7 @@ object CompressService {
         val compressionLevel: Int,    // 0-9 (format dependent)
         val password: String = "",    // 空=不加密
         val useAes: Boolean = true,   // zip 加密方式
+        val encryptNames: Boolean = false, // 7z 加密文件名（-mhe=on）
     )
 
     data class ExtractOptions(

@@ -2266,6 +2266,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         level: Int,
         password: String,
         useAes: Boolean,
+        encryptNames: Boolean = false,
         onProgress: (CompressService.ProgressInfo) -> Unit,
         onComplete: (Boolean, String?, String?) -> Unit
     ) {
@@ -2278,7 +2279,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 format = format,
                 compressionLevel = level,
                 password = password,
-                useAes = useAes
+                useAes = useAes,
+                encryptNames = encryptNames
             )
             CompressService.compress(
                 context = getApplication(),

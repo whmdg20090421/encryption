@@ -53,171 +53,129 @@ KEYSTORE_PASSWORD=xxx KEY_ALIAS=xxx KEY_PASSWORD=xxx ./gradlew assembleRelease
 ./gradlew connectedAndroidTest
 
 # 仅构建 arm64-v8a（默认已配置 splits，无需额外参数）
-./gradlew :app:assembleRelease
+./gradlew :APP:app:assembleRelease
 ```
+
+**Gradle 模块**：`:APP:app`（入口）、`:APP:core`（基础设施）、`:APP:Models:others`（主要功能）、`:APP:Models:accounting`（记账本）、`:libs:libxposed-api`
 
 ---
 
-## 项目结构
+## 项目结构（多模块架构）
 
+项目拆分为 4 个 Gradle 模块：`APP/app`（入口）、`APP/core`（基础设施）、`APP/Models/others`（主要功能）、`APP/Models/accounting`（记账本）。
+
+### APP/app — 应用入口
 ```
-app/src/main/java/com/whmdg/mczj/tools/
-├── AppDataPaths.kt                    # 应用数据路径解析
-├── ToolsApp.kt                        # Application 类（初始化）
+src/main/java/com/whmdg/mczj/tools/
 ├── MainActivity.kt                    # 入口，启用 Edge-to-Edge
+├── ToolsApp.kt                        # Application 类（初始化）
 ├── CrashActivity.kt                   # Native 崩溃显示界面（从 pipe 接收崩溃信息）
 ├── ErrorReportActivity.kt             # 错误报告界面
-├── util/
-│   ├── DiagnosticLog.kt               # 诊断日志工具
-│   ├── FormatUtils.kt                 # 格式化工具（文件大小等）
-│   ├── FileAccessLevel.kt             # 文件访问通道枚举（NORMAL / SHIZUKU / ROOT）
-│   ├── FileAccessor.kt                # 文件访问抽象层（屏蔽普通/Shizuku/Root 差异）
-│   ├── FolderSizeCalculator.kt        # 文件夹大小统计（全量+差异自底向上算法）
-│   ├── AppIconHelper.kt               # 文件管理器中显示已安装应用图标
-│   ├── JxlCoilDecoder.kt             # Coil 图片加载器 JPEG XL 解码器
-│   ├── BinaryExtractor.kt             # 7zzs 二进制提取（nativeLibraryDir → AppDataPaths.binaries()）
-│   ├── SevenZipCommand.kt             # 7zzs 命令行构建器（压缩/列表/解压/单文件提取）
-│   ├── ArchiveBrowser.kt              # 压缩包浏览（7zzs l 解析目录树 + 密码检测 + 会话缓存）
-│   ├── CompressService.kt             # 压缩/解压服务（三条权限路径：Normal/Shizuku/Root + 进度回调）
-│   └── XposedDetector.kt              # Xposed 模块激活检测（反射 + SystemProperties）
-├── xposed/
-│   └── XposedInit.kt                  # Xposed 模块入口（libxposed API，设置 mcjz.xposed.active 属性）
-├── auth/                              # 认证/授权模块（密钥→功能特性门控）
-│   ├── Feature.kt                     # 功能枚举（ENCRYPTION_VAULT, FILE_MANAGER, BATCH_DOWNLOADER, WIFI, DIARY, RP_HUB, ACCOUNTING 等）
-│   ├── NativeAuth.kt                  # JNI 接口，调用 authcore 验证密码（返回派生密钥）
-│   ├── KeyProfile.kt                  # 密钥 ID → Feature 集合映射（3 组预置密钥）
-│   ├── PermissionManager.kt           # 全局认证状态管理（StateFlow<AuthState>）
-│   ├── TokenCodec.kt                  # Token 编解码（JSON + HMAC-SHA256 签名）
-│   ├── TokenStorage.kt                # Token 持久化（SharedPreferences + AES-GCM 加密）
-│   ├── KeystoreMaster.kt              # Android Keystore AES-256-GCM 密钥包装（StrongBox 优先）
-│   ├── SecurityEnforcer.kt            # 业务层权限检查失败时的安全自杀机制
-│   ├── LocalPermissionGate.kt         # CompositionLocal<Boolean> UI 权限门控
-│   ├── ReadOnlyGate.kt                # 只读模式包装组件（透明遮罩拦截触摸）
-│   ├── PasswordDialog.kt              # 密码输入对话框
-│   └── NoPermissionScreen.kt          # 无权限提示页面
-├── encryption/
-│   ├── core/                          # 密码学原语层
-│   │   ├── AesGcm.kt                  # AES-256-GCM 加密/解密
-│   │   ├── Argon2id.kt                # Argon2id KDF（BouncyCastle）
-│   │   ├── Pbkdf2.kt                  # PBKDF2-SHA256 KDF
-│   │   ├── KeyDerivation.kt           # KDF 统一调度（Argon2id / PBKDF2）
-│   │   ├── FileCodec.kt               # 文件分块加密/解密（与 Python 工具二进制兼容）
-│   │   ├── FilenameCodec.kt           # 文件名 AES-GCM 加密（含 zlib 压缩回退 + SHA-256 映射）
-│   │   ├── NailObfuscation.kt         # 钉子混淆（自定义模式的抗篡改插入/校验）
-│   │   ├── HexCodec.kt                # Hex 编解码
-│   │   ├── SecureRandom.kt            # 安全随机字节
-│   │   └── FileConstants.kt           # 文件格式常量（魔数头、法律尾、分块大小）
-│   ├── data/                          # 数据模型与持久化
-│   │   ├── VaultConfig.kt             # 保险箱配置（KDF 参数、加密 DEK、HMAC 完整性、3 副本备份）
-│   │   ├── VaultRecord.kt             # 保险箱元信息记录
-│   │   ├── VaultDb.kt                 # 全局 vault_db.json（内部 + 外部双备份）
-│   │   ├── VaultPaths.kt              # 路径解析（内部/外部存储）
-│   │   ├── NameMapping.kt             # 文件名哈希→Hex 映射持久化
-│   │   ├── StorageLocation.kt         # INTERNAL / EXTERNAL 枚举
-│   │   ├── CanonicalJson.kt           # Python json.dumps(sort_keys=True) 的 Kotlin 等价
-│   │   └── FolderSizeDb.kt            # 文件夹大小缓存数据库（v1.2 文本格式）
-│   ├── models/
-│   │   └── EncryptionNode.kt          # 加密文件树节点模型
-│   └── services/                      # 业务逻辑层
-│       ├── VaultService.kt            # 保险箱 CRUD（创建/打开/删除/导入/改密）
-│       ├── VaultSession.kt            # 解锁后的在线会话（持有 DEK）
-│       ├── CryptoService.kt           # 高级加密/解密文件入/出保险箱
-│       └── EncryptionTaskManager.kt   # 加密任务队列管理（并发控制/进度回调）
-├── security/
-│   ├── ShellExecutor.kt               # 统一 shell 执行入口（Permission 枚举 + 参数校验 + 错误抛出）
-│   ├── TeeManager.kt                  # Android Keystore RSA TEE + 生物识别快速解锁
-│   ├── SpecialPermissionVerifier.kt   # 检测 & 提权运行（无障碍/ADB/管理员/Root）
-│   ├── ShizukuAuthorizer.kt           # Shizuku 授权（privileged shell 命令执行）
-│   ├── ShellService.kt                # Shizuku UserService（Binder IPC 执行 shell）
-│   ├── AndroidPermissionLevel.kt      # 权限级别枚举（STANDARD → ROOT 六级）
-│   ├── MyAccessibilityService.kt      # 无障碍服务声明
-│   └── MyDeviceAdminReceiver.kt       # 设备管理器接收器
-├── fileop/                            # 文件操作模块（参考 MaterialFiles 架构）
-│   ├── FileOperator.kt                # 文件操作抽象接口（copy/move/delete/mkdir）
-│   ├── JavaFileOperator.kt            # Java File API 实现
-│   ├── ShellFileOperator.kt           # Root/Shizuku Shell 实现
-│   ├── FileOperationJob.kt            # Job 基类
-│   ├── CopyJob.kt / MoveJob.kt / DeleteJob.kt  # 具体操作 Job
-│   ├── FileOperationManager.kt        # 全局单例，StateFlow 驱动进度/冲突/错误弹窗
-│   ├── FileOperationService.kt        # 前台 Service 执行长时间操作
-│   └── webdav/                        # WebDAV 客户端模块
-│       ├── WebDavServerConfig.kt      # 服务器配置模型
-│       ├── WebDavServerStore.kt       # 配置持久化存储
-│       ├── WebDavFileClient.kt        # WebDAV 文件操作（实现 FileOperator 接口）
-│       ├── WebDavPath.kt              # 路径解析
-│       ├── WebDavAuthenticator.kt     # 认证
-│       └── client/                    # 底层 HTTP 客户端（OkHttp + dav4jvm）
-│           ├── Client.kt
-│           ├── Authentication.kt
-│           ├── Authority.kt
-│           ├── Authenticator.kt
-│           ├── DavIOException.kt
-│           ├── DavResourceCompat.kt
-│           ├── MemoryCookieJar.kt
-│           ├── Protocol.kt
-│           └── ResponseExtensions.kt
 └── ui/
-    ├── HomeScreen.kt                  # 导航容器 + 主页/加密/云盘/设置所有屏幕
-    ├── VaultCreateScreen.kt           # 新建保险箱向导（含 Argon2id 基准测试）
-    ├── VaultOpenScreen.kt             # 保险箱文件浏览器（加密导入/解密导出/重命名/移动/复制/删除）
-    ├── VaultChangePasswordScreen.kt   # 修改保险箱密码
-    ├── EncryptionSettings.kt          # 加密模块偏好（SharedPreferences 响应式）
-    ├── FileManagerScreen.kt           # 文件管理器
-    ├── FileManagerViewModel.kt        # 文件管理器 ViewModel（shell 路由 + 大小统计）
-    ├── RpHubScreen.kt                 # RP Hub WebView 界面
-    ├── RpHubServer.kt                 # RP Hub 本地 NanoHTTPD 服务器
-    ├── RpHubTrafficPanel.kt           # RP Hub 流量统计面板
-    ├── RpHubDownloadPanel.kt          # RP Hub 下载管理面板
-    ├── RpHubDebugPanel.kt             # RP Hub 调试面板
-    ├── WifiScreen.kt                  # WiFi 传输功能界面
-    ├── SizeCalcManager.kt             # 大小统计进度管理（全局单例）
-    ├── AuthManagementScreen.kt        # 认证管理（切换密钥、清除授权）
-    ├── SecurityScreen.kt              # 安全设置入口菜单
-    ├── SpecialPermissionsScreen.kt    # 特殊权限管理 + 能力矩阵对比
-    ├── PermissionSettingsScreen.kt    # Android 运行时权限管理
-    ├── AppPermissionsScreen.kt        # 应用权限详情
-    ├── PermissionManagementConfigScreen.kt  # 权限管理配置
-    ├── PermissionGuideViewModel.kt    # 权限引导 ViewModel
-    ├── ErrorDialog.kt                 # 错误对话框组件
-    ├── DiaryScreen.kt                 # 日记首页（笔记本列表 + DropdownMenu）
-    ├── DiaryBookScreen.kt             # 笔记本详情（日期时间线 + Canvas 圆圈）
-    ├── DiaryModels.kt                 # 日记数据模型（DiaryBook / DiaryDb，JSON 持久化）
-    ├── ImageViewerScreen.kt           # 图片查看器（HorizontalPager + telephoto zoom）
-    ├── TextEditorScreen.kt            # 代码/文本编辑器（Sora CodeEditor）
-    ├── ChangelogScreen.kt             # 更新日志
-    ├── AboutScreen.kt                 # 关于页面
-    ├── WebDavEditDialog.kt            # WebDAV 服务器编辑对话框
-    ├── FileOperationDialogs.kt        # 文件操作冲突/错误确认弹窗
-    ├── accounting/                    # 记账本模块
-    │   ├── AccountingScreen.kt        # 记账本首页（5 Tab：首页/资产/统计/日历/我的）
-    │   ├── AccountingDetailScreen.kt  # 账单详情（报销操作 + 编辑入口）
-    │   ├── AddAccountingScreen.kt     # 记一笔（收支类型 + 金额键盘 + 日期时间齿轮 + 分类选择 + 附件）
-    │   ├── AccountingModels.kt        # 数据模型（Record/Category/Account/Attachment + 账户类型配置）
-    │   ├── AccountingDatabase.kt      # SQLite 数据库（5 表：settings/categories/records/accounts/attachment_trash）
-    │   ├── AccountingRepository.kt    # 数据访问层（Repository 模式，禁止外部直接使用 Database）
-    │   ├── CsvImportScreen.kt         # CSV 导入流程（字段映射→账户映射→分类映射→确认）
-    │   ├── NotePredictor.kt           # 备注预测器（MLP + Adam + 对比学习，持久化到 ai_model/）
-    │   ├── ReimbursementAccountScreen.kt  # 报销账户列表（分组 + 汇总）
-    │   └── AddReimbursementAccountScreen.kt # 添加报销账户
-    ├── components/
-    │   ├── GlowCard.kt               # 青色光晕边框卡片组件
-    │   ├── ApkInfoDialog.kt          # APK 信息弹窗
-    │   └── FileTypeIcon.kt           # 文件类型彩色图标组件
-    ├── encryption/
-    │   ├── EncryptionProgressIcon.kt  # 加密进度动画图标
-    │   └── EncryptionProgressPanel.kt # 加密进度面板（任务列表/统计）
-    ├── download/                      # 下载器模块
-    │   ├── BatchDownloaderScreen.kt   # 批量下载器界面
-    │   ├── FADownloaderScreen.kt      # FA 下载器界面
-    │   ├── FADownloaderViewModel.kt   # FA 下载器 ViewModel
-    │   ├── FALoginScreen.kt           # FA 登录界面
-    │   └── Deviant/                   # DeviantArt 下载器
-    │       ├── DeviantDownloaderScreen.kt
-    │       ├── DeviantDownloaderViewModel.kt
-    │       ├── DeviantLoginScreen.kt
-    │       └── DeviantModels.kt
+    └── HomeScreen.kt                  # 导航容器，路由到各功能模块的 ModuleScreen
+```
+
+### APP/core — 基础设施（被所有模块依赖）
+```
+src/main/java/com/whmdg/mczj/tools/
+├── AppDataPaths.kt                    # 应用数据路径解析
+├── auth/                              # 认证/授权模块（密钥→功能特性门控）
+│   ├── Feature.kt                     # 功能枚举
+│   ├── NativeAuth.kt                  # JNI 接口，调用 authcore 验证密码
+│   ├── KeyProfile.kt                  # 密钥 ID → Feature 集合映射
+│   ├── PermissionManager.kt           # 全局认证状态管理（StateFlow<AuthState>）
+│   ├── TokenCodec.kt / TokenStorage.kt / KeystoreMaster.kt
+│   ├── SecurityEnforcer.kt            # 业务层权限检查失败时的安全自杀
+│   ├── LocalPermissionGate.kt / ReadOnlyGate.kt / PasswordDialog.kt
+│   └── NoPermissionScreen.kt
+├── encryption/                        # 加密模块（core/data/models/services）
+│   ├── core/                          # 密码学原语（AesGcm, Argon2id, FileCodec, FilenameCodec 等）
+│   ├── data/                          # VaultConfig, VaultDb, VaultPaths, NameMapping 等
+│   ├── models/                        # EncryptionNode
+│   └── services/                      # VaultService, VaultSession, CryptoService, EncryptionTaskManager
+├── security/
+│   ├── ShellExecutor.kt               # 统一 shell 执行入口
+│   ├── TeeManager.kt                  # TEE 生物识别快速解锁
+│   ├── SpecialPermissionVerifier.kt / ShizukuAuthorizer.kt / ShellService.kt
+│   └── AndroidPermissionLevel.kt / AccessibilityServiceBridge.kt / MyDeviceAdminReceiver.kt
+├── util/                              # 基础工具类
+│   ├── DiagnosticLog.kt / FormatUtils.kt
+│   ├── FileAccessLevel.kt / FileAccessor.kt / FolderSizeCalculator.kt
+│   ├── AppIconHelper.kt
+│   ├── BinaryExtractor.kt / SevenZipCommand.kt / ArchiveBrowser.kt / CompressService.kt
+│   └── XposedDetector.kt
+└── ui/
+    ├── Screen.kt                      # Screen sealed class（全局导航定义）
+    ├── FileEntry.kt / ActivityRef.kt
+    ├── components/                    # GlowCard, ApkInfoDialog, FileTypeIcon
+    ├── security/                      # SecurityRoute + SecurityModuleScreen + 权限管理页面
     └── theme/                         # Color / Theme / Type
 ```
+
+### APP/Models/others — 主要功能模块
+```
+src/main/java/com/whmdg/mczj/tools/
+├── fileop/                            # 文件操作模块（参考 MaterialFiles 架构）
+│   ├── FileOperator.kt                # 抽象接口（copy/move/delete/mkdir）
+│   ├── JavaFileOperator.kt / ShellFileOperator.kt
+│   ├── FileOperationJob.kt / CopyJob.kt / MoveJob.kt / DeleteJob.kt
+│   ├── FileOperationManager.kt        # 全局单例，StateFlow 驱动进度/冲突/错误弹窗
+│   ├── FileOperationService.kt        # 前台 Service
+│   └── webdav/                        # WebDAV 客户端（WebDavServerConfig/Store/FileClient/Path/Authenticator + client/）
+├── xposed/
+│   └── XposedInit.kt                  # Xposed 模块入口
+├── util/
+│   └── JxlCoilDecoder.kt             # Coil 图片加载器 JPEG XL 解码器
+└── ui/
+    ├── SizeCalcManager.kt             # 大小统计进度管理
+    ├── ErrorDialog.kt                 # 错误对话框组件
+    ├── AboutScreen.kt                 # 关于页面
+    ├── ChangelogScreen.kt             # 更新日志
+    ├── filemanager/                   # 文件管理器
+    │   ├── FileManagerRoute.kt        # sealed class: Home / TextEditor / ImageViewer
+    │   ├── FileManagerModuleScreen.kt # Compose 导航容器
+    │   ├── FileManagerScreen.kt       # 文件管理器主界面
+    │   ├── FileManagerViewModel.kt    # ViewModel（shell 路由 + 大小统计）
+    │   ├── ImageViewerScreen.kt       # 图片查看器
+    │   ├── TextEditorScreen.kt        # 代码/文本编辑器
+    │   ├── FileOperationDialogs.kt    # 文件操作冲突/错误弹窗
+    │   └── WebDavEditDialog.kt        # WebDAV 服务器编辑对话框
+    ├── encryption/                    # 加密 UI
+    │   ├── EncryptionRoute.kt / EncryptionModuleScreen.kt
+    │   ├── EncryptionHomeScreen.kt / VaultCreateScreen.kt / VaultOpenScreen.kt
+    │   ├── VaultChangePasswordScreen.kt / EncryptionSettings.kt
+    │   └── EncryptionProgressIcon.kt / EncryptionProgressPanel.kt
+    ├── diary/                         # 日记模块
+    │   ├── DiaryRoute.kt / DiaryModuleScreen.kt
+    │   ├── DiaryScreen.kt / DiaryBookScreen.kt / DiaryModels.kt
+    ├── download/                      # 下载器模块
+    │   ├── DownloaderRoute.kt / DownloaderModuleScreen.kt
+    │   ├── BatchDownloaderScreen.kt / FADownloaderScreen.kt / FADownloaderViewModel.kt / FALoginScreen.kt
+    │   └── Deviant/ (DeviantDownloaderScreen/ViewModel/LoginScreen/Models)
+    ├── rphub/                         # RP Hub 模块
+    │   ├── RpHubRoute.kt / RpHubModuleScreen.kt
+    │   ├── RpHubScreen.kt / RpHubServer.kt / RpHubTrafficPanel.kt / RpHubDownloadPanel.kt / RpHubDebugPanel.kt
+    └── wifi/                          # WiFi 传输模块
+        ├── WifiRoute.kt / WifiModuleScreen.kt
+        └── WifiScreen.kt
+```
+
+### APP/Models/accounting — 记账本模块
+```
+src/main/java/com/whmdg/mczj/tools/ui/accounting/
+├── AccountingRoute.kt / AccountingModuleScreen.kt
+├── AccountingScreen.kt / AccountingDetailScreen.kt / AddAccountingScreen.kt
+├── AccountingModels.kt / AccountingDatabase.kt / AccountingRepository.kt
+├── CsvImportScreen.kt / NotePredictor.kt
+├── ReimbursementAccountScreen.kt / AddReimbursementAccountScreen.kt
+```
+
+### 路由层模式（*Route.kt + *ModuleScreen.kt）
+
+每个 UI 功能模块采用统一的内部路由模式：
+- `*Route.kt`：sealed class 定义模块内子路由（如 `FileManagerRoute.Home` / `.TextEditor` / `.ImageViewer`）
+- `*ModuleScreen.kt`：Compose 导航容器，管理 backStack，根据 Route 渲染对应 Screen
+- `HomeScreen.kt` 通过 `Screen.*` sealed class 路由到各模块的 `*ModuleScreen`
 
 **构建工具** (`tools/`)：
 ```
@@ -225,7 +183,7 @@ gen_password_hashes.py                 # 预生成 Argon2id 密码哈希 → has
 wait_and_download.sh                   # CI 产物下载辅助脚本
 ```
 
-**Native 代码** (`app/src/main/cpp/`)：
+**Native 代码** (`APP/core/src/main/cpp/`)：
 ```
 CMakeLists.txt                         # 构建 authcore 共享库
 auth_jni.cpp                           # JNI 入口（verifyPassword / keyIdOf）
@@ -240,32 +198,38 @@ third_party/argon2/                    # 内嵌 Argon2 实现（供 JNI 直接�
 
 ## 核心架构设计
 
-### 导航（Screen sealed class）
+### 导航（Screen sealed class + 模块内 Route）
+
+两级路由：`Screen` sealed class（core 模块）路由到各功能模块的 `*ModuleScreen`，模块内 `*Route` sealed class 管理子页面。
 
 ```
-主页 (Dashboard)
-  ├── 加密 (EncryptionHome)
-  │     ├── 保险箱列表 (VaultsListTab)
+Screen.Home → HomeScreen（底部导航容器）
+  ├── Screen.EncryptionHome → EncryptionModuleScreen
+  │     ├── EncryptionRoute.VaultsList → 保险箱列表
   │     │     ├── 新建保险箱 (VaultCreate)
   │     │     ├── 打开保险箱 (VaultOpen)  ← 含 TEE 生物识别快速解锁
   │     │     └── 修改密码 (VaultChangePassword)
-  │     ├── 云盘 (CloudTab)             ← 占位，待实现
-  │     └── 设置 (EncryptionSettingsTab)
-  ├── 日记 (Diary)
-  │     └── 笔记本详情 (DiaryBookDetail)  ← 日期时间线
-  ├── 记账本 (Accounting)
+  │     ├── EncryptionRoute.CloudTab   ← 占位，待实现
+  │     └── EncryptionRoute.Settings → 加密设置
+  ├── Screen.Diary → DiaryModuleScreen
+  │     └── DiaryRoute.BookDetail → 笔记本详情（日期时间线）
+  ├── Screen.Accounting → AccountingModuleScreen
   │     ├── 记一笔 (AddAccounting)         ← 金额键盘 + 日期时间齿轮选择器
   │     ├── 账单详情 (AccountingDetail)    ← 报销操作
   │     ├── 报销账户 (ReimbursementAccount)
   │     └── 添加报销账户 (AddReimbursementAccount)
-  ├── WiFi (Wifi)
-  ├── 批量下载 (BatchDownloader)
-  ├── FA 下载 (FADownloader / FALogin)
-  ├── DeviantArt 下载 (DeviantDownloader / DeviantLogin)
-  └── 文件管理器 (FileManager)           ← 含 WebDAV 快捷访问
+  ├── Screen.Wifi → WifiModuleScreen
+  ├── Screen.BatchDownloader → DownloaderModuleScreen
+  │     ├── FA 下载 (FADownloader / FALogin)
+  │     └── DeviantArt 下载 (DeviantDownloader / DeviantLogin)
+  ├── Screen.FileManager → FileManagerModuleScreen
+  │     ├── FileManagerRoute.Home → 文件管理器主界面（含 WebDAV 快捷访问）
+  │     ├── FileManagerRoute.TextEditor → 文本编辑器
+  │     └── FileManagerRoute.ImageViewer → 图片查看器
+  └── Screen.RpHub → RpHubModuleScreen
 
-设置 (Settings)
-  ├── 安全 (Security)
+Screen.Settings → 设置
+  ├── SecurityModuleScreen
   │     ├── 权限设置 (PermissionSettings)
   │     └── 特殊权限 (SpecialPermissions)
   ├── 关于 (About)
@@ -409,7 +373,7 @@ CopyJob / MoveJob / DeleteJob
 ### 日记模块
 
 - `DiaryBook` 数据模型 + `DiaryDb` JSON 持久化（存储于 `AppDataPaths`）
-- 导航：`Screen.Diary`（笔记本列表）→ `Screen.DiaryBookDetail`（笔记本详情）
+- 导航：`Screen.Diary` → `DiaryModuleScreen` → `DiaryRoute.BookDetail`（笔记本详情）
 - 笔记本详情页左侧日期时间线：Canvas 绘制竖线 + 空心圆圈，LazyColumn 前后各 10 年无限滚动
 - 工具栏名称居中：`onSizeChanged` 动态测量按钮宽度，`widthIn(max)` 约束避免重叠
 
