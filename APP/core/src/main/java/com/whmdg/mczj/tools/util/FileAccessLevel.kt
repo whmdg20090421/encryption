@@ -10,7 +10,7 @@ enum class FileAccessLevel { NORMAL, SHIZUKU, ROOT }
  * 统一的目录条目（脱离 FileEntry 依赖，专供后台扫描使用）。
  * mtime 单位：毫秒。
  *   - NORMAL 通道：来自 File.lastModified()，原生毫秒精度
- *   - SHIZUKU / ROOT 通道：来自 `ls -lap` 的 "yyyy-MM-dd HH:mm"，分钟级精度
+ *   - SHIZUKU / ROOT 通道：来自 `find -printf %T@` 的 Unix 时间戳，秒级精度
  *   差异统计的 mtime 对比要求同一路径始终走同一通道，否则不一致会被识别为"已变化"。
  */
 data class DirEntry(

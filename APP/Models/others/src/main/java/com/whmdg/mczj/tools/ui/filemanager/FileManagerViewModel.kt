@@ -382,18 +382,24 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 从 ls -lap 输出行中精确提取原始文件名（保留多空格）。
-     * 跳过前 7 个空白分隔字段后，剩余全部为原始文件名。
+     * 通过 find -printf 列出目录内容（保留前导空格等特殊字符）。
+     * 输出格式: %f|%s|%T@|%m|%u|%g|%M\n
+     * @return 原始行列表，调用方自行解析
      */
-    private fun parseLsFilename(line: String): String? {
-        var pos = 0
-        repeat(7) {
-            while (pos < line.length && line[pos].isWhitespace()) pos++
-            if (pos >= line.length) return null
-            while (pos < line.length && !line[pos].isWhitespace()) pos++
+    private fun listDirViaFind(
+        dirPath: String,
+        showHidden: Boolean
+    ): List<String> {
+        val normalized = if (dirPath == "/") "/" else dirPath.trimEnd('/').ifEmpty { "/" }
+        val escaped = SevenZipCommand.escape(normalized)
+        val hiddenFilter = if (showHidden) "" else " -not -name '.*'"
+        val cmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
+        return try {
+            val stdout = ShellExecutor.execute(Permission.MAX, cmd, debug = true)
+            stdout.lines().filter { it.isNotBlank() }
+        } catch (_: Exception) {
+            emptyList()
         }
-        while (pos < line.length && line[pos].isWhitespace()) pos++
-        return if (pos < line.length) line.substring(pos) else null
     }
 
     /**
@@ -404,79 +410,45 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun listDirEntriesViaShell(path: String, showHidden: Boolean, longFormat: Boolean = false, displayPath: String = path): List<FileEntry> {
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
         val normalizedDisplayPath = if (displayPath == "/") "/" else displayPath.trimEnd('/').ifEmpty { "/" }
-        val escapedPath = SevenZipCommand.escape(normalizedPath)
-        val flags = buildString {
-            append("-l")
-            if (showHidden) append("a")
-            append("p")
-        }
-        val command = "ls $flags $escapedPath"
 
-        val stdout = try {
-            ShellExecutor.execute(Permission.MAX, command, debug = true)
-        } catch (e: ShellException) {
-            DiagnosticLog.log("ShellLs", "执行失败: ${e.stderr}")
-            lastShellStderr = e.stderr.ifBlank { e.message ?: "执行失败" }
-            return emptyList()
-        } catch (e: Throwable) {
-            DiagnosticLog.log("ShellLs", "执行异常: ${e.message}")
-            lastShellStderr = e.message ?: "执行异常"
+        val findLines = listDirViaFind(normalizedPath, showHidden)
+        if (findLines.isEmpty()) {
+            lastShellStderr = ""
             return emptyList()
         }
-
-        DiagnosticLog.log("ShellLs", "cmd=$command out=${stdout.length}字符")
         lastShellStderr = ""
 
         val entries = mutableListOf<FileEntry>()
 
         // 收集软链接，批量检测目标类型
         val symlinks = mutableMapOf<String, String>()
-        for (raw in stdout.lines()) {
-            val line = raw.trimEnd('\r')
-            if (line.isBlank() || line.startsWith("total ")) continue
-            val parts = line.split("\\s+".toRegex())
-            if (parts.size < 8 || parts[0].length < 10) continue
-            if (parts[0][0] == 'l') {
-                val rn = parseLsFilename(line) ?: continue
-                val nm = if (rn.contains(" -> ")) rn.substringBefore(" -> ") else rn.trimEnd('/')
-                if (nm == "." || nm == "..") continue
-                val cp = if (normalizedDisplayPath == "/") "/$nm" else "$normalizedDisplayPath/$nm"
-                symlinks[cp] = rn.substringAfter(" -> ", "")
+        for (line in findLines) {
+            val parts = line.split("|")
+            if (parts.size < 7) continue
+            val perms = parts[6]
+            if (perms.startsWith("l")) {
+                val name = parts[0]
+                val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
+                symlinks[childPath] = ""
             }
         }
         checkSymlinkTargets(symlinks)
 
-        for (raw in stdout.lines()) {
-            val line = raw.trimEnd('\r')
-            if (line.isBlank()) continue
-            if (line.startsWith("total ")) continue
-
-            val parts = line.split("\\s+".toRegex())
-            if (parts.size < 8) continue
-            val perms = parts[0]
-            if (perms.length < 10) continue
-
-            val rawName = parseLsFilename(line) ?: continue
-            // 提取文件名：软链接去掉 " -> target" 部分，目录去掉尾部 /
-            val name = if (rawName.contains(" -> ")) {
-                rawName.substringBefore(" -> ")
-            } else {
-                rawName.trimEnd('/')
-            }
+        for (line in findLines) {
+            val parts = line.split("|")
+            if (parts.size < 7) continue
+            val name = parts[0]
             if (name == "." || name == "..") continue
-            if (!showHidden && name.startsWith(".")) continue
-
+            val size = parts[1].toLongOrNull() ?: 0L
+            val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
+            val perms = parts[6]
             val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
             val isDir = when {
-                perms[0] == 'd' -> true
-                perms[0] == 'l' -> symlinkTypeCache[childPath] ?: false
-                else -> rawName.endsWith("/")
+                perms.startsWith("d") -> true
+                perms.startsWith("l") -> symlinkTypeCache[childPath] ?: false
+                else -> false
             }
-            val size = parts[4].toLongOrNull() ?: 0L
-            val modified = try {
-                SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
-            } catch (_: Exception) { 0L }
-            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, modified))
+            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong()))
         }
         return entries
     }
@@ -1518,52 +1490,38 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 通过 shell 列出目录直接子项（含文件大小），用于受保护目录 */
     private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? {
-        val escapedPath = SevenZipCommand.escape(dirPath)
-        val cmd = "ls -lap $escapedPath"
-        val stdout = try {
-            ShellExecutor.execute(Permission.MAX, cmd, debug = true)
-        } catch (_: Exception) { return null }
-        if (stdout.isBlank()) return null
+        val normalized = if (dirPath == "/") "/" else dirPath.trimEnd('/').ifEmpty { "/" }
+        val findLines = listDirViaFind(normalized, showHidden = true)
+        if (findLines.isEmpty()) return null
 
         val entries = mutableListOf<FileEntry>()
 
         // 收集软链接，批量检测目标类型
         val symlinks = mutableMapOf<String, String>()
-        for (raw in stdout.lines()) {
-            val line = raw.trimEnd('\r')
-            if (line.isBlank() || line.startsWith("total ")) continue
-            val parts = line.split("\\s+".toRegex())
-            if (parts.size < 8 || parts[0].length < 10) continue
-            if (parts[0][0] == 'l') {
-                val rn = parseLsFilename(line) ?: continue
-                val nm = if (rn.contains(" -> ")) rn.substringBefore(" -> ") else rn.trimEnd('/')
-                if (nm == "." || nm == "..") continue
-                symlinks["$dirPath/$nm"] = rn.substringAfter(" -> ", "")
+        for (line in findLines) {
+            val parts = line.split("|")
+            if (parts.size < 7) continue
+            if (parts[6].startsWith("l")) {
+                symlinks["$normalized/${parts[0]}"] = ""
             }
         }
         checkSymlinkTargets(symlinks)
 
-        for (raw in stdout.lines()) {
-            val line = raw.trimEnd('\r')
-            if (line.isBlank() || line.startsWith("total ")) continue
-            val parts = line.split("\\s+".toRegex())
-            if (parts.size < 8) continue
-            val perms = parts[0]
-            if (perms.length < 10) continue
-            val rawName = parseLsFilename(line) ?: continue
-            val name = if (rawName.contains(" -> ")) rawName.substringBefore(" -> ") else rawName.trimEnd('/')
+        for (line in findLines) {
+            val parts = line.split("|")
+            if (parts.size < 7) continue
+            val name = parts[0]
             if (name == "." || name == "..") continue
-            val childPath = "$dirPath/$name"
+            val size = parts[1].toLongOrNull() ?: 0L
+            val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
+            val perms = parts[6]
+            val childPath = "$normalized/$name"
             val isDir = when {
-                perms[0] == 'd' -> true
-                perms[0] == 'l' -> symlinkTypeCache[childPath] ?: false
-                else -> rawName.endsWith("/")
+                perms.startsWith("d") -> true
+                perms.startsWith("l") -> symlinkTypeCache[childPath] ?: false
+                else -> false
             }
-            val size = parts[4].toLongOrNull() ?: 0L
-            val modified = try {
-                SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
-            } catch (_: Exception) { 0L }
-            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, modified))
+            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong()))
         }
         return entries
     }
@@ -1632,23 +1590,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val entries = mutableListOf<FileEntry>()
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
         val normalizedDisplayPath = if (displayPath == "/") "/" else displayPath.trimEnd('/').ifEmpty { "/" }
-        val escapedPath = SevenZipCommand.escape(normalizedPath)
 
-        // Root/Shizuku 使用长格式 ls -lap 以获取文件大小和时间戳
-        val lsFlags = if (useRoot) {
-            buildString {
-                append("-l")
-                if (showHidden) append("a")
-                append("p")
-            }
-        } else {
-            if (showHidden) "-1Ap" else "-1p"
-        }
-        val command = "ls $lsFlags $escapedPath"
-        DiagnosticLog.log("LsShell", "命令: $command")
-
-        val stdout = try {
-            ShellExecutor.execute(Permission.MAX, command, debug = true)
+        val findLines = try {
+            listDirViaFind(normalizedPath, showHidden)
         } catch (e: Throwable) {
             val isApkAssetsNoise = e is java.io.IOException && (
                 e.stackTrace.any { it.className == "android.content.res.ApkAssets" } ||
@@ -1663,74 +1607,52 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             loadError = if (e is Exception) e else RuntimeException(e)
             return emptyList()
         }
-        DiagnosticLog.log("LsShell", "stdout=${stdout.length}字符")
-        if (stdout.isNotBlank()) DiagnosticLog.log("LsShell", "stdout 前 500: ${stdout.take(500)}")
 
-        if (stdout.isBlank()) {
-            loadError = SecurityException("ls 失败: 输出为空")
+        DiagnosticLog.log("LsShell", "find 输出 ${findLines.size} 行")
+
+        if (findLines.isEmpty()) {
+            // 兜底：find 没结果 → 退到 Java File API
+            val file = File(normalizedPath)
+            if (!file.exists()) {
+                loadError = SecurityException("目录不存在: $normalizedPath")
+            } else if (!file.isDirectory) {
+                loadError = SecurityException("不是目录: $normalizedPath")
+            }
             return emptyList()
         }
 
-        val lines = stdout.lines().map { it.trimEnd('\r') }.filter { it.isNotBlank() }
         var dirCount = 0
         var fileCount = 0
 
-        if (useRoot) {  // ponytail: listWithLs 仅在 shell 引擎可用时调用，useRoot=true 时用长格式解析
-            // 收集软链接，批量检测目标类型
-            val symlinks = mutableMapOf<String, String>()
-            for (raw in lines) {
-                if (raw.startsWith("total ")) continue
-                val parts = raw.split("\\s+".toRegex())
-                if (parts.size < 8 || parts[0].length < 10) continue
-                if (parts[0][0] == 'l') {
-                    val rn = parseLsFilename(raw) ?: continue
-                    val nm = if (rn.contains(" -> ")) rn.substringBefore(" -> ") else rn.trimEnd('/')
-                    if (nm == "." || nm == "..") continue
-                    val cp = if (normalizedDisplayPath == "/") "/$nm" else "$normalizedDisplayPath/$nm"
-                    symlinks[cp] = rn.substringAfter(" -> ", "")
-                }
+        // 收集软链接，批量检测目标类型
+        val symlinks = mutableMapOf<String, String>()
+        for (line in findLines) {
+            val parts = line.split("|")
+            if (parts.size < 7) continue
+            if (parts[6].startsWith("l")) {
+                val name = parts[0]
+                val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
+                symlinks[childPath] = ""
             }
-            checkSymlinkTargets(symlinks)
+        }
+        checkSymlinkTargets(symlinks)
 
-            // 长格式解析 ls -lap: drwxrwx--x  4 root sdcard_rw  4096 2024-01-01 00:00 dirname/
-            for (raw in lines) {
-                if (raw.startsWith("total ")) continue
-                val parts = raw.split("\\s+".toRegex())
-                if (parts.size < 8) continue
-                val perms = parts[0]
-                if (perms.length < 10) continue
-                val rawName = parseLsFilename(raw) ?: continue
-                // 提取文件名：软链接去掉 " -> target"，目录去掉尾部 /
-                val name = if (rawName.contains(" -> ")) rawName.substringBefore(" -> ") else rawName.trimEnd('/')
-                if (name == "." || name == "..") continue
-                if (!showHidden && name.startsWith(".")) continue
-                val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
-                val isDir = when {
-                    perms[0] == 'd' -> true
-                    perms[0] == 'l' -> symlinkTypeCache[childPath] ?: false
-                    else -> rawName.endsWith("/")
-                }
-                if (isDir) dirCount++ else fileCount++
-                val sz = parts[4].toLongOrNull() ?: 0L
-                val modified = try {
-                    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).parse("${parts[5]} ${parts[6]}")?.time ?: 0L
-                } catch (_: Exception) { 0L }
-                entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else sz, modified))
+        for (line in findLines) {
+            val parts = line.split("|")
+            if (parts.size < 7) continue
+            val name = parts[0]
+            if (name == "." || name == "..") continue
+            val size = parts[1].toLongOrNull() ?: 0L
+            val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
+            val perms = parts[6]
+            val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
+            val isDir = when {
+                perms.startsWith("d") -> true
+                perms.startsWith("l") -> symlinkTypeCache[childPath] ?: false
+                else -> false
             }
-        } else {
-            // 短格式解析 ls -1p: dirname/ 或 filename
-            for (raw in lines) {
-                val name = if (raw.endsWith("/")) raw.dropLast(1) else raw
-                if (name == "." || name == "..") continue
-                if (!showHidden && name.startsWith(".")) continue
-                val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
-                val isDir = raw.endsWith("/")
-                if (isDir) dirCount++ else fileCount++
-                val perm = ""
-                val sz = if (isDir) 0L else try { File(childPath).length() } catch (_: Exception) { 0L }
-                val modified = try { File(childPath).lastModified() } catch (_: Exception) { 0L }
-                entries.add(FileEntry(childPath, name, isDir, perm, sz, modified))
-            }
+            if (isDir) dirCount++ else fileCount++
+            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong()))
         }
         DiagnosticLog.log("LsShell", "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
 
@@ -1746,7 +1668,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun getPropertyData(entry: FileEntry): FilePropertyData {
         val file = File(entry.path)
 
-        // shell 路径: ls -lapd 获取权限/用户名/组名，stat 获取 UID/GID 数值
+        // shell 路径: stat -c 一次获取权限/用户名/组名/UID/GID
         // 非 shell 路径: Os.stat 获取全部
         var permission = ""
         var owner = ""
@@ -1754,36 +1676,21 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         if (hasShellEngine) {
             val escaped = SevenZipCommand.escape(entry.path)
-            val (lsOut, _, lsExit) = try {
-                executeShell("ls -lapd $escaped")
+            // stat -c 一次获取权限、用户名、组名、UID、GID，无需解析 ls 列对齐
+            val (statOut, _, statExit) = try {
+                executeShell("stat -c '%a|%U|%G|%u|%g' $escaped")
             } catch (_: Exception) { Triple("", "", -1) }
-            if (lsExit == 0 && lsOut.isNotBlank()) {
-                val line = lsOut.lines().firstOrNull { it.isNotBlank() && !it.startsWith("total ") }
-                if (line != null) {
-                    val parts = line.split("\\s+".toRegex())
-                    if (parts.size >= 7) {
-                        val permStr = parts[0]
-                        val shellOwner = parts[2]
-                        val shellGroup = parts[3]
-                        val modeFromShell = parseRwxToMode(permStr)
-                        if (modeFromShell != 0) {
-                            permission = "${permStr}(${String.format("%03o", modeFromShell and 0x1FF)})"
-                        }
-                        // 通过 stat 获取 UID/GID 数值
-                        val (statOut, _, statExit) = try {
-                            executeShell("stat -c '%u %g' '$escaped'")
-                        } catch (_: Exception) { Triple("", "", -1) }
-                        if (statExit == 0 && statOut.isNotBlank()) {
-                            val statParts = statOut.trim().split("\\s+".toRegex())
-                            val uid = statParts.getOrNull(0)?.toIntOrNull()
-                            val gid = statParts.getOrNull(1)?.toIntOrNull()
-                            owner = if (uid != null) "$shellOwner ($uid)" else shellOwner
-                            group = if (gid != null) "$shellGroup ($gid)" else shellGroup
-                        } else {
-                            owner = shellOwner
-                            group = shellGroup
-                        }
-                    }
+            if (statExit == 0 && statOut.isNotBlank()) {
+                val parts = statOut.trim().split("|")
+                if (parts.size >= 5) {
+                    val modeOct = parts[0]
+                    val userName = parts[1]
+                    val groupName = parts[2]
+                    val uid = parts[3].toIntOrNull()
+                    val gid = parts[4].toIntOrNull()
+                    permission = "($modeOct)"
+                    owner = if (uid != null) "$userName ($uid)" else userName
+                    group = if (gid != null) "$groupName ($gid)" else groupName
                 }
             }
         } else {
@@ -2730,30 +2637,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 sb.append(if ((mode shr shift) and 1 != 0) rwx[2 - shift % 3] else '-')
             }
             return sb.toString()
-        }
-
-        /** 将 rwx 权限字符串（如 "drwxrwxrwx"）解析为 mode 整数 */
-        fun parseRwxToMode(perm: String): Int {
-            if (perm.length < 10) return 0
-            var mode = 0
-            // 文件类型
-            mode = when (perm[0]) {
-                'd' -> 0x4000
-                '-' -> 0x8000
-                'l' -> 0xA000
-                'b' -> 0x6000
-                'c' -> 0x2000
-                'p' -> 0x1000
-                's' -> 0xC000
-                else -> 0
-            }
-            // 9 位 rwx 权限
-            for (i in 1..9) {
-                if (perm[i] != '-') {
-                    mode = mode or (1 shl (9 - i))
-                }
-            }
-            return mode
         }
 
         fun formatSize(bytes: Long): String {

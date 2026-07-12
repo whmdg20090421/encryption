@@ -6,8 +6,6 @@ import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.util.DirEntry
 import com.whmdg.mczj.tools.util.SevenZipCommand
 import java.io.IOException
-import java.text.SimpleDateFormat
-import java.util.Locale
 
 /**
  * Shell 权限的文件操作实现，通过 Root/Shizuku 执行 shell 命令。
@@ -75,7 +73,7 @@ class ShellFileOperator(
     override fun listChildren(path: String): List<DirEntry>? {
         val normalized = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
         val escaped = SevenZipCommand.escape(normalized)
-        val command = "ls -lAp $escaped"
+        val command = "find $escaped -maxdepth 1 -mindepth 1 -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
         val stdout = try {
             exec(command)
         } catch (_: Throwable) {
@@ -83,33 +81,19 @@ class ShellFileOperator(
         }
         if (stdout.isBlank()) return null
 
-        val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
         val entries = mutableListOf<DirEntry>()
         for (raw in stdout.lines()) {
             val line = raw.trimEnd('\r')
-            if (line.isBlank() || line.startsWith("total ")) continue
-            val parts = line.split("\\s+".toRegex())
-            if (parts.size < 8) continue
-            if (parts[0].length < 10) continue
-
-            // 精确提取原始文件名（保留多空格）
-            var namePos = 0
-            repeat(7) {
-                while (namePos < line.length && line[namePos].isWhitespace()) namePos++
-                if (namePos >= line.length) return@repeat
-                while (namePos < line.length && !line[namePos].isWhitespace()) namePos++
-            }
-            while (namePos < line.length && line[namePos].isWhitespace()) namePos++
-            val nameWithSlash = if (namePos < line.length) line.substring(namePos) else continue
-            val isDir = nameWithSlash.endsWith("/")
-            val name = if (isDir) nameWithSlash.dropLast(1) else nameWithSlash
+            if (line.isBlank()) continue
+            val parts = line.split("|")
+            if (parts.size < 7) continue
+            val name = parts[0]
             if (name == "." || name == "..") continue
-
-            val size = parts[4].toLongOrNull() ?: 0L
+            val size = parts[1].toLongOrNull() ?: 0L
+            val mtime = (parts[2].toDoubleOrNull()?.toLong() ?: 0L) * 1000
+            val perms = parts[6]
+            val isDir = perms.startsWith("d")
             val childPath = if (normalized == "/") "/$name" else "$normalized/$name"
-            val mtime = try {
-                fmt.parse("${parts[5]} ${parts[6]}")?.time ?: 0L
-            } catch (_: Exception) { 0L }
             entries.add(DirEntry(name, childPath, isDir, if (isDir) 0L else size, mtime))
         }
         return entries
