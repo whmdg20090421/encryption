@@ -2462,15 +2462,96 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         )
     }
 
-    // ── 7z 不支持浏览提示弹窗 ──
-    if (vm.show7zUnsupportedDialog) {
+    // ── 7z 信息弹窗 ──
+    val sevenZipDialogEntry = vm.sevenZipInfo
+    if (sevenZipDialogEntry != null || vm.sevenZipAnalyzing) {
         AlertDialog(
-            onDismissRequest = { vm.show7zUnsupportedDialog = false },
-            title = { Text("暂不支持查看") },
-            text = { Text("当前不支持 7z 压缩包的在线查看，请解压后查看。") },
+            onDismissRequest = { if (!vm.sevenZipAnalyzing) vm.sevenZipInfo = null },
+            title = { Text("7z 压缩包信息", fontWeight = FontWeight.Bold) },
+            text = {
+                if (vm.sevenZipAnalyzing) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("正在检测...")
+                    }
+                } else if (sevenZipDialogEntry != null) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("文件名  ${sevenZipDialogEntry.fileName}", style = MaterialTheme.typography.bodyMedium)
+                        Text("大小    ${FormatUtils.formatSize(sevenZipDialogEntry.fileSize)}", style = MaterialTheme.typography.bodyMedium)
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("内容加密", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                when {
+                                    sevenZipDialogEntry.isCorrupted -> "无法检测"
+                                    sevenZipDialogEntry.headerEncrypted -> "无法检测（需密码）"
+                                    sevenZipDialogEntry.contentEncrypted -> "✓ 已加密"
+                                    else -> "✗ 未加密"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = when {
+                                    sevenZipDialogEntry.isCorrupted -> MaterialTheme.colorScheme.error
+                                    sevenZipDialogEntry.headerEncrypted -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    sevenZipDialogEntry.contentEncrypted -> MaterialTheme.colorScheme.primary
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("文件名加密", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                when {
+                                    sevenZipDialogEntry.isCorrupted -> "无法检测"
+                                    sevenZipDialogEntry.headerEncrypted -> "✓ 已加密"
+                                    else -> "✗ 未加密"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = when {
+                                    sevenZipDialogEntry.isCorrupted -> MaterialTheme.colorScheme.error
+                                    sevenZipDialogEntry.headerEncrypted -> MaterialTheme.colorScheme.primary
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+                        if (sevenZipDialogEntry.errorMessage != null) {
+                            Text(
+                                sevenZipDialogEntry.errorMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                        if (sevenZipDialogEntry.headerEncrypted || sevenZipDialogEntry.contentEncrypted) {
+                            Text(
+                                "加密压缩包需要密码才能查看内容",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                    }
+                }
+            },
             confirmButton = {
-                TextButton(onClick = { vm.show7zUnsupportedDialog = false }) {
-                    Text("我知道了")
+                TextButton(
+                    onClick = { vm.sevenZipInfo = null },
+                    enabled = !vm.sevenZipAnalyzing
+                ) {
+                    Text("关闭")
                 }
             }
         )

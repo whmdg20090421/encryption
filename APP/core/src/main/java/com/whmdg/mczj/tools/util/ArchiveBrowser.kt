@@ -123,6 +123,53 @@ object ArchiveBrowser {
         null
     }
 
+    /** 7z 文件分析结果 */
+    data class SevenZipInfo(
+        val fileName: String,
+        val fileSize: Long,
+        val headerEncrypted: Boolean,   // 头部加密（文件名不可见）
+        val contentEncrypted: Boolean,  // 内容加密
+        val isCorrupted: Boolean,       // 文件损坏
+        val errorMessage: String? = null
+    )
+
+    /**
+     * 分析 7z 文件的加密状态。
+     * 用假密码执行 `7zzs l -slt -pdummy`，根据 exitCode 和输出判断：
+     * - exitCode=0 + "7zAES"/"Encrypted = +" → 仅内容加密
+     * - exitCode=2 + "Cannot open encrypted archive" → 头部加密
+     * - exitCode=2 + "Cannot open the file as" → 文件损坏
+     */
+    suspend fun analyze7z(
+        context: Context,
+        archivePath: String,
+        permissionLevel: String
+    ): SevenZipInfo = withContext(Dispatchers.IO) {
+        val fileName = File(archivePath).name
+        val fileSize = File(archivePath).length()
+        try {
+            val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
+            val cmd = "${SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = \"dummy\")} 2>&1"
+            val (merged, _, exitCode) = executeCommand(cmd, permissionLevel, context)
+            Log.d(TAG, "7z 分析: exitCode=$exitCode, output=${merged.take(300)}")
+            when {
+                exitCode == 0 && (merged.contains("7zAES", ignoreCase = true) || merged.contains("Encrypted = +")) ->
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = true, isCorrupted = false)
+                exitCode == 0 ->
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = false)
+                merged.contains("Cannot open encrypted archive", ignoreCase = true) ->
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = true, contentEncrypted = true, isCorrupted = false)
+                merged.contains("Cannot open the file as", ignoreCase = true) ->
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "文件损坏，无法识别为 7z 格式")
+                else ->
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "未知错误 (exitCode=$exitCode)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "7z 分析失败", e)
+            SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = e.message ?: "分析失败")
+        }
+    }
+
     /** 压缩包目录树节点 */
     data class ArchiveNode(
         val name: String,

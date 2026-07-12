@@ -150,7 +150,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var pendingExternalEntry by mutableStateOf<FileEntry?>(null)
     var pendingApkEntry by mutableStateOf<FileEntry?>(null)
-    var show7zUnsupportedDialog by mutableStateOf(false)
+    var sevenZipInfo by mutableStateOf<ArchiveBrowser.SevenZipInfo?>(null)
+        private set
+    var sevenZipAnalyzing by mutableStateOf(false)
+        private set
 
     private val recycleBinJson = kotlinx.serialization.json.Json {
         ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true
@@ -1403,10 +1406,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return null
         }
         if (ArchiveBrowser.isArchiveFile(entry.name)) {
-            // 7z 格式不支持浏览（加密检测复杂），仅支持解压
+            // 7z 格式弹出信息弹窗（检测加密状态）
             if (entry.name.endsWith(".7z", ignoreCase = true)) {
-                DiagnosticLog.log("OpenFile", "7z 文件，不支持浏览: ${entry.name}")
-                show7zUnsupportedDialog = true
+                DiagnosticLog.log("OpenFile", "7z 文件，弹出信息弹窗: ${entry.name}")
+                sevenZipAnalyzing = true
+                sevenZipInfo = null
+                val pending = entry
+                viewModelScope.launch(Dispatchers.IO) {
+                    val info = ArchiveBrowser.analyze7z(getApplication(), pending.path, permissionLevel)
+                    withContext(Dispatchers.Main) {
+                        sevenZipInfo = info
+                        sevenZipAnalyzing = false
+                    }
+                }
                 return null
             }
             if (isDebug) {

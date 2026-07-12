@@ -387,7 +387,7 @@ BinaryExtractor                         # 7zzs 提取：nativeLibraryDir/lib7zzs
 
 SevenZipCommand                         # 命令行构建器（纯字符串拼接）
     ├── escape() / escapePassword()     # 单引号包裹 + '\'' 转义（行业标准 shell 路径转义）
-    ├── build()                         # 压缩命令：a -t<format> -mx=<level> [-p'pwd'] -bsp1
+    ├── build()                         # 压缩命令：a -t<format> -mx=<level> [-p'pwd' [-mem=AES256] [-mhe=on]] -bsp1
     ├── buildListCommand()              # 列表命令：l -ba [-p'pwd'] <archive>
     ├── buildListDetailCommand()        # 技术详情命令：l -slt（检测加密状态）
     ├── buildExtractCommand()           # 解压命令：x [-p'pwd'] -bsp1 <archive> -o<dir> -aoa
@@ -402,18 +402,23 @@ ArchiveBrowser                          # 压缩包浏览（只读）
     └── 会话缓存                         # JSON 序列化到 AppDataPaths.fileManager()/archive_session_cache.json
 
 CompressService                         # 压缩/解压服务
+    ├── CompressOptions                  # sourcePaths, outputPath, format, compressionLevel, password, useAes, encryptNames
     ├── compress()                      # 压缩入口（ProgressCallback + cancelFlag）
     ├── extract()                       # 解压入口（基于 fileSizes 的真实字节级进度）
     └── 进度解析                          # 正则匹配 7zzs -bsp1 输出 "75% 1" 格式
 ```
 
 **加密检测策略**（`checkPasswordRequired()`）：
-1. 7z 二进制头部快速检测：偏移 32 == `0x17` (kEncodedHeader) → 头部加密（无需启动进程）
+1. 7z 二进制头部快速检测：偏移 32 == `0x17` (kEncodedHeader) → 头部加密（无需启动进程）。**注意**：此方法对部分加密 7z 文件不可靠（头部被加密后偏移 32 是密文而非明文标识），仅作快速路径
 2. `7zzs l -slt` 输出含 `7zAES` → 内容加密
 3. 输出含 `Encrypted = +` → 加密
 4. exitCode=2 且为 7z 文件 → 头部加密（兜底）
 
-**压缩格式支持**：zip、7z、tar、tar.gz、tar.bz2、tar.xz，支持 AES-256 加密（zip/7z）
+**压缩格式支持**：zip、7z、tar、tar.gz、tar.bz2、tar.xz
+- **zip**：支持 AES-256 加密（`-mem=AES256`），压缩对话框中有"ZIP AES-256"开关
+- **7z**：支持内容加密 + 文件名加密（`-mhe=on` 隐藏文件列表），压缩对话框中有"加密文件名"开关
+- **tar 系列**：不支持加密
+- 加密开关需先输入密码才能启用，未输入密码时弹出 AlertDialog 提示
 
 ### 记账本模块
 
