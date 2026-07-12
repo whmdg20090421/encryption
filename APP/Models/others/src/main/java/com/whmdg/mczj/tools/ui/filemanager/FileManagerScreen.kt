@@ -2527,9 +2527,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 }
                             )
                         }
-                        if (sevenZipDialogEntry.errorMessage != null) {
+                        val errMsg = sevenZipDialogEntry.errorMessage
+                        if (errMsg != null) {
                             Text(
-                                sevenZipDialogEntry.errorMessage,
+                                errMsg,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                                 modifier = Modifier.padding(top = 4.dp)
