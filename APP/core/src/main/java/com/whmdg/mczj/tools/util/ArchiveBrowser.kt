@@ -149,7 +149,8 @@ object ArchiveBrowser {
         val fileSize = File(archivePath).length()
         try {
             val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
-            val cmd = "${SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = \"dummy\")} 2>&1"
+            val listCmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
+            val cmd = "$listCmd 2>&1"
             val (merged, _, exitCode) = executeCommand(cmd, permissionLevel, context)
             Log.d(TAG, "7z 分析: exitCode=$exitCode, output=${merged.take(300)}")
             when {
