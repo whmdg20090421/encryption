@@ -32,8 +32,7 @@ class ShellException(
     val command: String,
     val permission: Permission,
     val stderr: String = "",
-    val exitCode: Int = -1,
-    val stdout: String = ""   // ponytail: 仅用于 2>&1 重定向场景，正常 stderr 走 stderr 字段
+    val exitCode: Int = -1
 ) : Exception(buildMessage(message, command, permission, stderr, exitCode)) {
     companion object {
         private fun buildMessage(
@@ -241,13 +240,14 @@ object ShellExecutor {
         val stdout = result.getOut().joinToString("\n").trimEnd()
         if (!result.isSuccess) {
             val stderr = result.getErr().joinToString("\n").trimEnd()
+            // ponytail: libsu 直接读进程 fd，2>&1 不生效，错误可能在 stdout 或 stderr，合并确保不丢
+            val allOutput = listOf(stderr, stdout).filter { it.isNotBlank() }.joinToString("\n")
             throw ShellException(
                 message = "Root 命令执行失败",
                 command = command,
                 permission = permission,
-                stderr = if (debug) stderr else "exit ${result.getCode()}",
-                exitCode = result.getCode(),
-                stdout = stdout  // ponytail: 2>&1 重定向时 stderr 为空，错误信息在 stdout
+                stderr = if (debug) allOutput else "exit ${result.getCode()}",
+                exitCode = result.getCode()
             )
         }
         return stdout
@@ -265,13 +265,14 @@ object ShellExecutor {
             )
         }
         if (exitCode != 0) {
+            // ponytail: 合并 stdout+stderr，2>&1 可能不生效
+            val allOutput = listOf(stderr, stdout).filter { it.isNotBlank() }.joinToString("\n")
             throw ShellException(
                 message = "Shizuku 命令执行失败",
                 command = command,
                 permission = permission,
-                stderr = if (debug) stderr else "exit $exitCode",
-                exitCode = exitCode,
-                stdout = stdout  // ponytail: 2>&1 重定向时 stderr 为空，错误信息在 stdout
+                stderr = if (debug) allOutput else "exit $exitCode",
+                exitCode = exitCode
             )
         }
         return stdout
@@ -315,13 +316,14 @@ object ShellExecutor {
         val exitCode = process.exitValue()
 
         if (exitCode != 0) {
+            // ponytail: 合并 stdout+stderr，2>&1 可能不生效
+            val allOutput = listOf(stderr, stdout).filter { it.isNotBlank() }.joinToString("\n")
             throw ShellException(
                 message = "命令执行失败",
                 command = command,
                 permission = permission,
-                stderr = if (debug) stderr else "exit $exitCode",
-                exitCode = exitCode,
-                stdout = stdout  // ponytail: 2>&1 重定向时 stderr 为空，错误信息在 stdout
+                stderr = if (debug) allOutput else "exit $exitCode",
+                exitCode = exitCode
             )
         }
         return stdout
