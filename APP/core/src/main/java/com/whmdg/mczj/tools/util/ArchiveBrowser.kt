@@ -61,14 +61,17 @@ object ArchiveBrowser {
         permissionLevel: String
     ): Boolean? = withContext(Dispatchers.IO) {
         val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
-        val cmd = "${SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")} 2>&1"
-        val (merged, _, exitCode) = executeCommand(cmd, permissionLevel, context)
-        Log.d(TAG, "密码检测: exitCode=$exitCode, output=${merged.take(200)}")
+        val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
+        val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "$cmd 2>&1"))
+        val output = process.inputStream.bufferedReader().readText().trim()
+        process.waitFor()
+        val exitCode = process.exitValue()
+        Log.d(TAG, "密码检测: exitCode=$exitCode, output=${output.take(200)}")
         when {
-            exitCode == 0 && (merged.contains("7zAES", ignoreCase = true) || merged.contains("Encrypted = +")) -> true
+            exitCode == 0 && (output.contains("7zAES", ignoreCase = true) || output.contains("Encrypted = +")) -> true
             exitCode == 0 -> false
-            merged.contains("Cannot open encrypted archive", ignoreCase = true) -> true
-            merged.contains("Cannot open the file as", ignoreCase = true) -> null
+            output.contains("Cannot open encrypted archive", ignoreCase = true) -> true
+            output.contains("Cannot open the file as", ignoreCase = true) -> null
             else -> null
         }
     }
@@ -103,45 +106,31 @@ object ArchiveBrowser {
         val fileSize = File(archivePath).length()
         try {
             val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
-            val cmd = "${SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")} 2>&1"
+            val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
 
-            // === 诊断：原始进程执行，绕过 ShellExecutor ===
-            var rawStdout = ""
-            var rawStderr = ""
-            var rawExit = -1
-            try {
-                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
-                rawStdout = process.inputStream.bufferedReader().readText().trim()
-                rawStderr = process.errorStream.bufferedReader().readText().trim()
-                process.waitFor()
-                rawExit = process.exitValue()
-            } catch (e: Exception) {
-                rawStderr = "exec异常: ${e.message}"
-            }
-            Log.e(TAG, "诊断原始执行: exitCode=$rawExit, stdout=${rawStdout.take(300)}, stderr=${rawStderr.take(300)}")
+            // 直接执行，stdout+stderr 合到一个变量
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "$cmd 2>&1"))
+            val output = process.inputStream.bufferedReader().readText().trim()
+            process.waitFor()
+            val exitCode = process.exitValue()
 
-            val (merged, _, exitCode) = executeCommand(cmd, permissionLevel, context)
-            Log.e(TAG, "诊断ShellExecutor: exitCode=$exitCode, merged=${merged.take(300)}")
-
-            // === 诊断信息，直接显示在弹窗里 ===
-            val diagBlock = "=== 原始执行 ===\nexitCode=$rawExit\nstdout=${rawStdout.take(500)}\nstderr=${rawStderr.take(500)}\n=== ShellExecutor ===\nexitCode=$exitCode\nmerged=${merged.take(500)}"
+            Log.e(TAG, "7z分析: exitCode=$exitCode, output=${output.take(300)}")
 
             when {
-                exitCode == 0 && (merged.contains("7zAES", ignoreCase = true) || merged.contains("Encrypted = +")) ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = true, isCorrupted = false, diagnosticInfo = diagBlock)
+                exitCode == 0 && (output.contains("7zAES", ignoreCase = true) || output.contains("Encrypted = +")) ->
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = true, isCorrupted = false)
                 exitCode == 0 ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = false, diagnosticInfo = diagBlock)
-                merged.contains("Cannot open encrypted archive", ignoreCase = true) ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = true, contentEncrypted = true, isCorrupted = false, errorMessage = "头部加密，需要密码才能查看文件列表", diagnosticInfo = diagBlock)
-                merged.contains("Cannot open the file as", ignoreCase = true) ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "文件损坏，无法识别为 7z 格式", diagnosticInfo = diagBlock)
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = false)
+                output.contains("Cannot open encrypted archive", ignoreCase = true) ->
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = true, contentEncrypted = true, isCorrupted = false, errorMessage = "头部加密，需要密码才能查看文件列表")
+                output.contains("Cannot open the file as", ignoreCase = true) ->
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "文件损坏，无法识别为 7z 格式")
                 else ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "未知错误 (exitCode=$exitCode)", diagnosticInfo = diagBlock)
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "未知错误 (exitCode=$exitCode)", diagnosticInfo = "exitCode=$exitCode\n$output")
             }
         } catch (e: Exception) {
             Log.e(TAG, "7z 分析失败", e)
-            val diag = "path=$archivePath\npermission=$permissionLevel\nexception=${e.javaClass.simpleName}\n${e.stackTraceToString()}"
-            SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = e.message ?: "分析失败", diagnosticInfo = diag)
+            SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = e.message ?: "分析失败")
         }
     }
 
@@ -283,16 +272,19 @@ object ArchiveBrowser {
             val cmd = SevenZipCommand.buildListCommand(binaryPath, archivePath, password)
             Log.d(TAG, "列表命令: $cmd")
 
-            val (stdout, stderr, exitCode) = executeCommand(cmd, permissionLevel, context)
-            Log.d(TAG, "执行完毕: exitCode=$exitCode, stdout=${stdout.length}字节, stderr=${stderr.take(200)}")
+            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "$cmd 2>&1"))
+            val output = process.inputStream.bufferedReader().readText().trim()
+            process.waitFor()
+            val exitCode = process.exitValue()
+            Log.d(TAG, "执行完毕: exitCode=$exitCode, output=${output.length}字节")
 
             if (exitCode != 0) {
-                val errMsg = stderr.ifBlank { "7zzs 退出码: $exitCode" }
+                val errMsg = output.ifBlank { "7zzs 退出码: $exitCode" }
                 Log.w(TAG, "非零退出: $errMsg")
                 return@withContext Result.failure(Exception(errMsg))
             }
 
-            val entries = parseListOutput(stdout)
+            val entries = parseListOutput(output)
             Log.d(TAG, "解析到 ${entries.size} 个条目")
 
             if (entries.isEmpty()) {
@@ -333,12 +325,15 @@ object ArchiveBrowser {
             val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
 
             // 1. 密码检测：7zzs l -slt -p"dummy" 假密码探测
-            val detailCmd = "${SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")} 2>&1"
-            val (detMerged, _, detExit) = executeCommand(detailCmd, permissionLevel, context)
+            val detailCmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
+            val detProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "$detailCmd 2>&1"))
+            val detOutput = detProcess.inputStream.bufferedReader().readText().trim()
+            detProcess.waitFor()
+            val detExit = detProcess.exitValue()
             val passwordRequired = when {
-                detExit == 0 && (detMerged.contains("7zAES", ignoreCase = true) || detMerged.contains("Encrypted = +")) -> true
+                detExit == 0 && (detOutput.contains("7zAES", ignoreCase = true) || detOutput.contains("Encrypted = +")) -> true
                 detExit == 0 -> false
-                detMerged.contains("Cannot open encrypted archive", ignoreCase = true) -> true
+                detOutput.contains("Cannot open encrypted archive", ignoreCase = true) -> true
                 else -> false
             }
 
@@ -356,27 +351,30 @@ object ArchiveBrowser {
 
             // 3. 列表命令
             val listCmd = SevenZipCommand.buildListCommand(binaryPath, archivePath)
-            val (stdout, stderr, exitCode) = executeCommand(listCmd, permissionLevel, context)
+            val listProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "$listCmd 2>&1"))
+            val listOutput = listProcess.inputStream.bufferedReader().readText().trim()
+            listProcess.waitFor()
+            val exitCode = listProcess.exitValue()
 
             if (exitCode != 0) {
-                val errMsg = stderr.ifBlank { "7zzs 退出码: $exitCode" }
+                val errMsg = listOutput.ifBlank { "7zzs 退出码: $exitCode" }
                 return@withContext ArchiveDebugInfo(
                     archivePath = archivePath, archiveName = archiveName,
                     passwordRequired = passwordRequired,
                     listCommand = listCmd, listExitCode = exitCode,
-                    listStdout = stdout, listStderr = stderr,
+                    listStdout = "", listStderr = listOutput,
                     parsedEntryCount = 0, rootEntries = emptyList(),
                     error = errMsg
                 )
             }
 
-            val entries = parseListOutput(stdout)
+            val entries = parseListOutput(listOutput)
             if (entries.isEmpty()) {
                 return@withContext ArchiveDebugInfo(
                     archivePath = archivePath, archiveName = archiveName,
                     passwordRequired = passwordRequired,
                     listCommand = listCmd, listExitCode = exitCode,
-                    listStdout = stdout, listStderr = stderr,
+                    listStdout = listOutput, listStderr = "",
                     parsedEntryCount = 0, rootEntries = emptyList(),
                     error = "压缩包内容为空，可能是加密文件或格式不受支持"
                 )
@@ -614,9 +612,12 @@ object ArchiveBrowser {
                 binaryPath, archivePath, fileName, outputDir, password
             )
             Log.d(TAG, "提取单文件: $fileName")
-            val (stdout, stderr, exitCode) = executeCommand(cmd, permissionLevel, context)
+            val extProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "$cmd 2>&1"))
+            val extOutput = extProcess.inputStream.bufferedReader().readText().trim()
+            extProcess.waitFor()
+            val exitCode = extProcess.exitValue()
             if (exitCode != 0) {
-                Log.w(TAG, "提取失败 exitCode=$exitCode stderr=$stderr")
+                Log.w(TAG, "提取失败 exitCode=$exitCode output=$extOutput")
                 return@withContext null
             }
             // 保留目录结构：outputDir/fileName
