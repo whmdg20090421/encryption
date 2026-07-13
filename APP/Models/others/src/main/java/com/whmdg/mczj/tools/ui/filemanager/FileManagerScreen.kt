@@ -992,37 +992,27 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                     }
                 } else {
-                    val leftParentPath = if (vm.isInArchiveMode && vm.focusedPanel == FocusedPanel.LEFT) {
-                        if (vm.isAtArchiveRoot()) null else "__archive_parent__"
-                    } else if (vm.recycleBinPanel == vm.focusedPanel) {
-                        if (vm.isAtRecycleBinRoot) null
-                        else java.io.File(vm.recycleBinPath).parentFile?.absolutePath?.let { p ->
-                            if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
-                        }
-                    } else {
-                        val leftEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                        if (vm.leftPath != leftEffectiveRoot && vm.leftPath.contains('/')) {
-                            vm.leftPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-                                if (p != vm.leftPath && vm.canAccessPath(p)) p else null
-                            }
-                        } else null
-                    }
+                    val leftParentPath = computeParentPath(
+                        currentPath = vm.leftPath,
+                        isInArchiveMode = vm.isInArchiveMode,
+                        isAtArchiveRoot = { vm.isAtArchiveRoot() },
+                        isRecycleBinPanel = vm.recycleBinPanel == FocusedPanel.LEFT,
+                        isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
+                        recycleBinPath = vm.recycleBinPath,
+                        isRootEngine = vm.isRootEngine,
+                        canAccessPath = { vm.canAccessPath(it) }
+                    )
 
-                    val rightParentPath = if (vm.isInArchiveMode && vm.focusedPanel == FocusedPanel.RIGHT) {
-                        if (vm.isAtArchiveRoot()) null else "__archive_parent__"
-                    } else if (vm.recycleBinPanel == vm.focusedPanel) {
-                        if (vm.isAtRecycleBinRoot) null
-                        else java.io.File(vm.recycleBinPath).parentFile?.absolutePath?.let { p ->
-                            if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
-                        }
-                    } else {
-                        val rightEffectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                        if (vm.rightPath != rightEffectiveRoot && vm.rightPath.contains('/')) {
-                            vm.rightPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-                                if (p != vm.rightPath && vm.canAccessPath(p)) p else null
-                            }
-                        } else null
-                    }
+                    val rightParentPath = computeParentPath(
+                        currentPath = vm.rightPath,
+                        isInArchiveMode = vm.isInArchiveMode,
+                        isAtArchiveRoot = { vm.isAtArchiveRoot() },
+                        isRecycleBinPanel = vm.recycleBinPanel == FocusedPanel.RIGHT,
+                        isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
+                        recycleBinPath = vm.recycleBinPath,
+                        isRootEngine = vm.isRootEngine,
+                        canAccessPath = { vm.canAccessPath(it) }
+                    )
 
                     val leftFocused = vm.focusedPanel == FocusedPanel.LEFT
                     Layout(
@@ -4732,6 +4722,35 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             }
         )
     }
+}
+
+/** 计算指定面板的"返回上一级"路径，null 表示不显示。纯路径判断，与焦点无关。 */
+private fun computeParentPath(
+    currentPath: String,
+    isInArchiveMode: Boolean,
+    isAtArchiveRoot: () -> Boolean,
+    isRecycleBinPanel: Boolean,
+    isAtRecycleBinRoot: Boolean,
+    recycleBinPath: String,
+    isRootEngine: Boolean,
+    canAccessPath: (String) -> Boolean
+): String? {
+    if (isInArchiveMode) {
+        return if (isAtArchiveRoot()) null else "__archive_parent__"
+    }
+    if (isRecycleBinPanel) {
+        if (isAtRecycleBinRoot) return null
+        return java.io.File(recycleBinPath).parentFile?.absolutePath?.let { p ->
+            if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
+        }
+    }
+    val effectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
+    if (currentPath != effectiveRoot && currentPath.contains('/')) {
+        return currentPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
+            if (p != currentPath && canAccessPath(p)) p else null
+        }
+    }
+    return null
 }
 
 @Composable
