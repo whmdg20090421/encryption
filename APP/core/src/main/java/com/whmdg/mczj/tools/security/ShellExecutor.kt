@@ -5,6 +5,7 @@ import android.util.Log
 import com.topjohnwu.superuser.Shell
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -344,7 +345,6 @@ object ShellExecutor {
     ) {
         val process = try {
             ProcessBuilder("su", "-c", command)
-                .redirectErrorStream(true)
                 .start()
         } catch (e: Exception) {
             throw ShellException(
@@ -379,7 +379,6 @@ object ShellExecutor {
     ) {
         val process = try {
             ProcessBuilder("sh", "-c", command)
-                .redirectErrorStream(true)
                 .start()
         } catch (e: Exception) {
             throw ShellException(
@@ -400,7 +399,19 @@ object ShellExecutor {
         permission: Permission,
         debug: Boolean
     ) {
-        // redirectErrorStream(true) 已将 stderr 合并到 stdout，无需单独读取 stderr
+        // 读取 stderr
+        val stderrLines = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val tErr = Thread {
+            try {
+                process.errorStream.bufferedReader().use { reader ->
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        stderrLines.add(line!!)
+                    }
+                }
+            } catch (_: Exception) {}
+        }.apply { start() }
+
         val tOut = Thread {
             try {
                 process.inputStream.bufferedReader().use { reader ->
@@ -423,6 +434,7 @@ object ShellExecutor {
         }
 
         tOut.join(5000)
+        tErr.join(5000)
 
         if (cancelFlag?.get() == true) {
             throw ShellException(
@@ -434,11 +446,12 @@ object ShellExecutor {
 
         val exitCode = process.exitValue()
         if (exitCode != 0) {
+            val stderr = stderrLines.joinToString("\n").trim()
             throw ShellException(
                 message = "流式命令执行失败",
                 command = command,
                 permission = permission,
-                stderr = "exit $exitCode",
+                stderr = stderr.ifBlank { "exit $exitCode" },
                 exitCode = exitCode
             )
         }

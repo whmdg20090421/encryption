@@ -92,6 +92,20 @@ object CompressService {
             }
             callback.onComplete(true, options.outputPath, null)
         } catch (e: CancellationException) {
+            // 取消时删除残留的不完整输出文件（7zzs 无法覆盖损坏的7z文件）
+            try {
+                val permission = when (permissionLevel) {
+                    "ROOT" -> com.whmdg.mczj.tools.security.Permission.ROOT
+                    "SHIZUKU" -> com.whmdg.mczj.tools.security.Permission.ADB
+                    else -> com.whmdg.mczj.tools.security.Permission.APPLICANT
+                }
+                com.whmdg.mczj.tools.security.ShellExecutor.execute(
+                    permission, "rm -f '${options.outputPath}'", debug = false
+                )
+                Log.d(TAG, "已清理取消的输出文件: ${options.outputPath}")
+            } catch (rmEx: Exception) {
+                Log.w(TAG, "清理输出文件失败: ${options.outputPath}", rmEx)
+            }
             callback.onComplete(false, null, "压缩已取消")
         } catch (e: Exception) {
             callback.onComplete(false, null, e.message ?: "压缩失败")
