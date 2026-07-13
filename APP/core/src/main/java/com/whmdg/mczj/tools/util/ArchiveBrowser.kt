@@ -636,6 +636,7 @@ object ArchiveBrowser {
             }
             Triple(stdout, "", 0)
         } catch (e: ShellException) {
+            Log.e(TAG, "ShellException: exitCode=${e.exitCode}, stderr=${e.stderr.take(300)}, message=${e.message?.take(200)}")
             Triple("", "${e.message}\n${e.stderr}", e.exitCode)
         } catch (e: Exception) {
             Triple("", e.message ?: "Shell 执行异常", -1)

@@ -242,6 +242,7 @@ object ShellExecutor {
             val stderr = result.getErr().joinToString("\n").trimEnd()
             // ponytail: libsu 直接读进程 fd，2>&1 不生效，错误可能在 stdout 或 stderr，合并确保不丢
             val allOutput = listOf(stderr, stdout).filter { it.isNotBlank() }.joinToString("\n")
+            Log.e("ShellExecutor", "executeRoot失败: exitCode=${result.getCode()}, stdout=${stdout.take(200)}, stderr=${stderr.take(200)}, merged=${allOutput.take(200)}")
             throw ShellException(
                 message = "Root 命令执行失败",
                 command = command,
@@ -267,6 +268,7 @@ object ShellExecutor {
         if (exitCode != 0) {
             // ponytail: 合并 stdout+stderr，2>&1 可能不生效
             val allOutput = listOf(stderr, stdout).filter { it.isNotBlank() }.joinToString("\n")
+            Log.e("ShellExecutor", "executeShizuku失败: exitCode=$exitCode, stdout=${stdout.take(200)}, stderr=${stderr.take(200)}, merged=${allOutput.take(200)}")
             throw ShellException(
                 message = "Shizuku 命令执行失败",
                 command = command,
@@ -318,6 +320,7 @@ object ShellExecutor {
         if (exitCode != 0) {
             // ponytail: 合并 stdout+stderr，2>&1 可能不生效
             val allOutput = listOf(stderr, stdout).filter { it.isNotBlank() }.joinToString("\n")
+            Log.e("ShellExecutor", "executeAppShell失败: exitCode=$exitCode, stdout=${stdout.take(200)}, stderr=${stderr.take(200)}, merged=${allOutput.take(200)}")
             throw ShellException(
                 message = "命令执行失败",
                 command = command,
