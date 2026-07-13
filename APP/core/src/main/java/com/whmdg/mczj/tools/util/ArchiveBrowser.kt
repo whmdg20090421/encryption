@@ -104,25 +104,39 @@ object ArchiveBrowser {
         try {
             val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
             val cmd = "${SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")} 2>&1"
+
+            // === 诊断：原始进程执行，绕过 ShellExecutor ===
+            var rawStdout = ""
+            var rawStderr = ""
+            var rawExit = -1
+            try {
+                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+                rawStdout = process.inputStream.bufferedReader().readText().trim()
+                rawStderr = process.errorStream.bufferedReader().readText().trim()
+                process.waitFor()
+                rawExit = process.exitValue()
+            } catch (e: Exception) {
+                rawStderr = "exec异常: ${e.message}"
+            }
+            Log.e(TAG, "诊断原始执行: exitCode=$rawExit, stdout=${rawStdout.take(300)}, stderr=${rawStderr.take(300)}")
+
             val (merged, _, exitCode) = executeCommand(cmd, permissionLevel, context)
-            Log.d(TAG, "7z 分析: exitCode=$exitCode, output=${merged.take(300)}")
+            Log.e(TAG, "诊断ShellExecutor: exitCode=$exitCode, merged=${merged.take(300)}")
+
+            // === 诊断信息，直接显示在弹窗里 ===
+            val diagBlock = "=== 原始执行 ===\nexitCode=$rawExit\nstdout=${rawStdout.take(500)}\nstderr=${rawStderr.take(500)}\n=== ShellExecutor ===\nexitCode=$exitCode\nmerged=${merged.take(500)}"
+
             when {
                 exitCode == 0 && (merged.contains("7zAES", ignoreCase = true) || merged.contains("Encrypted = +")) ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = true, isCorrupted = false)
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = true, isCorrupted = false, diagnosticInfo = diagBlock)
                 exitCode == 0 ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = false)
-                merged.contains("Cannot open encrypted archive", ignoreCase = true) -> {
-                    val diag = "exitCode=$exitCode\npath=$archivePath\npermission=$permissionLevel\n---\n$merged"
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = true, contentEncrypted = true, isCorrupted = false, errorMessage = "头部加密，需要密码才能查看文件列表", diagnosticInfo = diag)
-                }
-                merged.contains("Cannot open the file as", ignoreCase = true) -> {
-                    val diag = "exitCode=$exitCode\npath=$archivePath\npermission=$permissionLevel\n---\n$merged"
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "文件损坏，无法识别为 7z 格式", diagnosticInfo = diag)
-                }
-                else -> {
-                    val diag = "exitCode=$exitCode\npath=$archivePath\npermission=$permissionLevel\n---\n$merged"
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "未知错误 (exitCode=$exitCode)", diagnosticInfo = diag)
-                }
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = false, diagnosticInfo = diagBlock)
+                merged.contains("Cannot open encrypted archive", ignoreCase = true) ->
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = true, contentEncrypted = true, isCorrupted = false, errorMessage = "头部加密，需要密码才能查看文件列表", diagnosticInfo = diagBlock)
+                merged.contains("Cannot open the file as", ignoreCase = true) ->
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "文件损坏，无法识别为 7z 格式", diagnosticInfo = diagBlock)
+                else ->
+                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "未知错误 (exitCode=$exitCode)", diagnosticInfo = diagBlock)
             }
         } catch (e: Exception) {
             Log.e(TAG, "7z 分析失败", e)

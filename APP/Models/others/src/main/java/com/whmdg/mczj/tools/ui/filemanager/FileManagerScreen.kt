@@ -2545,9 +2545,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 modifier = Modifier.padding(top = 4.dp)
                             )
                         }
-                        // 检测失败时显示诊断信息
+                        // 诊断信息（调试阶段始终显示）
                         val diag = sevenZipDialogEntry.diagnosticInfo
-                        if (sevenZipDialogEntry.isCorrupted && diag.isNotBlank()) {
+                        if (diag.isNotBlank()) {
                             Text(
                                 diag,
                                 style = MaterialTheme.typography.bodySmall,
@@ -2559,7 +2559,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 }
             },
             confirmButton = {
-                if (sevenZipDialogEntry != null && sevenZipDialogEntry.isCorrupted && sevenZipDialogEntry.diagnosticInfo.isNotBlank()) {
+                if (sevenZipDialogEntry != null && sevenZipDialogEntry.diagnosticInfo.isNotBlank()) {
                     TextButton(
                         onClick = {
                             val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
