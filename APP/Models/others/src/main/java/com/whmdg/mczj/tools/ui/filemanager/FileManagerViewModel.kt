@@ -1376,19 +1376,23 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return null
         }
         if (ArchiveBrowser.isArchiveFile(entry.name)) {
-            // 7z 格式弹出信息弹窗（检测加密状态）
+            // 7z 格式：检测加密状态，无密码则正常浏览，有密码/损坏则弹信息弹窗
             if (entry.name.endsWith(".7z", ignoreCase = true)) {
-                DiagnosticLog.log("OpenFile", "7z 文件，弹出信息弹窗: ${entry.name}")
-                sevenZipAnalyzing = true
-                sevenZipInfo = null
                 val pending = entry
                 viewModelScope.launch(Dispatchers.IO) {
                     val info = ArchiveBrowser.analyze7z(getApplication(), pending.path, permissionLevel)
                     withContext(Dispatchers.Main) {
-                        sevenZipInfo = info
-                        sevenZipAnalyzing = false
+                        if (info.contentEncrypted || info.headerEncrypted || info.isCorrupted) {
+                            sevenZipInfo = info
+                            sevenZipAnalyzing = false
+                        } else {
+                            sevenZipAnalyzing = false
+                            openArchive(pending)
+                        }
                     }
                 }
+                sevenZipAnalyzing = true
+                sevenZipInfo = null
                 return null
             }
             if (isDebug) {
