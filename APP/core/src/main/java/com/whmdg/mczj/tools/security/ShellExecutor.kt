@@ -1,6 +1,7 @@
 package com.whmdg.mczj.tools.security
 
 import android.content.Context
+import android.util.Log
 import com.topjohnwu.superuser.Shell
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
