@@ -636,7 +636,9 @@ object ArchiveBrowser {
             }
             Triple(stdout, "", 0)
         } catch (e: ShellException) {
-            Triple("", "${e.message}\n${e.stderr}", e.exitCode)
+            // ponytail: 2>&1 重定向场景下 stderr 为空，错误信息实际在 stdout
+            val effectiveErr = e.stderr.ifBlank { e.stdout }
+            Triple("", "${e.message}\n$effectiveErr", e.exitCode)
         } catch (e: Exception) {
             Triple("", e.message ?: "Shell 执行异常", -1)
         }

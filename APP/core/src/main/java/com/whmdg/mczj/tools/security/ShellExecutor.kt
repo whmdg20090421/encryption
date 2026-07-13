@@ -32,7 +32,8 @@ class ShellException(
     val command: String,
     val permission: Permission,
     val stderr: String = "",
-    val exitCode: Int = -1
+    val exitCode: Int = -1,
+    val stdout: String = ""   // ponytail: 仅用于 2>&1 重定向场景，正常 stderr 走 stderr 字段
 ) : Exception(buildMessage(message, command, permission, stderr, exitCode)) {
     companion object {
         private fun buildMessage(
@@ -245,7 +246,8 @@ object ShellExecutor {
                 command = command,
                 permission = permission,
                 stderr = if (debug) stderr else "exit ${result.getCode()}",
-                exitCode = result.getCode()
+                exitCode = result.getCode(),
+                stdout = stdout  // ponytail: 2>&1 重定向时 stderr 为空，错误信息在 stdout
             )
         }
         return stdout
@@ -268,7 +270,8 @@ object ShellExecutor {
                 command = command,
                 permission = permission,
                 stderr = if (debug) stderr else "exit $exitCode",
-                exitCode = exitCode
+                exitCode = exitCode,
+                stdout = stdout  // ponytail: 2>&1 重定向时 stderr 为空，错误信息在 stdout
             )
         }
         return stdout
@@ -317,7 +320,8 @@ object ShellExecutor {
                 command = command,
                 permission = permission,
                 stderr = if (debug) stderr else "exit $exitCode",
-                exitCode = exitCode
+                exitCode = exitCode,
+                stdout = stdout  // ponytail: 2>&1 重定向时 stderr 为空，错误信息在 stdout
             )
         }
         return stdout
