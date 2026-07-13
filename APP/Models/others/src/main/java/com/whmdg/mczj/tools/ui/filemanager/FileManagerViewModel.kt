@@ -142,7 +142,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var archiveOpenError by mutableStateOf<Pair<String, String>?>(null)
 
     // ── 回收站 ──
-    var isInRecycleBin by mutableStateOf(false)
+    /** 哪个面板处于回收站视图，null 表示无面板在回收站 */
+    var recycleBinPanel by mutableStateOf<FocusedPanel?>(null)
         private set
     var recycleBinPath by mutableStateOf("")
         private set
@@ -497,7 +498,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     // ── 核心导航：切换路径 + 刷新列表 ──
     // path = 显示路径（软链接路径），realPath = 真实路径（用于读取文件列表）
     fun navigateTo(path: String, realPath: String = path) {
-        if (isInRecycleBin) isInRecycleBin = false
+        if (recycleBinPanel == focusedPanel) recycleBinPanel = null
         // path = 显示路径（软链接路径），realPath = 真实路径（用于读取文件列表）
         // 后退/前进/返回上一级传入的 realPath 默认等于 path，需要解析真实路径
         val resolvedRealPath = if (realPath == path && hasShellEngine) {
@@ -1165,7 +1166,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         loadRecycleBinMeta()
         val binDir = AppDataPaths.recycleBin(context)
         recycleBinPath = binDir.absolutePath
-        isInRecycleBin = true
+        recycleBinPanel = focusedPanel
         val entries = listRecycleBinDir(binDir)
         if (focusedPanel == FocusedPanel.LEFT) {
             leftEntries = entries
@@ -1231,7 +1232,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 退出回收站视图，恢复到正常目录浏览。
      */
     fun exitRecycleBin() {
-        isInRecycleBin = false
+        recycleBinPanel = null
         recycleBinPath = ""
         refreshCurrent()
     }
@@ -1252,7 +1253,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateSortField(field: SortField) {
         sortField = field
         fmPrefs.edit().putString("sort_field", field.name).apply()
-        if (isInRecycleBin) {
+        if (recycleBinPanel == focusedPanel) {
             val entries = listRecycleBinDir(java.io.File(recycleBinPath))
             if (focusedPanel == FocusedPanel.LEFT) leftEntries = entries else rightEntries = entries
         } else {
@@ -1264,7 +1265,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateSortOrder(order: SortOrder) {
         sortOrder = order
         fmPrefs.edit().putString("sort_order", order.name).apply()
-        if (isInRecycleBin) {
+        if (recycleBinPanel == focusedPanel) {
             val entries = listRecycleBinDir(java.io.File(recycleBinPath))
             if (focusedPanel == FocusedPanel.LEFT) leftEntries = entries else rightEntries = entries
         } else {

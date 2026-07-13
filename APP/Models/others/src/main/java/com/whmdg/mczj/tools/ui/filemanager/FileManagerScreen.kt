@@ -500,7 +500,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             if (!vm.webDavGoBack()) {
                 vm.exitWebDavMode()
             }
-        } else if (vm.isInRecycleBin) {
+        } else if (vm.recycleBinPanel == vm.focusedPanel) {
             if (!vm.goUpInRecycleBin()) {
                 vm.exitRecycleBin()
             }
@@ -524,7 +524,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 if (it.currentPath == it.archivePath) it.archiveName
                                 else "${it.archiveName} / ${it.currentPath.removePrefix(it.archivePath).trimStart('/')}"
                             } ?: "压缩包"
-                            vm.isInRecycleBin -> "回收站"
+                            vm.recycleBinPanel == vm.focusedPanel -> "回收站"
                             else -> currentPath
                         }
                         StartEllipsisText(
@@ -771,7 +771,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         ) {
                             val canGoUp = if (vm.isInArchiveMode) {
                                 !vm.isAtArchiveRoot()
-                            } else if (vm.isInRecycleBin) {
+                            } else if (vm.recycleBinPanel == vm.focusedPanel) {
                                 !vm.isAtRecycleBinRoot
                             } else {
                                 val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
@@ -785,7 +785,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             IconButton(
                                 onClick = {
                                     if (vm.isInArchiveMode) vm.archiveGoUp()
-                                    else if (vm.isInRecycleBin) vm.goUpInRecycleBin()
+                                    else if (vm.recycleBinPanel == vm.focusedPanel) vm.goUpInRecycleBin()
                                     else saveScrollAndGoUp()
                                 },
                                 enabled = canGoUp
@@ -994,7 +994,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 } else {
                     val leftParentPath = if (vm.isInArchiveMode && vm.focusedPanel == FocusedPanel.LEFT) {
                         if (vm.isAtArchiveRoot()) null else "__archive_parent__"
-                    } else if (vm.isInRecycleBin) {
+                    } else if (vm.recycleBinPanel == vm.focusedPanel) {
                         if (vm.isAtRecycleBinRoot) null
                         else java.io.File(vm.recycleBinPath).parentFile?.absolutePath?.let { p ->
                             if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
@@ -1010,7 +1010,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
                     val rightParentPath = if (vm.isInArchiveMode && vm.focusedPanel == FocusedPanel.RIGHT) {
                         if (vm.isAtArchiveRoot()) null else "__archive_parent__"
-                    } else if (vm.isInRecycleBin) {
+                    } else if (vm.recycleBinPanel == vm.focusedPanel) {
                         if (vm.isAtRecycleBinRoot) null
                         else java.io.File(vm.recycleBinPath).parentFile?.absolutePath?.let { p ->
                             if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
@@ -1036,7 +1036,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     vm.focusedPanel = FocusedPanel.LEFT
                                     if (vm.isInArchiveMode) {
                                         vm.navigateInArchive(entry)
-                                    } else if (vm.isInRecycleBin) {
+                                    } else if (vm.recycleBinPanel == vm.focusedPanel) {
                                         vm.navigateInRecycleBin(entry)
                                     } else {
                                         DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
@@ -1103,7 +1103,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     if (vm.isInArchiveMode) {
                                         vm.focusedPanel = FocusedPanel.LEFT
                                         vm.archiveGoUp()
-                                    } else if (vm.isInRecycleBin) {
+                                    } else if (vm.recycleBinPanel == vm.focusedPanel) {
                                         vm.focusedPanel = FocusedPanel.LEFT
                                         vm.goUpInRecycleBin()
                                     } else if (leftParentPath != null) {
@@ -1172,7 +1172,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     vm.focusedPanel = FocusedPanel.RIGHT
                                     if (vm.isInArchiveMode) {
                                         vm.navigateInArchive(entry)
-                                    } else if (vm.isInRecycleBin) {
+                                    } else if (vm.recycleBinPanel == vm.focusedPanel) {
                                         vm.navigateInRecycleBin(entry)
                                     } else {
                                         DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
@@ -1235,7 +1235,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     if (vm.isInArchiveMode) {
                                         vm.focusedPanel = FocusedPanel.RIGHT
                                         vm.archiveGoUp()
-                                    } else if (vm.isInRecycleBin) {
+                                    } else if (vm.recycleBinPanel == vm.focusedPanel) {
                                         vm.focusedPanel = FocusedPanel.RIGHT
                                         vm.goUpInRecycleBin()
                                     } else if (rightParentPath != null) {
@@ -1963,7 +1963,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 .fillMaxWidth()
                                 .wrapContentHeight()
                         ) {
-                            if (vm.isInRecycleBin) {
+                            if (vm.recycleBinPanel == vm.focusedPanel) {
                                 // ── 回收站模式：永久删除 / 恢复到原位置 ──
                                 // 多选模式下显示选中数量
                                 if (isMultiSelect) {
@@ -2496,15 +2496,13 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             Text(
                                 when {
                                     sevenZipDialogEntry.isCorrupted -> "无法检测"
-                                    sevenZipDialogEntry.headerEncrypted -> "无法检测（需密码）"
-                                    sevenZipDialogEntry.contentEncrypted -> "✓ 已加密"
+                                    sevenZipDialogEntry.contentEncrypted || sevenZipDialogEntry.headerEncrypted -> "✓ 已加密"
                                     else -> "✗ 未加密"
                                 },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = when {
                                     sevenZipDialogEntry.isCorrupted -> MaterialTheme.colorScheme.error
-                                    sevenZipDialogEntry.headerEncrypted -> MaterialTheme.colorScheme.onSurfaceVariant
-                                    sevenZipDialogEntry.contentEncrypted -> MaterialTheme.colorScheme.primary
+                                    sevenZipDialogEntry.contentEncrypted || sevenZipDialogEntry.headerEncrypted -> MaterialTheme.colorScheme.primary
                                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                                 }
                             )
@@ -4953,8 +4951,10 @@ private fun FileEntryRow(
                     }
                 }
                 .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-                .padding(horizontal = 16.dp, vertical = 2.5.dp)
+                .padding(horizontal = 16.dp)
         ) {
+            Spacer(modifier = Modifier.weight(0.5f))
+            Column(modifier = Modifier.weight(9f)) {
             // Top 7/10: icon (left 1/5) + filename (right 4/5)
             Row(modifier = Modifier.weight(7f)) {
                 Box(
@@ -5039,20 +5039,15 @@ private fun FileEntryRow(
                         }
                     }
                 }
-                Box(
-                    modifier = Modifier.weight(4f).fillMaxHeight(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = entry.name,
-                        modifier = Modifier.fillMaxWidth(),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        softWrap = true,
-                        textAlign = TextAlign.Start,
-                        fontSize = 13.sp,
-                    )
-                }
+                Text(
+                    text = entry.name,
+                    modifier = Modifier.weight(4f).align(Alignment.CenterVertically),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = true,
+                    textAlign = TextAlign.Start,
+                    fontSize = 13.sp,
+                )
             }
             // Bottom 3/10: date/permission (left, aligned to icon left) + size (right, aligned to filename right)
             Row(
@@ -5089,6 +5084,8 @@ private fun FileEntryRow(
                     )
                 }
             }
+            } // inner Column (weight 9f)
+            Spacer(modifier = Modifier.weight(0.5f))
         }
     }
 }
