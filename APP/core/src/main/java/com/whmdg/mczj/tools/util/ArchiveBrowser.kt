@@ -3,13 +3,10 @@ package com.whmdg.mczj.tools.util
 import android.content.Context
 import android.util.Log
 import com.whmdg.mczj.tools.AppDataPaths
-import com.whmdg.mczj.tools.security.Permission
-import com.whmdg.mczj.tools.security.ShellException
-import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.ui.FileEntry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -62,10 +59,7 @@ object ArchiveBrowser {
     ): Boolean? = withContext(Dispatchers.IO) {
         val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
         val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
-        val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "$cmd 2>&1"))
-        val output = process.inputStream.bufferedReader().readText().trim()
-        process.waitFor()
-        val exitCode = process.exitValue()
+        val (output, exitCode) = run7zs(cmd)
         Log.d(TAG, "密码检测: exitCode=$exitCode, output=${output.take(200)}")
         when {
             exitCode == 0 && (output.contains("7zAES", ignoreCase = true) || output.contains("Encrypted = +")) -> true
@@ -101,21 +95,14 @@ object ArchiveBrowser {
         context: Context,
         archivePath: String,
         permissionLevel: String
-    ): SevenZipInfo = withContext(Dispatchers.IO) {
+    ): SevenZipInfo {
         val fileName = File(archivePath).name
         val fileSize = File(archivePath).length()
-        try {
+        return try {
             val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
             val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
-
-            // 直接执行，stdout+stderr 合到一个变量
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "$cmd 2>&1"))
-            val output = process.inputStream.bufferedReader().readText().trim()
-            process.waitFor()
-            val exitCode = process.exitValue()
-
+            val (output, exitCode) = run7zs(cmd)
             Log.e(TAG, "7z分析: exitCode=$exitCode, output=${output.take(300)}")
-
             when {
                 exitCode == 0 && (output.contains("7zAES", ignoreCase = true) || output.contains("Encrypted = +")) ->
                     SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = true, isCorrupted = false)
@@ -272,10 +259,7 @@ object ArchiveBrowser {
             val cmd = SevenZipCommand.buildListCommand(binaryPath, archivePath, password)
             Log.d(TAG, "列表命令: $cmd")
 
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "$cmd 2>&1"))
-            val output = process.inputStream.bufferedReader().readText().trim()
-            process.waitFor()
-            val exitCode = process.exitValue()
+            val (output, exitCode) = run7zs(cmd)
             Log.d(TAG, "执行完毕: exitCode=$exitCode, output=${output.length}字节")
 
             if (exitCode != 0) {
@@ -324,18 +308,8 @@ object ArchiveBrowser {
         try {
             val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
 
-            // 1. 密码检测：7zzs l -slt -p"dummy" 假密码探测
-            val detailCmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
-            val detProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "$detailCmd 2>&1"))
-            val detOutput = detProcess.inputStream.bufferedReader().readText().trim()
-            detProcess.waitFor()
-            val detExit = detProcess.exitValue()
-            val passwordRequired = when {
-                detExit == 0 && (detOutput.contains("7zAES", ignoreCase = true) || detOutput.contains("Encrypted = +")) -> true
-                detExit == 0 -> false
-                detOutput.contains("Cannot open encrypted archive", ignoreCase = true) -> true
-                else -> false
-            }
+            // 1. 密码检测
+            val passwordRequired = checkPasswordRequired(context, archivePath, permissionLevel) == true
 
             // 2. 需要密码时跳过列表命令（无密码会导致 7zzs 阻塞在 stdin 等待输入）
             if (passwordRequired) {
@@ -351,10 +325,7 @@ object ArchiveBrowser {
 
             // 3. 列表命令
             val listCmd = SevenZipCommand.buildListCommand(binaryPath, archivePath)
-            val listProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "$listCmd 2>&1"))
-            val listOutput = listProcess.inputStream.bufferedReader().readText().trim()
-            listProcess.waitFor()
-            val exitCode = listProcess.exitValue()
+            val (listOutput, exitCode) = run7zs(listCmd)
 
             if (exitCode != 0) {
                 val errMsg = listOutput.ifBlank { "7zzs 退出码: $exitCode" }
@@ -612,12 +583,9 @@ object ArchiveBrowser {
                 binaryPath, archivePath, fileName, outputDir, password
             )
             Log.d(TAG, "提取单文件: $fileName")
-            val extProcess = Runtime.getRuntime().exec(arrayOf("su", "-c", "$cmd 2>&1"))
-            val extOutput = extProcess.inputStream.bufferedReader().readText().trim()
-            extProcess.waitFor()
-            val exitCode = extProcess.exitValue()
+            val (output, exitCode) = run7zs(cmd)
             if (exitCode != 0) {
-                Log.w(TAG, "提取失败 exitCode=$exitCode output=$extOutput")
+                Log.w(TAG, "提取失败 exitCode=$exitCode output=$output")
                 return@withContext null
             }
             // 保留目录结构：outputDir/fileName
@@ -629,32 +597,11 @@ object ArchiveBrowser {
         }
     }
 
-    /** 命令执行超时时间（毫秒） */
-    private const val COMMAND_TIMEOUT_MS = 30_000L
-
-    /** 执行 shell 命令，返回 (stdout, stderr, exitCode)。
-     *  路径已由 SevenZipCommand.escape() 用单引号包裹，可安全传递给任何 shell。
-     *  委托给 ShellExecutor 执行。 */
-    private suspend fun executeCommand(
-        cmd: String,
-        permissionLevel: String,
-        context: Context
-    ): Triple<String, String, Int> = withContext(Dispatchers.IO) {
-        val permission = when (permissionLevel) {
-            "ROOT" -> Permission.ROOT
-            "SHIZUKU" -> Permission.ADB
-            else -> Permission.APPLICANT
-        }
-        try {
-            val stdout = withTimeout(COMMAND_TIMEOUT_MS) {
-                ShellExecutor.execute(permission, cmd, debug = true)
-            }
-            Triple(stdout, "", 0)
-        } catch (e: ShellException) {
-            Log.e(TAG, "ShellException: exitCode=${e.exitCode}, stderr=${e.stderr.take(300)}, message=${e.message?.take(200)}")
-            Triple("", "${e.message}\n${e.stderr}", e.exitCode)
-        } catch (e: Exception) {
-            Triple("", e.message ?: "Shell 执行异常", -1)
-        }
+    /** 执行 7zzs 命令，返回 (stdout+stderr, exitCode) */
+    private fun run7zs(cmd: String): Pair<String, Int> {
+        val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "$cmd 2>&1"))
+        val output = process.inputStream.bufferedReader().readText().trim()
+        process.waitFor()
+        return Pair(output, process.exitValue())
     }
 }
