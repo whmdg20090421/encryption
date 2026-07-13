@@ -392,7 +392,7 @@ object ArchiveBrowser {
                 archivePath = archivePath, archiveName = archiveName,
                 passwordRequired = passwordRequired,
                 listCommand = listCmd, listExitCode = exitCode,
-                listStdout = stdout, listStderr = stderr,
+                listStdout = listOutput, listStderr = "",
                 parsedEntryCount = entries.size, rootEntries = rootEntries,
                 session = session
             )
