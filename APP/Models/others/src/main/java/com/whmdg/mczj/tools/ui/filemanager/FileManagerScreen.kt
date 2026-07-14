@@ -224,10 +224,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var showNameDialog by remember { mutableStateOf(false) }
     var createName by remember { mutableStateOf("") }
     var showRenameDialog by remember { mutableStateOf(false) }
+    var renameText by remember { mutableStateOf("") }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var hideToolbarForDelete by remember { mutableStateOf(false) }
     var showDeleteProgress by remember { mutableStateOf(false) }
-    var renameText by remember { mutableStateOf("") }
     var recycleBinEnabled by remember { mutableStateOf(true) }
     var showForceDeleteDialog by remember { mutableStateOf(false) }
     var forceDeleteEntry by remember { mutableStateOf<FileEntry?>(null) }
@@ -2772,6 +2772,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── 重命名对话框 ──
     if (showRenameDialog && selectedEntry != null) {
+        val entry = selectedEntry!!
         AlertDialog(
             onDismissRequest = {
                 showRenameDialog = false
@@ -2783,13 +2784,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     value = renameText,
                     onValueChange = { renameText = it },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 )
             },
-            modifier = Modifier.heightIn(max = 200.dp),
             confirmButton = {
                 TextButton(onClick = {
-                    val entry = selectedEntry ?: return@TextButton
                     val newName = renameText.trim()
                     if (newName.isBlank() || newName == entry.name) {
                         showRenameDialog = false

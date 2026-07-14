@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.ui.diary
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
+import com.whmdg.mczj.tools.ui.Screen
 
 @Composable
 fun DiaryModuleScreen(
@@ -30,7 +31,11 @@ fun DiaryModuleScreen(
         is DiaryRoute.Home -> {
             DiaryScreen(
                 onBack = { navigateBack() },
-                onNavigate = { /* Handle navigation to DiaryBookDetail */ }
+                onNavigate = { screen ->
+                    when (screen) {
+                        is Screen.DiaryBookDetail -> navigateTo(DiaryRoute.BookDetail(screen.bookName))
+                    }
+                }
             )
         }
         is DiaryRoute.BookDetail -> {

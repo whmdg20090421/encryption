@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.ui.filemanager
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
+import com.whmdg.mczj.tools.ui.Screen
 
 @Composable
 fun FileManagerModuleScreen(
@@ -30,7 +31,12 @@ fun FileManagerModuleScreen(
         is FileManagerRoute.Home -> {
             FileManagerScreen(
                 onBack = { navigateBack() },
-                onNavigate = { /* Handle navigation to TextEditor/ImageViewer */ }
+                onNavigate = { screen ->
+                    when (screen) {
+                        is Screen.TextEditor -> navigateTo(FileManagerRoute.TextEditor(screen.filePath))
+                        is Screen.ImageViewer -> navigateTo(FileManagerRoute.ImageViewer(screen.filePath, screen.imagePaths, screen.startIndex))
+                    }
+                }
             )
         }
         is FileManagerRoute.TextEditor -> {
@@ -42,6 +48,8 @@ fun FileManagerModuleScreen(
         is FileManagerRoute.ImageViewer -> {
             ImageViewerScreen(
                 filePath = currentRoute.filePath,
+                imagePaths = currentRoute.imagePaths,
+                startIndex = currentRoute.startIndex,
                 onBack = { navigateBack() }
             )
         }

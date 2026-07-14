@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.ui.download
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
+import com.whmdg.mczj.tools.ui.Screen
 import com.whmdg.mczj.tools.ui.download.Deviant.DeviantDownloaderScreen
 import com.whmdg.mczj.tools.ui.download.Deviant.DeviantLoginScreen
 
@@ -32,7 +33,12 @@ fun DownloaderModuleScreen(
         is DownloaderRoute.BatchDownloader -> {
             BatchDownloaderScreen(
                 onBack = { navigateBack() },
-                onNavigate = { /* Handle navigation to FADownloader/DeviantDownloader */ }
+                onNavigate = { screen ->
+                    when (screen) {
+                        is Screen.FADownloader -> navigateTo(DownloaderRoute.FADownloader)
+                        is Screen.DeviantDownloader -> navigateTo(DownloaderRoute.DeviantDownloader)
+                    }
+                }
             )
         }
         is DownloaderRoute.FADownloader -> {
