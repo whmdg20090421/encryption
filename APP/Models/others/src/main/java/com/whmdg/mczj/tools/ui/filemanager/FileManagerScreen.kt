@@ -231,6 +231,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var showDeleteDialog by remember { mutableStateOf(false) }
     var hideToolbarForDelete by remember { mutableStateOf(false) }
     var showDeleteProgress by remember { mutableStateOf(false) }
+    // ── 复制/移动确认对话框 ──
+    var showCopyMoveConfirmDialog by remember { mutableStateOf(false) }
+    var copyMoveConfirmIsCopy by remember { mutableStateOf(true) }
+    var copyMoveConfirmSourcePaths by remember { mutableStateOf(listOf<String>()) }
+    var copyMoveConfirmTargetDir by remember { mutableStateOf("") }
     var showFileOpProgress by remember { mutableStateOf(false) }
     var cancelingFileOp by remember { mutableStateOf(false) }
     var recycleBinEnabled by remember { mutableStateOf(true) }
@@ -2091,17 +2096,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                 return@clickable
                                             }
                                             val targetDir = if (isToRight) vm.rightPath else vm.leftPath
-                                            val accessLevel = when {
-                                                vm.isRootEngine -> com.whmdg.mczj.tools.util.FileAccessLevel.ROOT
-                                                com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> com.whmdg.mczj.tools.util.FileAccessLevel.SHIZUKU
-                                                else -> com.whmdg.mczj.tools.util.FileAccessLevel.NORMAL
-                                            }
-                                            FileOperationManager.copy(sourcePaths, targetDir, accessLevel, context)
-                                            showFileOpProgress = true
-                                            cancelingFileOp = false
-                                            selectedEntry = null
-                                            leftSelectedPaths = emptySet()
-                                            rightSelectedPaths = emptySet()
+                                            copyMoveConfirmIsCopy = true
+                                            copyMoveConfirmSourcePaths = sourcePaths
+                                            copyMoveConfirmTargetDir = targetDir
+                                            showCopyMoveConfirmDialog = true
                                         }
                                         .padding(vertical = 16.dp),
                                     contentAlignment = Alignment.Center
@@ -2134,17 +2132,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                 return@clickable
                                             }
                                             val targetDir = if (isToRight) vm.rightPath else vm.leftPath
-                                            val accessLevel = when {
-                                                vm.isRootEngine -> com.whmdg.mczj.tools.util.FileAccessLevel.ROOT
-                                                com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> com.whmdg.mczj.tools.util.FileAccessLevel.SHIZUKU
-                                                else -> com.whmdg.mczj.tools.util.FileAccessLevel.NORMAL
-                                            }
-                                            FileOperationManager.move(sourcePaths, targetDir, accessLevel, context)
-                                            showFileOpProgress = true
-                                            cancelingFileOp = false
-                                            selectedEntry = null
-                                            leftSelectedPaths = emptySet()
-                                            rightSelectedPaths = emptySet()
+                                            copyMoveConfirmIsCopy = false
+                                            copyMoveConfirmSourcePaths = sourcePaths
+                                            copyMoveConfirmTargetDir = targetDir
+                                            showCopyMoveConfirmDialog = true
                                         }
                                         .padding(vertical = 16.dp),
                                     contentAlignment = Alignment.Center
@@ -2973,6 +2964,82 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 hideToolbarForDelete = false
             }
         }
+    }
+
+    // ── 复制/移动确认对话框 ──
+    if (showCopyMoveConfirmDialog) {
+        val sourceNames = copyMoveConfirmSourcePaths.map { path ->
+            path.substringAfterLast('/')
+        }
+        val sourceDisplay = if (sourceNames.size == 1) {
+            sourceNames[0]
+        } else {
+            "${sourceNames[0]} 等 ${sourceNames.size} 个文件"
+        }
+        val sourceDir = copyMoveConfirmSourcePaths.firstOrNull()?.substringBeforeLast('/') ?: ""
+        AlertDialog(
+            onDismissRequest = { showCopyMoveConfirmDialog = false },
+            title = { Text(if (copyMoveConfirmIsCopy) "确认复制" else "确认移动") },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = if (copyMoveConfirmIsCopy) "复制到以下目录：" else "移动到以下目录：",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = copyMoveConfirmTargetDir,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = "源文件：",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = sourceDisplay,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2
+                    )
+                    Text(
+                        text = sourceDir,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showCopyMoveConfirmDialog = false
+                    val accessLevel = when {
+                        vm.isRootEngine -> com.whmdg.mczj.tools.util.FileAccessLevel.ROOT
+                        com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> com.whmdg.mczj.tools.util.FileAccessLevel.SHIZUKU
+                        else -> com.whmdg.mczj.tools.util.FileAccessLevel.NORMAL
+                    }
+                    if (copyMoveConfirmIsCopy) {
+                        FileOperationManager.copy(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context)
+                    } else {
+                        FileOperationManager.move(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context)
+                    }
+                    showFileOpProgress = true
+                    cancelingFileOp = false
+                    selectedEntry = null
+                    leftSelectedPaths = emptySet()
+                    rightSelectedPaths = emptySet()
+                }) {
+                    Text("确认")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCopyMoveConfirmDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 
     // ── 复制/移动进度对话框 ──

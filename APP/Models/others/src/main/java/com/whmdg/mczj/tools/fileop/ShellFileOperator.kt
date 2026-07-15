@@ -39,10 +39,11 @@ class ShellFileOperator(
     /**
      * 使用 PV 复制文件，通过 ShellExecutor 路由到正确 UID，实时读取 stderr 获取进度。
      * PV -n 输出百分比到 stderr，每行一个数字（0.0 到 100.0）。
+     * --force 强制输出进度，即使 stderr 不是终端（解决缓冲问题）。
      */
     private fun copyWithPv(src: String, dst: String, onProgress: (Long) -> Unit) {
         val size = fileSize(src)
-        val command = "$pvPath -n ${escape(src)} > ${escape(dst)}"
+        val command = "$pvPath --force -n ${escape(src)} > ${escape(dst)}"
 
         try {
             ShellExecutor.executeWithStderr(
@@ -67,7 +68,7 @@ class ShellFileOperator(
     private fun moveWithPv(src: String, dst: String, onProgress: (Long) -> Unit) {
         val size = fileSize(src)
         val escapedSrc = escape(src)
-        val command = "$pvPath -n $escapedSrc > ${escape(dst)}"
+        val command = "$pvPath --force -n $escapedSrc > ${escape(dst)}"
 
         try {
             ShellExecutor.executeWithStderr(
