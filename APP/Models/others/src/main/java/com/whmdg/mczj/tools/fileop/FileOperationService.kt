@@ -151,5 +151,18 @@ class FileOperationService : Service() {
                 pendingJobs.clear()
             }
         }
+
+        /**
+         * 优雅取消所有任务：设 cancelFlag 但不 interrupt，让当前文件完成后再停止。
+         */
+        fun gracefulCancelAll() {
+            instance?.let { service ->
+                synchronized(service.runningJobs) {
+                    for ((job, _) in service.runningJobs) {
+                        job.cancelFlag.set(true)
+                    }
+                }
+            }
+        }
     }
 }

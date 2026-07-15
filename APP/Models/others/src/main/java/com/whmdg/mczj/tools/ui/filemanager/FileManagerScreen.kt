@@ -231,6 +231,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var showDeleteDialog by remember { mutableStateOf(false) }
     var hideToolbarForDelete by remember { mutableStateOf(false) }
     var showDeleteProgress by remember { mutableStateOf(false) }
+    var showFileOpProgress by remember { mutableStateOf(false) }
+    var cancelingFileOp by remember { mutableStateOf(false) }
     var recycleBinEnabled by remember { mutableStateOf(true) }
     var showForceDeleteDialog by remember { mutableStateOf(false) }
     var forceDeleteEntry by remember { mutableStateOf<FileEntry?>(null) }
@@ -428,6 +430,11 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     DisposableEffect(showDeleteProgress) {
         if (showDeleteProgress) registerOverlay("deleteProgress") { showDeleteProgress = false; selectedEntry = null; hideToolbarForDelete = false }
         else unregisterOverlay("deleteProgress")
+        onDispose {}
+    }
+    DisposableEffect(showFileOpProgress) {
+        if (showFileOpProgress) registerOverlay("fileOpProgress") { showFileOpProgress = false }
+        else unregisterOverlay("fileOpProgress")
         onDispose {}
     }
     DisposableEffect(showForceDeleteDialog) {
@@ -2090,6 +2097,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                 else -> com.whmdg.mczj.tools.util.FileAccessLevel.NORMAL
                                             }
                                             FileOperationManager.copy(sourcePaths, targetDir, accessLevel, context)
+                                            showFileOpProgress = true
+                                            cancelingFileOp = false
                                             selectedEntry = null
                                             leftSelectedPaths = emptySet()
                                             rightSelectedPaths = emptySet()
@@ -2131,6 +2140,8 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                                 else -> com.whmdg.mczj.tools.util.FileAccessLevel.NORMAL
                                             }
                                             FileOperationManager.move(sourcePaths, targetDir, accessLevel, context)
+                                            showFileOpProgress = true
+                                            cancelingFileOp = false
                                             selectedEntry = null
                                             leftSelectedPaths = emptySet()
                                             rightSelectedPaths = emptySet()
@@ -2960,6 +2971,84 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 showDeleteProgress = false
                 selectedEntry = null
                 hideToolbarForDelete = false
+            }
+        }
+    }
+
+    // ── 复制/移动进度对话框 ──
+    if (showFileOpProgress) {
+        val progress = fileOpManagerProgress
+        AlertDialog(
+            onDismissRequest = { /* 不可手动关闭 */ },
+            title = { Text(progress?.phase ?: "处理中") },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    if (progress != null && progress.totalBytes > 0) {
+                        if (progress.currentFileName.isNotEmpty()) {
+                            Text(
+                                text = progress.currentFileName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        if (!progress.isScanning) {
+                            LinearProgressIndicator(
+                                progress = { progress.fraction.coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(4.dp))
+                        }
+                        Text(
+                            text = if (progress.isScanning) {
+                                "${FormatUtils.formatBytes(progress.totalBytes)} (正在统计)"
+                            } else {
+                                "${FormatUtils.formatBytes(progress.currentBytes)} / ${FormatUtils.formatBytes(progress.totalBytes)}"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
+                    if (cancelingFileOp) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = "确定取消？当前文件将继续完成。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                if (cancelingFileOp) {
+                    TextButton(onClick = {
+                        FileOperationManager.gracefulCancel()
+                        cancelingFileOp = false
+                    }) {
+                        Text("确认取消", color = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    TextButton(onClick = { cancelingFileOp = true }) {
+                        Text("取消")
+                    }
+                }
+            },
+            dismissButton = {
+                if (cancelingFileOp) {
+                    TextButton(onClick = { cancelingFileOp = false }) {
+                        Text("继续")
+                    }
+                }
+            }
+        )
+        // 操作完成（progress 变为 null）→ 自动关闭对话框
+        LaunchedEffect(fileOpManagerProgress) {
+            if (fileOpManagerProgress == null) {
+                showFileOpProgress = false
+                cancelingFileOp = false
             }
         }
     }

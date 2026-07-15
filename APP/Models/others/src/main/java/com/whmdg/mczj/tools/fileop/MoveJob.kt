@@ -37,7 +37,6 @@ class MoveJob(
                 if (sourceFile.name != File(targetPath).name) {
                     try {
                         if (!operator.moveFile(source, targetPath)) {
-                            // renameTo 失败，加入跨分区列表
                             crossPartitionSources.add(source)
                         }
                     } catch (e: InterruptedIOException) {
@@ -46,6 +45,7 @@ class MoveJob(
                         crossPartitionSources.add(source)
                     }
                 }
+                if (isGracefulCancelled()) break
                 continue
             }
 
@@ -60,6 +60,7 @@ class MoveJob(
             } catch (_: Exception) {
                 crossPartitionSources.add(source)
             }
+            if (isGracefulCancelled()) break
         }
 
         // 阶段 2：跨分区文件需要 copy + delete
@@ -69,8 +70,15 @@ class MoveJob(
             return
         }
 
-        // 扫描跨分区文件
-        val scanInfo = scan(crossPartitionSources)
+        // 扫描跨分区文件（实时回调已扫描字节数）
+        val scanInfo = scanWithProgress(crossPartitionSources) { totalSoFar ->
+            manager.updateProgress(FileOpProgress(
+                phase = "正在移动",
+                currentBytes = 0,
+                totalBytes = totalSoFar,
+                isScanning = true
+            ))
+        }
         var transferredBytes = 0L
         var transferredFiles = 0
 
@@ -90,6 +98,7 @@ class MoveJob(
             val result = moveRecursively(source, targetPath, scanInfo, transferredBytes, transferredFiles)
             transferredBytes += result.bytes
             transferredFiles += result.files
+            if (isGracefulCancelled()) break
             throwIfCancelled()
         }
 
@@ -257,37 +266,6 @@ class MoveJob(
             ConflictAction.SKIP -> null
             ConflictAction.CANCEL -> throw InterruptedIOException("用户取消")
         }
-    }
-
-    private fun scan(sources: List<String>): ScanInfo {
-        var fileCount = 0
-        var totalBytes = 0L
-
-        for (source in sources) {
-            throwIfCancelled()
-            val file = File(source)
-            if (!file.exists()) continue
-
-            if (file.isDirectory) {
-                val stack = ArrayDeque<File>()
-                stack.add(file)
-                while (stack.isNotEmpty()) {
-                    throwIfCancelled()
-                    val f = stack.removeLast()
-                    if (f.isDirectory) {
-                        f.listFiles()?.forEach { stack.add(it) }
-                    } else {
-                        fileCount++
-                        totalBytes += f.length()
-                    }
-                }
-            } else {
-                fileCount++
-                totalBytes += file.length()
-            }
-        }
-
-        return ScanInfo(fileCount, totalBytes)
     }
 
     private fun generateUniqueName(dir: String, name: String, isDirectory: Boolean): String {

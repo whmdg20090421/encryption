@@ -134,6 +134,11 @@ object FileOperationManager {
         _errorRequest.value = null
     }
 
+    /** 优雅取消：设 cancelFlag 但不 interrupt 线程，让当前文件完成后再停止。 */
+    fun gracefulCancel() {
+        FileOperationService.gracefulCancelAll()
+    }
+
     /** 取消所有正在运行的任务 */
     fun cancelAll() {
         FileOperationService.cancelAll()
@@ -152,12 +157,11 @@ data class FileOpProgress(
     val currentFileName: String = "",
     val isRunning: Boolean = true,
     val fileIndex: Int = 0,
-    val fileCount: Int = 0
+    val fileCount: Int = 0,
+    val isScanning: Boolean = false
 ) {
-    val fraction: Float get() {
-        if (fileCount > 0) return fileIndex.toFloat() / fileCount
-        return if (totalBytes > 0) currentBytes.toFloat() / totalBytes else 0f
-    }
+    val fraction: Float get() =
+        if (totalBytes > 0) currentBytes.toFloat() / totalBytes else 0f
 }
 
 // ── 冲突/错误模型 ──

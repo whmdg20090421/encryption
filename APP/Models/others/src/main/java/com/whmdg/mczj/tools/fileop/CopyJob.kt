@@ -25,8 +25,15 @@ class CopyJob(
 
     @Throws(Exception::class)
     override fun run() {
-        // 1. 扫描
-        val scanInfo = scan(sources)
+        // 1. 扫描（实时回调已扫描字节数）
+        val scanInfo = scanWithProgress(sources) { totalSoFar ->
+            manager.updateProgress(FileOpProgress(
+                phase = "正在复制",
+                currentBytes = 0,
+                totalBytes = totalSoFar,
+                isScanning = true
+            ))
+        }
         var transferredBytes = 0L
         var transferredFiles = 0
 
@@ -52,6 +59,7 @@ class CopyJob(
             val result = copyRecursively(source, targetPath, scanInfo, transferredBytes, transferredFiles)
             transferredBytes += result.bytes
             transferredFiles += result.files
+            if (isGracefulCancelled()) break
             throwIfCancelled()
         }
 
@@ -200,40 +208,6 @@ class CopyJob(
             ConflictAction.SKIP -> null
             ConflictAction.CANCEL -> throw InterruptedIOException("用户取消")
         }
-    }
-
-    /**
-     * 扫描源文件列表，统计总文件数和总大小。
-     */
-    private fun scan(sources: List<String>): ScanInfo {
-        var fileCount = 0
-        var totalBytes = 0L
-
-        for (source in sources) {
-            throwIfCancelled()
-            val file = File(source)
-            if (!file.exists()) continue
-
-            if (file.isDirectory) {
-                val stack = ArrayDeque<File>()
-                stack.add(file)
-                while (stack.isNotEmpty()) {
-                    throwIfCancelled()
-                    val f = stack.removeLast()
-                    if (f.isDirectory) {
-                        f.listFiles()?.forEach { stack.add(it) }
-                    } else {
-                        fileCount++
-                        totalBytes += f.length()
-                    }
-                }
-            } else {
-                fileCount++
-                totalBytes += file.length()
-            }
-        }
-
-        return ScanInfo(fileCount, totalBytes)
     }
 
     /**
