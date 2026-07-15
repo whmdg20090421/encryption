@@ -95,6 +95,7 @@ object FileOperationManager {
         accessLevel: FileAccessLevel,
         context: Context
     ) {
+        _progress.value = FileOpProgress(phase = "正在复制", currentBytes = 0, totalBytes = 0, isScanning = true)
         val pvPath = PvExtractor.ensureExtracted(context).absolutePath
         val operator = FileOperator.create(accessLevel, pvPath)
         val job = CopyJob(sources, targetDir, this).apply {
@@ -109,6 +110,7 @@ object FileOperationManager {
         accessLevel: FileAccessLevel,
         context: Context
     ) {
+        _progress.value = FileOpProgress(phase = "正在移动", currentBytes = 0, totalBytes = 0, isScanning = true)
         val pvPath = PvExtractor.ensureExtracted(context).absolutePath
         val operator = FileOperator.create(accessLevel, pvPath)
         val job = MoveJob(sources, targetDir, this).apply {
@@ -123,6 +125,7 @@ object FileOperationManager {
         accessLevel: FileAccessLevel,
         context: Context
     ) {
+        _progress.value = FileOpProgress(phase = "正在删除", currentBytes = 0, totalBytes = 0, isScanning = true)
         val pvPath = PvExtractor.ensureExtracted(context).absolutePath
         val operator = FileOperator.create(accessLevel, pvPath)
         val job = DeleteJob(entries, toRecycleBin, this, context).apply {

@@ -2983,7 +2983,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             title = { Text(progress?.phase ?: "处理中") },
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    if (progress != null && progress.totalBytes > 0) {
+                    if (progress != null) {
                         if (progress.currentFileName.isNotEmpty()) {
                             Text(
                                 text = progress.currentFileName,
@@ -2993,16 +2993,19 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                             )
                             Spacer(Modifier.height(8.dp))
                         }
-                        if (!progress.isScanning) {
+                        if (progress.isScanning) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        } else if (progress.totalBytes > 0) {
                             LinearProgressIndicator(
                                 progress = { progress.fraction.coerceIn(0f, 1f) },
                                 modifier = Modifier.fillMaxWidth()
                             )
-                            Spacer(Modifier.height(4.dp))
                         }
+                        Spacer(Modifier.height(4.dp))
                         Text(
                             text = if (progress.isScanning) {
-                                "${FormatUtils.formatBytes(progress.totalBytes)} (正在统计)"
+                                if (progress.totalBytes > 0) "${FormatUtils.formatBytes(progress.totalBytes)} (正在统计)"
+                                else "正在统计..."
                             } else {
                                 "${FormatUtils.formatBytes(progress.currentBytes)} / ${FormatUtils.formatBytes(progress.totalBytes)}"
                             },
