@@ -1,5 +1,6 @@
 package com.whmdg.mczj.tools.security
 
+import android.os.ParcelFileDescriptor
 import android.util.Base64
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -113,6 +114,53 @@ class ShellService : IShellService.Stub() {
             try { progressFile.writeText("DONE:$exitCode\n") } catch (_: Exception) {}
         } catch (e: Exception) {
             try { progressFile.writeText("DONE:-1\n") } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * 执行命令，stderr 通过 PFD 管道实时流式返回。
+     * 运行在 Shizuku 进程中，UID 2000 或 0。
+     * Binder 调用阻塞直到命令完成。
+     */
+    override fun executeStreamingStderr(command: String, stderrWriteFd: ParcelFileDescriptor): String {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
+
+            val stdoutBuf = StringBuilder()
+            val tOut = Thread {
+                try {
+                    BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                        val buf = CharArray(8192)
+                        var n: Int
+                        while (reader.read(buf).also { n = it } != -1) {
+                            stdoutBuf.append(buf, 0, n)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            val tErr = Thread {
+                try {
+                    ParcelFileDescriptor.AutoCloseOutputStream(stderrWriteFd).use { os ->
+                        process.errorStream.use { it.copyTo(os) }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            tOut.start()
+            tErr.start()
+            process.waitFor()
+            tOut.join(5000)
+            tErr.join(5000)
+
+            val stdout = stdoutBuf.toString().trimEnd()
+            val exitCode = process.exitValue()
+            val stdoutB64 = Base64.encodeToString(stdout.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+            "$stdoutB64\n\n$exitCode"
+        } catch (e: Exception) {
+            val errB64 = Base64.encodeToString(
+                (e.message ?: "执行异常").toByteArray(Charsets.UTF_8), Base64.NO_WRAP
+            )
+            "\n$errB64\n-1"
         }
     }
 

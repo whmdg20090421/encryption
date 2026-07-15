@@ -1,6 +1,5 @@
 package com.whmdg.mczj.tools.fileop
 
-import android.content.Context
 import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.util.DirEntry
@@ -8,15 +7,20 @@ import com.whmdg.mczj.tools.util.SevenZipCommand
 import java.io.IOException
 
 /**
- * Shell 权限的文件操作实现，通过 Root/Shizuku 执行 shell 命令。
- * 复制使用 cp，移动使用 mv，删除使用 rm -rf。
+ * 文件操作实现，统一通过 ShellExecutor 执行 shell 命令。
+ * 复制使用 pv 获取实时进度，移动使用 pv+rm，删除使用 rm -rf。
+ * 所有权限级别（NORMAL/SHIZUKU/ROOT）都通过 ShellExecutor 路由。
  */
 class ShellFileOperator(
-    private val context: Context,
-    private val useRoot: Boolean
+    private val permission: Permission,
+    private val pvPath: String
 ) : FileOperator {
 
-    private val permission = if (useRoot) Permission.ROOT else Permission.ADB
+    /** 兼容旧调用：useRoot=true → ROOT, useRoot=false → ADB */
+    constructor(useRoot: Boolean, pvPath: String) : this(
+        if (useRoot) Permission.ROOT else Permission.ADB,
+        pvPath
+    )
 
     private fun escape(path: String): String = SevenZipCommand.escape(path)
 
@@ -32,22 +36,70 @@ class ShellFileOperator(
         }
     }
 
-    override fun copyFile(src: String, dst: String, onProgress: (Long) -> Unit) {
+    /**
+     * 使用 PV 复制文件，通过 ShellExecutor 路由到正确 UID，实时读取 stderr 获取进度。
+     * PV -n 输出百分比到 stderr，每行一个数字（0.0 到 100.0）。
+     */
+    private fun copyWithPv(src: String, dst: String, onProgress: (Long) -> Unit) {
         val size = fileSize(src)
-        val escapedSrc = escape(src)
-        val escapedDst = escape(dst)
-        checkExit("cp $escapedSrc $escapedDst", "复制失败")
-        // Shell cp 无法获取实时进度，复制完成后回调总大小
+        val command = "$pvPath -n ${escape(src)} > ${escape(dst)}"
+
+        try {
+            ShellExecutor.executeWithStderr(
+                permission = permission,
+                command = command,
+                onStderrLine = { line ->
+                    line.trim().toDoubleOrNull()?.let { percent ->
+                        onProgress((size * percent / 100).toLong())
+                    }
+                }
+            )
+        } catch (e: Exception) {
+            throw IOException("PV 复制失败: ${e.message}")
+        }
+
         onProgress(size)
     }
 
-    override fun moveFile(src: String, dst: String): Boolean {
+    /**
+     * 使用 PV 移动文件（复制+删除源文件），通过 ShellExecutor 路由到正确 UID。
+     */
+    private fun moveWithPv(src: String, dst: String, onProgress: (Long) -> Unit) {
+        val size = fileSize(src)
         val escapedSrc = escape(src)
-        val escapedDst = escape(dst)
+        val command = "$pvPath -n $escapedSrc > ${escape(dst)}"
+
+        try {
+            ShellExecutor.executeWithStderr(
+                permission = permission,
+                command = command,
+                onStderrLine = { line ->
+                    line.trim().toDoubleOrNull()?.let { percent ->
+                        onProgress((size * percent / 100).toLong())
+                    }
+                }
+            )
+        } catch (e: Exception) {
+            throw IOException("PV 移动失败: ${e.message}")
+        }
+
+        // 复制成功，删除源文件（通过 ShellExecutor，保持权限一致）
+        exec("rm -rf $escapedSrc")
+
+        onProgress(size)
+    }
+
+    override fun copyFile(src: String, dst: String, onProgress: (Long) -> Unit) {
+        copyWithPv(src, dst, onProgress)
+    }
+
+    override fun moveFile(src: String, dst: String): Boolean {
         return try {
-            exec("mv $escapedSrc $escapedDst")
+            moveWithPv(src, dst) { /* moveFile 不需要进度回调，MoveJob 使用 copyFile+deleteFile */ }
             true
-        } catch (_: Exception) { false }
+        } catch (e: Exception) {
+            false
+        }
     }
 
     override fun deleteFile(path: String) {

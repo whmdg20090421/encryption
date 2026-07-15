@@ -345,8 +345,9 @@ FileAccessor（FolderSizeCalculator 使用）
 ```
 
 **关键实现细节**：
-- Shell 命令使用 `ls -lap '$escaped'` 模式（不用 `cd`，Shizuku 的 `cd` 对含括号/特殊字符路径失败）
-- `ls -lap` 输出解析使用逐字符定位（非 `split("\\s+")`），精确保留文件名中的连续空格
+- Shell 命令不用 `cd`（Shizuku 的 `cd` 对含括号/特殊字符路径失败）
+- 目录列表使用 `find -printf` 直接输出字段（替代旧版 `ls -lap` 逐字符解析）
+- 文件属性使用 `stat -c '%a|%U|%G|%u|%g'` 一次获取权限/用户名/组名/UID/GID
 - 大小统计 BFS 前执行 `find -type d | wc -l` 获取总目录数，实现实时进度显示
 
 ### 文件操作模块（fileop）
@@ -379,11 +380,11 @@ CopyJob / MoveJob / DeleteJob
 
 ### 压缩包模块
 
-基于 APK 内嵌的 `7zzs` 静态二进制（7-Zip 命令行），支持三条权限路径（Normal/Shizuku/Root）。
+基于 APK 内嵌的 `7zzs` 静态二进制（7-Zip 命令行），`ArchiveBrowser` 通过 `run7zs()` 使用 `Runtime.exec` 直接执行（绕过 ShellExecutor）。
 
 ```
-BinaryExtractor                         # 7zzs 提取：nativeLibraryDir/lib7zzs.so → AppDataPaths.binaries()/7zzs
-    └── ensureExtracted() → chmod 755，返回目标路径
+BinaryExtractor                         # 直接使用 nativeLibraryDir/lib7zzs.so（APK 安装时已解压）
+    └── ensureExtracted() → 校验文件存在，返回路径
 
 SevenZipCommand                         # 命令行构建器（纯字符串拼接）
     ├── escape() / escapePassword()     # 单引号包裹 + '\'' 转义（行业标准 shell 路径转义）

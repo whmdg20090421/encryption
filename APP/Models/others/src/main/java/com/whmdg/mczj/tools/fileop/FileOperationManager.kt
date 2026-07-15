@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.fileop
 
 import android.content.Context
 import com.whmdg.mczj.tools.util.FileAccessLevel
+import com.whmdg.mczj.tools.util.PvExtractor
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -94,7 +95,8 @@ object FileOperationManager {
         accessLevel: FileAccessLevel,
         context: Context
     ) {
-        val operator = FileOperator.create(accessLevel, context)
+        val pvPath = PvExtractor.ensureExtracted(context).absolutePath
+        val operator = FileOperator.create(accessLevel, pvPath)
         val job = CopyJob(sources, targetDir, this).apply {
             this.operator = operator
         }
@@ -107,7 +109,8 @@ object FileOperationManager {
         accessLevel: FileAccessLevel,
         context: Context
     ) {
-        val operator = FileOperator.create(accessLevel, context)
+        val pvPath = PvExtractor.ensureExtracted(context).absolutePath
+        val operator = FileOperator.create(accessLevel, pvPath)
         val job = MoveJob(sources, targetDir, this).apply {
             this.operator = operator
         }
@@ -120,7 +123,8 @@ object FileOperationManager {
         accessLevel: FileAccessLevel,
         context: Context
     ) {
-        val operator = FileOperator.create(accessLevel, context)
+        val pvPath = PvExtractor.ensureExtracted(context).absolutePath
+        val operator = FileOperator.create(accessLevel, pvPath)
         val job = DeleteJob(entries, toRecycleBin, this, context).apply {
             this.operator = operator
         }

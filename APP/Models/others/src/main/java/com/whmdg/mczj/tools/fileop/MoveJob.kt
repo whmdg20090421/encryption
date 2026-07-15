@@ -9,10 +9,9 @@ import java.io.InterruptedIOException
  * 移动任务。
  *
  * 流程：
- * 1. 逐个源文件尝试原子 renameTo（同分区瞬间完成）
- * 2. rename 失败的加入跨分区列表
- * 3. 跨分区文件：scan → walkFileTree 递归复制 → 删除源
- * 4. 冲突时通过 FileOperationManager 弹窗等待用户选择
+ * 1. 扫描源文件统计总数和大小
+ * 2. 逐个源文件使用 PV 复制+删除
+ * 3. 冲突时通过 FileOperationManager 弹窗等待用户选择
  */
 class MoveJob(
     private val sources: List<String>,
@@ -24,54 +23,8 @@ class MoveJob(
 
     @Throws(Exception::class)
     override fun run() {
-        // 阶段 1：尝试原子移动
-        val crossPartitionSources = mutableListOf<String>()
-        for (source in sources) {
-            throwIfCancelled()
-            val sourceFile = File(source)
-            val targetPath = "$targetDir/${sourceFile.name}"
-
-            // 同目录检查
-            if (File(targetDir).canonicalPath == sourceFile.parentFile?.canonicalPath) {
-                // 同目录移动 = 重命名（如果名称不同）
-                if (sourceFile.name != File(targetPath).name) {
-                    try {
-                        if (!operator.moveFile(source, targetPath)) {
-                            crossPartitionSources.add(source)
-                        }
-                    } catch (e: InterruptedIOException) {
-                        throw e
-                    } catch (_: Exception) {
-                        crossPartitionSources.add(source)
-                    }
-                }
-                if (isGracefulCancelled()) break
-                continue
-            }
-
-            // 尝试原子移动
-            try {
-                val success = operator.moveFile(source, targetPath)
-                if (!success) {
-                    crossPartitionSources.add(source)
-                }
-            } catch (e: InterruptedIOException) {
-                throw e
-            } catch (_: Exception) {
-                crossPartitionSources.add(source)
-            }
-            if (isGracefulCancelled()) break
-        }
-
-        // 阶段 2：跨分区文件需要 copy + delete
-        if (crossPartitionSources.isEmpty()) {
-            manager.updateProgress(null)
-            manager.notifyRefreshNeeded()
-            return
-        }
-
-        // 扫描跨分区文件（实时回调已扫描字节数）
-        val scanInfo = scanWithProgress(crossPartitionSources) { totalSoFar ->
+        // 1. 扫描（实时回调已扫描字节数）
+        val scanInfo = scanWithProgress(sources) { totalSoFar ->
             manager.updateProgress(FileOpProgress(
                 phase = "正在移动",
                 currentBytes = 0,
@@ -91,8 +44,8 @@ class MoveJob(
             fileCount = scanInfo.fileCount
         ))
 
-        // 逐个源文件复制+删除
-        for (source in crossPartitionSources) {
+        // 2. 逐个源文件移动
+        for (source in sources) {
             val sourceFile = File(source)
             val targetPath = "$targetDir/${sourceFile.name}"
             val result = moveRecursively(source, targetPath, scanInfo, transferredBytes, transferredFiles)
@@ -102,6 +55,7 @@ class MoveJob(
             throwIfCancelled()
         }
 
+        // 3. 完成
         manager.updateProgress(null)
         manager.notifyRefreshNeeded()
     }
@@ -109,7 +63,8 @@ class MoveJob(
     private data class MoveResult(val bytes: Long, val files: Int)
 
     /**
-     * 递归移动单个源文件/目录到目标路径（copy + delete）。
+     * 递归移动单个源文件/目录到目标路径。
+     * 使用 PV 复制 + 删除源文件。
      */
     private fun moveRecursively(
         source: String,
@@ -125,19 +80,7 @@ class MoveJob(
         var totalFiles = 0
 
         if (sourceFile.isDirectory) {
-            // 目录：先尝试原子 rename 整个目录
-            try {
-                val success = operator.moveFile(source, target)
-                if (success) {
-                    // 整个目录瞬间移动完成
-                    val dirSize = calculateDirSize(sourceFile)
-                    return MoveResult(dirSize, 1)
-                }
-            } catch (_: Exception) {
-                // rename 失败，回退到逐项处理
-            }
-
-            // 冲突检查
+            // 目录：冲突检查
             val resolvedTarget = resolveConflictIfNeeded(sourceFile, target, isDirectory = true)
                 ?: return MoveResult(0, 0)
 
@@ -170,34 +113,17 @@ class MoveJob(
             val resolvedTarget = resolveConflictIfNeeded(sourceFile, target, isDirectory = false)
                 ?: return MoveResult(0, 0)
 
-            // 复制 + 删除，带重试
+            // 使用 moveFile（PV 复制+删除），带重试
             var retry: Boolean
             do {
                 retry = false
                 try {
                     val fileSize = operator.fileSize(source)
-                    operator.copyFile(source, resolvedTarget) { copied ->
-                        manager.updateProgress(FileOpProgress(
-                            phase = "正在移动",
-                            currentBytes = baseBytes + totalBytes + copied,
-                            totalBytes = scanInfo.totalBytes,
-                            currentFileName = sourceFile.name,
-                            fileIndex = baseFiles + totalFiles,
-                            fileCount = scanInfo.fileCount
-                        ))
+                    val success = operator.moveFile(source, resolvedTarget)
+                    if (success) {
+                        totalBytes += fileSize
+                        totalFiles++
                     }
-                    // 复制成功，删除源文件
-                    try {
-                        operator.deleteFile(source)
-                    } catch (e: Exception) {
-                        // 删除失败，尝试回滚（删除已复制的目标文件）
-                        try {
-                            operator.deleteFile(resolvedTarget)
-                        } catch (_: Exception) {}
-                        throw e
-                    }
-                    totalBytes += fileSize
-                    totalFiles++
                 } catch (e: InterruptedIOException) {
                     throw e
                 } catch (e: Exception) {

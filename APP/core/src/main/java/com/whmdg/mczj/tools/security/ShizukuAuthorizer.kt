@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.util.Base64
 import android.util.Log
 import android.widget.Toast
@@ -256,6 +257,50 @@ object ShizukuAuthorizer {
         // 首次调用：异步绑定 UserService
         ensureBound { /* 后续调用自动走快速路径 */ }
         return Triple("", "Shizuku UserService 正在连接中，请稍后重试", -1)
+    }
+
+    /**
+     * 通过 Shizuku 执行命令，stderr 通过 PFD 管道实时返回。
+     * 首次调用异步绑定 UserService；断连后自动短超时重连（200ms × 3 次）。
+     * @param command shell 命令
+     * @param stderrWriteFd 管道写端（客户端创建）
+     * @return Triple(stdout, stderr, exitCode)，stderr 为空（已通过 pipe 传输）
+     */
+    fun executeStreamingStderr(command: String, stderrWriteFd: ParcelFileDescriptor): Triple<String, String, Int> {
+        val service = shellService
+        if (service != null) {
+            try {
+                val rawResult = service.executeStreamingStderr(command, stderrWriteFd)
+                return parseResult(rawResult)
+            } catch (e: Exception) {
+                synchronized(bindLock) { shellService = null }
+                Log.w(TAG, "UserService executeStreamingStderr 失败: ${e.message}，尝试重连")
+                return reconnectAndRetryStreamingStderr(command, stderrWriteFd)
+            }
+        }
+
+        ensureBound { /* 后续调用自动走快速路径 */ }
+        return Triple("", "Shizuku UserService 正在连接中，请稍后重试", -1)
+    }
+
+    /** 断连后重连并重试 executeStreamingStderr（200ms 超时 × 3 次） */
+    private fun reconnectAndRetryStreamingStderr(
+        command: String,
+        stderrWriteFd: ParcelFileDescriptor
+    ): Triple<String, String, Int> {
+        for (attempt in 1..3) {
+            if (rebindSync(200)) {
+                val retryService = shellService
+                if (retryService != null) {
+                    try {
+                        return parseResult(retryService.executeStreamingStderr(command, stderrWriteFd))
+                    } catch (_: Exception) {
+                        synchronized(bindLock) { shellService = null }
+                    }
+                }
+            }
+        }
+        return Triple("", "Shizuku UserService 不可用，请检查 Shizuku 是否正常运行", -1)
     }
 
     /** 断连后重连并重试（200ms 超时 × 3 次） */

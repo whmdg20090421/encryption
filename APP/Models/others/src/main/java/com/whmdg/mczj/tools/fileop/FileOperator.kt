@@ -1,15 +1,16 @@
 package com.whmdg.mczj.tools.fileop
 
-import android.content.Context
+import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.util.DirEntry
 import com.whmdg.mczj.tools.util.FileAccessLevel
 import java.io.File
 
 /**
- * 文件操作抽象层，屏蔽 Java File API / Shell 两种通道差异。
+ * 文件操作抽象层，统一通过 ShellExecutor 执行。
  *
- * 复制/移动/删除等操作统一通过此接口执行，
- * 由 [JavaFileOperator]（普通权限）和 [ShellFileOperator]（Root/Shizuku）分别实现。
+ * 所有权限级别（NORMAL/SHIZUKU/ROOT）都通过 ShellExecutor 路由，
+ * 由 [ShellFileOperator] 统一实现。
+ * 复制使用 pv 获取实时进度。
  */
 interface FileOperator {
 
@@ -48,12 +49,13 @@ interface FileOperator {
     companion object {
         /**
          * 根据权限级别创建合适的 FileOperator。
-         * 有 Shell 引擎时优先使用 ShellFileOperator。
+         * 统一通过 ShellExecutor 执行，由 ShellExecutor 内部路由到对应权限。
+         * @param pvPath pv 二进制路径，用于复制时获取实时进度
          */
-        fun create(level: FileAccessLevel, context: Context): FileOperator = when (level) {
-            FileAccessLevel.NORMAL -> JavaFileOperator()
-            FileAccessLevel.SHIZUKU -> ShellFileOperator(context, useRoot = false)
-            FileAccessLevel.ROOT -> ShellFileOperator(context, useRoot = true)
+        fun create(level: FileAccessLevel, pvPath: String): FileOperator = when (level) {
+            FileAccessLevel.NORMAL -> ShellFileOperator(Permission.APPLICANT, pvPath)
+            FileAccessLevel.SHIZUKU -> ShellFileOperator(Permission.ADB, pvPath)
+            FileAccessLevel.ROOT -> ShellFileOperator(Permission.ROOT, pvPath)
         }
     }
 }
