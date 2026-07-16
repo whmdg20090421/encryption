@@ -1,6 +1,7 @@
 package com.whmdg.mczj.tools.fileop
 
 import android.os.ParcelFileDescriptor
+import android.system.Os
 import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.security.ShizukuAuthorizer
@@ -75,7 +76,8 @@ class ShellFileOperator(
 
     /**
      * 在两个 PFD 之间复制，8KB buffer，字节驱动进度。
-     * 与 MT 管理器 C3317.transferTo() 的 buffer 大小一致。
+     * 与 MT 管理器 Features3.read/write(fd, buf, off, len) 对齐：
+     * 直接用 Os.read/write 操作 fd，绕过 FileInputStream 缓冲层。
      */
     private fun copyBetweenPfds(
         srcPfd: ParcelFileDescriptor,
@@ -83,16 +85,15 @@ class ShellFileOperator(
         onProgress: (Long) -> Unit
     ) {
         val buf = ByteArray(BUFFER_SIZE)
+        val srcFd = srcPfd.fileDescriptor
+        val dstFd = dstPfd.fileDescriptor
         var copied = 0L
-        FileInputStream(srcPfd.fileDescriptor).use { input ->
-            FileOutputStream(dstPfd.fileDescriptor).use { output ->
-                var read: Int
-                while (input.read(buf).also { read = it } != -1) {
-                    output.write(buf, 0, read)
-                    copied += read
-                    onProgress(copied)
-                }
-            }
+        while (true) {
+            val n = Os.read(srcFd, buf, 0, BUFFER_SIZE)
+            if (n == -1) break
+            Os.write(dstFd, buf, 0, n)
+            copied += n
+            onProgress(copied)
         }
     }
 
