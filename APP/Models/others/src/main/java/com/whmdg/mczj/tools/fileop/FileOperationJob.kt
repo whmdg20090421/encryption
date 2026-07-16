@@ -54,7 +54,7 @@ abstract class FileOperationJob(val id: Int = Random.nextInt()) {
                     val dir = stack.removeLast()
                     val children = operator.listChildren(dir) ?: continue
                     for (child in children) {
-                        if (child.isDirectory) {
+                        if (child.isDir) {
                             stack.add(child.path)
                         } else {
                             fileCount++

@@ -145,7 +145,7 @@ class DeleteJob(
             val dir = stack.removeLast()
             val children = operator.listChildren(dir) ?: continue
             for (child in children) {
-                if (child.isDirectory) {
+                if (child.isDir) {
                     stack.add(child.path)
                 } else {
                     total += operator.fileSize(child.path)
