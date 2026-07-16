@@ -996,7 +996,7 @@ object ShellExecutor {
         val tOut = Thread {
             try {
                 val buf = ByteArray(FD_BUFFER_SIZE)
-                val srcFd = process.inputStream.fileDescriptor
+                val srcFd = (process.inputStream as java.io.FileInputStream).fd
                 val dstFd = writeEnd.fileDescriptor
                 while (true) {
                     val n = Os.read(srcFd, buf, 0, FD_BUFFER_SIZE)
@@ -1092,7 +1092,7 @@ object ShellExecutor {
             try {
                 val buf = ByteArray(FD_BUFFER_SIZE)
                 val srcFd = readEnd.fileDescriptor
-                val dstFd = process.outputStream.fileDescriptor
+                val dstFd = (process.outputStream as java.io.FileOutputStream).fd
                 while (true) {
                     val n = Os.read(srcFd, buf, 0, FD_BUFFER_SIZE)
                     if (n == -1) break
@@ -1122,7 +1122,5 @@ object ShellExecutor {
         return writeEnd
     }
 
-    companion object {
-        private const val FD_BUFFER_SIZE = 8192
-    }
+    private const val FD_BUFFER_SIZE = 8192
 }
