@@ -1,8 +1,6 @@
 package com.whmdg.mczj.tools.fileop
 
 import kotlinx.coroutines.runBlocking
-import java.io.File
-import java.io.IOException
 import java.io.InterruptedIOException
 
 /**
@@ -46,8 +44,7 @@ class MoveJob(
 
         // 2. 逐个源文件移动
         for (source in sources) {
-            val sourceFile = File(source)
-            val targetPath = "$targetDir/${sourceFile.name}"
+            val targetPath = "$targetDir/${source.substringAfterLast('/')}"
             val result = moveRecursively(source, targetPath, scanInfo, transferredBytes, transferredFiles)
             transferredBytes += result.bytes
             transferredFiles += result.files
@@ -73,20 +70,19 @@ class MoveJob(
         baseBytes: Long,
         baseFiles: Int
     ): MoveResult {
-        val sourceFile = File(source)
-        if (!sourceFile.exists()) return MoveResult(0, 0)
+        if (!operator.exists(source)) return MoveResult(0, 0)
 
         var totalBytes = 0L
         var totalFiles = 0
+        val sourceName = source.substringAfterLast('/')
 
-        if (sourceFile.isDirectory) {
+        if (operator.isDirectory(source)) {
             // 目录：冲突检查
-            val resolvedTarget = resolveConflictIfNeeded(sourceFile, target, isDirectory = true)
+            val resolvedTarget = resolveConflictIfNeeded(source, sourceName, target, isDirectory = true)
                 ?: return MoveResult(0, 0)
 
             // 确保目标目录存在
-            val targetDirFile = File(resolvedTarget)
-            if (!targetDirFile.exists()) {
+            if (!operator.exists(resolvedTarget)) {
                 operator.mkdir(resolvedTarget)
             }
 
@@ -110,7 +106,7 @@ class MoveJob(
             }
         } else {
             // 文件：冲突检查
-            val resolvedTarget = resolveConflictIfNeeded(sourceFile, target, isDirectory = false)
+            val resolvedTarget = resolveConflictIfNeeded(source, sourceName, target, isDirectory = false)
                 ?: return MoveResult(0, 0)
 
             // 使用 moveFile（PV 复制+删除），带重试
@@ -132,13 +128,13 @@ class MoveJob(
                     }
                     val result = runBlocking {
                         manager.resolveError(ErrorRequest(
-                            fileName = sourceFile.name,
+                            fileName = sourceName,
                             errorMessage = e.message ?: "移动失败"
                         ))
                     }
                     when (result.action) {
                         ErrorAction.RETRY -> retry = true
-                        ErrorAction.SKIP -> { /* 跳过 */ }
+                        ErrorAction.SKIP -> { }
                         ErrorAction.SKIP_ALL -> skipAllErrors = true
                         ErrorAction.CANCEL -> throw InterruptedIOException("用户取消")
                     }
@@ -154,23 +150,23 @@ class MoveJob(
      * 返回 null 表示用户选择跳过/CANCEL。
      */
     private fun resolveConflictIfNeeded(
-        sourceFile: File,
+        sourcePath: String,
+        sourceName: String,
         target: String,
         isDirectory: Boolean
     ): String? {
-        val targetFile = File(target)
-        if (!targetFile.exists()) return target
+        if (!operator.exists(target)) return target
 
         // 目录→目录：合并
-        if (isDirectory && targetFile.isDirectory) return target
+        if (isDirectory && operator.isDirectory(target)) return target
 
         val request = ConflictRequest(
-            sourceName = sourceFile.name,
-            targetName = targetFile.name,
+            sourceName = sourceName,
+            targetName = target.substringAfterLast('/'),
             isDirectory = isDirectory,
-            sourceSize = if (isDirectory) 0L else operator.fileSize(sourceFile.absolutePath),
-            targetSize = if (targetFile.isDirectory) 0L else operator.fileSize(target),
-            sourceModifiedTime = operator.lastModified(sourceFile.absolutePath),
+            sourceSize = if (isDirectory) 0L else operator.fileSize(sourcePath),
+            targetSize = if (operator.isDirectory(target)) 0L else operator.fileSize(target),
+            sourceModifiedTime = operator.lastModified(sourcePath),
             targetModifiedTime = operator.lastModified(target)
         )
 
@@ -181,12 +177,8 @@ class MoveJob(
         return when (result.action) {
             ConflictAction.REPLACE -> target
             ConflictAction.RENAME -> {
-                val newName = result.newName ?: generateUniqueName(
-                    File(target).parent ?: targetDir,
-                    sourceFile.name,
-                    isDirectory
-                )
-                val parent = File(target).parent ?: targetDir
+                val parent = target.substringBeforeLast('/')
+                val newName = result.newName ?: generateUniqueName(parent, sourceName, isDirectory)
                 "$parent/$newName"
             }
             ConflictAction.SKIP -> null
@@ -195,8 +187,7 @@ class MoveJob(
     }
 
     private fun generateUniqueName(dir: String, name: String, isDirectory: Boolean): String {
-        val file = File(dir, name)
-        if (!file.exists()) return "$dir/$name"
+        if (!operator.exists("$dir/$name")) return "$dir/$name"
 
         val baseName: String
         val extension: String
@@ -217,23 +208,8 @@ class MoveJob(
         var i = 2
         while (true) {
             val candidate = "$dir/$baseName ($i)$extension"
-            if (!File(candidate).exists()) return candidate
+            if (!operator.exists(candidate)) return candidate
             i++
         }
-    }
-
-    private fun calculateDirSize(dir: File): Long {
-        var size = 0L
-        val stack = ArrayDeque<File>()
-        stack.add(dir)
-        while (stack.isNotEmpty()) {
-            val f = stack.removeLast()
-            if (f.isDirectory) {
-                f.listFiles()?.forEach { stack.add(it) }
-            } else {
-                size += f.length()
-            }
-        }
-        return size
     }
 }

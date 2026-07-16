@@ -33,7 +33,7 @@ class DeleteJob(
     override fun run() {
         var totalSize = 0L
         for (entry in entries) {
-            totalSize += calculateTotalSize(File(entry.path))
+            totalSize += calculateTotalSize(entry.path)
         }
         var processedBytes = 0L
 
@@ -58,6 +58,8 @@ class DeleteJob(
                 fileCount = entries.size
             ))
 
+            val entrySize = entry.size.takeIf { it > 0 } ?: calculateTotalSize(entry.path)
+
             var retry: Boolean
             do {
                 retry = false
@@ -67,7 +69,7 @@ class DeleteJob(
                     } else {
                         deleteEntry(entry)
                     }
-                    processedBytes += calculateTotalSize(File(entry.path))
+                    processedBytes += entrySize
                 } catch (e: InterruptedIOException) {
                     throw e
                 } catch (e: Exception) {
@@ -82,7 +84,7 @@ class DeleteJob(
                     }
                     when (result.action) {
                         ErrorAction.RETRY -> retry = true
-                        ErrorAction.SKIP -> { /* 跳过 */ }
+                        ErrorAction.SKIP -> { }
                         ErrorAction.SKIP_ALL -> skipAllErrors = true
                         ErrorAction.CANCEL -> throw InterruptedIOException("用户取消")
                     }
@@ -97,69 +99,60 @@ class DeleteJob(
     /**
      * 将文件移到回收站。
      * 回收站路径：<internal_files>/.recycle_bin/
+     * 通过 operator（Permission.MAX）执行 mv，确保 ROOT-only 文件也能移动。
      */
     private fun moveToRecycleBin(entry: DeleteEntry) {
         val binDir = AppDataPaths.recycleBin(context)
-        if (!binDir.exists()) binDir.mkdirs()
+        operator.mkdir(binDir.absolutePath)
 
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val binName = "${entry.name}_$timestamp"
-        val binFile = File(binDir, binName)
+        val binPath = "${binDir.absolutePath}/$binName"
 
-        val sourceFile = File(entry.path)
-        if (!sourceFile.renameTo(binFile)) {
-            throw IOException("无法移动到回收站: ${entry.name}")
+        // 通过 shell mv 移动（源可能在 ROOT-only 目录）
+        val escaped_src = SevenZipCommand.escape(entry.path)
+        val escaped_dst = SevenZipCommand.escape(binPath)
+        try {
+            com.whmdg.mczj.tools.security.ShellExecutor.execute(
+                com.whmdg.mczj.tools.security.Permission.MAX, "mv $escaped_src $escaped_dst"
+            )
+        } catch (e: Exception) {
+            throw IOException("无法移动到回收站: ${entry.name}: ${e.message}")
         }
 
-        // 保存回收站元数据
+        // 保存回收站元数据（应用内部存储，Java File API 可用）
         saveRecycleBinMeta(entry, binName)
     }
 
     /**
-     * 永久删除文件/目录。
+     * 永久删除文件/目录。通过 operator（Permission.MAX）执行。
      */
     private fun deleteEntry(entry: DeleteEntry) {
-        val file = File(entry.path)
-        if (!file.exists()) return
+        if (!operator.exists(entry.path)) return
+        operator.deleteFile(entry.path)
+    }
 
-        if (file.isDirectory) {
-            // 递归删除目录内容
-            deleteRecursively(file)
-        } else {
-            if (!file.delete()) {
-                // 尝试 shell 删除
-                try {
-                    val escaped = SevenZipCommand.escape(entry.path)
-                    com.whmdg.mczj.tools.security.ShellExecutor.execute(
-                        com.whmdg.mczj.tools.security.Permission.ROOT, "rm -f $escaped"
-                    )
-                } catch (e: Exception) {
-                    if (e is IOException) throw e
-                    throw IOException("删除失败: ${e.message}")
+    /**
+     * 计算文件/目录总大小。通过 operator（Permission.MAX）执行。
+     */
+    private fun calculateTotalSize(path: String): Long {
+        if (!operator.exists(path)) return 0L
+        if (!operator.isDirectory(path)) return operator.fileSize(path)
+        var total = 0L
+        val stack = ArrayDeque<String>()
+        stack.add(path)
+        while (stack.isNotEmpty()) {
+            val dir = stack.removeLast()
+            val children = operator.listChildren(dir) ?: continue
+            for (child in children) {
+                if (child.isDirectory) {
+                    stack.add(child.path)
+                } else {
+                    total += operator.fileSize(child.path)
                 }
             }
         }
-    }
-
-    private fun deleteRecursively(file: File) {
-        if (file.isDirectory) {
-            file.listFiles()?.forEach { child ->
-                throwIfCancelled()
-                deleteRecursively(child)
-            }
-        }
-        if (!file.delete()) {
-            // 尝试 shell 删除
-            try {
-                val escaped = SevenZipCommand.escape(file.absolutePath)
-                com.whmdg.mczj.tools.security.ShellExecutor.execute(
-                    com.whmdg.mczj.tools.security.Permission.ROOT, "rm -rf $escaped"
-                )
-            } catch (e: Exception) {
-                if (e is IOException) throw e
-                throw IOException("删除失败: ${e.message}")
-            }
-        }
+        return total
     }
 
     private fun saveRecycleBinMeta(entry: DeleteEntry, binName: String) {

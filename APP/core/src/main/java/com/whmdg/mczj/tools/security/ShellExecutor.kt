@@ -2,10 +2,12 @@ package com.whmdg.mczj.tools.security
 
 import android.content.Context
 import android.os.ParcelFileDescriptor
+import android.system.Os
 import android.util.Log
 import com.topjohnwu.superuser.Shell
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import com.whmdg.mczj.tools.util.SevenZipCommand
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -844,5 +846,283 @@ object ShellExecutor {
             try { readFd.close() } catch (_: Exception) {}
             try { writeFd.close() } catch (_: Exception) {}
         }
+    }
+
+    // ── FD 获取（openForRead / openForWrite）────────────────────────────
+
+    /**
+     * 以指定权限打开文件用于读取，返回 PFD。
+     * 内部 resolvePermission 后路由到 ROOT/ADB/APPLICANT 三条独立路径。
+     */
+    fun openForRead(permission: Permission, path: String): ParcelFileDescriptor {
+        if (path.isBlank()) {
+            throw ShellException(
+                message = "文件路径不能为空",
+                command = "openForRead",
+                permission = permission
+            )
+        }
+        DiagnosticLog.log("ShellExecutor", "openForRead: permission=$permission path=$path")
+        val resolved = resolvePermission(permission)
+        return when (resolved) {
+            Permission.ROOT -> {
+                if (!SpecialPermissionVerifier.isRootAvailable()) {
+                    throw ShellException(
+                        message = "Root 权限不可用",
+                        command = "openForRead($path)",
+                        permission = permission
+                    )
+                }
+                openForReadRoot(path, permission)
+            }
+            Permission.ADB -> {
+                if (isShizukuAvailable()) {
+                    openForReadShizuku(path, permission)
+                } else {
+                    openForReadLocal(path, permission)
+                }
+            }
+            Permission.APPLICANT -> openForReadLocal(path, permission)
+            else -> throw ShellException(
+                message = "resolvePermission 返回未处理的权限级别: $resolved",
+                command = "openForRead($path)",
+                permission = permission
+            )
+        }
+    }
+
+    /**
+     * 以指定权限打开/创建文件用于写入，返回 PFD。
+     * 内部 resolvePermission 后路由到 ROOT/ADB/APPLICANT 三条独立路径。
+     */
+    fun openForWrite(permission: Permission, path: String): ParcelFileDescriptor {
+        if (path.isBlank()) {
+            throw ShellException(
+                message = "文件路径不能为空",
+                command = "openForWrite",
+                permission = permission
+            )
+        }
+        DiagnosticLog.log("ShellExecutor", "openForWrite: permission=$permission path=$path")
+        val resolved = resolvePermission(permission)
+        return when (resolved) {
+            Permission.ROOT -> {
+                if (!SpecialPermissionVerifier.isRootAvailable()) {
+                    throw ShellException(
+                        message = "Root 权限不可用",
+                        command = "openForWrite($path)",
+                        permission = permission
+                    )
+                }
+                openForWriteRoot(path, permission)
+            }
+            Permission.ADB -> {
+                if (isShizukuAvailable()) {
+                    openForWriteShizuku(path, permission)
+                } else {
+                    openForWriteLocal(path, permission)
+                }
+            }
+            Permission.APPLICANT -> openForWriteLocal(path, permission)
+            else -> throw ShellException(
+                message = "resolvePermission 返回未处理的权限级别: $resolved",
+                command = "openForWrite($path)",
+                permission = permission
+            )
+        }
+    }
+
+    // ── FD 获取私有实现 ──
+
+    /** APPLICANT：应用自身 UID 直接打开 */
+    private fun openForReadLocal(path: String, permission: Permission): ParcelFileDescriptor {
+        return try {
+            ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY)
+        } catch (e: Exception) {
+            throw ShellException(
+                message = "打开文件失败: ${e.message}",
+                command = "openForRead($path)",
+                permission = permission,
+                stderr = e.message ?: ""
+            )
+        }
+    }
+
+    /** ADB：通过 ShizukuAuthorizer 获取 PFD（ShellService uid 2000） */
+    private fun openForReadShizuku(path: String, permission: Permission): ParcelFileDescriptor {
+        return ShizukuAuthorizer.openForRead(path)
+            ?: throw ShellException(
+                message = "Shizuku 打开文件失败",
+                command = "openForRead($path)",
+                permission = permission
+            )
+    }
+
+    /** ROOT：su 进程(uid 0) 执行 cat，数据通过 pipe 传回 */
+    private fun openForReadRoot(path: String, permission: Permission): ParcelFileDescriptor {
+        val escaped = SevenZipCommand.escape(path)
+        val pipe = ParcelFileDescriptor.createPipe()
+        val readEnd = pipe[0]
+        val writeEnd = pipe[1]
+
+        val process = try {
+            ProcessBuilder("su", "-c", "cat $escaped")
+                .redirectErrorStream(false)
+                .start()
+        } catch (e: Exception) {
+            try { readEnd.close() } catch (_: Exception) {}
+            try { writeEnd.close() } catch (_: Exception) {}
+            throw ShellException(
+                message = "Root 启动进程失败: ${e.message}",
+                command = "cat $escaped",
+                permission = permission,
+                stderr = e.message ?: ""
+            )
+        }
+
+        val stderrBuf = StringBuilder()
+        val tErr = Thread {
+            try {
+                process.errorStream.bufferedReader().use { reader ->
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        stderrBuf.appendLine(line)
+                    }
+                }
+            } catch (_: Exception) {}
+        }.apply { start() }
+
+        // stdout → pipe writeEnd：将 su 进程的输出桥接到 pipe
+        val tOut = Thread {
+            try {
+                val buf = ByteArray(FD_BUFFER_SIZE)
+                val srcFd = process.inputStream.fileDescriptor
+                val dstFd = writeEnd.fileDescriptor
+                while (true) {
+                    val n = Os.read(srcFd, buf, 0, FD_BUFFER_SIZE)
+                    if (n == -1) break
+                    Os.write(dstFd, buf, 0, n)
+                }
+            } catch (_: Exception) {}
+            finally {
+                try { writeEnd.close() } catch (_: Exception) {}
+            }
+        }.apply { start() }
+
+        // 异步等待进程结束，检查退出码
+        Thread {
+            try {
+                process.waitFor()
+                tOut.join(5000)
+                tErr.join(5000)
+                if (process.exitValue() != 0) {
+                    val stderr = stderrBuf.toString().trim()
+                    DiagnosticLog.log("ShellExecutor", "openForReadRoot 失败: exitCode=${process.exitValue()}, stderr=$stderr")
+                    try { readEnd.close() } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {}
+        }.start()
+
+        return readEnd
+    }
+
+    /** APPLICANT：应用自身 UID 直接创建 */
+    private fun openForWriteLocal(path: String, permission: Permission): ParcelFileDescriptor {
+        return try {
+            ParcelFileDescriptor.open(
+                File(path),
+                ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_WRITE_ONLY
+            )
+        } catch (e: Exception) {
+            throw ShellException(
+                message = "创建文件失败: ${e.message}",
+                command = "openForWrite($path)",
+                permission = permission,
+                stderr = e.message ?: ""
+            )
+        }
+    }
+
+    /** ADB：通过 ShizukuAuthorizer 获取 PFD（ShellService uid 2000） */
+    private fun openForWriteShizuku(path: String, permission: Permission): ParcelFileDescriptor {
+        return ShizukuAuthorizer.openForWrite(path)
+            ?: throw ShellException(
+                message = "Shizuku 创建文件失败",
+                command = "openForWrite($path)",
+                permission = permission
+            )
+    }
+
+    /** ROOT：su 进程(uid 0) 执行 cat > file，数据通过 pipe 从应用传入 */
+    private fun openForWriteRoot(path: String, permission: Permission): ParcelFileDescriptor {
+        val escaped = SevenZipCommand.escape(path)
+        val pipe = ParcelFileDescriptor.createPipe()
+        val readEnd = pipe[0]
+        val writeEnd = pipe[1]
+
+        val process = try {
+            ProcessBuilder("su", "-c", "cat > $escaped")
+                .redirectErrorStream(false)
+                .start()
+        } catch (e: Exception) {
+            try { readEnd.close() } catch (_: Exception) {}
+            try { writeEnd.close() } catch (_: Exception) {}
+            throw ShellException(
+                message = "Root 启动进程失败: ${e.message}",
+                command = "cat > $escaped",
+                permission = permission,
+                stderr = e.message ?: ""
+            )
+        }
+
+        val stderrBuf = StringBuilder()
+        val tErr = Thread {
+            try {
+                process.errorStream.bufferedReader().use { reader ->
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        stderrBuf.appendLine(line)
+                    }
+                }
+            } catch (_: Exception) {}
+        }.apply { start() }
+
+        // pipe readEnd → stdin：将应用写入 pipe 的数据桥接到 su 进程的 stdin
+        val tIn = Thread {
+            try {
+                val buf = ByteArray(FD_BUFFER_SIZE)
+                val srcFd = readEnd.fileDescriptor
+                val dstFd = process.outputStream.fileDescriptor
+                while (true) {
+                    val n = Os.read(srcFd, buf, 0, FD_BUFFER_SIZE)
+                    if (n == -1) break
+                    Os.write(dstFd, buf, 0, n)
+                }
+            } catch (_: Exception) {}
+            finally {
+                try { process.outputStream.close() } catch (_: Exception) {}
+                try { readEnd.close() } catch (_: Exception) {}
+            }
+        }.apply { start() }
+
+        // 异步等待进程结束，检查退出码
+        Thread {
+            try {
+                process.waitFor()
+                tIn.join(5000)
+                tErr.join(5000)
+                if (process.exitValue() != 0) {
+                    val stderr = stderrBuf.toString().trim()
+                    DiagnosticLog.log("ShellExecutor", "openForWriteRoot 失败: exitCode=${process.exitValue()}, stderr=$stderr")
+                    try { writeEnd.close() } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {}
+        }.start()
+
+        return writeEnd
+    }
+
+    companion object {
+        private const val FD_BUFFER_SIZE = 8192
     }
 }

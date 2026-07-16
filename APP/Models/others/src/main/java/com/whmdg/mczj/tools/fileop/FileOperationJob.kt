@@ -1,6 +1,5 @@
 package com.whmdg.mczj.tools.fileop
 
-import java.io.File
 import java.io.InterruptedIOException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
@@ -34,6 +33,7 @@ abstract class FileOperationJob(val id: Int = Random.nextInt()) {
     /**
      * 扫描源文件列表，统计总文件数和总大小。
      * 每累加一个文件后回调 [onFileScanned] 通知当前总字节数。
+     * 全部通过 operator（ShellExecutor Permission.MAX）执行，不使用 Java File API。
      */
     protected fun scanWithProgress(
         sources: List<String>,
@@ -44,26 +44,28 @@ abstract class FileOperationJob(val id: Int = Random.nextInt()) {
 
         for (source in sources) {
             throwIfCancelled()
-            val file = File(source)
-            if (!file.exists()) continue
+            if (!operator.exists(source)) continue
 
-            if (file.isDirectory) {
-                val stack = ArrayDeque<File>()
-                stack.add(file)
+            if (operator.isDirectory(source)) {
+                val stack = ArrayDeque<String>()
+                stack.add(source)
                 while (stack.isNotEmpty()) {
                     throwIfCancelled()
-                    val f = stack.removeLast()
-                    if (f.isDirectory) {
-                        f.listFiles()?.forEach { stack.add(it) }
-                    } else {
-                        fileCount++
-                        totalBytes += f.length()
-                        onFileScanned(totalBytes)
+                    val dir = stack.removeLast()
+                    val children = operator.listChildren(dir) ?: continue
+                    for (child in children) {
+                        if (child.isDirectory) {
+                            stack.add(child.path)
+                        } else {
+                            fileCount++
+                            totalBytes += operator.fileSize(child.path)
+                            onFileScanned(totalBytes)
+                        }
                     }
                 }
             } else {
                 fileCount++
-                totalBytes += file.length()
+                totalBytes += operator.fileSize(source)
                 onFileScanned(totalBytes)
             }
         }

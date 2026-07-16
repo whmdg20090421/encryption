@@ -1,8 +1,6 @@
 package com.whmdg.mczj.tools.fileop
 
 import kotlinx.coroutines.runBlocking
-import java.io.File
-import java.io.IOException
 import java.io.InterruptedIOException
 
 /**
@@ -48,11 +46,12 @@ class CopyJob(
 
         // 2. 逐个源文件复制
         for (source in sources) {
-            val sourceFile = File(source)
-            val targetName = sourceFile.name
-            val targetPath = if (File(targetDir).canonicalPath == sourceFile.parentFile?.canonicalPath) {
+            val targetName = source.substringAfterLast('/')
+            val sourceParent = source.substringBeforeLast('/')
+            val sourceIsDir = operator.isDirectory(source)
+            val targetPath = if (targetDir.trimEnd('/') == sourceParent) {
                 // 同目录：自动重命名
-                generateUniqueName(targetDir, targetName, sourceFile.isDirectory)
+                generateUniqueName(targetDir, targetName, sourceIsDir)
             } else {
                 "$targetDir/$targetName"
             }
@@ -80,20 +79,19 @@ class CopyJob(
         baseBytes: Long,
         baseFiles: Int
     ): CopyResult {
-        val sourceFile = File(source)
-        if (!sourceFile.exists()) return CopyResult(0, 0)
+        if (!operator.exists(source)) return CopyResult(0, 0)
 
         var totalCopiedBytes = 0L
         var totalCopiedFiles = 0
+        val sourceName = source.substringAfterLast('/')
 
-        if (sourceFile.isDirectory) {
+        if (operator.isDirectory(source)) {
             // 目录处理
-            val resolvedTarget = resolveConflictIfNeeded(sourceFile, target, isDirectory = true)
+            val resolvedTarget = resolveConflictIfNeeded(source, sourceName, target, isDirectory = true)
                 ?: return CopyResult(0, 0) // 用户选择跳过
 
             // 确保目标目录存在
-            val targetDirFile = File(resolvedTarget)
-            if (!targetDirFile.exists()) {
+            if (!operator.exists(resolvedTarget)) {
                 operator.mkdir(resolvedTarget)
             }
 
@@ -102,14 +100,13 @@ class CopyJob(
             for (child in children) {
                 throwIfCancelled()
                 val childTarget = "$resolvedTarget/${child.name}"
-                val childSource = child.path
-                val result = copyRecursively(childSource, childTarget, scanInfo, baseBytes + totalCopiedBytes, baseFiles + totalCopiedFiles)
+                val result = copyRecursively(child.path, childTarget, scanInfo, baseBytes + totalCopiedBytes, baseFiles + totalCopiedFiles)
                 totalCopiedBytes += result.bytes
                 totalCopiedFiles += result.files
             }
         } else {
             // 文件处理
-            val resolvedTarget = resolveConflictIfNeeded(sourceFile, target, isDirectory = false)
+            val resolvedTarget = resolveConflictIfNeeded(source, sourceName, target, isDirectory = false)
                 ?: return CopyResult(0, 0) // 用户选择跳过
 
             // 复制文件，带重试
@@ -123,7 +120,7 @@ class CopyJob(
                             phase = "正在复制",
                             currentBytes = baseBytes + totalCopiedBytes + copied,
                             totalBytes = scanInfo.totalBytes,
-                            currentFileName = sourceFile.name,
+                            currentFileName = sourceName,
                             fileIndex = baseFiles + totalCopiedFiles,
                             fileCount = scanInfo.fileCount
                         ))
@@ -134,28 +131,19 @@ class CopyJob(
                     throw e
                 } catch (e: Exception) {
                     if (skipAllErrors) {
-                        // 全部跳过错误
                         return CopyResult(totalCopiedBytes, totalCopiedFiles)
                     }
                     val result = runBlocking {
                         manager.resolveError(ErrorRequest(
-                            fileName = sourceFile.name,
+                            fileName = sourceName,
                             errorMessage = e.message ?: "复制失败"
                         ))
                     }
                     when (result.action) {
-                        ErrorAction.RETRY -> {
-                            retry = true
-                        }
-                        ErrorAction.SKIP -> {
-                            // 跳过此文件
-                        }
-                        ErrorAction.SKIP_ALL -> {
-                            skipAllErrors = true
-                        }
-                        ErrorAction.CANCEL -> {
-                            throw InterruptedIOException("用户取消")
-                        }
+                        ErrorAction.RETRY -> retry = true
+                        ErrorAction.SKIP -> { }
+                        ErrorAction.SKIP_ALL -> skipAllErrors = true
+                        ErrorAction.CANCEL -> throw InterruptedIOException("用户取消")
                     }
                 }
             } while (retry)
@@ -169,24 +157,24 @@ class CopyJob(
      * 返回 null 表示用户选择跳过/CANCEL。
      */
     private fun resolveConflictIfNeeded(
-        sourceFile: File,
+        sourcePath: String,
+        sourceName: String,
         target: String,
         isDirectory: Boolean
     ): String? {
-        val targetFile = File(target)
-        if (!targetFile.exists()) return target
+        if (!operator.exists(target)) return target
 
         // 目录→目录：合并（直接进入递归）
-        if (isDirectory && targetFile.isDirectory) return target
+        if (isDirectory && operator.isDirectory(target)) return target
 
         // 冲突：弹窗
         val request = ConflictRequest(
-            sourceName = sourceFile.name,
-            targetName = targetFile.name,
+            sourceName = sourceName,
+            targetName = target.substringAfterLast('/'),
             isDirectory = isDirectory,
-            sourceSize = if (isDirectory) 0L else operator.fileSize(sourceFile.absolutePath),
-            targetSize = if (targetFile.isDirectory) 0L else operator.fileSize(target),
-            sourceModifiedTime = operator.lastModified(sourceFile.absolutePath),
+            sourceSize = if (isDirectory) 0L else operator.fileSize(sourcePath),
+            targetSize = if (operator.isDirectory(target)) 0L else operator.fileSize(target),
+            sourceModifiedTime = operator.lastModified(sourcePath),
             targetModifiedTime = operator.lastModified(target)
         )
 
@@ -197,12 +185,8 @@ class CopyJob(
         return when (result.action) {
             ConflictAction.REPLACE -> target
             ConflictAction.RENAME -> {
-                val newName = result.newName ?: generateUniqueName(
-                    File(target).parent ?: targetDir,
-                    sourceFile.name,
-                    isDirectory
-                )
-                val parent = File(target).parent ?: targetDir
+                val parent = target.substringBeforeLast('/')
+                val newName = result.newName ?: generateUniqueName(parent, sourceName, isDirectory)
                 "$parent/$newName"
             }
             ConflictAction.SKIP -> null
@@ -214,8 +198,7 @@ class CopyJob(
      * 生成不重复的文件名。同目录下已存在同名文件时添加 (2)、(3) 等后缀。
      */
     private fun generateUniqueName(dir: String, name: String, isDirectory: Boolean): String {
-        val file = File(dir, name)
-        if (!file.exists()) return "$dir/$name"
+        if (!operator.exists("$dir/$name")) return "$dir/$name"
 
         val baseName: String
         val extension: String
@@ -236,7 +219,7 @@ class CopyJob(
         var i = 2
         while (true) {
             val candidate = "$dir/$baseName ($i)$extension"
-            if (!File(candidate).exists()) return candidate
+            if (!operator.exists(candidate)) return candidate
             i++
         }
     }

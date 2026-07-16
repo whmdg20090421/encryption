@@ -2,9 +2,9 @@ package com.whmdg.mczj.tools.fileop
 
 import android.os.ParcelFileDescriptor
 import android.system.Os
+import com.whmdg.mczj.tools.security.FdProvider
 import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.security.ShellExecutor
-import com.whmdg.mczj.tools.security.ShizukuAuthorizer
 import com.whmdg.mczj.tools.util.DirEntry
 import com.whmdg.mczj.tools.util.FileAccessLevel
 import com.whmdg.mczj.tools.util.SevenZipCommand
@@ -17,10 +17,10 @@ import java.io.IOException
  * 文件操作实现。
  *
  * - [FileAccessLevel.NORMAL]：Java Stream 直接复制，字节驱动进度
- * - [FileAccessLevel.SHIZUKU]：Shizuku UserService 打开文件返回 PFD，Java Stream 在 PFD 上复制
- * - [FileAccessLevel.ROOT]：Shizuku PFD（需 Shizuku 同时可用）
+ * - [FileAccessLevel.SHIZUKU] / [FileAccessLevel.ROOT]：通过 FdProvider 获取 PFD，Java 在 PFD 上复制
  *
- * PFD 路径：ShellService（uid 2000/0）打开文件 → PFD 通过 Binder 传回 → Java 读写 FD，无需权限校验。
+ * FdProvider 委托 ShellExecutor 按 Permission.MAX 路由到 ROOT/ADB/APPLICANT 获取 FD。
+ * FD 一旦获取，后续 I/O 不再检查权限。
  */
 class ShellFileOperator(
     private val permission: Permission,
@@ -51,19 +51,15 @@ class ShellFileOperator(
     }
 
     /**
-     * PFD 复制：Shizuku UserService 打开源文件和目标文件返回 PFD，
-     * Java 在 PFD 的 FD 上做 8KB read/write 循环，字节驱动进度。
+     * PFD 复制：FdProvider 获取源/目标 PFD，Java 在 PFD 的 FD 上做 8KB read/write 循环。
      *
      * 与 MT 管理器架构一致：提升权限打开文件获取 FD → Java 层直接读写 FD。
      * FD 一旦获取，后续 I/O 不再检查权限。
      */
     private fun copyWithPfd(src: String, dst: String, onProgress: (Long) -> Unit) {
-        val srcPfd = ShizukuAuthorizer.openForRead(src)
-            ?: throw IOException("Shizuku 打开源文件失败: $src")
+        val srcPfd = FdProvider.openForRead(src)
         try {
-            // 目标文件需要先通过 Shizuku 创建（可能在应用无写权限的目录）
-            val dstPfd = ShizukuAuthorizer.openForWrite(dst)
-                ?: throw IOException("Shizuku 创建目标文件失败: $dst")
+            val dstPfd = FdProvider.openForWrite(dst)
             try {
                 copyBetweenPfds(srcPfd, dstPfd, onProgress)
             } finally {
