@@ -655,4 +655,194 @@ object ShellExecutor {
             try { writeFd.close() } catch (_: Exception) {}
         }
     }
+
+    /**
+     * 执行 shell 命令，逐行回调 stdout（用于文件复制等需要实时进度的场景）。
+     * 与 [executeWithStderr] 对称，stderr 丢弃。
+     */
+    fun executeWithStdout(
+        permission: Permission,
+        command: String,
+        onStdoutLine: (String) -> Unit,
+        cancelFlag: AtomicBoolean? = null
+    ) {
+        if (command.isBlank()) {
+            throw ShellException(
+                message = "Shell 命令不能为空",
+                command = command,
+                permission = permission
+            )
+        }
+
+        DiagnosticLog.log("ShellExecutor", "stdout执行: permission=$permission cmd=${command.take(200)}")
+
+        val resolved = resolvePermission(permission)
+        when (resolved) {
+            Permission.ROOT -> {
+                if (!SpecialPermissionVerifier.isRootAvailable()) {
+                    throw ShellException(
+                        message = "Root 权限不可用",
+                        command = command,
+                        permission = permission
+                    )
+                }
+                executeWithStdoutLocal(arrayOf("su", "-c", command), onStdoutLine, cancelFlag, command, permission)
+            }
+            Permission.ADB -> {
+                if (isShizukuAvailable()) {
+                    executeWithStdoutShizuku(command, onStdoutLine, cancelFlag, permission)
+                } else {
+                    executeWithStdoutLocal(arrayOf("sh", "-c", command), onStdoutLine, cancelFlag, command, permission)
+                }
+            }
+            Permission.APPLICANT -> {
+                executeWithStdoutLocal(arrayOf("sh", "-c", command), onStdoutLine, cancelFlag, command, permission)
+            }
+            else -> throw ShellException(
+                message = "resolvePermission 返回未处理的权限级别: $resolved",
+                command = command,
+                permission = permission
+            )
+        }
+
+        DiagnosticLog.log("ShellExecutor", "stdout执行完成")
+    }
+
+    /** ROOT / APPLICANT：本地 ProcessBuilder，回调 stdout */
+    private fun executeWithStdoutLocal(
+        cmdArray: Array<String>,
+        onStdoutLine: (String) -> Unit,
+        cancelFlag: AtomicBoolean?,
+        command: String,
+        permission: Permission
+    ) {
+        val process = try {
+            ProcessBuilder(*cmdArray)
+                .redirectErrorStream(false)
+                .start()
+        } catch (e: Exception) {
+            throw ShellException(
+                message = "stdout 执行启动异常: ${e.message}",
+                command = command,
+                permission = permission,
+                stderr = e.message ?: ""
+            )
+        }
+
+        val stdoutLines = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val tOut = Thread {
+            try {
+                process.inputStream.bufferedReader().use { reader ->
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        if (cancelFlag?.get() == true) break
+                        stdoutLines.add(line!!)
+                        onStdoutLine(line!!)
+                    }
+                }
+            } catch (_: Exception) {}
+        }.apply { start() }
+
+        // stderr 丢弃
+        val tErr = Thread {
+            try {
+                process.errorStream.bufferedReader().use { reader ->
+                    while (reader.readLine() != null) { /* 丢弃 */ }
+                }
+            } catch (_: Exception) {}
+        }.apply { start() }
+
+        while (process.isAlive) {
+            if (cancelFlag?.get() == true) {
+                process.destroyForcibly()
+                break
+            }
+            Thread.sleep(100)
+        }
+
+        tOut.join(5000)
+        tErr.join(5000)
+
+        if (cancelFlag?.get() == true) {
+            throw ShellException(
+                message = "命令已取消",
+                command = command,
+                permission = permission
+            )
+        }
+
+        val exitCode = process.exitValue()
+        if (exitCode != 0) {
+            val stdout = stdoutLines.joinToString("\n").trim()
+            throw ShellException(
+                message = "stdout 命令执行失败",
+                command = command,
+                permission = permission,
+                stderr = stdout.ifBlank { "exit $exitCode" },
+                exitCode = exitCode
+            )
+        }
+    }
+
+    /** Shizuku：通过 PFD 管道获取 stdout */
+    private fun executeWithStdoutShizuku(
+        command: String,
+        onStdoutLine: (String) -> Unit,
+        cancelFlag: AtomicBoolean?,
+        permission: Permission
+    ) {
+        val pipe = ParcelFileDescriptor.createPipe()
+        val readFd = pipe[0]
+        val writeFd = pipe[1]
+
+        val stdoutLines = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val tOut = Thread {
+            try {
+                ParcelFileDescriptor.AutoCloseInputStream(readFd).bufferedReader().use { reader ->
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        if (cancelFlag?.get() == true) break
+                        stdoutLines.add(line!!)
+                        onStdoutLine(line!!)
+                    }
+                }
+            } catch (_: Exception) {}
+        }.apply { start() }
+
+        try {
+            val (_, _, exitCode) = ShizukuAuthorizer.executeStreamingStdout(command, writeFd)
+
+            tOut.join(5000)
+
+            if (cancelFlag?.get() == true) {
+                throw ShellException(
+                    message = "命令已取消",
+                    command = command,
+                    permission = permission
+                )
+            }
+            if (exitCode != 0) {
+                val stdout = stdoutLines.joinToString("\n").trim()
+                throw ShellException(
+                    message = "Shizuku stdout 命令执行失败",
+                    command = command,
+                    permission = permission,
+                    stderr = stdout.ifBlank { "exit $exitCode" },
+                    exitCode = exitCode
+                )
+            }
+        } catch (e: ShellException) {
+            throw e
+        } catch (e: Exception) {
+            throw ShellException(
+                message = "Shizuku stdout 执行异常: ${e.message}",
+                command = command,
+                permission = permission,
+                stderr = e.message ?: ""
+            )
+        } finally {
+            try { readFd.close() } catch (_: Exception) {}
+            try { writeFd.close() } catch (_: Exception) {}
+        }
+    }
 }

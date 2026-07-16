@@ -164,6 +164,76 @@ class ShellService : IShellService.Stub() {
         }
     }
 
+    /**
+     * 执行命令，stdout 通过 PFD 管道实时流式返回。
+     * 与 executeStreamingStderr 对称：stdout → pipe，stderr → buffer。
+     */
+    override fun executeStreamingStdout(command: String, stdoutWriteFd: ParcelFileDescriptor): String {
+        return try {
+            val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
+
+            val stderrBuf = StringBuilder()
+            val tErr = Thread {
+                try {
+                    BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
+                        val buf = CharArray(8192)
+                        var n: Int
+                        while (reader.read(buf).also { n = it } != -1) {
+                            stderrBuf.append(buf, 0, n)
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+            val tOut = Thread {
+                try {
+                    ParcelFileDescriptor.AutoCloseOutputStream(stdoutWriteFd).use { os ->
+                        process.inputStream.use { it.copyTo(os) }
+                    }
+                } catch (_: Exception) {}
+            }
+
+            tErr.start()
+            tOut.start()
+            process.waitFor()
+            tErr.join(5000)
+            tOut.join(5000)
+
+            val stderr = stderrBuf.toString().trimEnd()
+            val exitCode = process.exitValue()
+            val stderrB64 = Base64.encodeToString(stderr.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+            "\n$stderrB64\n$exitCode"
+        } catch (e: Exception) {
+            val errB64 = Base64.encodeToString(
+                (e.message ?: "执行异常").toByteArray(Charsets.UTF_8), Base64.NO_WRAP
+            )
+            "\n$errB64\n-1"
+        }
+    }
+
+    /**
+     * 以提升权限打开文件用于读取，返回 PFD 传回调用方进程。
+     * ShellService 运行在 Shizuku 进程中，uid 2000 或 0，可打开应用自身无权访问的文件。
+     * PFD 通过 Binder IPC 传递回应用进程后，应用可用 FileInputStream(fd) 直接读取。
+     */
+    override fun openForRead(path: String): ParcelFileDescriptor {
+        return ParcelFileDescriptor.open(
+            java.io.File(path),
+            ParcelFileDescriptor.MODE_READ_ONLY
+        )
+    }
+
+    /**
+     * 以提升权限打开/创建文件用于写入，返回 PFD 传回调用方进程。
+     * 若文件已存在则截断为 0。ShellService 运行在 Shizuku 进程中，uid 2000 或 0。
+     * PFD 通过 Binder IPC 传递回应用进程后，应用可用 FileOutputStream(fd) 直接写入。
+     */
+    override fun openForWrite(path: String): ParcelFileDescriptor {
+        return ParcelFileDescriptor.open(
+            java.io.File(path),
+            ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_WRITE_ONLY
+        )
+    }
+
     override fun destroy() {
         // Shizuku 调用销毁时的清理（当前无需特殊处理）
     }

@@ -303,6 +303,47 @@ object ShizukuAuthorizer {
         return Triple("", "Shizuku UserService 不可用，请检查 Shizuku 是否正常运行", -1)
     }
 
+    /**
+     * 通过 Shizuku 执行命令，stdout 通过 PFD 管道实时返回。
+     * 与 executeStreamingStderr 对称。
+     */
+    fun executeStreamingStdout(command: String, stdoutWriteFd: ParcelFileDescriptor): Triple<String, String, Int> {
+        val service = shellService
+        if (service != null) {
+            try {
+                val rawResult = service.executeStreamingStdout(command, stdoutWriteFd)
+                return parseResult(rawResult)
+            } catch (e: Exception) {
+                synchronized(bindLock) { shellService = null }
+                Log.w(TAG, "UserService executeStreamingStdout 失败: ${e.message}，尝试重连")
+                return reconnectAndRetryStreamingStdout(command, stdoutWriteFd)
+            }
+        }
+
+        ensureBound { /* 后续调用自动走快速路径 */ }
+        return Triple("", "Shizuku UserService 正在连接中，请稍后重试", -1)
+    }
+
+    /** 断连后重连并重试 executeStreamingStdout（200ms 超时 × 3 次） */
+    private fun reconnectAndRetryStreamingStdout(
+        command: String,
+        stdoutWriteFd: ParcelFileDescriptor
+    ): Triple<String, String, Int> {
+        for (attempt in 1..3) {
+            if (rebindSync(200)) {
+                val retryService = shellService
+                if (retryService != null) {
+                    try {
+                        return parseResult(retryService.executeStreamingStdout(command, stdoutWriteFd))
+                    } catch (_: Exception) {
+                        synchronized(bindLock) { shellService = null }
+                    }
+                }
+            }
+        }
+        return Triple("", "Shizuku UserService 不可用，请检查 Shizuku 是否正常运行", -1)
+    }
+
     /** 断连后重连并重试（200ms 超时 × 3 次） */
     private fun reconnectAndRetry(command: String): Triple<String, String, Int> {
         for (attempt in 1..3) {
@@ -348,6 +389,65 @@ object ShizukuAuthorizer {
         } catch (_: Exception) { "" }
         val exitCode = lines.getOrElse(2) { "-1" }.trim().toIntOrNull() ?: -1
         return Triple(stdout, stderr, exitCode)
+    }
+
+    /**
+     * 以提升权限打开文件用于读取，返回 PFD。
+     * ShellService 在 Shizuku 进程中打开文件（uid 2000/0），PFD 通过 Binder 传回应用进程。
+     * 应用拿到 PFD 后可用 FileInputStream(fd) 直接读取，无需额外权限。
+     */
+    fun openForRead(path: String): ParcelFileDescriptor? {
+        val service = shellService
+        if (service != null) {
+            try {
+                return service.openForRead(path)
+            } catch (e: Exception) {
+                synchronized(bindLock) { shellService = null }
+                Log.w(TAG, "openForRead 失败: ${e.message}，尝试重连")
+                return reconnectAndRetryOpen { it.openForRead(path) }
+            }
+        }
+        ensureBound { /* 后续调用自动走快速路径 */ }
+        return null
+    }
+
+    /**
+     * 以提升权限打开/创建文件用于写入，返回 PFD。
+     * ShellService 在 Shizuku 进程中创建文件（uid 2000/0），PFD 通过 Binder 传回应用进程。
+     * 应用拿到 PFD 后可用 FileOutputStream(fd) 直接写入，无需额外权限。
+     */
+    fun openForWrite(path: String): ParcelFileDescriptor? {
+        val service = shellService
+        if (service != null) {
+            try {
+                return service.openForWrite(path)
+            } catch (e: Exception) {
+                synchronized(bindLock) { shellService = null }
+                Log.w(TAG, "openForWrite 失败: ${e.message}，尝试重连")
+                return reconnectAndRetryOpen { it.openForWrite(path) }
+            }
+        }
+        ensureBound { /* 后续调用自动走快速路径 */ }
+        return null
+    }
+
+    /** 断连后重连并重试 open 操作（200ms 超时 × 3 次） */
+    private fun reconnectAndRetryOpen(
+        action: (IShellService) -> ParcelFileDescriptor?
+    ): ParcelFileDescriptor? {
+        for (attempt in 1..3) {
+            if (rebindSync(200)) {
+                val retryService = shellService
+                if (retryService != null) {
+                    try {
+                        return action(retryService)
+                    } catch (_: Exception) {
+                        synchronized(bindLock) { shellService = null }
+                    }
+                }
+            }
+        }
+        return null
     }
 
     fun getLastError(): String = lastError

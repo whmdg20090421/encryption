@@ -1,26 +1,30 @@
 package com.whmdg.mczj.tools.fileop
 
+import android.os.ParcelFileDescriptor
 import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.security.ShellExecutor
+import com.whmdg.mczj.tools.security.ShizukuAuthorizer
 import com.whmdg.mczj.tools.util.DirEntry
+import com.whmdg.mczj.tools.util.FileAccessLevel
 import com.whmdg.mczj.tools.util.SevenZipCommand
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.IOException
 
 /**
- * 文件操作实现，统一通过 ShellExecutor 执行 shell 命令。
- * 复制使用 pv 获取实时进度，移动使用 pv+rm，删除使用 rm -rf。
- * 所有权限级别（NORMAL/SHIZUKU/ROOT）都通过 ShellExecutor 路由。
+ * 文件操作实现。
+ *
+ * - [FileAccessLevel.NORMAL]：Java Stream 直接复制，字节驱动进度
+ * - [FileAccessLevel.SHIZUKU]：Shizuku UserService 打开文件返回 PFD，Java Stream 在 PFD 上复制
+ * - [FileAccessLevel.ROOT]：Shizuku PFD（需 Shizuku 同时可用）
+ *
+ * PFD 路径：ShellService（uid 2000/0）打开文件 → PFD 通过 Binder 传回 → Java 读写 FD，无需权限校验。
  */
 class ShellFileOperator(
     private val permission: Permission,
-    private val pvPath: String
+    private val accessLevel: FileAccessLevel
 ) : FileOperator {
-
-    /** 兼容旧调用：useRoot=true → ROOT, useRoot=false → ADB */
-    constructor(useRoot: Boolean, pvPath: String) : this(
-        if (useRoot) Permission.ROOT else Permission.ADB,
-        pvPath
-    )
 
     private fun escape(path: String): String = SevenZipCommand.escape(path)
 
@@ -36,72 +40,109 @@ class ShellFileOperator(
         }
     }
 
-    /**
-     * 使用 PV 复制文件，通过 ShellExecutor 路由到正确 UID，实时读取 stderr 获取进度。
-     * PV -n 输出百分比到 stderr，每行一个数字（0.0 到 100.0）。
-     * --force 强制输出进度，即使 stderr 不是终端（解决缓冲问题）。
-     */
-    private fun copyWithPv(src: String, dst: String, onProgress: (Long) -> Unit) {
-        val size = fileSize(src)
-        val command = "$pvPath --force -n ${escape(src)} > ${escape(dst)}"
-
-        try {
-            ShellExecutor.executeWithStderr(
-                permission = permission,
-                command = command,
-                onStderrLine = { line ->
-                    line.trim().toDoubleOrNull()?.let { percent ->
-                        onProgress((size * percent / 100).toLong())
-                    }
-                }
-            )
-        } catch (e: Exception) {
-            throw IOException("PV 复制失败: ${e.message}")
-        }
-
-        onProgress(size)
-    }
-
-    /**
-     * 使用 PV 移动文件（复制+删除源文件），通过 ShellExecutor 路由到正确 UID。
-     */
-    private fun moveWithPv(src: String, dst: String, onProgress: (Long) -> Unit) {
-        val size = fileSize(src)
-        val escapedSrc = escape(src)
-        val command = "$pvPath --force -n $escapedSrc > ${escape(dst)}"
-
-        try {
-            ShellExecutor.executeWithStderr(
-                permission = permission,
-                command = command,
-                onStderrLine = { line ->
-                    line.trim().toDoubleOrNull()?.let { percent ->
-                        onProgress((size * percent / 100).toLong())
-                    }
-                }
-            )
-        } catch (e: Exception) {
-            throw IOException("PV 移动失败: ${e.message}")
-        }
-
-        // 复制成功，删除源文件（通过 ShellExecutor，保持权限一致）
-        exec("rm -rf $escapedSrc")
-
-        onProgress(size)
-    }
+    // ── 复制 ──
 
     override fun copyFile(src: String, dst: String, onProgress: (Long) -> Unit) {
-        copyWithPv(src, dst, onProgress)
+        when (accessLevel) {
+            FileAccessLevel.NORMAL -> copyWithJavaStream(src, dst, onProgress)
+            FileAccessLevel.SHIZUKU, FileAccessLevel.ROOT -> copyWithPfd(src, dst, onProgress)
+        }
     }
+
+    /**
+     * PFD 复制：Shizuku UserService 打开源文件和目标文件返回 PFD，
+     * Java 在 PFD 的 FD 上做 128KB read/write 循环，字节驱动进度。
+     *
+     * 与 MT 管理器架构一致：提升权限打开文件获取 FD → Java 层直接读写 FD。
+     * FD 一旦获取，后续 I/O 不再检查权限。
+     */
+    private fun copyWithPfd(src: String, dst: String, onProgress: (Long) -> Unit) {
+        val srcPfd = ShizukuAuthorizer.openForRead(src)
+            ?: throw IOException("Shizuku 打开源文件失败: $src")
+        try {
+            // 目标文件需要先通过 Shizuku 创建（可能在应用无写权限的目录）
+            val dstPfd = ShizukuAuthorizer.openForWrite(dst)
+                ?: throw IOException("Shizuku 创建目标文件失败: $dst")
+            try {
+                copyBetweenPfds(srcPfd, dstPfd, onProgress)
+            } finally {
+                dstPfd.close()
+            }
+        } finally {
+            srcPfd.close()
+        }
+    }
+
+    /**
+     * 在两个 PFD 之间复制，128KB buffer，字节驱动进度。
+     * 与 MT 管理器 C2285 的 buffer 大小一致。
+     */
+    private fun copyBetweenPfds(
+        srcPfd: ParcelFileDescriptor,
+        dstPfd: ParcelFileDescriptor,
+        onProgress: (Long) -> Unit
+    ) {
+        val buf = ByteArray(BUFFER_SIZE)
+        var copied = 0L
+        FileInputStream(srcPfd.fileDescriptor).use { input ->
+            FileOutputStream(dstPfd.fileDescriptor).use { output ->
+                var read: Int
+                while (input.read(buf).also { read = it } != -1) {
+                    output.write(buf, 0, read)
+                    copied += read
+                    onProgress(copied)
+                }
+            }
+        }
+    }
+
+    /**
+     * Java Stream 直接复制，128KB buffer，字节驱动进度。
+     * 用于 NORMAL 权限（应用自身 uid 可读写的文件）。
+     */
+    private fun copyWithJavaStream(src: String, dst: String, onProgress: (Long) -> Unit) {
+        val buf = ByteArray(BUFFER_SIZE)
+        var copied = 0L
+        FileInputStream(src).use { input ->
+            FileOutputStream(dst).use { output ->
+                var read: Int
+                while (input.read(buf).also { read = it } != -1) {
+                    output.write(buf, 0, read)
+                    copied += read
+                    onProgress(copied)
+                }
+            }
+        }
+    }
+
+    // ── 移动 ──
 
     override fun moveFile(src: String, dst: String): Boolean {
         return try {
-            moveWithPv(src, dst) { /* moveFile 不需要进度回调，MoveJob 使用 copyFile+deleteFile */ }
+            when (accessLevel) {
+                FileAccessLevel.NORMAL -> moveWithJavaStream(src, dst)
+                FileAccessLevel.SHIZUKU, FileAccessLevel.ROOT -> moveWithPfd(src, dst)
+            }
             true
         } catch (e: Exception) {
             false
         }
     }
+
+    private fun moveWithJavaStream(src: String, dst: String) {
+        copyWithJavaStream(src, dst) { /* moveFile 不需要进度 */ }
+        if (!File(src).delete()) {
+            throw IOException("删除源文件失败: $src")
+        }
+    }
+
+    private fun moveWithPfd(src: String, dst: String) {
+        copyWithPfd(src, dst) { /* moveFile 不需要进度 */ }
+        // 移动完成后删除源文件（通过 Shell 删除，因为源可能在应用无权目录）
+        deleteFile(src)
+    }
+
+    // ── 其他操作 ──
 
     override fun deleteFile(path: String) {
         val escaped = escape(path)
@@ -163,5 +204,10 @@ class ShellFileOperator(
         val stdout = try { exec("stat -c %Y $escaped") } catch (_: Exception) { return 0L }
         val epochSec = stdout.trim().toLongOrNull() ?: return 0L
         return epochSec * 1000
+    }
+
+    companion object {
+        /** 128KB buffer，与 MT 管理器一致 */
+        private const val BUFFER_SIZE = 131072
     }
 }

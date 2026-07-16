@@ -2,7 +2,6 @@ package com.whmdg.mczj.tools.fileop
 
 import android.content.Context
 import com.whmdg.mczj.tools.util.FileAccessLevel
-import com.whmdg.mczj.tools.util.PvExtractor
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -96,8 +95,7 @@ object FileOperationManager {
         context: Context
     ) {
         _progress.value = FileOpProgress(phase = "正在复制", currentBytes = 0, totalBytes = 0, isScanning = true)
-        val pvPath = PvExtractor.ensureExtracted(context).absolutePath
-        val operator = FileOperator.create(accessLevel, pvPath)
+        val operator = FileOperator.create(accessLevel)
         val job = CopyJob(sources, targetDir, this).apply {
             this.operator = operator
         }
@@ -111,8 +109,7 @@ object FileOperationManager {
         context: Context
     ) {
         _progress.value = FileOpProgress(phase = "正在移动", currentBytes = 0, totalBytes = 0, isScanning = true)
-        val pvPath = PvExtractor.ensureExtracted(context).absolutePath
-        val operator = FileOperator.create(accessLevel, pvPath)
+        val operator = FileOperator.create(accessLevel)
         val job = MoveJob(sources, targetDir, this).apply {
             this.operator = operator
         }
@@ -126,8 +123,7 @@ object FileOperationManager {
         context: Context
     ) {
         _progress.value = FileOpProgress(phase = "正在删除", currentBytes = 0, totalBytes = 0, isScanning = true)
-        val pvPath = PvExtractor.ensureExtracted(context).absolutePath
-        val operator = FileOperator.create(accessLevel, pvPath)
+        val operator = FileOperator.create(accessLevel)
         val job = DeleteJob(entries, toRecycleBin, this, context).apply {
             this.operator = operator
         }

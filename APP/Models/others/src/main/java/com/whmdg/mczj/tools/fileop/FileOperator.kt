@@ -3,14 +3,12 @@ package com.whmdg.mczj.tools.fileop
 import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.util.DirEntry
 import com.whmdg.mczj.tools.util.FileAccessLevel
-import java.io.File
 
 /**
- * 文件操作抽象层，统一通过 ShellExecutor 执行。
+ * 文件操作抽象层。
  *
- * 所有权限级别（NORMAL/SHIZUKU/ROOT）都通过 ShellExecutor 路由，
- * 由 [ShellFileOperator] 统一实现。
- * 复制使用 pv 获取实时进度。
+ * APPLICANT 走 Java Stream 直接复制，ROOT/ADB 通过 ShellExecutor 路由到 Shell dd 脚本。
+ * 由 [ShellFileOperator] 统一实现，字节驱动进度。
  */
 interface FileOperator {
 
@@ -48,14 +46,11 @@ interface FileOperator {
 
     companion object {
         /**
-         * 根据权限级别创建合适的 FileOperator。
-         * 统一通过 ShellExecutor 执行，由 ShellExecutor 内部路由到对应权限。
-         * @param pvPath pv 二进制路径，用于复制时获取实时进度
+         * 根据访问级别创建合适的 FileOperator。
+         * NORMAL 走 Java Stream，SHIZUKU/ROOT 走 Shell dd 脚本。
+         * Shell 权限统一使用 MAX（自动取最高已授权权限）。
          */
-        fun create(level: FileAccessLevel, pvPath: String): FileOperator = when (level) {
-            FileAccessLevel.NORMAL -> ShellFileOperator(Permission.APPLICANT, pvPath)
-            FileAccessLevel.SHIZUKU -> ShellFileOperator(Permission.ADB, pvPath)
-            FileAccessLevel.ROOT -> ShellFileOperator(Permission.ROOT, pvPath)
-        }
+        fun create(level: FileAccessLevel): FileOperator =
+            ShellFileOperator(Permission.MAX, level)
     }
 }

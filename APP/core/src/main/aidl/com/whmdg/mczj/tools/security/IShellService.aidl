@@ -26,6 +26,28 @@ interface IShellService {
     String executeStreamingStderr(String command, in ParcelFileDescriptor stderrWriteFd) = 3;
 
     /**
+     * 执行命令，stdout 通过 PFD 管道实时流式返回。
+     * 返回格式同 execute()（stdoutB64\nstderrB64\nexitCode），其中 stdoutB64 为空。
+     * @param command 要执行的 shell 命令
+     * @param stdoutWriteFd 客户端创建的管道写端，服务端将 stdout 写入此 fd
+     */
+    String executeStreamingStdout(String command, in ParcelFileDescriptor stdoutWriteFd) = 4;
+
+    /**
+     * 以提升权限打开文件用于读取，返回 PFD 传回调用方进程。
+     * ShellService 运行在 Shizuku 进程（uid 2000 或 0），可打开应用自身无权访问的文件。
+     * 返回的 PFD 跨 Binder 传递后，调用方可用 FileInputStream(fd) 直接读取。
+     */
+    ParcelFileDescriptor openForRead(String path) = 5;
+
+    /**
+     * 以提升权限打开/创建文件用于写入，返回 PFD 传回调用方进程。
+     * 若文件已存在则截断。ShellService 运行在 Shizuku 进程（uid 2000 或 0）。
+     * 返回的 PFD 跨 Binder 传递后，调用方可用 FileOutputStream(fd) 直接写入。
+     */
+    ParcelFileDescriptor openForWrite(String path) = 6;
+
+    /**
      * 销毁服务（transaction code = 16777114，Shizuku 保留）
      */
     void destroy() = 16777114;
