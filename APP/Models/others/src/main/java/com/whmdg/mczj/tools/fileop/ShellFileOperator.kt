@@ -51,7 +51,7 @@ class ShellFileOperator(
 
     /**
      * PFD 复制：Shizuku UserService 打开源文件和目标文件返回 PFD，
-     * Java 在 PFD 的 FD 上做 128KB read/write 循环，字节驱动进度。
+     * Java 在 PFD 的 FD 上做 8KB read/write 循环，字节驱动进度。
      *
      * 与 MT 管理器架构一致：提升权限打开文件获取 FD → Java 层直接读写 FD。
      * FD 一旦获取，后续 I/O 不再检查权限。
@@ -74,8 +74,8 @@ class ShellFileOperator(
     }
 
     /**
-     * 在两个 PFD 之间复制，128KB buffer，字节驱动进度。
-     * 与 MT 管理器 C2285 的 buffer 大小一致。
+     * 在两个 PFD 之间复制，8KB buffer，字节驱动进度。
+     * 与 MT 管理器 C3317.transferTo() 的 buffer 大小一致。
      */
     private fun copyBetweenPfds(
         srcPfd: ParcelFileDescriptor,
@@ -97,7 +97,7 @@ class ShellFileOperator(
     }
 
     /**
-     * Java Stream 直接复制，128KB buffer，字节驱动进度。
+     * Java Stream 直接复制，8KB buffer，字节驱动进度。
      * 用于 NORMAL 权限（应用自身 uid 可读写的文件）。
      */
     private fun copyWithJavaStream(src: String, dst: String, onProgress: (Long) -> Unit) {
@@ -207,7 +207,7 @@ class ShellFileOperator(
     }
 
     companion object {
-        /** 128KB buffer，与 MT 管理器一致 */
-        private const val BUFFER_SIZE = 131072
+        /** 8KB buffer，与 MT 管理器 C3317.transferTo() 一致 */
+        private const val BUFFER_SIZE = 8192
     }
 }
