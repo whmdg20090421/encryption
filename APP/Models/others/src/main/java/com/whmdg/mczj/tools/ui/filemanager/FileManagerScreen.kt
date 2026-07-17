@@ -3123,6 +3123,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         }
     }
 
+    // ── 文件操作冲突/错误弹窗 ──
+    FileConflictDialog()
+    FileErrorDialog()
+
     // ── 强制删除确认对话框（移动到回收站失败时） ──
     if (showForceDeleteDialog && forceDeleteEntry != null) {
         AlertDialog(
