@@ -61,7 +61,7 @@ object FileOpDiagnostics {
         log("PHASE_DONE", "$phase: totalBytes=$totalBytes elapsed=${elapsedMs}ms throughput=${throughput}B/s")
     }
 
-    /** 导出为文本 */
+    /** 导出完整报告（写入文件） */
     fun export(): String {
         val sb = StringBuilder()
         sb.appendLine("=== 文件操作诊断报告 ===")
@@ -69,6 +69,20 @@ object FileOpDiagnostics {
         sb.appendLine("条目数: ${entries.size}")
         sb.appendLine()
         entries.forEach { entry ->
+            sb.appendLine("[${entry.timestamp}] ${entry.phase} (${entry.elapsedMs}ms) ${entry.detail}")
+        }
+        return sb.toString()
+    }
+
+    /** 导出摘要（写入剪贴板，限制 1KB） */
+    fun exportSummary(): String {
+        val sb = StringBuilder()
+        sb.appendLine("=== 文件操作诊断摘要 ===")
+        sb.appendLine("导出时间: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
+        sb.appendLine("条目数: ${entries.size}")
+        // 只保留 PHASE_DONE 和 PFD_OPEN 阶段
+        val summaryEntries = entries.filter { it.phase == "PHASE_DONE" || it.phase == "PFD_OPEN" }
+        summaryEntries.forEach { entry ->
             sb.appendLine("[${entry.timestamp}] ${entry.phase} (${entry.elapsedMs}ms) ${entry.detail}")
         }
         return sb.toString()
