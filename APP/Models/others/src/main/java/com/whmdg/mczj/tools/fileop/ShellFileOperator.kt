@@ -256,6 +256,12 @@ class ShellFileOperator(
         return epochSec * 1000
     }
 
+    override fun deviceId(path: String): Long {
+        val escaped = escape(path)
+        val stdout = try { exec("stat -c %d $escaped") } catch (_: Exception) { return -1L }
+        return stdout.trim().toLongOrNull() ?: -1L
+    }
+
     companion object {
         /** 128KB buffer，大文件复制性能优化 */
         private const val BUFFER_SIZE = 128 * 1024

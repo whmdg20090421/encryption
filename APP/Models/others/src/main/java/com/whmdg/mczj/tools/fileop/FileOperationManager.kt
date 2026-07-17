@@ -99,7 +99,7 @@ object FileOperationManager {
         FileOpDiagnostics.setEnabled(debugMode)
         _progress.value = FileOpProgress(phase = "正在复制", currentBytes = 0, totalBytes = 0, isScanning = true)
         val operator = FileOperator.create(accessLevel)
-        val job = CopyJob(sources, targetDir, this).apply {
+        val job = CopyJob(CopyPurpose.COPY, sources, targetDir, this).apply {
             this.operator = operator
         }
         FileOperationService.submit(job, context)
@@ -116,7 +116,7 @@ object FileOperationManager {
         FileOpDiagnostics.setEnabled(debugMode)
         _progress.value = FileOpProgress(phase = "正在移动", currentBytes = 0, totalBytes = 0, isScanning = true)
         val operator = FileOperator.create(accessLevel)
-        val job = MoveJob(sources, targetDir, this).apply {
+        val job = CopyJob(CopyPurpose.MOVE, sources, targetDir, this).apply {
             this.operator = operator
         }
         FileOperationService.submit(job, context)

@@ -44,6 +44,9 @@ interface FileOperator {
     /** 获取文件修改时间（epoch millis）。 */
     fun lastModified(path: String): Long
 
+    /** 获取文件所在分区的设备号（用于判断是否在同一分区）。 */
+    fun deviceId(path: String): Long
+
     companion object {
         /**
          * 根据访问级别创建合适的 FileOperator。

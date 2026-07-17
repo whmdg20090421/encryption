@@ -95,8 +95,26 @@ class DeleteJob(
                 } while (retry)
             }
         } finally {
-            manager.updateProgress(null)
-            manager.notifyRefreshNeeded()
+            // 清除线程中断标志，确保后续清理代码能正常执行 shell 命令
+            Thread.interrupted()
+
+            if (cancelFlag.get()) {
+                // 步骤一：用户手动取消
+                // 1. 面板改为"正在取消"
+                manager.updateProgress(FileOpProgress(
+                    phase = "正在取消",
+                    currentBytes = 0,
+                    totalBytes = 0,
+                    isRunning = true
+                ))
+                // 2. 清理完毕，关闭窗口
+                manager.updateProgress(null)
+                manager.notifyRefreshNeeded()
+            } else {
+                // 步骤二：其他错误或正常完成
+                manager.updateProgress(null)
+                manager.notifyRefreshNeeded()
+            }
         }
     }
 
