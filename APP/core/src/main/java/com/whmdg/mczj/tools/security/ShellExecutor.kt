@@ -2,12 +2,10 @@ package com.whmdg.mczj.tools.security
 
 import android.content.Context
 import android.os.ParcelFileDescriptor
-import android.system.Os
 import android.util.Log
 import com.topjohnwu.superuser.Shell
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
-import com.whmdg.mczj.tools.util.SevenZipCommand
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -958,72 +956,18 @@ object ShellExecutor {
             )
     }
 
-    /** ROOT：su 进程(uid 0) 执行 cat，数据通过 pipe 传回 */
+    /** ROOT：直接打开真实文件，返回文件 fd（非管道） */
     private fun openForReadRoot(path: String, permission: Permission): ParcelFileDescriptor {
-        val escaped = SevenZipCommand.escape(path)
-        val pipe = ParcelFileDescriptor.createPipe()
-        val readEnd = pipe[0]
-        val writeEnd = pipe[1]
-
-        val process = try {
-            ProcessBuilder("su", "-c", "cat $escaped")
-                .redirectErrorStream(false)
-                .start()
+        return try {
+            ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY)
         } catch (e: Exception) {
-            try { readEnd.close() } catch (_: Exception) {}
-            try { writeEnd.close() } catch (_: Exception) {}
             throw ShellException(
-                message = "Root 启动进程失败: ${e.message}",
-                command = "cat $escaped",
+                message = "打开文件失败: ${e.message}",
+                command = "openForRead($path)",
                 permission = permission,
                 stderr = e.message ?: ""
             )
         }
-
-        val stderrBuf = StringBuilder()
-        val tErr = Thread {
-            try {
-                process.errorStream.bufferedReader().use { reader ->
-                    var line: String?
-                    while (reader.readLine().also { line = it } != null) {
-                        stderrBuf.appendLine(line)
-                    }
-                }
-            } catch (_: Exception) {}
-        }.apply { start() }
-
-        // stdout → pipe writeEnd：将 su 进程的输出桥接到 pipe
-        val tOut = Thread {
-            try {
-                val buf = ByteArray(FD_BUFFER_SIZE)
-                val srcFd = (process.inputStream as java.io.FileInputStream).fd
-                val dstFd = writeEnd.fileDescriptor
-                while (true) {
-                    val n = Os.read(srcFd, buf, 0, FD_BUFFER_SIZE)
-                    if (n == -1) break
-                    Os.write(dstFd, buf, 0, n)
-                }
-            } catch (_: Exception) {}
-            finally {
-                try { writeEnd.close() } catch (_: Exception) {}
-            }
-        }.apply { start() }
-
-        // 异步等待进程结束，检查退出码
-        Thread {
-            try {
-                process.waitFor()
-                tOut.join(5000)
-                tErr.join(5000)
-                if (process.exitValue() != 0) {
-                    val stderr = stderrBuf.toString().trim()
-                    DiagnosticLog.log("ShellExecutor", "openForReadRoot 失败: exitCode=${process.exitValue()}, stderr=$stderr")
-                    try { readEnd.close() } catch (_: Exception) {}
-                }
-            } catch (_: Exception) {}
-        }.start()
-
-        return readEnd
     }
 
     /** APPLICANT：应用自身 UID 直接创建 */
@@ -1053,74 +997,21 @@ object ShellExecutor {
             )
     }
 
-    /** ROOT：su 进程(uid 0) 执行 cat > file，数据通过 pipe 从应用传入 */
+    /** ROOT：直接打开真实文件，返回文件 fd（非管道） */
     private fun openForWriteRoot(path: String, permission: Permission): ParcelFileDescriptor {
-        val escaped = SevenZipCommand.escape(path)
-        val pipe = ParcelFileDescriptor.createPipe()
-        val readEnd = pipe[0]
-        val writeEnd = pipe[1]
-
-        val process = try {
-            ProcessBuilder("su", "-c", "cat > $escaped")
-                .redirectErrorStream(false)
-                .start()
+        return try {
+            ParcelFileDescriptor.open(
+                File(path),
+                ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_WRITE_ONLY
+            )
         } catch (e: Exception) {
-            try { readEnd.close() } catch (_: Exception) {}
-            try { writeEnd.close() } catch (_: Exception) {}
             throw ShellException(
-                message = "Root 启动进程失败: ${e.message}",
-                command = "cat > $escaped",
+                message = "创建文件失败: ${e.message}",
+                command = "openForWrite($path)",
                 permission = permission,
                 stderr = e.message ?: ""
             )
         }
-
-        val stderrBuf = StringBuilder()
-        val tErr = Thread {
-            try {
-                process.errorStream.bufferedReader().use { reader ->
-                    var line: String?
-                    while (reader.readLine().also { line = it } != null) {
-                        stderrBuf.appendLine(line)
-                    }
-                }
-            } catch (_: Exception) {}
-        }.apply { start() }
-
-        // pipe readEnd → stdin：将应用写入 pipe 的数据桥接到 su 进程的 stdin
-        val tIn = Thread {
-            try {
-                val buf = ByteArray(FD_BUFFER_SIZE)
-                val srcFd = readEnd.fileDescriptor
-                val dstFd = (process.outputStream as java.io.FileOutputStream).fd
-                while (true) {
-                    val n = Os.read(srcFd, buf, 0, FD_BUFFER_SIZE)
-                    if (n == -1) break
-                    Os.write(dstFd, buf, 0, n)
-                }
-            } catch (_: Exception) {}
-            finally {
-                try { process.outputStream.close() } catch (_: Exception) {}
-                try { readEnd.close() } catch (_: Exception) {}
-            }
-        }.apply { start() }
-
-        // 异步等待进程结束，检查退出码
-        Thread {
-            try {
-                process.waitFor()
-                tIn.join(5000)
-                tErr.join(5000)
-                if (process.exitValue() != 0) {
-                    val stderr = stderrBuf.toString().trim()
-                    DiagnosticLog.log("ShellExecutor", "openForWriteRoot 失败: exitCode=${process.exitValue()}, stderr=$stderr")
-                    try { writeEnd.close() } catch (_: Exception) {}
-                }
-            } catch (_: Exception) {}
-        }.start()
-
-        return writeEnd
     }
 
-    private const val FD_BUFFER_SIZE = 128 * 1024
 }
