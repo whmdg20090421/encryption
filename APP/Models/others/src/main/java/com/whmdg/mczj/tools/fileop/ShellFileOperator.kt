@@ -51,15 +51,29 @@ class ShellFileOperator(
     }
 
     /**
-     * PFD 复制：FdProvider 获取源/目标 PFD，Java 在 PFD 的 FD 上做 8KB read/write 循环。
+     * PFD 复制：FdProvider 获取源/目标 PFD，Java 在 PFD 的 FD 上做 read/write 循环。
      *
      * 与 MT 管理器架构一致：提升权限打开文件获取 FD → Java 层直接读写 FD。
      * FD 一旦获取，后续 I/O 不再检查权限。
      */
     private fun copyWithPfd(src: String, dst: String, onProgress: (Long) -> Unit) {
+        val diag = FileOpDiagnostics.isEnabled()
+        val t0 = if (diag) System.nanoTime() else 0L
+
         val srcPfd = FdProvider.openForRead(src)
+        if (diag) {
+            val elapsed = (System.nanoTime() - t0) / 1_000_000
+            FileOpDiagnostics.logPfdOpen("READ", src, elapsed)
+        }
+
         try {
+            val t1 = if (diag) System.nanoTime() else 0L
             val dstPfd = FdProvider.openForWrite(dst)
+            if (diag) {
+                val elapsed = (System.nanoTime() - t1) / 1_000_000
+                FileOpDiagnostics.logPfdOpen("WRITE", dst, elapsed)
+            }
+
             try {
                 copyBetweenPfds(srcPfd, dstPfd, onProgress)
             } finally {
@@ -71,7 +85,7 @@ class ShellFileOperator(
     }
 
     /**
-     * 在两个 PFD 之间复制，8KB buffer，字节驱动进度。
+     * 在两个 PFD 之间复制，buffer 驱动进度。
      * 与 MT 管理器 Features3.read/write(fd, buf, off, len) 对齐：
      * 直接用 Os.read/write 操作 fd，绕过 FileInputStream 缓冲层。
      */
@@ -80,16 +94,33 @@ class ShellFileOperator(
         dstPfd: ParcelFileDescriptor,
         onProgress: (Long) -> Unit
     ) {
+        val diag = FileOpDiagnostics.isEnabled()
         val buf = ByteArray(BUFFER_SIZE)
         val srcFd = srcPfd.fileDescriptor
         val dstFd = dstPfd.fileDescriptor
         var copied = 0L
+        var chunkIndex = 0
+        val transferStart = if (diag) System.nanoTime() else 0L
+
         while (true) {
+            val t0 = if (diag) System.nanoTime() else 0L
             val n = Os.read(srcFd, buf, 0, BUFFER_SIZE)
             if (n == -1) break
             Os.write(dstFd, buf, 0, n)
             copied += n
+            chunkIndex++
+
+            if (diag) {
+                val elapsed = (System.nanoTime() - t0) / 1_000_000
+                FileOpDiagnostics.logTransfer(chunkIndex, n.toLong(), copied, elapsed)
+            }
+
             onProgress(copied)
+        }
+
+        if (diag) {
+            val totalElapsed = (System.nanoTime() - transferStart) / 1_000_000
+            FileOpDiagnostics.logPhaseComplete("TRANSFER", copied, totalElapsed)
         }
     }
 

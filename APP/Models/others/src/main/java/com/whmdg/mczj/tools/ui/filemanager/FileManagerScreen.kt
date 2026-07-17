@@ -3021,9 +3021,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         else -> com.whmdg.mczj.tools.util.FileAccessLevel.NORMAL
                     }
                     if (copyMoveConfirmIsCopy) {
-                        FileOperationManager.copy(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context)
+                        FileOperationManager.copy(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode)
                     } else {
-                        FileOperationManager.move(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context)
+                        FileOperationManager.move(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode)
                     }
                     showFileOpProgress = true
                     cancelingFileOp = false
@@ -3110,6 +3110,25 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 if (cancelingFileOp) {
                     TextButton(onClick = { cancelingFileOp = false }) {
                         Text("继续")
+                    }
+                } else if (isDebugMode) {
+                    TextButton(onClick = {
+                        val report = com.whmdg.mczj.tools.fileop.FileOpDiagnostics.export()
+                        // 写入剪贴板
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("file_op_diag", report))
+                        // 写入文件
+                        try {
+                            val diagDir = com.whmdg.mczj.tools.AppDataPaths.diagnostics(context)
+                            val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
+                            val file = java.io.File(diagDir, "file_op_report_$timestamp.log")
+                            file.writeText(report)
+                            android.widget.Toast.makeText(context, "报告已保存: ${file.absolutePath}", android.widget.Toast.LENGTH_LONG).show()
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(context, "保存失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }) {
+                        Text("提取报告")
                     }
                 }
             }

@@ -87,25 +87,16 @@ object FileOperationManager {
         _errorRequest.value = null
     }
 
-    /**
-     * 报告超时错误（非 suspend，由看门狗线程调用）。
-     * 直接设置 errorRequest 状态，UI 层会弹出错误对话框。
-     */
-    fun reportTimeoutError(step: String) {
-        _progress.value = null
-        _errorRequest.value = ErrorRequest(
-            fileName = step,
-            errorMessage = "操作超时：该步骤已超过 5 秒无响应，可能因 su 进程卡住或 I/O 阻塞"
-        )
-    }
-
     // ── 提交任务 ──
     fun copy(
         sources: List<String>,
         targetDir: String,
         accessLevel: FileAccessLevel,
-        context: Context
+        context: Context,
+        debugMode: Boolean = false
     ) {
+        FileOpDiagnostics.clear()
+        FileOpDiagnostics.setEnabled(debugMode)
         _progress.value = FileOpProgress(phase = "正在复制", currentBytes = 0, totalBytes = 0, isScanning = true)
         val operator = FileOperator.create(accessLevel)
         val job = CopyJob(sources, targetDir, this).apply {
@@ -118,8 +109,11 @@ object FileOperationManager {
         sources: List<String>,
         targetDir: String,
         accessLevel: FileAccessLevel,
-        context: Context
+        context: Context,
+        debugMode: Boolean = false
     ) {
+        FileOpDiagnostics.clear()
+        FileOpDiagnostics.setEnabled(debugMode)
         _progress.value = FileOpProgress(phase = "正在移动", currentBytes = 0, totalBytes = 0, isScanning = true)
         val operator = FileOperator.create(accessLevel)
         val job = MoveJob(sources, targetDir, this).apply {
