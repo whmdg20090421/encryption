@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.fileop
 
 import java.io.InterruptedIOException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.random.Random
 
 /**
@@ -14,6 +15,21 @@ abstract class FileOperationJob(val id: Int = Random.nextInt()) {
 
     lateinit var operator: FileOperator
     val cancelFlag = AtomicBoolean(false)
+
+    /** 最后一次进度更新时间戳（epoch millis），用于超时检测 */
+    private val lastActivityTime = AtomicLong(System.currentTimeMillis())
+
+    /** 记录当前正在执行的步骤描述 */
+    @Volatile
+    var currentStep: String = ""
+
+    /** 更新活动时间戳，在每次 I/O 操作后调用 */
+    protected fun heartbeat() {
+        lastActivityTime.set(System.currentTimeMillis())
+    }
+
+    /** 获取距离上次活动的毫秒数 */
+    fun millisSinceLastActivity(): Long = System.currentTimeMillis() - lastActivityTime.get()
 
     /** 由子类实现的具体操作逻辑。在线程池中执行。 */
     @Throws(Exception::class)
@@ -44,6 +60,7 @@ abstract class FileOperationJob(val id: Int = Random.nextInt()) {
 
         for (source in sources) {
             throwIfCancelled()
+            heartbeat()
             if (!operator.exists(source)) continue
 
             if (operator.isDirectory(source)) {
@@ -51,6 +68,7 @@ abstract class FileOperationJob(val id: Int = Random.nextInt()) {
                 stack.add(source)
                 while (stack.isNotEmpty()) {
                     throwIfCancelled()
+                    heartbeat()
                     val dir = stack.removeLast()
                     val children = operator.listChildren(dir) ?: continue
                     for (child in children) {

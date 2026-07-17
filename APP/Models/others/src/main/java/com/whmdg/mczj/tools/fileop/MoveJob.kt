@@ -115,7 +115,9 @@ class MoveJob(
                 retry = false
                 try {
                     val fileSize = operator.fileSize(source)
+                    currentStep = "移动: $sourceName"
                     val success = operator.moveFile(source, resolvedTarget)
+                    heartbeat()
                     if (success) {
                         totalBytes += fileSize
                         totalFiles++

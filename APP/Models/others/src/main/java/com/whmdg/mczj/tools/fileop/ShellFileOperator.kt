@@ -204,7 +204,7 @@ class ShellFileOperator(
     }
 
     companion object {
-        /** 8KB buffer，与 MT 管理器 C3317.transferTo() 一致 */
-        private const val BUFFER_SIZE = 8192
+        /** 128KB buffer，大文件复制性能优化 */
+        private const val BUFFER_SIZE = 128 * 1024
     }
 }

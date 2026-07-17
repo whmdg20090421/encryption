@@ -115,7 +115,9 @@ class CopyJob(
                 retry = false
                 try {
                     val fileSize = operator.fileSize(source)
+                    currentStep = "复制: $sourceName"
                     operator.copyFile(source, resolvedTarget) { copied ->
+                        heartbeat()
                         manager.updateProgress(FileOpProgress(
                             phase = "正在复制",
                             currentBytes = baseBytes + totalCopiedBytes + copied,

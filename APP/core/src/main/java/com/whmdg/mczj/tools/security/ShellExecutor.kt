@@ -1122,5 +1122,5 @@ object ShellExecutor {
         return writeEnd
     }
 
-    private const val FD_BUFFER_SIZE = 8192
+    private const val FD_BUFFER_SIZE = 128 * 1024
 }

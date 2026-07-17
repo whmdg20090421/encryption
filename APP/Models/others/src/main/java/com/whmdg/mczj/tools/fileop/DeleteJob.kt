@@ -64,11 +64,13 @@ class DeleteJob(
             do {
                 retry = false
                 try {
+                    currentStep = if (toRecycleBin) "移到回收站: ${entry.name}" else "删除: ${entry.name}"
                     if (toRecycleBin) {
                         moveToRecycleBin(entry)
                     } else {
                         deleteEntry(entry)
                     }
+                    heartbeat()
                     processedBytes += entrySize
                 } catch (e: InterruptedIOException) {
                     throw e

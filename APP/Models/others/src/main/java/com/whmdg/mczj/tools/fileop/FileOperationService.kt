@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.whmdg.mczj.tools.util.DiagnosticLog
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
@@ -21,6 +22,7 @@ class FileOperationService : Service() {
 
     private val executorService = Executors.newCachedThreadPool()
     private val runningJobs = mutableMapOf<FileOperationJob, Future<*>>()
+    private val watchdogThreads = mutableMapOf<FileOperationJob, Thread>()
 
     override fun onCreate() {
         super.onCreate()
@@ -47,6 +49,7 @@ class FileOperationService : Service() {
                 } finally {
                     synchronized(runningJobs) {
                         runningJobs.remove(job)
+                        watchdogThreads.remove(job)?.interrupt()
                         if (runningJobs.isEmpty()) {
                             stopSelf()
                         }
@@ -54,6 +57,26 @@ class FileOperationService : Service() {
                 }
             }
             runningJobs[job] = future
+
+            // 启动看门狗线程，检测任务是否卡住
+            val watchdog = Thread {
+                try {
+                    while (!job.cancelFlag.get() && runningJobs.containsKey(job)) {
+                        Thread.sleep(WATCHDOG_CHECK_INTERVAL_MS)
+                        val elapsed = job.millisSinceLastActivity()
+                        if (elapsed > WATCHDOG_TIMEOUT_MS) {
+                            val step = job.currentStep
+                            DiagnosticLog.log("FileOperationService",
+                                "任务超时: step=$step, elapsed=${elapsed}ms, jobId=${job.id}")
+                            job.cancelFlag.set(true)
+                            // 通过 manager 报告超时错误，触发 UI 弹窗
+                            FileOperationManager.reportTimeoutError(step)
+                            break
+                        }
+                    }
+                } catch (_: InterruptedException) {}
+            }.apply { isDaemon = true; start() }
+            watchdogThreads[job] = watchdog
         }
     }
 
@@ -63,6 +86,7 @@ class FileOperationService : Service() {
             if (entry != null) {
                 entry.key.cancelFlag.set(true)
                 entry.value.cancel(true)
+                watchdogThreads.remove(entry.key)?.interrupt()
                 runningJobs.remove(entry.key)
             }
             if (runningJobs.isEmpty()) {
@@ -78,6 +102,7 @@ class FileOperationService : Service() {
             for ((job, future) in runningJobs) {
                 job.cancelFlag.set(true)
                 future.cancel(true)
+                watchdogThreads.remove(job)?.interrupt()
             }
             runningJobs.clear()
         }
@@ -108,6 +133,10 @@ class FileOperationService : Service() {
     companion object {
         private const val CHANNEL_ID = "file_operation"
         private const val NOTIFICATION_ID = 1001
+        /** 看门狗检查间隔（毫秒） */
+        private const val WATCHDOG_CHECK_INTERVAL_MS = 1000L
+        /** 任务超时时间（毫秒）：5 秒无活动视为卡住 */
+        private const val WATCHDOG_TIMEOUT_MS = 5000L
 
         private var instance: FileOperationService? = null
         private val pendingJobs = mutableListOf<FileOperationJob>()
@@ -143,6 +172,7 @@ class FileOperationService : Service() {
                     for ((job, future) in service.runningJobs) {
                         job.cancelFlag.set(true)
                         future.cancel(true)
+                        service.watchdogThreads.remove(job)?.interrupt()
                     }
                     service.runningJobs.clear()
                     service.stopSelf()
