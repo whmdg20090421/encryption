@@ -16,12 +16,12 @@ interface FileOperator {
      * 复制文件。进度通过 [onProgress] 回调已复制字节数（增量）。
      * @throws IOException 复制失败
      */
-    fun copyFile(src: String, dst: String, onProgress: (Long) -> Unit)
+    fun copyFile(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob? = null)
 
     /**
      * 尝试原子移动（renameTo）。成功返回 true，失败返回 false（调用方回退到 copy+delete）。
      */
-    fun moveFile(src: String, dst: String): Boolean
+    fun moveFile(src: String, dst: String, job: FileOperationJob? = null): Boolean
 
     /** 删除文件或目录。 */
     fun deleteFile(path: String)

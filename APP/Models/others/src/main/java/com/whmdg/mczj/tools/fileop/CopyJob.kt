@@ -8,9 +8,10 @@ import java.io.InterruptedIOException
  *
  * 流程：
  * 1. scan() 统计文件数 + 总大小
- * 2. 逐个源文件 walkFileTree 递归复制
- * 3. 冲突时通过 FileOperationManager 弹窗等待用户选择
- * 4. 每个文件复制后回调进度
+ * 2. 逐个源文件递归复制
+ * 3. 冲突时弹窗等待用户选择（挂起等待）
+ * 4. I/O 异常时终止任务 → 关闭进度条 → 弹出报错窗口
+ * 5. 每个文件复制后回调进度
  */
 class CopyJob(
     private val sources: List<String>,
@@ -18,59 +19,79 @@ class CopyJob(
     private val manager: FileOperationManager
 ) : FileOperationJob() {
 
-    /** 应用到全部的状态 */
-    private var skipAllErrors = false
+    /** 异常时需要清理的残留目标文件路径 */
+    @Volatile
+    private var pendingCleanupTarget: String? = null
 
     @Throws(Exception::class)
     override fun run() {
-        // 1. 扫描（实时回调已扫描字节数）
-        val scanInfo = scanWithProgress(sources) { totalSoFar ->
+        var errorToShow: Exception? = null
+        try {
+            // 1. 扫描（实时回调已扫描字节数）
+            val scanInfo = scanWithProgress(sources) { totalSoFar ->
+                manager.updateProgress(FileOpProgress(
+                    phase = "正在复制",
+                    currentBytes = 0,
+                    totalBytes = totalSoFar,
+                    isScanning = true
+                ))
+            }
+            var transferredBytes = 0L
+            var transferredFiles = 0
+
             manager.updateProgress(FileOpProgress(
                 phase = "正在复制",
                 currentBytes = 0,
-                totalBytes = totalSoFar,
-                isScanning = true
+                totalBytes = scanInfo.totalBytes,
+                currentFileName = "",
+                fileIndex = 0,
+                fileCount = scanInfo.fileCount
             ))
-        }
-        var transferredBytes = 0L
-        var transferredFiles = 0
 
-        manager.updateProgress(FileOpProgress(
-            phase = "正在复制",
-            currentBytes = 0,
-            totalBytes = scanInfo.totalBytes,
-            currentFileName = "",
-            fileIndex = 0,
-            fileCount = scanInfo.fileCount
-        ))
-
-        // 2. 逐个源文件复制
-        for (source in sources) {
-            val targetName = source.substringAfterLast('/')
-            val sourceParent = source.substringBeforeLast('/')
-            val sourceIsDir = operator.isDirectory(source)
-            val targetPath = if (targetDir.trimEnd('/') == sourceParent) {
-                // 同目录：自动重命名
-                generateUniqueName(targetDir, targetName, sourceIsDir)
-            } else {
-                "$targetDir/$targetName"
+            // 2. 逐个源文件复制
+            for (source in sources) {
+                val targetName = source.substringAfterLast('/')
+                val sourceParent = source.substringBeforeLast('/')
+                val sourceIsDir = operator.isDirectory(source)
+                val targetPath = if (targetDir.trimEnd('/') == sourceParent) {
+                    generateUniqueName(targetDir, targetName, sourceIsDir)
+                } else {
+                    "$targetDir/$targetName"
+                }
+                val result = copyRecursively(source, targetPath, scanInfo, transferredBytes, transferredFiles)
+                transferredBytes += result.bytes
+                transferredFiles += result.files
+                if (isGracefulCancelled()) break
+                throwIfCancelled()
             }
-            val result = copyRecursively(source, targetPath, scanInfo, transferredBytes, transferredFiles)
-            transferredBytes += result.bytes
-            transferredFiles += result.files
-            if (isGracefulCancelled()) break
-            throwIfCancelled()
+        } catch (e: Exception) {
+            errorToShow = e
+        } finally {
+            // ② 清理残留文件
+            pendingCleanupTarget?.let { target ->
+                try { if (operator.exists(target)) operator.deleteFile(target) } catch (_: Exception) {}
+                pendingCleanupTarget = null
+            }
+            // ③ 关闭进度条
+            manager.updateProgress(null)
+            manager.notifyRefreshNeeded()
+            // ④ 弹报错窗口（用户主动取消导致的异常不弹）
+            if (errorToShow != null && !cancelFlag.get() && errorToShow !is InterruptedIOException) {
+                runBlocking {
+                    manager.resolveError(ErrorRequest(
+                        fileName = "",
+                        errorMessage = errorToShow!!.message ?: "复制失败"
+                    ))
+                }
+            }
         }
-
-        // 3. 完成
-        manager.updateProgress(null)
-        manager.notifyRefreshNeeded()
     }
 
     private data class CopyResult(val bytes: Long, val files: Int)
 
     /**
      * 递归复制单个源文件/目录到目标路径。
+     * 异常直接传播到 run()，由 run() 统一处理。
      */
     private fun copyRecursively(
         source: String,
@@ -109,46 +130,24 @@ class CopyJob(
             val resolvedTarget = resolveConflictIfNeeded(source, sourceName, target, isDirectory = false)
                 ?: return CopyResult(0, 0) // 用户选择跳过
 
-            // 复制文件，带重试
-            var retry: Boolean
-            do {
-                retry = false
-                try {
-                    val fileSize = operator.fileSize(source)
-                    currentStep = "复制: $sourceName"
-                    operator.copyFile(source, resolvedTarget) { copied ->
-                        heartbeat()
-                        manager.updateProgress(FileOpProgress(
-                            phase = "正在复制",
-                            currentBytes = baseBytes + totalCopiedBytes + copied,
-                            totalBytes = scanInfo.totalBytes,
-                            currentFileName = sourceName,
-                            fileIndex = baseFiles + totalCopiedFiles,
-                            fileCount = scanInfo.fileCount
-                        ))
-                    }
-                    totalCopiedBytes += fileSize
-                    totalCopiedFiles++
-                } catch (e: InterruptedIOException) {
-                    throw e
-                } catch (e: Exception) {
-                    if (skipAllErrors) {
-                        return CopyResult(totalCopiedBytes, totalCopiedFiles)
-                    }
-                    val result = runBlocking {
-                        manager.resolveError(ErrorRequest(
-                            fileName = sourceName,
-                            errorMessage = e.message ?: "复制失败"
-                        ))
-                    }
-                    when (result.action) {
-                        ErrorAction.RETRY -> retry = true
-                        ErrorAction.SKIP -> { }
-                        ErrorAction.SKIP_ALL -> skipAllErrors = true
-                        ErrorAction.CANCEL -> throw InterruptedIOException("用户取消")
-                    }
-                }
-            } while (retry)
+            // 复制文件
+            pendingCleanupTarget = resolvedTarget
+            val fileSize = operator.fileSize(source)
+            currentStep = "复制: $sourceName"
+            operator.copyFile(source, resolvedTarget, job = this) { copied ->
+                heartbeat()
+                manager.updateProgress(FileOpProgress(
+                    phase = "正在复制",
+                    currentBytes = baseBytes + totalCopiedBytes + copied,
+                    totalBytes = scanInfo.totalBytes,
+                    currentFileName = sourceName,
+                    fileIndex = baseFiles + totalCopiedFiles,
+                    fileCount = scanInfo.fileCount
+                ))
+            }
+            pendingCleanupTarget = null
+            totalCopiedBytes += fileSize
+            totalCopiedFiles++
         }
 
         return CopyResult(totalCopiedBytes, totalCopiedFiles)

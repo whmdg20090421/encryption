@@ -31,71 +31,73 @@ class DeleteJob(
 
     @Throws(Exception::class)
     override fun run() {
-        var totalSize = 0L
-        for (entry in entries) {
-            totalSize += calculateTotalSize(entry.path)
-        }
-        var processedBytes = 0L
-
-        manager.updateProgress(FileOpProgress(
-            phase = "正在删除",
-            currentBytes = 0,
-            totalBytes = totalSize,
-            currentFileName = "",
-            fileIndex = 0,
-            fileCount = entries.size
-        ))
-
-        for ((index, entry) in entries.withIndex()) {
-            throwIfCancelled()
+        try {
+            var totalSize = 0L
+            for (entry in entries) {
+                totalSize += calculateTotalSize(entry.path)
+            }
+            var processedBytes = 0L
 
             manager.updateProgress(FileOpProgress(
-                phase = if (toRecycleBin) "正在移到回收站" else "正在删除",
-                currentBytes = processedBytes,
+                phase = "正在删除",
+                currentBytes = 0,
                 totalBytes = totalSize,
-                currentFileName = entry.name,
-                fileIndex = index,
+                currentFileName = "",
+                fileIndex = 0,
                 fileCount = entries.size
             ))
 
-            val entrySize = entry.size.takeIf { it > 0 } ?: calculateTotalSize(entry.path)
+            for ((index, entry) in entries.withIndex()) {
+                throwIfCancelled()
 
-            var retry: Boolean
-            do {
-                retry = false
-                try {
-                    currentStep = if (toRecycleBin) "移到回收站: ${entry.name}" else "删除: ${entry.name}"
-                    if (toRecycleBin) {
-                        moveToRecycleBin(entry)
-                    } else {
-                        deleteEntry(entry)
+                manager.updateProgress(FileOpProgress(
+                    phase = if (toRecycleBin) "正在移到回收站" else "正在删除",
+                    currentBytes = processedBytes,
+                    totalBytes = totalSize,
+                    currentFileName = entry.name,
+                    fileIndex = index,
+                    fileCount = entries.size
+                ))
+
+                val entrySize = entry.size.takeIf { it > 0 } ?: calculateTotalSize(entry.path)
+
+                var retry: Boolean
+                do {
+                    retry = false
+                    try {
+                        currentStep = if (toRecycleBin) "移到回收站: ${entry.name}" else "删除: ${entry.name}"
+                        if (toRecycleBin) {
+                            moveToRecycleBin(entry)
+                        } else {
+                            deleteEntry(entry)
+                        }
+                        heartbeat()
+                        processedBytes += entrySize
+                    } catch (e: InterruptedIOException) {
+                        throw e
+                    } catch (e: Exception) {
+                        if (skipAllErrors) {
+                            continue
+                        }
+                        val result = runBlocking {
+                            manager.resolveError(ErrorRequest(
+                                fileName = entry.name,
+                                errorMessage = e.message ?: "删除失败"
+                            ))
+                        }
+                        when (result.action) {
+                            ErrorAction.RETRY -> retry = true
+                            ErrorAction.SKIP -> { }
+                            ErrorAction.SKIP_ALL -> skipAllErrors = true
+                            ErrorAction.CANCEL -> throw InterruptedIOException("用户取消")
+                        }
                     }
-                    heartbeat()
-                    processedBytes += entrySize
-                } catch (e: InterruptedIOException) {
-                    throw e
-                } catch (e: Exception) {
-                    if (skipAllErrors) {
-                        continue
-                    }
-                    val result = runBlocking {
-                        manager.resolveError(ErrorRequest(
-                            fileName = entry.name,
-                            errorMessage = e.message ?: "删除失败"
-                        ))
-                    }
-                    when (result.action) {
-                        ErrorAction.RETRY -> retry = true
-                        ErrorAction.SKIP -> { }
-                        ErrorAction.SKIP_ALL -> skipAllErrors = true
-                        ErrorAction.CANCEL -> throw InterruptedIOException("用户取消")
-                    }
-                }
-            } while (retry)
+                } while (retry)
+            }
+        } finally {
+            manager.updateProgress(null)
+            manager.notifyRefreshNeeded()
         }
-
-        manager.updateProgress(null)
-        manager.notifyRefreshNeeded()
     }
 
     /**

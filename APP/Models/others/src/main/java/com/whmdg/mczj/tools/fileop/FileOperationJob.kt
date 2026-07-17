@@ -1,5 +1,6 @@
 package com.whmdg.mczj.tools.fileop
 
+import android.os.ParcelFileDescriptor
 import java.io.InterruptedIOException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -15,6 +16,37 @@ abstract class FileOperationJob(val id: Int = Random.nextInt()) {
 
     lateinit var operator: FileOperator
     val cancelFlag = AtomicBoolean(false)
+
+    /** 执行此任务的线程，用于强制取消时 interrupt */
+    @Volatile
+    var workerThread: Thread? = null
+
+    /** 当前正在复制的源/目标 PFD，用于强制取消时关闭 fd 中断 I/O */
+    @Volatile
+    private var currentSrcPfd: ParcelFileDescriptor? = null
+    @Volatile
+    private var currentDstPfd: ParcelFileDescriptor? = null
+
+    /** 注册当前复制的 PFD（由 ShellFileOperator.copyBetweenPfds 调用） */
+    fun setCurrentPfds(src: ParcelFileDescriptor?, dst: ParcelFileDescriptor?) {
+        currentSrcPfd = src
+        currentDstPfd = dst
+    }
+
+    /**
+     * 强制取消：设标志 + interrupt 线程 + 关闭 PFD。
+     * - interrupt 中断 Java Stream 阻塞读写 + 扫描阶段的 shell 调用
+     * - close PFD 中断 Os.read/write 的 native 阻塞
+     * 关闭已关闭的 PFD 是 no-op，不会崩。
+     */
+    fun cancelHard() {
+        cancelFlag.set(true)
+        workerThread?.interrupt()
+        currentSrcPfd?.close()
+        currentSrcPfd = null
+        currentDstPfd?.close()
+        currentDstPfd = null
+    }
 
     /** 最后一次进度更新时间戳（epoch millis），用于超时检测 */
     private val lastActivityTime = AtomicLong(System.currentTimeMillis())

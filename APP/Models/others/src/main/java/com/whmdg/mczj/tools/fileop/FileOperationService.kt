@@ -40,6 +40,7 @@ class FileOperationService : Service() {
     private fun startJob(job: FileOperationJob) {
         synchronized(runningJobs) {
             val future = executorService.submit {
+                job.workerThread = Thread.currentThread()
                 try {
                     job.run()
                 } catch (_: Exception) {
@@ -153,13 +154,13 @@ class FileOperationService : Service() {
         }
 
         /**
-         * 优雅取消所有任务：设 cancelFlag 但不 interrupt，让当前文件完成后再停止。
+         * 强制取消所有任务：设 cancelFlag + 关闭当前 PFD 中断 I/O。
          */
-        fun gracefulCancelAll() {
+        fun cancelHardAll() {
             instance?.let { service ->
                 synchronized(service.runningJobs) {
                     for ((job, _) in service.runningJobs) {
-                        job.cancelFlag.set(true)
+                        job.cancelHard()
                     }
                 }
             }

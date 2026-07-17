@@ -143,9 +143,9 @@ object FileOperationManager {
         _errorRequest.value = null
     }
 
-    /** 优雅取消：设 cancelFlag 但不 interrupt 线程，让当前文件完成后再停止。 */
-    fun gracefulCancel() {
-        FileOperationService.gracefulCancelAll()
+    /** 强制取消：设 cancelFlag + 关闭当前 PFD 中断 I/O。任务 finally 自行清理。 */
+    fun cancelHard() {
+        FileOperationService.cancelHardAll()
     }
 
     /** 取消所有正在运行的任务 */

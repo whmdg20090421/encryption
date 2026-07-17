@@ -8,8 +8,9 @@ import java.io.InterruptedIOException
  *
  * 流程：
  * 1. 扫描源文件统计总数和大小
- * 2. 逐个源文件使用 PV 复制+删除
- * 3. 冲突时通过 FileOperationManager 弹窗等待用户选择
+ * 2. 逐个源文件复制+删除
+ * 3. 冲突时弹窗等待用户选择（挂起等待）
+ * 4. I/O 异常时终止任务 → 关闭进度条 → 弹出报错窗口
  */
 class MoveJob(
     private val sources: List<String>,
@@ -17,51 +18,63 @@ class MoveJob(
     private val manager: FileOperationManager
 ) : FileOperationJob() {
 
-    private var skipAllErrors = false
-
     @Throws(Exception::class)
     override fun run() {
-        // 1. 扫描（实时回调已扫描字节数）
-        val scanInfo = scanWithProgress(sources) { totalSoFar ->
+        var errorToShow: Exception? = null
+        try {
+            // 1. 扫描（实时回调已扫描字节数）
+            val scanInfo = scanWithProgress(sources) { totalSoFar ->
+                manager.updateProgress(FileOpProgress(
+                    phase = "正在移动",
+                    currentBytes = 0,
+                    totalBytes = totalSoFar,
+                    isScanning = true
+                ))
+            }
+            var transferredBytes = 0L
+            var transferredFiles = 0
+
             manager.updateProgress(FileOpProgress(
                 phase = "正在移动",
                 currentBytes = 0,
-                totalBytes = totalSoFar,
-                isScanning = true
+                totalBytes = scanInfo.totalBytes,
+                currentFileName = "",
+                fileIndex = 0,
+                fileCount = scanInfo.fileCount
             ))
+
+            // 2. 逐个源文件移动
+            for (source in sources) {
+                val targetPath = "$targetDir/${source.substringAfterLast('/')}"
+                val result = moveRecursively(source, targetPath, scanInfo, transferredBytes, transferredFiles)
+                transferredBytes += result.bytes
+                transferredFiles += result.files
+                if (isGracefulCancelled()) break
+                throwIfCancelled()
+            }
+        } catch (e: Exception) {
+            errorToShow = e
+        } finally {
+            // 1. 终止任务，关闭进度条
+            manager.updateProgress(null)
+            manager.notifyRefreshNeeded()
+            // 2. 打开报错弹窗（用户主动取消导致的异常不弹）
+            if (errorToShow != null && !cancelFlag.get() && errorToShow !is InterruptedIOException) {
+                runBlocking {
+                    manager.resolveError(ErrorRequest(
+                        fileName = "",
+                        errorMessage = errorToShow!!.message ?: "移动失败"
+                    ))
+                }
+            }
         }
-        var transferredBytes = 0L
-        var transferredFiles = 0
-
-        manager.updateProgress(FileOpProgress(
-            phase = "正在移动",
-            currentBytes = 0,
-            totalBytes = scanInfo.totalBytes,
-            currentFileName = "",
-            fileIndex = 0,
-            fileCount = scanInfo.fileCount
-        ))
-
-        // 2. 逐个源文件移动
-        for (source in sources) {
-            val targetPath = "$targetDir/${source.substringAfterLast('/')}"
-            val result = moveRecursively(source, targetPath, scanInfo, transferredBytes, transferredFiles)
-            transferredBytes += result.bytes
-            transferredFiles += result.files
-            if (isGracefulCancelled()) break
-            throwIfCancelled()
-        }
-
-        // 3. 完成
-        manager.updateProgress(null)
-        manager.notifyRefreshNeeded()
     }
 
     private data class MoveResult(val bytes: Long, val files: Int)
 
     /**
      * 递归移动单个源文件/目录到目标路径。
-     * 使用 PV 复制 + 删除源文件。
+     * 异常直接传播到 run()，由 run() 统一处理。
      */
     private fun moveRecursively(
         source: String,
@@ -109,39 +122,15 @@ class MoveJob(
             val resolvedTarget = resolveConflictIfNeeded(source, sourceName, target, isDirectory = false)
                 ?: return MoveResult(0, 0)
 
-            // 使用 moveFile（PV 复制+删除），带重试
-            var retry: Boolean
-            do {
-                retry = false
-                try {
-                    val fileSize = operator.fileSize(source)
-                    currentStep = "移动: $sourceName"
-                    val success = operator.moveFile(source, resolvedTarget)
-                    heartbeat()
-                    if (success) {
-                        totalBytes += fileSize
-                        totalFiles++
-                    }
-                } catch (e: InterruptedIOException) {
-                    throw e
-                } catch (e: Exception) {
-                    if (skipAllErrors) {
-                        return MoveResult(totalBytes, totalFiles)
-                    }
-                    val result = runBlocking {
-                        manager.resolveError(ErrorRequest(
-                            fileName = sourceName,
-                            errorMessage = e.message ?: "移动失败"
-                        ))
-                    }
-                    when (result.action) {
-                        ErrorAction.RETRY -> retry = true
-                        ErrorAction.SKIP -> { }
-                        ErrorAction.SKIP_ALL -> skipAllErrors = true
-                        ErrorAction.CANCEL -> throw InterruptedIOException("用户取消")
-                    }
-                }
-            } while (retry)
+            // 使用 moveFile（复制+删除）
+            val fileSize = operator.fileSize(source)
+            currentStep = "移动: $sourceName"
+            val success = operator.moveFile(source, resolvedTarget, job = this)
+            heartbeat()
+            if (success) {
+                totalBytes += fileSize
+                totalFiles++
+            }
         }
 
         return MoveResult(totalBytes, totalFiles)

@@ -237,7 +237,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var copyMoveConfirmSourcePaths by remember { mutableStateOf(listOf<String>()) }
     var copyMoveConfirmTargetDir by remember { mutableStateOf("") }
     var showFileOpProgress by remember { mutableStateOf(false) }
-    var cancelingFileOp by remember { mutableStateOf(false) }
     var recycleBinEnabled by remember { mutableStateOf(true) }
     var showForceDeleteDialog by remember { mutableStateOf(false) }
     var forceDeleteEntry by remember { mutableStateOf<FileEntry?>(null) }
@@ -3026,7 +3025,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         FileOperationManager.move(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode)
                     }
                     showFileOpProgress = true
-                    cancelingFileOp = false
                     selectedEntry = null
                     leftSelectedPaths = emptySet()
                     rightSelectedPaths = emptySet()
@@ -3045,12 +3043,21 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     // ── 复制/移动进度对话框 ──
     if (showFileOpProgress) {
         val progress = fileOpManagerProgress
+        var isCancelling by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { /* 不可手动关闭 */ },
-            title = { Text(progress?.phase ?: "处理中") },
+            title = { Text(if (isCancelling) "正在取消" else progress?.phase ?: "处理中") },
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    if (progress != null) {
+                    if (isCancelling) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "正在取消...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else if (progress != null) {
                         if (progress.currentFileName.isNotEmpty()) {
                             Text(
                                 text = progress.currentFileName,
@@ -3082,36 +3089,20 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                     } else {
                         CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                     }
-                    if (cancelingFileOp) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            text = "确定取消？当前文件将继续完成。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
                 }
             },
             confirmButton = {
-                if (cancelingFileOp) {
+                if (!isCancelling) {
                     TextButton(onClick = {
-                        FileOperationManager.gracefulCancel()
-                        cancelingFileOp = false
+                        isCancelling = true
+                        FileOperationManager.cancelHard()
                     }) {
-                        Text("确认取消", color = MaterialTheme.colorScheme.error)
-                    }
-                } else {
-                    TextButton(onClick = { cancelingFileOp = true }) {
-                        Text("取消")
+                        Text("取消", color = MaterialTheme.colorScheme.error)
                     }
                 }
             },
             dismissButton = {
-                if (cancelingFileOp) {
-                    TextButton(onClick = { cancelingFileOp = false }) {
-                        Text("继续")
-                    }
-                } else if (isDebugMode) {
+                if (isDebugMode) {
                     TextButton(onClick = {
                         val diag = com.whmdg.mczj.tools.fileop.FileOpDiagnostics
                         // 写入剪贴板（摘要）
@@ -3138,7 +3129,6 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         LaunchedEffect(fileOpManagerProgress) {
             if (fileOpManagerProgress == null) {
                 showFileOpProgress = false
-                cancelingFileOp = false
             }
         }
     }

@@ -1,7 +1,9 @@
 package com.whmdg.mczj.tools.fileop
 
 import android.os.ParcelFileDescriptor
+import android.system.ErrnoException
 import android.system.Os
+import android.system.OsConstants
 import com.whmdg.mczj.tools.security.FdProvider
 import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.security.ShellExecutor
@@ -43,10 +45,10 @@ class ShellFileOperator(
 
     // ── 复制 ──
 
-    override fun copyFile(src: String, dst: String, onProgress: (Long) -> Unit) {
+    override fun copyFile(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob?) {
         when (accessLevel) {
             FileAccessLevel.NORMAL -> copyWithJavaStream(src, dst, onProgress)
-            FileAccessLevel.SHIZUKU, FileAccessLevel.ROOT -> copyWithPfd(src, dst, onProgress)
+            FileAccessLevel.SHIZUKU, FileAccessLevel.ROOT -> copyWithPfd(src, dst, onProgress, job)
         }
     }
 
@@ -56,7 +58,7 @@ class ShellFileOperator(
      * 与 MT 管理器架构一致：提升权限打开文件获取 FD → Java 层直接读写 FD。
      * FD 一旦获取，后续 I/O 不再检查权限。
      */
-    private fun copyWithPfd(src: String, dst: String, onProgress: (Long) -> Unit) {
+    private fun copyWithPfd(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob?) {
         val diag = FileOpDiagnostics.isEnabled()
         val t0 = if (diag) System.nanoTime() else 0L
 
@@ -75,8 +77,10 @@ class ShellFileOperator(
             }
 
             try {
+                job?.setCurrentPfds(srcPfd, dstPfd)
                 copyBetweenPfds(srcPfd, dstPfd, onProgress)
             } finally {
+                job?.setCurrentPfds(null, null)
                 dstPfd.close()
             }
         } finally {
@@ -104,9 +108,17 @@ class ShellFileOperator(
 
         while (true) {
             val t0 = if (diag) System.nanoTime() else 0L
-            val n = Os.read(srcFd, buf, 0, BUFFER_SIZE)
-            if (n == -1) break
-            Os.write(dstFd, buf, 0, n)
+            val n = try {
+                Os.read(srcFd, buf, 0, BUFFER_SIZE)
+            } catch (e: ErrnoException) {
+                throw IOException("读取失败: ${describeErrno(e)}", e)
+            }
+            if (n == 0) break
+            try {
+                Os.write(dstFd, buf, 0, n)
+            } catch (e: ErrnoException) {
+                throw IOException("写入失败: ${describeErrno(e)}", e)
+            }
             copied += n
             chunkIndex++
 
@@ -145,11 +157,11 @@ class ShellFileOperator(
 
     // ── 移动 ──
 
-    override fun moveFile(src: String, dst: String): Boolean {
+    override fun moveFile(src: String, dst: String, job: FileOperationJob?): Boolean {
         return try {
             when (accessLevel) {
                 FileAccessLevel.NORMAL -> moveWithJavaStream(src, dst)
-                FileAccessLevel.SHIZUKU, FileAccessLevel.ROOT -> moveWithPfd(src, dst)
+                FileAccessLevel.SHIZUKU, FileAccessLevel.ROOT -> moveWithPfd(src, dst, job)
             }
             true
         } catch (e: Exception) {
@@ -158,14 +170,24 @@ class ShellFileOperator(
     }
 
     private fun moveWithJavaStream(src: String, dst: String) {
-        copyWithJavaStream(src, dst) { /* moveFile 不需要进度 */ }
+        try {
+            copyWithJavaStream(src, dst) { /* moveFile 不需要进度 */ }
+        } catch (e: Exception) {
+            try { File(dst).delete() } catch (_: Exception) {}
+            throw e
+        }
         if (!File(src).delete()) {
             throw IOException("删除源文件失败: $src")
         }
     }
 
-    private fun moveWithPfd(src: String, dst: String) {
-        copyWithPfd(src, dst) { /* moveFile 不需要进度 */ }
+    private fun moveWithPfd(src: String, dst: String, job: FileOperationJob?) {
+        try {
+            copyWithPfd(src, dst, onProgress = {}, job = job)
+        } catch (e: Exception) {
+            try { if (exists(dst)) deleteFile(dst) } catch (_: Exception) {}
+            throw e
+        }
         // 移动完成后删除源文件（通过 Shell 删除，因为源可能在应用无权目录）
         deleteFile(src)
     }
@@ -237,5 +259,23 @@ class ShellFileOperator(
     companion object {
         /** 128KB buffer，大文件复制性能优化 */
         private const val BUFFER_SIZE = 128 * 1024
+    }
+
+    private fun describeErrno(e: ErrnoException): String {
+        val msg = when (e.errno) {
+            OsConstants.EPERM -> "操作不允许（需要更高权限）"
+            OsConstants.EACCES -> "权限不足"
+            OsConstants.ENOENT -> "文件不存在"
+            OsConstants.EIO -> "I/O 硬件错误"
+            OsConstants.EBADF -> "无效文件描述符"
+            OsConstants.ENOMEM -> "内存不足"
+            OsConstants.ENOSPC -> "磁盘空间不足"
+            OsConstants.EDQUOT -> "磁盘配额超限"
+            OsConstants.EINTR -> "操作被信号中断"
+            OsConstants.EFBIG -> "文件过大"
+            OsConstants.EROFS -> "只读文件系统"
+            else -> null
+        }
+        return msg ?: "errno=${e.errno}: ${e.message}"
     }
 }
