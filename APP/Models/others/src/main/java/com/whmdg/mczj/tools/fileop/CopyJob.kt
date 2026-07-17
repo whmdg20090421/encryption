@@ -134,7 +134,7 @@ class CopyJob(
             pendingCleanupTarget = resolvedTarget
             val fileSize = operator.fileSize(source)
             currentStep = "复制: $sourceName"
-            operator.copyFile(source, resolvedTarget, job = this) { copied ->
+            operator.copyFile(source, resolvedTarget, onProgress = { copied ->
                 heartbeat()
                 manager.updateProgress(FileOpProgress(
                     phase = "正在复制",
@@ -144,7 +144,7 @@ class CopyJob(
                     fileIndex = baseFiles + totalCopiedFiles,
                     fileCount = scanInfo.fileCount
                 ))
-            }
+            }, job = this)
             pendingCleanupTarget = null
             totalCopiedBytes += fileSize
             totalCopiedFiles++
