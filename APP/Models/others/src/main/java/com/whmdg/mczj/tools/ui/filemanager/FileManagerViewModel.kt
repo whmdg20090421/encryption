@@ -2355,7 +2355,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
 
-            onComplete(successCount, failedFiles.size, failedFiles)
+            withContext(Dispatchers.Main) { onComplete(successCount, failedFiles.size, failedFiles) }
         }
     }
 
