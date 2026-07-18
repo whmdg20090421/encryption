@@ -132,6 +132,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private val encryptCancelFlag = AtomicBoolean(false)
     private var encryptJob: Job? = null
 
+    // ── 解密任务 ──
+    private val decryptCancelFlag = AtomicBoolean(false)
+    private var decryptJob: Job? = null
+
     // ── 压缩包浏览 ──
     var isInArchiveMode by mutableStateOf(false)
         private set
@@ -2392,6 +2396,120 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         return md.digest()
+    }
+
+    // ── 解密 ──
+
+    /**
+     * 对选中的 .aes 文件进行解密。
+     * @param entries 选中的文件列表
+     * @param password 用户输入的密码
+     * @param deleteSource 解密后是否删除 .aes 源文件
+     * @param onProgress 进度回调
+     * @param onComplete 完成回调：(成功数, 失败数, 失败文件名列表)
+     */
+    fun decrypt(
+        entries: List<FileEntry>,
+        password: String,
+        deleteSource: Boolean,
+        onProgress: (EncryptProgressInfo) -> Unit,
+        onComplete: (Int, Int, List<String>) -> Unit
+    ) {
+        decryptCancelFlag.set(false)
+        decryptJob?.cancel()
+        decryptJob = viewModelScope.launch(Dispatchers.IO) {
+            val tasks = mutableListOf<EncryptTask>()
+            for (entry in entries) {
+                collectDecryptTasks(File(entry.path), tasks)
+            }
+            if (tasks.isEmpty()) {
+                withContext(Dispatchers.Main) { onComplete(0, 0, emptyList()) }
+                return@launch
+            }
+
+            val totalBytes = tasks.sumOf { it.srcFile.length() }
+            var bytesProcessed = 0L
+            var successCount = 0
+            val failedFiles = mutableListOf<String>()
+
+            for ((index, task) in tasks.withIndex()) {
+                if (decryptCancelFlag.get()) break
+
+                val srcFile = task.srcFile
+                val dstFile = task.dstFile
+
+                onProgress(EncryptProgressInfo(
+                    currentFileName = srcFile.name,
+                    bytesProcessed = bytesProcessed,
+                    totalBytes = totalBytes,
+                    currentFileIndex = index,
+                    totalFiles = tasks.size
+                ))
+
+                try {
+                    // 读取 salt（前 16 字节）
+                    val salt = ByteArray(16)
+                    srcFile.inputStream().use { it.read(salt) }
+                    val key = com.whmdg.mczj.tools.encryption.core.Pbkdf2Kdf.derive(
+                        password = password,
+                        salt = salt,
+                        iterations = 600000
+                    )
+
+                    FileCodec.decryptRaw(
+                        src = srcFile,
+                        dst = dstFile,
+                        key = key,
+                        cancelFlag = decryptCancelFlag,
+                        onProgress = { fileDone, _ ->
+                            onProgress(EncryptProgressInfo(
+                                currentFileName = srcFile.name,
+                                bytesProcessed = bytesProcessed + fileDone,
+                                totalBytes = totalBytes,
+                                currentFileIndex = index,
+                                totalFiles = tasks.size
+                            ))
+                        }
+                    )
+
+                    key.fill(0)
+                    if (deleteSource) srcFile.delete()
+                    bytesProcessed += srcFile.length()
+                    successCount++
+                } catch (e: java.io.InterruptedIOException) {
+                    if (dstFile.exists()) dstFile.delete()
+                    bytesProcessed += srcFile.length()
+                    break
+                } catch (e: Exception) {
+                    if (dstFile.exists()) dstFile.delete()
+                    failedFiles.add(srcFile.name)
+                    bytesProcessed += srcFile.length()
+                }
+            }
+
+            withContext(Dispatchers.Main) { onComplete(successCount, failedFiles.size, failedFiles) }
+        }
+    }
+
+    /** 取消正在进行的解密任务 */
+    fun cancelDecrypt() {
+        decryptCancelFlag.set(true)
+        decryptJob?.cancel()
+        decryptJob = null
+    }
+
+    /** 递归收集需要解密的 .aes 文件 */
+    private fun collectDecryptTasks(file: File, tasks: MutableList<EncryptTask>) {
+        if (file.isDirectory) {
+            file.listFiles()?.forEach { child ->
+                collectDecryptTasks(child, tasks)
+            }
+        } else {
+            if (file.name.endsWith(".aes")) {
+                val outPath = file.absolutePath.removeSuffix(".aes")
+                tasks.add(EncryptTask(file, File(outPath)))
+            }
+        }
     }
 
     // ── 解压 ──

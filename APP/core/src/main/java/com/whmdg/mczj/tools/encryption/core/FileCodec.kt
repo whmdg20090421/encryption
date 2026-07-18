@@ -218,7 +218,8 @@ object FileCodec {
         src: File,
         dst: File,
         key: ByteArray,
-        onProgress: (Long, Long) -> Unit = { _, _ -> }
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+        cancelFlag: AtomicBoolean? = null
     ): ByteArray {
         val totalSize = src.length()
         val salt = ByteArray(16)
@@ -250,6 +251,7 @@ object FileCodec {
                     out.write(plain)
                     bytesDone += plain.size
                     onProgress(bytesDone, totalSize)
+                    if (cancelFlag?.get() == true) throw InterruptedIOException("用户取消")
                 }
             }
         }
