@@ -15,6 +15,7 @@ import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.ui.FileEntry
 import com.whmdg.mczj.tools.ui.Screen
 import com.whmdg.mczj.tools.ui.SizeCalcManager
+import com.whmdg.mczj.tools.encryption.core.FileCodec
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.security.Permission
@@ -126,6 +127,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     // ── 解压任务 ──
     private val extractCancelFlag = AtomicBoolean(false)
     private var extractJob: Job? = null
+
+    // ── 加密任务 ──
+    private val encryptCancelFlag = AtomicBoolean(false)
+    private var encryptJob: Job? = null
 
     // ── 压缩包浏览 ──
     var isInArchiveMode by mutableStateOf(false)
@@ -2226,6 +2231,167 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         compressCancelFlag.set(true)
         compressJob?.cancel()
         compressJob = null
+    }
+
+    // ── 加密 ──
+
+    data class EncryptProgressInfo(
+        val currentFileName: String,
+        val bytesProcessed: Long,
+        val totalBytes: Long,
+        val currentFileIndex: Int,
+        val totalFiles: Int
+    ) {
+        val progress: Float get() = if (totalBytes > 0) bytesProcessed.toFloat() / totalBytes else 0f
+    }
+
+    /**
+     * 对选中的文件/文件夹进行纯 AES-256-GCM 加密。
+     * @param entries 选中的文件列表
+     * @param password 用户输入的密码
+     * @param deleteSource 加密后是否删除源文件
+     * @param onProgress 进度回调（主线程）
+     * @param onComplete 完成回调（主线程）：(成功数, 失败数, 失败文件名列表)
+     */
+    fun encrypt(
+        entries: List<FileEntry>,
+        password: String,
+        deleteSource: Boolean,
+        onProgress: (EncryptProgressInfo) -> Unit,
+        onComplete: (Int, Int, List<String>) -> Unit
+    ) {
+        encryptCancelFlag.set(false)
+        encryptJob?.cancel()
+        encryptJob = viewModelScope.launch(Dispatchers.IO) {
+            // 1. 遍历所有文件
+            val tasks = mutableListOf<EncryptTask>()
+            for (entry in entries) {
+                collectEncryptTasks(File(entry.path), tasks)
+            }
+            if (tasks.isEmpty()) {
+                onComplete(0, 0, emptyList())
+                return@launch
+            }
+
+            val totalBytes = tasks.sumOf { it.srcFile.length() }
+            var bytesProcessed = 0L
+            var successCount = 0
+            val failedFiles = mutableListOf<String>()
+
+            for ((index, task) in tasks.withIndex()) {
+                if (encryptCancelFlag.get()) break
+
+                val srcFile = task.srcFile
+                val dstFile = task.dstFile
+
+                onProgress(EncryptProgressInfo(
+                    currentFileName = srcFile.name,
+                    bytesProcessed = bytesProcessed,
+                    totalBytes = totalBytes,
+                    currentFileIndex = index,
+                    totalFiles = tasks.size
+                ))
+
+                try {
+                    // 2. 派生密钥
+                    val salt = com.whmdg.mczj.tools.encryption.core.SecureRandom.bytes(16)
+                    val key = com.whmdg.mczj.tools.encryption.core.Pbkdf2Kdf.derive(
+                        password = password,
+                        salt = salt,
+                        iterations = 600000
+                    )
+
+                    // 3. 加密
+                    FileCodec.encryptRaw(
+                        src = srcFile,
+                        dst = dstFile,
+                        key = key,
+                        salt = salt,
+                        onProgress = { fileDone, _ ->
+                            onProgress(EncryptProgressInfo(
+                                currentFileName = srcFile.name,
+                                bytesProcessed = bytesProcessed + fileDone,
+                                totalBytes = totalBytes,
+                                currentFileIndex = index,
+                                totalFiles = tasks.size
+                            ))
+                        },
+                        cancelFlag = encryptCancelFlag
+                    )
+
+                    // 4. 完整性验证
+                    val tmpFile = File(dstFile.parent, ".encrypt_verify_${System.currentTimeMillis()}.tmp")
+                    try {
+                        FileCodec.decryptRaw(dstFile, tmpFile, key)
+                        val srcHash = sha256(srcFile)
+                        val tmpHash = sha256(tmpFile)
+                        if (srcHash.contentEquals(tmpHash)) {
+                            tmpFile.delete()
+                            if (deleteSource) srcFile.delete()
+                            bytesProcessed += srcFile.length()
+                            successCount++
+                        } else {
+                            tmpFile.delete()
+                            dstFile.delete()
+                            failedFiles.add(srcFile.name)
+                            bytesProcessed += srcFile.length()
+                        }
+                    } catch (e: Exception) {
+                        tmpFile.delete()
+                        dstFile.delete()
+                        failedFiles.add(srcFile.name)
+                        bytesProcessed += srcFile.length()
+                    }
+
+                    key.fill(0)
+                } catch (e: java.io.InterruptedIOException) {
+                    if (dstFile.exists()) dstFile.delete()
+                    bytesProcessed += srcFile.length()
+                    break
+                } catch (e: Exception) {
+                    if (dstFile.exists()) dstFile.delete()
+                    failedFiles.add(srcFile.name)
+                    bytesProcessed += srcFile.length()
+                }
+            }
+
+            onComplete(successCount, failedFiles.size, failedFiles)
+        }
+    }
+
+    /** 取消正在进行的加密任务 */
+    fun cancelEncrypt() {
+        encryptCancelFlag.set(true)
+        encryptJob?.cancel()
+        encryptJob = null
+    }
+
+    /** 递归收集需要加密的文件，跳过已有 .aes 后缀 */
+    private fun collectEncryptTasks(file: File, tasks: MutableList<EncryptTask>) {
+        if (file.isDirectory) {
+            file.listFiles()?.forEach { child ->
+                collectEncryptTasks(child, tasks)
+            }
+        } else {
+            if (!file.name.endsWith(".aes")) {
+                tasks.add(EncryptTask(file, File(file.absolutePath + ".aes")))
+            }
+        }
+    }
+
+    private data class EncryptTask(val srcFile: File, val dstFile: File)
+
+    /** SHA-256 计算 */
+    private fun sha256(file: File): ByteArray {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(8192)
+            var read: Int
+            while (input.read(buffer).also { read = it } > 0) {
+                md.update(buffer, 0, read)
+            }
+        }
+        return md.digest()
     }
 
     // ── 解压 ──

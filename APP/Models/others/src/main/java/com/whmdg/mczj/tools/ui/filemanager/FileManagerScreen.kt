@@ -289,7 +289,20 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── 加密对话框 ──
     var showEncryptDialog by remember { mutableStateOf(false) }
-    var encryptMode by remember { mutableIntStateOf(0) } // 0=打包加密, 1=分片加密
+    var encryptEntries by remember { mutableStateOf(listOf<FileEntry>()) }
+    var encryptPassword by remember { mutableStateOf("") }
+    var encryptPasswordConfirm by remember { mutableStateOf("") }
+    var encryptPasswordVisible by remember { mutableStateOf(false) }
+    var encryptPasswordConfirmVisible by remember { mutableStateOf(false) }
+    var encryptDeleteSource by remember { mutableStateOf(true) }
+    var encryptMode by remember { mutableIntStateOf(0) } // 0=普通模式, 1=特殊模式（占位）
+    var showEncryptProgress by remember { mutableStateOf(false) }
+    var encryptProgress by remember { mutableFloatStateOf(0f) }
+    var encryptBytesProcessed by remember { mutableStateOf(0L) }
+    var encryptTotalBytes by remember { mutableStateOf(0L) }
+    var encryptCurrentFileName by remember { mutableStateOf("") }
+    var encryptCurrentFile by remember { mutableIntStateOf(0) }
+    var encryptTotalFiles by remember { mutableIntStateOf(0) }
 
     // 移动/复制（功能待实现，保留 UI 占位）
 
@@ -2288,10 +2301,16 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                     modifier = Modifier
                                         .weight(1f)
                                         .clickable {
+                                            val entries = selectedEntries.ifEmpty {
+                                                listOfNotNull(selectedEntry)
+                                            }
+                                            if (entries.isNotEmpty()) {
+                                                encryptEntries = entries
+                                                showEncryptDialog = true
+                                            }
                                             selectedEntry = null
                                             if (vm.focusedPanel == FocusedPanel.LEFT) leftSelectedPaths = emptySet()
                                             else rightSelectedPaths = emptySet()
-                                            showEncryptDialog = true
                                         }
                                         .padding(vertical = 16.dp),
                                     contentAlignment = Alignment.Center
@@ -4146,34 +4165,197 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         )
     }
 
-    // ── 加密方式选择对话框 ──
+    // ── 加密对话框 ──
     if (showEncryptDialog) {
+        val passwordMismatch = encryptPassword.isNotEmpty() && encryptPasswordConfirm.isNotEmpty()
+                && encryptPassword != encryptPasswordConfirm
+        val canEncrypt = encryptPassword.isNotEmpty() && encryptPassword == encryptPasswordConfirm && encryptMode == 0
+
         AlertDialog(
             onDismissRequest = { showEncryptDialog = false },
-            title = { Text("选择加密方式") },
+            title = { Text("加密") },
             text = {
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable { encryptMode = 0 }.padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(selected = encryptMode == 0, onClick = { encryptMode = 0 })
-                        Spacer(Modifier.width(8.dp))
-                        Text("打包加密", style = MaterialTheme.typography.bodyLarge)
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // 模式选择
+                    Text("模式选择", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            modifier = Modifier.clickable { encryptMode = 0 },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = encryptMode == 0, onClick = { encryptMode = 0 })
+                            Text("普通模式", style = MaterialTheme.typography.bodyLarge)
+                        }
+                        Spacer(Modifier.width(16.dp))
+                        Row(
+                            modifier = Modifier.clickable { encryptMode = 1 },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = encryptMode == 1, onClick = { encryptMode = 1 })
+                            Text("特殊模式", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                        }
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable { encryptMode = 1 }.padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(selected = encryptMode == 1, onClick = { encryptMode = 1 })
-                        Spacer(Modifier.width(8.dp))
-                        Text("分片加密", style = MaterialTheme.typography.bodyLarge)
+
+                    if (encryptMode == 0) {
+                        // 密码
+                        OutlinedTextField(
+                            value = encryptPassword,
+                            onValueChange = { encryptPassword = it },
+                            label = { Text("密码") },
+                            singleLine = true,
+                            visualTransformation = if (encryptPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            trailingIcon = {
+                                IconButton(onClick = { encryptPasswordVisible = !encryptPasswordVisible }) {
+                                    Icon(
+                                        if (encryptPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = null
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        // 确认密码
+                        OutlinedTextField(
+                            value = encryptPasswordConfirm,
+                            onValueChange = { encryptPasswordConfirm = it },
+                            label = { Text("确认密码") },
+                            singleLine = true,
+                            isError = passwordMismatch,
+                            visualTransformation = if (encryptPasswordConfirmVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            trailingIcon = {
+                                IconButton(onClick = { encryptPasswordConfirmVisible = !encryptPasswordConfirmVisible }) {
+                                    Icon(
+                                        if (encryptPasswordConfirmVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = null
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (passwordMismatch) {
+                            Text("密码不一致", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        }
+
+                        // 删除源文件复选框
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = encryptDeleteSource,
+                                onCheckedChange = { encryptDeleteSource = it }
+                            )
+                            Text("加密后删除源文件", style = MaterialTheme.typography.bodyLarge)
+                        }
+                    } else {
+                        // 特殊模式占位
+                        Text("暂未开放", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showEncryptDialog = false }) { Text("确认") } },
-            dismissButton = { TextButton(onClick = { showEncryptDialog = false }) { Text("取消") } }
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showEncryptDialog = false
+                        showEncryptProgress = true
+                        encryptProgress = 0f
+                        encryptBytesProcessed = 0
+                        encryptTotalBytes = 0
+                        encryptCurrentFile = 0
+                        encryptTotalFiles = 0
+                        encryptCurrentFileName = ""
+                        vm.encrypt(
+                            entries = encryptEntries,
+                            password = encryptPassword,
+                            deleteSource = encryptDeleteSource,
+                            onProgress = { info ->
+                                encryptProgress = info.progress
+                                encryptBytesProcessed = info.bytesProcessed
+                                encryptTotalBytes = info.totalBytes
+                                encryptCurrentFile = info.currentFileIndex
+                                encryptTotalFiles = info.totalFiles
+                                encryptCurrentFileName = info.currentFileName
+                            },
+                            onComplete = { success, failed, failedNames ->
+                                showEncryptProgress = false
+                                if (failed > 0) {
+                                    Toast.makeText(context, "加密完成：成功 $success，失败 $failed", Toast.LENGTH_LONG).show()
+                                } else {
+                                    Toast.makeText(context, "加密完成", Toast.LENGTH_SHORT).show()
+                                }
+                                vm.refreshCurrent()
+                                encryptPassword = ""
+                                encryptPasswordConfirm = ""
+                            }
+                        )
+                    },
+                    enabled = canEncrypt
+                ) {
+                    Text("加密", color = if (canEncrypt) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showEncryptDialog = false
+                    encryptPassword = ""
+                    encryptPasswordConfirm = ""
+                }) {
+                    Text("取消")
+                }
+            },
+            properties = DialogProperties(dismissOnBackPress = true, dismissOnClickOutside = false)
         )
+    }
+
+    // ── 加密进度面板 ──
+    if (showEncryptProgress) {
+        val isDark = isSystemInDarkTheme()
+        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(0.85f)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("正在加密", style = MaterialTheme.typography.titleMedium)
+                        if (encryptCurrentFileName.isNotEmpty()) {
+                            Text(
+                                encryptCurrentFileName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        LinearProgressIndicator(
+                            progress = { encryptProgress },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            "${FormatUtils.formatBytes(encryptBytesProcessed)} / ${FormatUtils.formatBytes(encryptTotalBytes)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = {
+                                vm.cancelEncrypt()
+                            }) {
+                                Text("取消")
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // ── 压缩对话框 ──

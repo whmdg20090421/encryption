@@ -21,9 +21,9 @@ object FileConstants {
     val aadCustomObf = "CUSTOM_OBF".toByteArray(Charsets.UTF_8)
 
     /**
-     * 分块大小 = 4 MiB
+     * 分块大小 = 1 MiB
      */
-    const val CHUNK_SIZE = 4 * 1024 * 1024
+    const val CHUNK_SIZE = 1 * 1024 * 1024
 
     /**
      * 大于此阈值时附 legal_footer
