@@ -42,23 +42,27 @@ class CopyJob(
     override fun run() {
         var errorToShow: Exception? = null
         try {
-            // 移动目的：渐进式分区检测，分离可以 mv 和需要复制+删除的节点
+            // 移动目的：先统一扫描，再分区处理
             if (purpose == CopyPurpose.MOVE) {
-                val (movable, needCopy) = partitionSourcesByDevice(sources, targetDir)
-
-                // 先处理可以 mv 的节点
-                if (movable.isNotEmpty()) {
-                    moveWithMv(movable, targetDir)
+                val scanInfo = scanWithProgress(sources) { totalSoFar ->
+                    manager.updateProgress(FileOpProgress(
+                        phase = "正在移动",
+                        currentBytes = 0,
+                        totalBytes = totalSoFar,
+                        isScanning = true
+                    ))
                 }
 
-                // 如果没有需要复制+删除的节点，直接返回
+                val (movable, needCopy) = partitionSourcesByDevice(sources, targetDir)
+
+                if (movable.isNotEmpty()) {
+                    moveWithMv(movable, targetDir, scanInfo)
+                }
+
                 if (needCopy.isEmpty()) {
                     return
                 }
 
-                // 更新 sources 为需要复制+删除的节点，继续走复制+删除链路
-                // 注意：这里需要递归调用或修改后续逻辑
-                // 为了保持代码简洁，我们直接处理 needCopy 列表
                 processCopyAndDelete(needCopy, targetDir)
                 return
             }
@@ -335,17 +339,18 @@ class CopyJob(
     /**
      * 对可以 mv 的节点执行快速移动。
      */
-    private fun moveWithMv(nodes: List<String>, targetDir: String) {
+    private fun moveWithMv(nodes: List<String>, targetDir: String, scanInfo: ScanInfo) {
         val totalNodes = nodes.size
         var processedNodes = 0
+        var movedBytes = 0L
 
         manager.updateProgress(FileOpProgress(
             phase = "正在移动",
             currentBytes = 0,
-            totalBytes = totalNodes.toLong(),
+            totalBytes = scanInfo.totalBytes,
             currentFileName = "",
             fileIndex = 0,
-            fileCount = totalNodes,
+            fileCount = scanInfo.fileCount,
             isScanning = false
         ))
 
@@ -365,6 +370,9 @@ class CopyJob(
             val resolvedTarget = resolveConflictIfNeeded(node, targetName, targetPath, isDirectory = sourceIsDir)
                 ?: continue
 
+            // 记录移动前的文件大小
+            val fileSize = if (sourceIsDir) 0L else operator.fileSize(node)
+
             // 执行 mv
             currentStep = "移动: $targetName"
             val success = operator.moveFile(node, resolvedTarget, job = this)
@@ -372,14 +380,15 @@ class CopyJob(
                 throw IOException("移动失败: $targetName")
             }
 
+            movedBytes += fileSize
             processedNodes++
             manager.updateProgress(FileOpProgress(
                 phase = "正在移动",
-                currentBytes = processedNodes.toLong(),
-                totalBytes = totalNodes.toLong(),
+                currentBytes = movedBytes,
+                totalBytes = scanInfo.totalBytes,
                 currentFileName = targetName,
                 fileIndex = processedNodes,
-                fileCount = totalNodes
+                fileCount = scanInfo.fileCount
             ))
         }
     }
