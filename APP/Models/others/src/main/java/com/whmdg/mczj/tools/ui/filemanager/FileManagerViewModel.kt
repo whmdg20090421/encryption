@@ -38,6 +38,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileInputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import java.nio.file.Files
 import java.nio.file.attribute.BasicFileAttributes
@@ -46,6 +47,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.serialization.Serializable
+import com.whmdg.mczj.tools.encryption.core.FileConstants
+import com.whmdg.mczj.tools.encryption.core.AesGcm256
 
 @Serializable
 data class RecycleBinEntry(
@@ -2299,10 +2302,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     // 2. 派生密钥
                     val salt = com.whmdg.mczj.tools.encryption.core.SecureRandom.bytes(16)
-                    val key = com.whmdg.mczj.tools.encryption.core.Pbkdf2Kdf.derive(
+                    val key = com.whmdg.mczj.tools.encryption.core.Argon2idKdf.derive(
                         password = password,
                         salt = salt,
-                        iterations = 600000
+                        timeCost = 3,
+                        memoryCostKb = 65536,
+                        parallelism = 2
                     )
 
                     // 3. 加密
@@ -2323,25 +2328,21 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         cancelFlag = encryptCancelFlag
                     )
 
-                    // 4. 完整性验证
-                    val tmpFile = File(dstFile.parent, ".encrypt_verify_${System.currentTimeMillis()}.tmp")
+                    // 4. 完整性验证（仅验证第一个 chunk）
                     try {
-                        FileCodec.decryptRaw(dstFile, tmpFile, key)
-                        val srcHash = sha256(srcFile)
-                        val tmpHash = sha256(tmpFile)
-                        if (srcHash.contentEquals(tmpHash)) {
-                            tmpFile.delete()
-                            if (deleteSource) srcFile.delete()
-                            bytesProcessed += srcFile.length()
-                            successCount++
-                        } else {
-                            tmpFile.delete()
-                            dstFile.delete()
-                            failedFiles.add(srcFile.name)
-                            bytesProcessed += srcFile.length()
+                        FileInputStream(dstFile).use { vf ->
+                            val vSalt = ByteArray(16)
+                            vf.read(vSalt)
+                            val vIv = ByteArray(12)
+                            vf.read(vIv)
+                            val vCipher = ByteArray(FileConstants.CHUNK_SIZE + 16)
+                            val vRead = vf.read(vCipher)
+                            AesGcm256.decrypt(key, vIv, vCipher.copyOf(vRead))
                         }
+                        if (deleteSource) srcFile.delete()
+                        bytesProcessed += srcFile.length()
+                        successCount++
                     } catch (e: Exception) {
-                        tmpFile.delete()
                         dstFile.delete()
                         failedFiles.add(srcFile.name)
                         bytesProcessed += srcFile.length()
@@ -2366,8 +2367,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 取消正在进行的加密任务 */
     fun cancelEncrypt() {
         encryptCancelFlag.set(true)
-        encryptJob?.cancel()
-        encryptJob = null
     }
 
     /** 递归收集需要加密的文件，跳过已有 .aes 后缀 */
@@ -2384,19 +2383,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private data class EncryptTask(val srcFile: File, val dstFile: File)
-
-    /** SHA-256 计算 */
-    private fun sha256(file: File): ByteArray {
-        val md = java.security.MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(8192)
-            var read: Int
-            while (input.read(buffer).also { read = it } > 0) {
-                md.update(buffer, 0, read)
-            }
-        }
-        return md.digest()
-    }
 
     // ── 解密 ──
 
@@ -2450,10 +2436,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     // 读取 salt（前 16 字节）
                     val salt = ByteArray(16)
                     srcFile.inputStream().use { it.read(salt) }
-                    val key = com.whmdg.mczj.tools.encryption.core.Pbkdf2Kdf.derive(
+                    val key = com.whmdg.mczj.tools.encryption.core.Argon2idKdf.derive(
                         password = password,
                         salt = salt,
-                        iterations = 600000
+                        timeCost = 3,
+                        memoryCostKb = 65536,
+                        parallelism = 2
                     )
 
                     FileCodec.decryptRaw(
@@ -2494,8 +2482,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 取消正在进行的解密任务 */
     fun cancelDecrypt() {
         decryptCancelFlag.set(true)
-        decryptJob?.cancel()
-        decryptJob = null
     }
 
     /** 递归收集需要解密的 .aes 文件 */

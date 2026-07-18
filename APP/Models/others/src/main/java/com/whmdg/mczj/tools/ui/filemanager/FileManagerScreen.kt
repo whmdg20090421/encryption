@@ -303,6 +303,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var encryptCurrentFileName by remember { mutableStateOf("") }
     var encryptCurrentFile by remember { mutableIntStateOf(0) }
     var encryptTotalFiles by remember { mutableIntStateOf(0) }
+    var showEncryptResult by remember { mutableStateOf(false) }
+    var encryptResultSuccess by remember { mutableIntStateOf(0) }
+    var encryptResultFailed by remember { mutableIntStateOf(0) }
+    var encryptFailedFiles by remember { mutableStateOf(listOf<String>()) }
 
     // ── 解密对话框 ──
     var showDecryptDialog by remember { mutableStateOf(false) }
@@ -317,6 +321,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     var decryptCurrentFileName by remember { mutableStateOf("") }
     var decryptCurrentFile by remember { mutableIntStateOf(0) }
     var decryptTotalFiles by remember { mutableIntStateOf(0) }
+    var showDecryptResult by remember { mutableStateOf(false) }
+    var decryptResultSuccess by remember { mutableIntStateOf(0) }
+    var decryptResultFailed by remember { mutableIntStateOf(0) }
+    var decryptFailedFiles by remember { mutableStateOf(listOf<String>()) }
 
     // 移动/复制（功能待实现，保留 UI 占位）
 
@@ -4293,16 +4301,19 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         encryptTotalFiles = info.totalFiles
                                         encryptCurrentFileName = info.currentFileName
                                     },
-                                    onComplete = { success, failed, _ ->
+                                    onComplete = { success, failed, failedNames ->
                                         showEncryptProgress = false
+                                        encryptResultSuccess = success
+                                        encryptResultFailed = failed
+                                        encryptFailedFiles = failedNames
                                         if (failed > 0) {
-                                            Toast.makeText(context, "加密完成：成功 $success，失败 $failed", Toast.LENGTH_LONG).show()
+                                            showEncryptResult = true
                                         } else {
                                             Toast.makeText(context, "加密完成", Toast.LENGTH_SHORT).show()
+                                            encryptPassword = ""
+                                            encryptPasswordConfirm = ""
                                         }
                                         vm.refreshCurrent()
-                                        encryptPassword = ""
-                                        encryptPasswordConfirm = ""
                                     }
                                 )
                             },
@@ -4372,15 +4383,18 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                         decryptTotalFiles = info.totalFiles
                                         decryptCurrentFileName = info.currentFileName
                                     },
-                                    onComplete = { success, failed, _ ->
+                                    onComplete = { success, failed, failedNames ->
                                         showDecryptProgress = false
+                                        decryptResultSuccess = success
+                                        decryptResultFailed = failed
+                                        decryptFailedFiles = failedNames
                                         if (failed > 0) {
-                                            Toast.makeText(context, "解密完成：成功 $success，失败 $failed（密码可能错误）", Toast.LENGTH_LONG).show()
+                                            showDecryptResult = true
                                         } else {
                                             Toast.makeText(context, "解密完成", Toast.LENGTH_SHORT).show()
+                                            decryptPassword = ""
                                         }
                                         vm.refreshCurrent()
-                                        decryptPassword = ""
                                     }
                                 )
                             },
@@ -4417,6 +4431,82 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                             TextButton(onClick = { vm.cancelDecrypt() }) { Text("取消") }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 解密结果弹窗（失败时显示） ──
+    if (showDecryptResult) {
+        val isDark = isSystemInDarkTheme()
+        Dialog(onDismissRequest = { showDecryptResult = false }) {
+            Card(modifier = Modifier.fillMaxWidth(0.85f)) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("解密结果", style = MaterialTheme.typography.titleMedium)
+                    Text("成功：${decryptResultSuccess} 个文件")
+                    Text("失败：${decryptResultFailed} 个文件（密码可能错误）", color = MaterialTheme.colorScheme.error)
+                    if (decryptFailedFiles.isNotEmpty()) {
+                        Text(
+                            decryptFailedFiles.joinToString("、"),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        TextButton(onClick = {
+                            showDecryptResult = false
+                            decryptPassword = ""
+                        }) { Text("确认") }
+                        TextButton(onClick = {
+                            showDecryptResult = false
+                            val retryEntries = decryptEntries.filter { entry ->
+                                decryptFailedFiles.contains(File(entry.path).name)
+                            }
+                            if (retryEntries.isNotEmpty()) {
+                                decryptEntries = retryEntries
+                                showDecryptProgress = true
+                                decryptProgress = 0f
+                                decryptBytesProcessed = 0
+                                decryptTotalBytes = 0
+                                decryptCurrentFile = 0
+                                decryptTotalFiles = 0
+                                decryptCurrentFileName = ""
+                                vm.decrypt(
+                                    entries = retryEntries,
+                                    password = decryptPassword,
+                                    deleteSource = decryptDeleteSource,
+                                    onProgress = { info ->
+                                        decryptProgress = info.progress
+                                        decryptBytesProcessed = info.bytesProcessed
+                                        decryptTotalBytes = info.totalBytes
+                                        decryptCurrentFile = info.currentFileIndex
+                                        decryptTotalFiles = info.totalFiles
+                                        decryptCurrentFileName = info.currentFileName
+                                    },
+                                    onComplete = { success, failed, failedNames ->
+                                        showDecryptProgress = false
+                                        decryptResultSuccess = success
+                                        decryptResultFailed = failed
+                                        decryptFailedFiles = failedNames
+                                        if (failed > 0) {
+                                            showDecryptResult = true
+                                        } else {
+                                            Toast.makeText(context, "解密完成", Toast.LENGTH_SHORT).show()
+                                            decryptPassword = ""
+                                        }
+                                        vm.refreshCurrent()
+                                    }
+                                )
+                            }
+                        }) { Text("重试") }
                     }
                 }
             }
@@ -4468,6 +4558,84 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                                 Text("取消")
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 加密结果弹窗（失败时显示） ──
+    if (showEncryptResult) {
+        val isDark = isSystemInDarkTheme()
+        Dialog(onDismissRequest = { showEncryptResult = false }) {
+            Card(modifier = Modifier.fillMaxWidth(0.85f)) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("加密结果", style = MaterialTheme.typography.titleMedium)
+                    Text("成功：${encryptResultSuccess} 个文件")
+                    Text("失败：${encryptResultFailed} 个文件", color = MaterialTheme.colorScheme.error)
+                    if (encryptFailedFiles.isNotEmpty()) {
+                        Text(
+                            encryptFailedFiles.joinToString("、"),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        TextButton(onClick = {
+                            showEncryptResult = false
+                            encryptPassword = ""
+                            encryptPasswordConfirm = ""
+                        }) { Text("确认") }
+                        TextButton(onClick = {
+                            showEncryptResult = false
+                            val retryEntries = encryptEntries.filter { entry ->
+                                encryptFailedFiles.contains(File(entry.path).name)
+                            }
+                            if (retryEntries.isNotEmpty()) {
+                                encryptEntries = retryEntries
+                                showEncryptProgress = true
+                                encryptProgress = 0f
+                                encryptBytesProcessed = 0
+                                encryptTotalBytes = 0
+                                encryptCurrentFile = 0
+                                encryptTotalFiles = 0
+                                encryptCurrentFileName = ""
+                                vm.encrypt(
+                                    entries = retryEntries,
+                                    password = encryptPassword,
+                                    deleteSource = encryptDeleteSource,
+                                    onProgress = { info ->
+                                        encryptProgress = info.progress
+                                        encryptBytesProcessed = info.bytesProcessed
+                                        encryptTotalBytes = info.totalBytes
+                                        encryptCurrentFile = info.currentFileIndex
+                                        encryptTotalFiles = info.totalFiles
+                                        encryptCurrentFileName = info.currentFileName
+                                    },
+                                    onComplete = { success, failed, failedNames ->
+                                        showEncryptProgress = false
+                                        encryptResultSuccess = success
+                                        encryptResultFailed = failed
+                                        encryptFailedFiles = failedNames
+                                        if (failed > 0) {
+                                            showEncryptResult = true
+                                        } else {
+                                            Toast.makeText(context, "加密完成", Toast.LENGTH_SHORT).show()
+                                            encryptPassword = ""
+                                            encryptPasswordConfirm = ""
+                                        }
+                                        vm.refreshCurrent()
+                                    }
+                                )
+                            }
+                        }) { Text("重试") }
                     }
                 }
             }
