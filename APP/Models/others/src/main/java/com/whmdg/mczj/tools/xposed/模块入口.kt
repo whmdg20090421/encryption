@@ -6,36 +6,36 @@ import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.SystemServerLoadedParam
 
-class XposedInit(base: XposedContext, param: ModuleLoadedParam) : XposedModule(base, param) {
+class 模块入口(base: XposedContext, param: ModuleLoadedParam) : XposedModule(base, param) {
 
     init {
         log("艨艟: 模块已加载, 进程=${param.processName}, systemServer=${param.isSystemServer}")
-        setActiveProperty()
+        设置激活属性()
     }
 
     override fun onPackageLoaded(param: PackageLoadedParam) {
         log("艨艟: 包已加载: ${param.packageName}, first=${param.isFirstPackage}")
 
         if (param.packageName == "com.tencent.mm") {
-            com.whmdg.mczj.tools.xposed.hooks.WechatBillHooker.register(this, param)
+            com.whmdg.mczj.tools.xposed.hooks.微信账单拦截.注册(this, param)
         }
     }
 
     override fun onSystemServerLoaded(param: SystemServerLoadedParam) {
         log("艨艟: system_server 已加载")
-        setActiveProperty()
+        设置激活属性()
     }
 
-    private fun setActiveProperty() {
+    private fun 设置激活属性() {
         try {
             val clazz = Class.forName("android.os.SystemProperties")
             val setMethod = clazz.getMethod("set", String::class.java, String::class.java)
-            setMethod.invoke(null, PROP_ACTIVE, "${System.currentTimeMillis()}")
+            setMethod.invoke(null, 激活属性名, "${System.currentTimeMillis()}")
         } catch (_: Throwable) {
         }
     }
 
     companion object {
-        private const val PROP_ACTIVE = "mczj.xposed.active"
+        private const val 激活属性名 = "mczj.xposed.active"
     }
 }
