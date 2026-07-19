@@ -346,7 +346,7 @@ object 微信账单拦截 {
                 putExtra(额外账单JSON, json)
                 addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
             }
-            context.发送广播(intent)
+            context.sendBroadcast(intent)
         } catch (_: Throwable) {}
     }
 
