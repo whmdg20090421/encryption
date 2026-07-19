@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 文档版本
 
-**基准哈希**：`2fb5993d11b7d4d643cf9952aadbd46c5ff0520a`
+**基准哈希**：`4a1f5431bc9050c81304b7aec888d56dc009fde5`
 **更新日期**：2026-07-19
 
 > 更新 CLAUDE.md 前，先执行 `git diff <基准哈希>..HEAD -- '*.kt' '*.kts' '*.py' '*.sh' '*.yml'` 查看自上次记录以来的所有代码变更，确保文档与代码同步。更新后替换基准哈希为新的 HEAD。
@@ -95,16 +95,25 @@ src/main/java/com/whmdg/mczj/tools/
 │   ├── SecurityEnforcer.kt            # 业务层权限检查失败时的安全自杀
 │   ├── LocalPermissionGate.kt / ReadOnlyGate.kt / PasswordDialog.kt
 │   └── NoPermissionScreen.kt
-├── encryption/                        # 加密模块（core/data/models/services）
-│   ├── core/                          # 密码学原语（AesGcm, Argon2id, FileCodec 含 encryptRaw/decryptRaw 独立加密, FilenameCodec 等）
-│   ├── data/                          # VaultConfig, VaultDb, VaultPaths, NameMapping 等
-│   ├── models/                        # EncryptionNode
-│   └── services/                      # VaultService, VaultSession, CryptoService, EncryptionTaskManager
+├── encryption/                        # 加密模块
+│   ├── core/                          # 密码学原语
+│   │   ├── AesGcm.kt / Argon2id.kt / Pbkdf2.kt / KeyDerivation.kt
+│   │   ├── FileCodec.kt / FileConstants.kt / FilenameCodec.kt
+│   │   ├── HexCodec.kt / SecureRandom.kt / NailObfuscation.kt
+│   ├── data/                          # 加密数据层
+│   │   ├── VaultConfig.kt / VaultDb.kt / VaultPaths.kt / VaultRecord.kt
+│   │   ├── CanonicalJson.kt / NameMapping.kt / FolderSizeDb.kt / StorageLocation.kt
+│   ├── models/
+│   │   └── EncryptionNode.kt
+│   └── services/
+│       ├── VaultService.kt / VaultSession.kt
+│       └── CryptoService.kt / EncryptionTaskManager.kt
 ├── security/
 │   ├── ShellExecutor.kt               # 统一 shell 执行入口
 │   ├── TeeManager.kt                  # TEE 生物识别快速解锁
 │   ├── SpecialPermissionVerifier.kt / ShizukuAuthorizer.kt / ShellService.kt
-│   └── AndroidPermissionLevel.kt / AccessibilityServiceBridge.kt / MyDeviceAdminReceiver.kt
+│   ├── AndroidPermissionLevel.kt / AccessibilityServiceBridge.kt / MyDeviceAdminReceiver.kt
+│   └── FdProvider.kt                   # 文件描述符提供（跨进程 fd 传递）
 ├── util/                              # 基础工具类
 │   ├── DiagnosticLog.kt / FormatUtils.kt
 │   ├── FileAccessLevel.kt / FileAccessor.kt / FolderSizeCalculator.kt
@@ -114,9 +123,15 @@ src/main/java/com/whmdg/mczj/tools/
 └── ui/
     ├── Screen.kt                      # Screen sealed class（全局导航定义）
     ├── FileEntry.kt / ActivityRef.kt
-    ├── components/                    # GlowCard, ApkInfoDialog, FileTypeIcon
-    ├── security/                      # SecurityRoute + SecurityModuleScreen + 权限管理页面
-    └── theme/                         # Color / Theme / Type
+    ├── components/
+    │   ├── GlowCard.kt / ApkInfoDialog.kt / FileTypeIcon.kt
+    ├── security/                      # 权限管理
+    │   ├── SecurityRoute.kt / SecurityModuleScreen.kt / SecurityScreen.kt
+    │   ├── PermissionSettingsScreen.kt / SpecialPermissionsScreen.kt
+    │   ├── AppPermissionsScreen.kt / AuthManagementScreen.kt
+    │   ├── PermissionManagementConfigScreen.kt / PermissionGuideViewModel.kt
+    └── theme/
+        └── Color.kt / Theme.kt / Type.kt
 ```
 
 ### APP/Models/others — 主要功能模块
@@ -124,13 +139,24 @@ src/main/java/com/whmdg/mczj/tools/
 src/main/java/com/whmdg/mczj/tools/
 ├── fileop/                            # 文件操作模块（参考 MaterialFiles 架构）
 │   ├── FileOperator.kt                # 抽象接口（copy/move/delete/mkdir）
-│   ├── JavaFileOperator.kt / ShellFileOperator.kt
-│   ├── FileOperationJob.kt / CopyJob.kt # CopyJob 统一处理复制/移动，同分区 mv 快速路径 / DeleteJob.kt
+│   ├── ShellFileOperator.kt           # Root/Shizuku 文件操作实现
+│   ├── FileOperationJob.kt / CopyJob.kt / DeleteJob.kt  # CopyJob 统一处理复制/移动，同分区 mv 快速路径
 │   ├── FileOperationManager.kt        # 全局单例，StateFlow 驱动进度/冲突/错误弹窗
 │   ├── FileOperationService.kt        # 前台 Service
-│   └── webdav/                        # WebDAV 客户端（WebDavServerConfig/Store/FileClient/Path/Authenticator + client/）
+│   ├── FileOpDiagnostics.kt           # 文件操作诊断
+│   └── webdav/                        # WebDAV 客户端
+│       ├── WebDavServerConfig.kt / WebDavServerStore.kt  # 服务器配置持久化
+│       ├── WebDavFileClient.kt / WebDavPath.kt / WebDavAuthenticator.kt
+│       └── client/                    # 底层 HTTP 客户端
+│           ├── Client.kt / Protocol.kt / Authority.kt
+│           ├── Authentication.kt / Authenticator.kt
+│           ├── DavResourceCompat.kt / DavIOException.kt
+│           ├── MemoryCookieJar.kt / ResponseExtensions.kt
 ├── xposed/
-│   └── XposedInit.kt                  # Xposed 模块入口
+│   ├── XposedInit.kt                  # Xposed 模块入口
+│   └── hooks/                         # 微信账单 Hook（WebView.evaluateJavascript 拦截）
+│       ├── WechatBillHooker.kt        # Hook 注册 + Application 获取 + Tinker 禁用 + WebView 拦截 + 广播
+│       └── BillHookParser.kt          # 账单 JSON 解析（金额/商户/时间/类型）
 ├── util/
 │   └── JxlCoilDecoder.kt             # Coil 图片加载器 JPEG XL 解码器
 └── ui/
@@ -158,7 +184,9 @@ src/main/java/com/whmdg/mczj/tools/
     ├── download/                      # 下载器模块
     │   ├── DownloaderRoute.kt / DownloaderModuleScreen.kt
     │   ├── BatchDownloaderScreen.kt / FADownloaderScreen.kt / FADownloaderViewModel.kt / FALoginScreen.kt
-    │   └── Deviant/ (DeviantDownloaderScreen/ViewModel/LoginScreen/Models)
+    │   └── Deviant/
+    │       ├── DeviantDownloaderScreen.kt / DeviantDownloaderViewModel.kt
+    │       └── DeviantLoginScreen.kt / DeviantModels.kt
     ├── rphub/                         # RP Hub 模块
     │   ├── RpHubRoute.kt / RpHubModuleScreen.kt
     │   ├── RpHubScreen.kt / RpHubServer.kt / RpHubTrafficPanel.kt / RpHubDownloadPanel.kt / RpHubDebugPanel.kt
@@ -174,7 +202,14 @@ src/main/java/com/whmdg/mczj/tools/ui/accounting/
 ├── AccountingScreen.kt / AccountingDetailScreen.kt / AddAccountingScreen.kt
 ├── AccountingModels.kt / AccountingDatabase.kt / AccountingRepository.kt
 ├── CsvImportScreen.kt / NotePredictor.kt
-├── ReimbursementAccountScreen.kt / AddReimbursementAccountScreen.kt
+├── ReimbursementAccountScreen.kt / ReimbursementAccountDetailScreen.kt / AddReimbursementAccountScreen.kt
+├── TransferListScreen.kt / CapitalFlowScreen.kt   # 转账列表 / 资金流水
+├── AssetDetailScreen.kt / AssetHistoryScreen.kt / FixedDepositScreen.kt  # 资产详情/历史/定期
+├── CloudSyncScreen.kt                              # 云同步
+├── BillOcrEngine.kt / BillOcrModels.kt             # 账单 OCR 识别引擎
+├── OcrFloatingWindow.kt / OcrFloatingService.kt / OcrLifecycleObserver.kt  # 悬浮窗 OCR
+├── HookFloatingWindow.kt / HookFloatingService.kt / HookResultReceiver.kt  # Hook 账单悬浮窗
+├── MyAccessibilityService.kt                       # 无障碍服务
 ├── ColorIconRegistry.kt               # 279 个分类图标的 build_in_XXXX 编码映射
 ├── ColorIconImage.kt                  # 从 assets/color_icons/ 加载 PNG 的 Compose 组件
 └── (assets/color_icons/ — 279 个分类图标 PNG，由 ColorIconImage 加载)
