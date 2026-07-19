@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 文档版本
+
+**基准哈希**：`2fb5993d11b7d4d643cf9952aadbd46c5ff0520a`
+**更新日期**：2026-07-19
+
+> 更新 CLAUDE.md 前，先执行 `git diff <基准哈希>..HEAD -- '*.kt' '*.kts' '*.py' '*.sh' '*.yml'` 查看自上次记录以来的所有代码变更，确保文档与代码同步。更新后替换基准哈希为新的 HEAD。
+
 ## 工具使用规范
 
 - **严禁使用 Explore 工具**，包括以下所有形式：
@@ -89,7 +96,7 @@ src/main/java/com/whmdg/mczj/tools/
 │   ├── LocalPermissionGate.kt / ReadOnlyGate.kt / PasswordDialog.kt
 │   └── NoPermissionScreen.kt
 ├── encryption/                        # 加密模块（core/data/models/services）
-│   ├── core/                          # 密码学原语（AesGcm, Argon2id, FileCodec, FilenameCodec 等）
+│   ├── core/                          # 密码学原语（AesGcm, Argon2id, FileCodec 含 encryptRaw/decryptRaw 独立加密, FilenameCodec 等）
 │   ├── data/                          # VaultConfig, VaultDb, VaultPaths, NameMapping 等
 │   ├── models/                        # EncryptionNode
 │   └── services/                      # VaultService, VaultSession, CryptoService, EncryptionTaskManager
@@ -118,7 +125,7 @@ src/main/java/com/whmdg/mczj/tools/
 ├── fileop/                            # 文件操作模块（参考 MaterialFiles 架构）
 │   ├── FileOperator.kt                # 抽象接口（copy/move/delete/mkdir）
 │   ├── JavaFileOperator.kt / ShellFileOperator.kt
-│   ├── FileOperationJob.kt / CopyJob.kt / MoveJob.kt / DeleteJob.kt
+│   ├── FileOperationJob.kt / CopyJob.kt # CopyJob 统一处理复制/移动，同分区 mv 快速路径 / DeleteJob.kt
 │   ├── FileOperationManager.kt        # 全局单例，StateFlow 驱动进度/冲突/错误弹窗
 │   ├── FileOperationService.kt        # 前台 Service
 │   └── webdav/                        # WebDAV 客户端（WebDavServerConfig/Store/FileClient/Path/Authenticator + client/）
@@ -135,14 +142,14 @@ src/main/java/com/whmdg/mczj/tools/
     │   ├── FileManagerRoute.kt        # sealed class: Home / TextEditor / ImageViewer
     │   ├── FileManagerModuleScreen.kt # Compose 导航容器
     │   ├── FileManagerScreen.kt       # 文件管理器主界面
-    │   ├── FileManagerViewModel.kt    # ViewModel（shell 路由 + 大小统计）
+    │   ├── FileManagerViewModel.kt    # ViewModel（shell 路由 + 大小统计 + 独立加密/解密）
     │   ├── ImageViewerScreen.kt       # 图片查看器
     │   ├── TextEditorScreen.kt        # 代码/文本编辑器
     │   ├── FileOperationDialogs.kt    # 文件操作冲突/错误弹窗
     │   └── WebDavEditDialog.kt        # WebDAV 服务器编辑对话框
     ├── encryption/                    # 加密 UI
     │   ├── EncryptionRoute.kt / EncryptionModuleScreen.kt
-    │   ├── EncryptionHomeScreen.kt / VaultCreateScreen.kt / VaultOpenScreen.kt
+    │   ├── EncryptionHomeScreen.kt     # 保险箱卡片 UI（渐变+光晕）+ 保持打开计时器（JNI HMAC 防篡改）/ VaultCreateScreen.kt / VaultOpenScreen.kt
     │   ├── VaultChangePasswordScreen.kt / EncryptionSettings.kt
     │   └── EncryptionProgressIcon.kt / EncryptionProgressPanel.kt
     ├── diary/                         # 日记模块
@@ -168,6 +175,9 @@ src/main/java/com/whmdg/mczj/tools/ui/accounting/
 ├── AccountingModels.kt / AccountingDatabase.kt / AccountingRepository.kt
 ├── CsvImportScreen.kt / NotePredictor.kt
 ├── ReimbursementAccountScreen.kt / AddReimbursementAccountScreen.kt
+├── ColorIconRegistry.kt               # 279 个分类图标的 build_in_XXXX 编码映射
+├── ColorIconImage.kt                  # 从 assets/color_icons/ 加载 PNG 的 Compose 组件
+└── (assets/color_icons/ — 279 个分类图标 PNG，由 ColorIconImage 加载)
 ```
 
 ### 路由层模式（*Route.kt + *ModuleScreen.kt）
@@ -177,10 +187,11 @@ src/main/java/com/whmdg/mczj/tools/ui/accounting/
 - `*ModuleScreen.kt`：Compose 导航容器，管理 backStack，根据 Route 渲染对应 Screen
 - `HomeScreen.kt` 通过 `Screen.*` sealed class 路由到各模块的 `*ModuleScreen`
 
-**构建工具** (`tools/`)：
+**构建/工具** (`tools/`)：
 ```
 gen_password_hashes.py                 # 预生成 Argon2id 密码哈希 → hashes.inc + obf_key.h
 wait_and_download.sh                   # CI 产物下载辅助脚本
+diagnose.sh                            # 白屏诊断脚本（在设备上 su -c sh 执行）
 ```
 
 **Native 代码** (`APP/core/src/main/cpp/`)：
@@ -256,7 +267,7 @@ Screen.Settings → 设置
 ```
 [魔数头 "艨艟战舰" 12字节] [footer标志 1字节]  ← 仅 custom_encryption=true 时
 [4字节 meta块长度] [12字节 IV] [加密metadata]
-[4字节 chunk长度] [12字节 IV] [加密数据块] × N  ← 每块 4MiB
+[4字节 chunk长度] [12字节 IV] [加密数据块] × N  ← 每块 1MiB (FileConstants.CHUNK_SIZE)
 [法律尾声字节串]                                ← 仅文件 > 4MiB 且 custom_encryption=true
 ```
 
@@ -365,8 +376,13 @@ FileOperator（抽象接口）
     ├── ShellFileOperator → Root/Shizuku 路径
     └── WebDavFileClient → WebDAV 远程路径
 
-CopyJob / MoveJob / DeleteJob
-    └── 递归遍历 → 冲突检测 → 执行 → 进度回调
+CopyJob（统一处理复制和移动）
+    ├── CopyPurpose.COPY → 直接走复制链路
+    ├── CopyPurpose.MOVE → partitionSourcesByDevice() 分区检测
+    │     ├── 同分区 → moveWithMv() 快速 mv
+    │     └── 跨分区 → 复制 + 删除源文件
+    ├── 递归遍历 → 冲突检测（resolveConflictIfNeeded）→ 执行 → 进度回调
+    └── 取消/异常 → 清理残留目标文件
 ```
 
 **WebDAV 客户端**：基于 OkHttp + dav4jvm，配置持久化在 `AppDataPaths`，通过 `WebDavEditDialog` 编辑服务器信息。
