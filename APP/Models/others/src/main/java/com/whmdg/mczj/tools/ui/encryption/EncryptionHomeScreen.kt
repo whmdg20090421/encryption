@@ -495,6 +495,22 @@ fun VaultsListTab(
         pendingVaultUnlock = vault to pwd
     }
 
+    // 正在解密弹窗
+    if (isVaultOpening) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("正在解密并打开保险箱") },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text("请稍候，正在派生密钥…")
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
     if (list.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
