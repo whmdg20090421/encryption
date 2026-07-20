@@ -67,7 +67,7 @@ dependencies {
     // NanoHTTPD
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     // libxposed API
-    val xposedApiVersion = "100"
+    val xposedApiVersion = "102.0.0"
     val xposedMavenCoord = "io.github.libxposed:api:$xposedApiVersion"
     val xposedMavenAvailable = try {
         val checkConfig = configurations.create("xposedMavenCheck") {
