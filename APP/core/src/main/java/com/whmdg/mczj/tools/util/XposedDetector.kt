@@ -7,7 +7,7 @@ object XposedDetector {
     fun isModuleActive(): Boolean {
         // 方法一：反射检查 libxposed API 类是否被框架注入当前进程
         try {
-            Class.forName("io.github.libxposed.api.XposedContext")
+            Class.forName("io.github.libxposed.api.XposedInterface")
             return true
         } catch (_: Throwable) {
         }

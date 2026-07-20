@@ -1,14 +1,13 @@
 package com.whmdg.mczj.tools.xposed
 
-import io.github.libxposed.api.XposedContext
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
-import io.github.libxposed.api.XposedModuleInterface.SystemServerLoadedParam
+import io.github.libxposed.api.XposedModuleInterface.SystemServerStartingParam
 
-class 模块入口(base: XposedContext, param: ModuleLoadedParam) : XposedModule(base, param) {
+class 模块入口 : XposedModule() {
 
-    init {
+    override fun onModuleLoaded(param: ModuleLoadedParam) {
         log("艨艟: 模块已加载, 进程=${param.processName}, systemServer=${param.isSystemServer}")
         设置激活属性()
     }
@@ -17,7 +16,7 @@ class 模块入口(base: XposedContext, param: ModuleLoadedParam) : XposedModule
         log("艨艟: 包已加载: ${param.packageName}, first=${param.isFirstPackage}")
     }
 
-    override fun onSystemServerLoaded(param: SystemServerLoadedParam) {
+    override fun onSystemServerStarting(param: SystemServerStartingParam) {
         log("艨艟: system_server 已加载")
         设置激活属性()
     }

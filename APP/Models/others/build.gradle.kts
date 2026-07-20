@@ -66,19 +66,6 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // NanoHTTPD
     implementation("org.nanohttpd:nanohttpd:2.3.1")
-    // libxposed API
-    val xposedApiVersion = "102.0.0"
-    val xposedMavenCoord = "io.github.libxposed:api:$xposedApiVersion"
-    val xposedMavenAvailable = try {
-        val checkConfig = configurations.create("xposedMavenCheck") {
-            isCanBeResolved = true; isCanBeConsumed = false
-        }
-        dependencies.add(checkConfig.name, xposedMavenCoord)
-        checkConfig.resolve(); true
-    } catch (_: Exception) { false }
-    if (xposedMavenAvailable) {
-        compileOnly(xposedMavenCoord)
-    } else {
-        implementation(project(":libs:libxposed-api"))
-    }
+    // libxposed API 102 (本地 AAR)
+    compileOnly(files("${rootProject.projectDir}/libs/api-102.0.0.aar"))
 }
