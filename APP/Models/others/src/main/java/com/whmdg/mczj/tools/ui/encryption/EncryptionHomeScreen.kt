@@ -389,6 +389,9 @@ fun VaultsListTab(
     var showPasswordDialog by remember { mutableStateOf<VaultRecord?>(null) }
     var passwordInput by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
+    // vault 解锁异步处理
+    var pendingVaultUnlock by remember { mutableStateOf<Pair<VaultRecord, String>?>(null) }
+    var isVaultOpening by remember { mutableStateOf(false) }
 
     var alsoDeleteFiles by remember { mutableStateOf(false) }
     var showWarningDialog by remember { mutableStateOf<Pair<VaultRecord, VaultConfig.VerifyResult>?>(null) }
@@ -451,17 +454,17 @@ fun VaultsListTab(
             .commit()
     }
 
-    fun openVault(vault: VaultRecord, pwd: String) {
-        if (pwd.isEmpty()) {
-            vaultListError = Exception("密码不能为空")
-            return
-        }
+    // 异步执行 vault 解锁（Argon2id 派生在 IO 线程，不阻塞主线程）
+    LaunchedEffect(pendingVaultUnlock) {
+        val (vault, pwd) = pendingVaultUnlock ?: return@LaunchedEffect
+        isVaultOpening = true
         try {
-            val session = vaultService.open(vault.id, pwd)
+            val session = withContext(Dispatchers.IO) {
+                vaultService.open(vault.id, pwd)
+            }
             if (settings.enableTeeQuickUnlock) {
                 com.whmdg.mczj.tools.security.TeeManager.encryptPassword(context, vault.id, pwd)
             }
-            // 如果设置了保持时长，缓存密码 + 写入 deadline
             val durationMs = lockPrefs.getLong("duration_${vault.id}", 0L)
             if (durationMs > 0) {
                 try {
@@ -470,14 +473,26 @@ fun VaultsListTab(
                         .putString("cached_pwd_${vault.id}", android.util.Base64.encodeToString(cipher, android.util.Base64.NO_WRAP))
                         .putString("cached_iv_${vault.id}", android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP))
                         .apply()
-                    // 立即写入加密 deadline（防止被杀时丢失）
                     writeDeadline(vault.id.toString(), durationMs)
                 } catch (_: Exception) {}
             }
+            pendingVaultUnlock = null
+            isVaultOpening = false
             onNavigate(Screen.FileManager(session))
         } catch (e: Exception) {
+            pendingVaultUnlock = null
+            isVaultOpening = false
             vaultListError = e
         }
+    }
+
+    fun openVault(vault: VaultRecord, pwd: String) {
+        if (pwd.isEmpty()) {
+            vaultListError = Exception("密码不能为空")
+            return
+        }
+        if (isVaultOpening) return  // 防重复点击
+        pendingVaultUnlock = vault to pwd
     }
 
     if (list.isEmpty()) {
