@@ -23,6 +23,9 @@ private val LightColorScheme = lightColorScheme(
     tertiary = Pink40
 )
 
+/** 弹窗统一宽度比例，与长按工具栏一致 */
+const val DialogWidthFraction = 0.8f
+
 val LocalIsDarkMode = compositionLocalOf { true }
 val LocalOnToggleTheme = compositionLocalOf<((Boolean) -> Unit)> { {} }
 val LocalIsGlowEnabled = compositionLocalOf { true }

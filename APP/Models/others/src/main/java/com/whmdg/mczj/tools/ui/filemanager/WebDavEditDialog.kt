@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.ui.filemanager
 
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,8 +11,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,12 +35,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.whmdg.mczj.tools.fileop.webdav.WebDavAuthenticator
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
 import com.whmdg.mczj.tools.fileop.webdav.client.Authority
 import com.whmdg.mczj.tools.fileop.webdav.client.Protocol
+import com.whmdg.mczj.tools.ui.theme.DialogWidthFraction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -150,198 +156,204 @@ fun WebDavEditDialog(
         }
     }
 
-    AlertDialog(
-        onDismissRequest = { if (!isConnecting) onDismiss() },
-        title = {
-            Text(if (existingConfig != null) "编辑 WebDAV 服务器" else "添加 WebDAV 服务器")
-        },
-        text = {
-            if (isConnecting) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(16.dp))
-                    Text("正在连接...")
-                }
-            } else {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    // Protocol
-                    var protocolExpanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(
-                        expanded = protocolExpanded,
-                        onExpandedChange = { protocolExpanded = it }
+    Dialog(onDismissRequest = { if (!isConnecting) onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Card(
+            modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = if (existingConfig != null) "编辑 WebDAV 服务器" else "添加 WebDAV 服务器",
+                    style = MaterialTheme.typography.titleLarge
+                )
+
+                if (isConnecting) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        OutlinedTextField(
-                            value = if (protocol == "davs") "DAVS (HTTPS)" else "DAV (HTTP)",
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("协议") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(protocolExpanded) },
-                            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth()
-                        )
-                        ExposedDropdownMenu(
+                        CircularProgressIndicator()
+                        Spacer(Modifier.height(16.dp))
+                        Text("正在连接...")
+                    }
+                } else {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState()).weight(1f, fill = false)) {
+                        // Protocol
+                        var protocolExpanded by remember { mutableStateOf(false) }
+                        ExposedDropdownMenuBox(
                             expanded = protocolExpanded,
-                            onDismissRequest = { protocolExpanded = false }
+                            onExpandedChange = { protocolExpanded = it }
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("DAVS (HTTPS)") },
-                                onClick = { protocol = "davs"; protocolExpanded = false }
+                            OutlinedTextField(
+                                value = if (protocol == "davs") "DAVS (HTTPS)" else "DAV (HTTP)",
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("协议") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(protocolExpanded) },
+                                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth()
                             )
-                            DropdownMenuItem(
-                                text = { Text("DAV (HTTP)") },
-                                onClick = { protocol = "dav"; protocolExpanded = false }
-                            )
+                            ExposedDropdownMenu(
+                                expanded = protocolExpanded,
+                                onDismissRequest = { protocolExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("DAVS (HTTPS)") },
+                                    onClick = { protocol = "davs"; protocolExpanded = false }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("DAV (HTTP)") },
+                                    onClick = { protocol = "dav"; protocolExpanded = false }
+                                )
+                            }
                         }
-                    }
 
-                    Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(8.dp))
 
-                    // Host
-                    OutlinedTextField(
-                        value = host,
-                        onValueChange = { host = it; hostError = null },
-                        label = { Text("主机名") },
-                        singleLine = true,
-                        isError = hostError != null,
-                        supportingText = hostError?.let { { Text(it) } },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(Modifier.height(8.dp))
-
-                    // Port
-                    OutlinedTextField(
-                        value = port,
-                        onValueChange = { port = it; portError = null },
-                        label = { Text("端口") },
-                        placeholder = { Text(defaultPort.toString()) },
-                        singleLine = true,
-                        isError = portError != null,
-                        supportingText = portError?.let { { Text(it) } },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(Modifier.height(8.dp))
-
-                    // Path
-                    OutlinedTextField(
-                        value = path,
-                        onValueChange = { path = it },
-                        label = { Text("路径") },
-                        placeholder = { Text("/") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(Modifier.height(8.dp))
-
-                    // Authentication type
-                    var authExpanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(
-                        expanded = authExpanded,
-                        onExpandedChange = { authExpanded = it }
-                    ) {
-                        val authLabel = when (authType) {
-                            "password" -> "密码"
-                            "token" -> "访问令牌"
-                            else -> "无"
-                        }
+                        // Host
                         OutlinedTextField(
-                            value = authLabel,
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("认证类型") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(authExpanded) },
-                            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth()
+                            value = host,
+                            onValueChange = { host = it; hostError = null },
+                            label = { Text("主机名") },
+                            singleLine = true,
+                            isError = hostError != null,
+                            supportingText = hostError?.let { { Text(it) } },
+                            modifier = Modifier.fillMaxWidth()
                         )
-                        ExposedDropdownMenu(
+
+                        Spacer(Modifier.height(8.dp))
+
+                        // Port
+                        OutlinedTextField(
+                            value = port,
+                            onValueChange = { port = it; portError = null },
+                            label = { Text("端口") },
+                            placeholder = { Text(defaultPort.toString()) },
+                            singleLine = true,
+                            isError = portError != null,
+                            supportingText = portError?.let { { Text(it) } },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(Modifier.height(8.dp))
+
+                        // Path
+                        OutlinedTextField(
+                            value = path,
+                            onValueChange = { path = it },
+                            label = { Text("路径") },
+                            placeholder = { Text("/") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(Modifier.height(8.dp))
+
+                        // Authentication type
+                        var authExpanded by remember { mutableStateOf(false) }
+                        ExposedDropdownMenuBox(
                             expanded = authExpanded,
-                            onDismissRequest = { authExpanded = false }
+                            onExpandedChange = { authExpanded = it }
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("密码") },
-                                onClick = { authType = "password"; authExpanded = false }
+                            val authLabel = when (authType) {
+                                "password" -> "密码"
+                                "token" -> "访问令牌"
+                                else -> "无"
+                            }
+                            OutlinedTextField(
+                                value = authLabel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("认证类型") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(authExpanded) },
+                                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth()
                             )
-                            DropdownMenuItem(
-                                text = { Text("访问令牌") },
-                                onClick = { authType = "token"; authExpanded = false }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("无") },
-                                onClick = { authType = "none"; authExpanded = false }
-                            )
+                            ExposedDropdownMenu(
+                                expanded = authExpanded,
+                                onDismissRequest = { authExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("密码") },
+                                    onClick = { authType = "password"; authExpanded = false }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("访问令牌") },
+                                    onClick = { authType = "token"; authExpanded = false }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("无") },
+                                    onClick = { authType = "none"; authExpanded = false }
+                                )
+                            }
                         }
+
+                        // Username (only for password auth)
+                        AnimatedVisibility(authType == "password") {
+                            Column {
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = username,
+                                    onValueChange = { username = it; usernameError = null },
+                                    label = { Text("用户名") },
+                                    singleLine = true,
+                                    isError = usernameError != null,
+                                    supportingText = usernameError?.let { { Text(it) } },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+
+                        // Password / Token
+                        when (authType) {
+                            "password" -> {
+                                OutlinedTextField(
+                                    value = password,
+                                    onValueChange = { password = it },
+                                    label = { Text("密码") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            "token" -> {
+                                OutlinedTextField(
+                                    value = password,
+                                    onValueChange = { password = it },
+                                    label = { Text("访问令牌") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+
+                        // Name
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { name = it },
+                            label = { Text("自定义名称") },
+                            placeholder = { Text(updateNamePlaceholder()) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
 
-                    // Username (only for password auth)
-                    AnimatedVisibility(authType == "password") {
-                        Column {
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = username,
-                                onValueChange = { username = it; usernameError = null },
-                                label = { Text("用户名") },
-                                singleLine = true,
-                                isError = usernameError != null,
-                                supportingText = usernameError?.let { { Text(it) } },
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                    // Buttons
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = onDismiss) {
+                            Text("取消")
+                        }
+                        TextButton(onClick = { connectAndAdd() }) {
+                            Text(if (existingConfig != null) "保存" else "连接并添加")
                         }
                     }
-
-                    Spacer(Modifier.height(8.dp))
-
-                    // Password / Token
-                    when (authType) {
-                        "password" -> {
-                            OutlinedTextField(
-                                value = password,
-                                onValueChange = { password = it },
-                                label = { Text("密码") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                        "token" -> {
-                            OutlinedTextField(
-                                value = password,
-                                onValueChange = { password = it },
-                                label = { Text("访问令牌") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-
-                    // Name
-                    OutlinedTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        label = { Text("自定义名称") },
-                        placeholder = { Text(updateNamePlaceholder()) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            if (!isConnecting) {
-                TextButton(onClick = { connectAndAdd() }) {
-                    Text(if (existingConfig != null) "保存" else "连接并添加")
-                }
-            }
-        },
-        dismissButton = {
-            if (!isConnecting) {
-                TextButton(onClick = onDismiss) {
-                    Text("取消")
                 }
             }
         }
-    )
+    }
 }

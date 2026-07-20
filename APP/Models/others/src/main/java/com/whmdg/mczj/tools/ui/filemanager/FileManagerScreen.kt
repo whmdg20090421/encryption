@@ -13,6 +13,7 @@ import com.whmdg.mczj.tools.util.FormatUtils
 import com.whmdg.mczj.tools.util.AppIconHelper
 import com.whmdg.mczj.tools.util.ArchiveBrowser
 import com.whmdg.mczj.tools.ui.ErrorDialog
+import com.whmdg.mczj.tools.ui.theme.DialogWidthFraction
 import com.whmdg.mczj.tools.ui.FileEntry
 import com.whmdg.mczj.tools.ui.Screen
 import com.whmdg.mczj.tools.ui.encryption.EncryptionSettings
@@ -1956,7 +1957,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 ) {
                     Card(
                         modifier = Modifier
-                            .fillMaxWidth(0.8f)
+                            .fillMaxWidth(DialogWidthFraction)
                             .wrapContentHeight(),
                         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
                         colors = CardDefaults.cardColors(
@@ -2429,7 +2430,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── 外部打开警告对话框 ──
     vm.pendingExternalEntry?.let { entry ->
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { vm.pendingExternalEntry = null },
             title = { Text("无法打开文件") },
             text = { Text("该文件「${entry.name}」可能无法使用外部应用打开，是否强行打开？") },
@@ -2462,7 +2463,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     val sevenZipDialogEntry = vm.sevenZipInfo
     if (sevenZipDialogEntry != null || vm.sevenZipAnalyzing) {
         val context = LocalContext.current
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { if (!vm.sevenZipAnalyzing) vm.sevenZipInfo = null },
             title = { Text("7z 压缩包信息", fontWeight = FontWeight.Bold) },
             text = {
@@ -2578,7 +2579,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── 压缩包 Debug 信息弹窗 ──
     vm.archiveDebugInfo?.let { info ->
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { vm.archiveDebugInfo = null },
             title = { Text("压缩包 Debug 信息", fontWeight = FontWeight.Bold) },
             text = {
@@ -2641,7 +2642,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── 压缩包打开错误弹窗 ──
     vm.archiveOpenError?.let { (fileName, message) ->
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { vm.archiveOpenError = null },
             title = { Text("无法打开压缩包") },
             text = { Text(message) },
@@ -2655,7 +2656,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── 强行打开失败详情 ──
     if (forceOpenError != null) {
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { forceOpenError = null },
             title = { Text("打开失败", color = MaterialTheme.colorScheme.error) },
             text = {
@@ -2688,7 +2689,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── 新建类型选择对话框 ──
     if (showCreateTypeDialog) {
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { showCreateTypeDialog = false },
             title = { Text("新建") },
             text = {
@@ -2728,7 +2729,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── 名称输入对话框 ──
     if (showNameDialog) {
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = {
                 showNameDialog = false
                 createName = ""
@@ -2779,7 +2780,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     // ── 重命名对话框 ──
     if (showRenameDialog && selectedEntry != null) {
         val entry = selectedEntry!!
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = {
                 showRenameDialog = false
                 renameText = ""
@@ -2833,7 +2834,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     else
         vm.rightEntries.filter { it.path in rightSelectedPaths }
     if (showDeleteDialog && (selectedEntry != null || delMultiSelect)) {
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text("删除") },
             text = {
@@ -2899,7 +2900,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     // ── 删除进度对话框 ──
     if (showDeleteProgress) {
         val isMultiDel = if (vm.focusedPanel == FocusedPanel.LEFT) leftSelectedPaths.size > 1 else rightSelectedPaths.size > 1
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { /* 不可手动关闭 */ },
             title = { Text("删除") },
             text = {
@@ -2936,7 +2937,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             "${sourceNames[0]} 等 ${sourceNames.size} 个文件"
         }
         val sourceDir = copyMoveConfirmSourcePaths.firstOrNull()?.substringBeforeLast('/') ?: ""
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { showCopyMoveConfirmDialog = false },
             title = { Text(if (copyMoveConfirmIsCopy) "确认复制" else "确认移动") },
             text = {
@@ -3004,7 +3005,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     if (showFileOpProgress) {
         val progress = fileOpManagerProgress
         var isCancelling by remember { mutableStateOf(false) }
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { /* 不可手动关闭 */ },
             title = { Text(if (isCancelling) "正在取消" else progress?.phase ?: "处理中") },
             text = {
@@ -3099,7 +3100,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── 强制删除确认对话框（移动到回收站失败时） ──
     if (showForceDeleteDialog && forceDeleteEntry != null) {
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { showForceDeleteDialog = false; forceDeleteEntry = null },
             title = { Text("删除") },
             text = { Text("无法移动到回收站，是否永久删除？") },
@@ -3130,7 +3131,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     // ── 回收站永久删除确认对话框 ──
     if (showPermanentDeleteDialog && (permanentDeleteTarget != null || permanentDeleteMultiNames.isNotEmpty())) {
         val isMultiDelete = permanentDeleteMultiNames.isNotEmpty()
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = {
                 showPermanentDeleteDialog = false; permanentDeleteTarget = null; permanentDeleteMultiNames = emptyList()
             },
@@ -3208,7 +3209,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             normalizedPath.isNotEmpty() &&
             !vm.isDirectoryShell(normalizedPath)
 
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = {
                 showAddQaDialog = false
                 qaNameInput = ""; qaPathInput = ""
@@ -3287,7 +3288,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── 添加快捷访问类型选择 ──
     if (showQaTypeSelector) {
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { showQaTypeSelector = false },
             title = { Text("添加快捷访问") },
             text = {
@@ -3373,7 +3374,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
     if (showSizeCalcOptionsMenu && selectedEntry?.isDirectory == true) {
         val targetPath = selectedEntry!!.path
         val targetName = selectedEntry!!.name
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { showSizeCalcOptionsMenu = false },
             title = { Text("大小统计选项") },
             text = {
@@ -3409,7 +3410,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
         Dialog(onDismissRequest = { showPropertyDialog = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Card(
                 modifier = Modifier
-                    .fillMaxWidth(0.8f),
+                    .fillMaxWidth(DialogWidthFraction),
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surface
@@ -3554,7 +3555,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
         Dialog(onDismissRequest = { /* 禁止点击外部关闭 */ }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Card(
-                modifier = Modifier.fillMaxWidth(0.8f),
+                modifier = Modifier.fillMaxWidth(DialogWidthFraction),
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
@@ -3805,7 +3806,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             }
             Dialog(onDismissRequest = { showUserPicker = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(0.8f).fillMaxHeight(0.6f),
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction).fillMaxHeight(0.6f),
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
@@ -3864,7 +3865,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             }
             Dialog(onDismissRequest = { showGroupPicker = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(0.8f).fillMaxHeight(0.6f),
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction).fillMaxHeight(0.6f),
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
@@ -3914,9 +3915,9 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
         // ── 扩展属性帮助弹窗 ──
         if (showExtHelp) {
-            Dialog(onDismissRequest = { showExtHelp = false }) {
+            Dialog(onDismissRequest = { showExtHelp = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(0.85f),
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction),
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
@@ -3954,7 +3955,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
             SortField.CREATED to "创建时间"
         )
 
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { showSortDialog = false },
             title = { Text("排列顺序") },
             text = {
@@ -4077,7 +4078,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── 排序前刷新大小确认对话框 ──
     if (showSortSizeRefreshDialog) {
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { showSortSizeRefreshDialog = false },
             title = { Text("统计大小") },
             text = { Text("当前列表有 ${unmeasuredDirs.size} 个文件夹尚未统计大小，是否先统计再排序？") },
@@ -4160,7 +4161,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 contentAlignment = Alignment.Center
             ) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(0.85f),
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction),
                     shape = RoundedCornerShape(24.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -4454,7 +4455,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
 
     // ── 压缩加密需密码提示 ──
     if (showCompressPasswordHint) {
-        AlertDialog(
+        StandardDialog(
             onDismissRequest = { showCompressPasswordHint = false },
             title = { Text("需要密码") },
             text = { Text("请先输入密码后再启用加密选项。") },
@@ -4477,7 +4478,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 contentAlignment = Alignment.Center
             ) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(0.8f),
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction),
                     shape = RoundedCornerShape(24.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -4581,7 +4582,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 contentAlignment = Alignment.Center
             ) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(0.85f),
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction),
                     shape = RoundedCornerShape(24.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -4703,7 +4704,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 contentAlignment = Alignment.Center
             ) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(0.85f),
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction),
                     shape = RoundedCornerShape(24.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -4811,7 +4812,7 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 contentAlignment = Alignment.Center
             ) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(0.8f),
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction),
                     shape = RoundedCornerShape(24.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -5473,6 +5474,50 @@ private fun DrawerMenuItem(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 统一弹窗包装，参数与 AlertDialog 兼容，内部使用 Dialog+Card 实现。
+ * 宽度统一为 [DialogWidthFraction]，与长按工具栏一致。
+ */
+@Composable
+private fun StandardDialog(
+    onDismissRequest: () -> Unit,
+    title: (@Composable () -> Unit)? = null,
+    text: (@Composable () -> Unit)? = null,
+    confirmButton: (@Composable () -> Unit)? = null,
+    dismissButton: (@Composable () -> Unit)? = null,
+) {
+    Dialog(onDismissRequest = onDismissRequest, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Card(
+            modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                title?.let {
+                    Box { it() }
+                }
+                text?.let {
+                    Box(modifier = Modifier.weight(1f, fill = false)) { it() }
+                }
+                if (confirmButton != null || dismissButton != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        dismissButton?.invoke()
+                        Spacer(Modifier.width(8.dp))
+                        confirmButton?.invoke()
+                    }
+                }
             }
         }
     }

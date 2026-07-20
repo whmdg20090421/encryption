@@ -2,12 +2,16 @@ package com.whmdg.mczj.tools.ui.filemanager
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.whmdg.mczj.tools.ui.theme.DialogWidthFraction
 import com.whmdg.mczj.tools.fileop.ConflictAction
 import com.whmdg.mczj.tools.fileop.ConflictRequest
 import com.whmdg.mczj.tools.fileop.ConflictResult
@@ -32,17 +36,23 @@ fun FileConflictDialog() {
         val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
         var selected by remember(req) { mutableStateOf(ConflictAction.REPLACE) }
 
-        AlertDialog(
-            onDismissRequest = { /* 不可点击外部关闭 */ },
-            title = {
-                Text(
-                    text = "文件冲突",
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.error
-                )
-            },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
+        Dialog(onDismissRequest = { /* 不可点击外部关闭 */ }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Card(
+                modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "文件冲突",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error
+                    )
+
                     // 源文件信息
                     Text(
                         text = if (req.isDirectory) "源文件夹: ${req.sourceName}" else "源文件: ${req.sourceName}",
@@ -57,9 +67,7 @@ fun FileConflictDialog() {
                         )
                     }
 
-                    Spacer(Modifier.height(12.dp))
                     HorizontalDivider()
-                    Spacer(Modifier.height(12.dp))
 
                     // 目标文件信息
                     Text(
@@ -75,9 +83,7 @@ fun FileConflictDialog() {
                         )
                     }
 
-                    Spacer(Modifier.height(12.dp))
                     HorizontalDivider()
-                    Spacer(Modifier.height(12.dp))
 
                     // 三个单选操作
                     ConflictAction.entries.filter { it != ConflictAction.CANCEL }.forEach { action ->
@@ -104,26 +110,26 @@ fun FileConflictDialog() {
                             )
                         }
                     }
-                }
-            },
-            confirmButton = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    TextButton(onClick = {
-                        FileOperationManager.onConflictResolved(ConflictResult(ConflictAction.CANCEL))
-                    }) {
-                        Text("取消", color = MaterialTheme.colorScheme.error)
-                    }
-                    TextButton(onClick = {
-                        FileOperationManager.onConflictResolved(ConflictResult(selected))
-                    }) {
-                        Text("确认")
+
+                    // 按钮
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        TextButton(onClick = {
+                            FileOperationManager.onConflictResolved(ConflictResult(ConflictAction.CANCEL))
+                        }) {
+                            Text("取消", color = MaterialTheme.colorScheme.error)
+                        }
+                        TextButton(onClick = {
+                            FileOperationManager.onConflictResolved(ConflictResult(selected))
+                        }) {
+                            Text("确认")
+                        }
                     }
                 }
             }
-        )
+        }
     }
 }
 
@@ -135,87 +141,88 @@ fun FileErrorDialog() {
     val request by FileOperationManager.errorRequest.collectAsState()
 
     request?.let { req ->
-        AlertDialog(
-            onDismissRequest = {
-                FileOperationManager.onErrorResolved(ErrorResult(ErrorAction.CANCEL))
-            },
-            title = {
-                Text(
-                    text = "操作失败",
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.error
-                )
-            },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
+        Dialog(onDismissRequest = { FileOperationManager.onErrorResolved(ErrorResult(ErrorAction.CANCEL)) }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Card(
+                modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "操作失败",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error
+                    )
+
                     Text(
                         text = req.fileName,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium
                     )
-                    Spacer(Modifier.height(8.dp))
                     Text(
                         text = req.errorMessage,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(Modifier.height(12.dp))
                     Text(
                         text = "请选择操作：",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium
                     )
-                }
-            },
-            confirmButton = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
+
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Button(
-                            onClick = {
-                                FileOperationManager.onErrorResolved(ErrorResult(ErrorAction.RETRY))
-                            },
-                            modifier = Modifier.weight(1f)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("重试")
+                            Button(
+                                onClick = {
+                                    FileOperationManager.onErrorResolved(ErrorResult(ErrorAction.RETRY))
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("重试")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    FileOperationManager.onErrorResolved(ErrorResult(ErrorAction.SKIP))
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("跳过")
+                            }
                         }
-                        OutlinedButton(
-                            onClick = {
-                                FileOperationManager.onErrorResolved(ErrorResult(ErrorAction.SKIP))
-                            },
-                            modifier = Modifier.weight(1f)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("跳过")
-                        }
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                FileOperationManager.onErrorResolved(ErrorResult(ErrorAction.SKIP_ALL))
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("全部跳过")
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                FileOperationManager.onErrorResolved(ErrorResult(ErrorAction.CANCEL))
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("取消")
+                            OutlinedButton(
+                                onClick = {
+                                    FileOperationManager.onErrorResolved(ErrorResult(ErrorAction.SKIP_ALL))
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("全部跳过")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    FileOperationManager.onErrorResolved(ErrorResult(ErrorAction.CANCEL))
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("取消")
+                            }
                         }
                     }
                 }
             }
-        )
+        }
     }
 }

@@ -1,6 +1,7 @@
 package com.whmdg.mczj.tools.auth
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -14,6 +15,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.whmdg.mczj.tools.ui.theme.DialogWidthFraction
 import kotlinx.coroutines.launch
 
 /**
@@ -71,11 +75,18 @@ fun PasswordDialog(
         }
     }
 
-    AlertDialog(
-        onDismissRequest = { if (!isProcessing) onDismiss() },
-        title = { Text(title) },
-        text = {
-            Column {
+    Dialog(onDismissRequest = { if (!isProcessing) onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Card(
+            modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(text = title, style = MaterialTheme.typography.titleLarge)
+
                 val now = System.currentTimeMillis()
                 if (lockedUntil > now) {
                     Text(
@@ -89,8 +100,7 @@ fun PasswordDialog(
                     Text(
                         text = msg,
                         color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(bottom = 8.dp)
+                        style = MaterialTheme.typography.bodySmall
                     )
                 }
 
@@ -116,22 +126,21 @@ fun PasswordDialog(
                     enabled = !isProcessing && lockedUntil <= System.currentTimeMillis(),
                     modifier = Modifier.fillMaxWidth()
                 )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { handleSubmit() },
-                enabled = !isProcessing && password.isNotBlank() && lockedUntil <= System.currentTimeMillis()
-            ) {
-                Text("确认")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isProcessing) {
-                Text("取消")
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss, enabled = !isProcessing) {
+                        Text("取消")
+                    }
+                    TextButton(
+                        onClick = { handleSubmit() },
+                        enabled = !isProcessing && password.isNotBlank() && lockedUntil <= System.currentTimeMillis()
+                    ) {
+                        Text("确认")
+                    }
+                }
             }
         }
-    )
+    }
 }
 
 @Composable

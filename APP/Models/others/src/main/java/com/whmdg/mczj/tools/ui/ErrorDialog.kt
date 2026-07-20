@@ -14,6 +14,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.whmdg.mczj.tools.ui.theme.DialogWidthFraction
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import java.io.File
 import kotlin.system.exitProcess
@@ -52,20 +55,25 @@ fun ErrorDialog(
     }
 
     if (error != null) {
-        AlertDialog(
-            onDismissRequest = { if (!fatal) onDismiss() },
-            shape = RoundedCornerShape(28.dp),
-            title = {
-                Text(
-                    text = if (fatal) "致命错误" else "报错信息",
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.error
-                )
-            },
-            text = {
-                val scrollState = rememberScrollState()
-                Column(modifier = Modifier.fillMaxWidth()) {
+        Dialog(onDismissRequest = { if (!fatal) onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Card(
+                modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = if (fatal) "致命错误" else "报错信息",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error
+                    )
+
                     // 错误信息（可滚动）
+                    val scrollState = rememberScrollState()
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -102,7 +110,7 @@ fun ErrorDialog(
                             }
                         }
                     }
-                    Spacer(Modifier.height(12.dp))
+
                     // 操作按钮
                     Row(modifier = Modifier.fillMaxWidth()) {
                         OutlinedButton(
@@ -138,27 +146,26 @@ fun ErrorDialog(
                             }
                         }
                     }
-                }
-            },
-            confirmButton = {
-                if (fatal) {
-                    Button(
-                        onClick = {
-                            onDismiss()
-                            // 终止进程
-                            exitProcess(0)
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    ) {
-                        Text("退出应用")
-                    }
-                } else {
-                    Button(onClick = onDismiss) {
-                        Text("知道了")
+
+                    if (fatal) {
+                        Button(
+                            onClick = {
+                                onDismiss()
+                                exitProcess(0)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("退出应用")
+                        }
+                    } else {
+                        Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                            Text("知道了")
+                        }
                     }
                 }
             }
-        )
+        }
     }
 }
 
