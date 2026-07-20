@@ -132,25 +132,11 @@
             </intent-filter>
         </receiver>
 
-        <!-- Hook 模式账单数据接收器 -->
-        <receiver
-            android:name=".ui.accounting.HookResultReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.whmdg.mczj.tools.ACTION_HOOK_BILL" />
-            </intent-filter>
-        </receiver>
-
         <!-- OCR 悬浮窗 Service -->
         <service
             android:name=".ui.accounting.OcrFloatingService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
-
-        <!-- Hook 模式悬浮窗 Service -->
-        <service
-            android:name=".ui.accounting.HookFloatingService"
-            android:exported="false" />
 
         <!-- 文件操作 Service（复制/移动/删除任务执行） -->
         <service

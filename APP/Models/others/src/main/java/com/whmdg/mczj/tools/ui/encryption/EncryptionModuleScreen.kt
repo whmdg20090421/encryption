@@ -10,7 +10,8 @@ import com.whmdg.mczj.tools.ui.Screen
 @Composable
 fun EncryptionModuleScreen(
     vaultService: VaultService,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigate: (Screen) -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val settings = remember { EncryptionSettings(context) }
@@ -41,11 +42,14 @@ fun EncryptionModuleScreen(
         else -> null
     }
 
-    // 包装 onNavigate：将 Screen 子类转换为 EncryptionRoute 并压栈
+    // 包装 onNavigate：将 Screen 子类转换为 EncryptionRoute 并压栈，非加密路由传递给父级
     val navigateFromScreen: (Screen) -> Unit = { screen ->
         val route = screenToRoute(screen)
         if (route != null) {
             backStack = backStack + route
+        } else {
+            // 非加密子路由（如 Screen.FileManager），传递给父级处理
+            onNavigate(screen)
         }
     }
 

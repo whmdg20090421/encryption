@@ -474,7 +474,7 @@ fun VaultsListTab(
                     writeDeadline(vault.id.toString(), durationMs)
                 } catch (_: Exception) {}
             }
-            onNavigate(Screen.VaultOpen(session))
+            onNavigate(Screen.FileManager(session))
         } catch (e: Exception) {
             vaultListError = e
         }
@@ -788,7 +788,7 @@ fun VaultsListTab(
                                                             String(com.whmdg.mczj.tools.auth.KeystoreMaster.unwrap(cipherBytes, ivBytes)!!, Charsets.UTF_8)
                                                         } else throw Exception("缓存密码丢失")
                                                         val session = vaultService.open(v.id, pwd)
-                                                        onNavigate(Screen.VaultOpen(session))
+                                                        onNavigate(Screen.FileManager(session))
                                                     } catch (e: Exception) {
                                                         clearDeadline(v.id.toString())
                                                         showPasswordDialog = v

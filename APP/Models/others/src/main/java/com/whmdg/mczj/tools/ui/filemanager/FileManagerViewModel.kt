@@ -46,6 +46,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.serialization.Serializable
+import com.whmdg.mczj.tools.encryption.services.VaultSession
+import com.whmdg.mczj.tools.encryption.core.FilenameCodec
+import com.whmdg.mczj.tools.encryption.core.FileCodec
+import com.whmdg.mczj.tools.encryption.core.FileConstants
+import com.whmdg.mczj.tools.encryption.services.CryptoService
 
 @Serializable
 data class RecycleBinEntry(
@@ -192,6 +197,18 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     /** 是否处于 WebDAV 模式 */
     val isWebDavMode: Boolean get() = webDavClient != null
+
+    // ── Vault 模式 ──
+    var vaultSession by mutableStateOf<VaultSession?>(null)
+        private set
+    val isVaultMode: Boolean get() = vaultSession != null
+    /** vault 模式下 TextEditor 的保存回调（临时文件路径 → 加密写回保险箱） */
+    var pendingVaultTextEntry by mutableStateOf<FileEntry?>(null)
+        private set
+    /** vault 模式下当前编辑文件的原始加密路径 */
+    private var pendingVaultOriginalPath: String? = null
+    /** vault 模式下的导航回调（由 FileManagerScreen 设置） */
+    var onNavigateVault: ((Screen) -> Unit)? = null
 
     init {
         // 权限级别（统一从 legacySp 读取，与 HomeScreen / 安全设置一致）
@@ -814,6 +831,188 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         loadExtFlagsForDir(rightPath, isLeft = false)
     }
 
+    // ── Vault 模式 ──
+
+    fun initVaultMode(session: VaultSession) {
+        vaultSession = session
+        session.loadNameMapping(context)
+        // 设置双面板初始路径为保险箱根目录
+        leftPath = session.vaultDir.absolutePath
+        rightPath = session.vaultDir.absolutePath
+        leftEntries = listDirectory(leftPath)
+        rightEntries = listDirectory(rightPath)
+    }
+
+    fun exitVaultMode() {
+        vaultSession?.dispose()
+        vaultSession = null
+        pendingVaultTextEntry = null
+        pendingVaultOriginalPath = null
+        onNavigateVault = null
+        cleanupVaultTempFiles()
+    }
+
+    private fun cleanupVaultTempFiles() {
+        try {
+            context.cacheDir.listFiles { _, name ->
+                name.startsWith("vault_open_") || name.startsWith("vault_text_") || name.startsWith("vault_img_")
+            }?.forEach { it.delete() }
+        } catch (_: Exception) {}
+    }
+
+    private fun decryptVaultFileName(encryptedName: String, session: VaultSession): String {
+        var raw = encryptedName
+        if (raw.endsWith(".aes")) {
+            raw = raw.substring(0, raw.length - 4)
+        }
+        if (!session.record.encryptFilename) {
+            return raw
+        }
+        return try {
+            FilenameCodec.decrypt(
+                encryptedName = "${raw}.aes",
+                dek = session.dek,
+                aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null,
+                lookupMapping = { session.nameMapping.get(it) }
+            )
+        } catch (e: Exception) {
+            raw
+        }
+    }
+
+    /** vault 模式下打开文件：解密到临时文件后分发 */
+    fun openVaultFile(entry: FileEntry): Screen? {
+        val session = vaultSession ?: return null
+
+        if (entry.isDirectory) {
+            navigateToFolder(entry)
+            return null
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val tempFile = File(context.cacheDir, "vault_open_${System.currentTimeMillis()}_${entry.name}")
+                FileCodec.decrypt(
+                    src = File(entry.path),
+                    dst = tempFile,
+                    dek = session.dek,
+                    customEncryption = session.record.customEncryption
+                )
+
+                withContext(Dispatchers.Main) {
+                    val ext = entry.name.substringAfterLast('.').lowercase()
+                    val textExts = listOf("txt", "kt", "java", "xml", "json", "md", "py", "sh", "log", "csv", "html", "css", "js", "yml", "yaml", "toml", "ini", "cfg", "conf", "bat", "cmd", "c", "cpp", "h", "hpp", "go", "rs", "swift", "rb", "php", "sql", "r", "lua", "pl", "scala", "groovy", "properties")
+                    val imageExts = listOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico", "tiff", "tif")
+
+                    when {
+                        ext in textExts -> {
+                            val textFile = File(context.cacheDir, "vault_text_${entry.name}")
+                            tempFile.copyTo(textFile, overwrite = true)
+                            pendingVaultTextEntry = entry.copy(path = textFile.absolutePath)
+                            pendingVaultOriginalPath = entry.path  // 保存原始加密路径
+                            onNavigateVault?.invoke(Screen.TextEditor(textFile.absolutePath))
+                        }
+                        ext in imageExts -> {
+                            val imgFile = File(context.cacheDir, "vault_img_${entry.name}")
+                            tempFile.copyTo(imgFile, overwrite = true)
+                            onNavigateVault?.invoke(Screen.ImageViewer(imgFile.absolutePath))
+                        }
+                        else -> {
+                            openWithExternalApp(tempFile, entry.name)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    loadError = e
+                }
+            }
+        }
+        return null
+    }
+
+    /** vault 模式下 TextEditor 保存回调：重新加密写回保险箱 */
+    fun handleVaultTextSave(content: String) {
+        val session = vaultSession ?: return
+        val entry = pendingVaultTextEntry ?: return
+        val originalPath = pendingVaultOriginalPath ?: return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // 写入临时文件
+                val tempFile = File(entry.path)
+                tempFile.writeText(content)
+
+                // 计算保险箱内的相对子目录
+                val vaultDir = session.vaultDir
+                val originalFile = File(originalPath)
+                val subDir = originalFile.parentFile?.let { parent ->
+                    if (parent.absolutePath == vaultDir.absolutePath) ""
+                    else parent.relativeTo(vaultDir).path
+                } ?: ""
+
+                // 删除原始加密文件
+                SpecialPermissionVerifier.safeDelete(originalFile)
+
+                // 重新加密写回保险箱
+                CryptoService.encryptIntoVault(
+                    context = context,
+                    session = session,
+                    srcFile = tempFile,
+                    subDir = subDir,
+                    overwrite = true
+                )
+
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "已加密保存", Toast.LENGTH_SHORT).show()
+                    pendingVaultTextEntry = null
+                    pendingVaultOriginalPath = null
+                    refreshCurrent()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    loadError = e
+                }
+            }
+        }
+    }
+
+    private fun openWithExternalApp(file: File, displayName: String) {
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, getMimeType(displayName))
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            viewModelScope.launch(Dispatchers.Main) {
+                loadError = RuntimeException("无法打开文件: $displayName\n${e.message}")
+            }
+        }
+    }
+
+    private fun getMimeType(fileName: String): String {
+        val ext = fileName.substringAfterLast('.').lowercase()
+        return when (ext) {
+            "pdf" -> "application/pdf"
+            "doc", "docx" -> "application/msword"
+            "xls", "xlsx" -> "application/vnd.ms-excel"
+            "ppt", "pptx" -> "application/vnd.ms-powerpoint"
+            "zip" -> "application/zip"
+            "mp3" -> "audio/mpeg"
+            "mp4" -> "video/mp4"
+            "avi" -> "video/x-msvideo"
+            "mkv" -> "video/x-matroska"
+            else -> "*/*"
+        }
+    }
+
     // ── 文件夹大小统计 ──
 
     /** 选用当前可用的最高权限通道（ROOT > SHIZUKU > NORMAL）。 */
@@ -1321,6 +1520,25 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
+        // vault 模式：过滤配置文件 + 文件名解密
+        if (isVaultMode) {
+            val session = vaultSession!!
+            entries = entries.filter { entry ->
+                val name = entry.name
+                name != "vault_config.json" &&
+                name != "vault_config.backup.json" &&
+                name != "name_mappings.json" &&
+                name != "folder_sizes.json"
+            }.map { entry ->
+                if (entry.isDirectory) {
+                    entry
+                } else {
+                    val displayName = decryptVaultFileName(entry.name, session)
+                    entry.copy(name = displayName)
+                }
+            }
+        }
+
         // 填充创建时间（API 26+ 使用 NIO）
         if (sortField == SortField.CREATED && android.os.Build.VERSION.SDK_INT >= 26) {
             entries = entries.map { e ->
@@ -1367,6 +1585,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 文件操作 ──
     fun openFile(context: Context, entry: FileEntry, isDebug: Boolean = false): Screen? {
+        // vault 模式：解密后打开
+        if (isVaultMode) {
+            return openVaultFile(entry)
+        }
+
         DiagnosticLog.log("OpenFile", "请求打开: ${entry.path}")
         if (entry.name.endsWith(".apk", ignoreCase = true)) {
             DiagnosticLog.log("OpenFile", "APK 文件，弹出信息弹窗: ${entry.name}")

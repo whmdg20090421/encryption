@@ -28,6 +28,7 @@ import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
+import com.whmdg.mczj.tools.encryption.services.VaultSession
 import com.whmdg.mczj.tools.fileop.FileOperationManager
 import com.whmdg.mczj.tools.fileop.DeleteEntry
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
@@ -176,10 +177,32 @@ data class PanelNavState(
 @OptIn(ExperimentalMaterial3Api::class)
 // 系统文件管理器（FileManagerScreen）—— 不要与 VaultOpenScreen（保险箱文件浏览器）混淆
 @Composable
-fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
+fun FileManagerScreen(
+    onBack: () -> Unit,
+    onNavigate: (Screen) -> Unit = {},
+    vaultSession: VaultSession? = null,
+    onVaultSaveReady: (((String) -> Unit) -> Unit)? = null
+) {
     val context = LocalContext.current
     val vm: FileManagerViewModel = viewModel()
     val encSettings = remember { EncryptionSettings(context) }
+
+    // vault 模式初始化
+    LaunchedEffect(vaultSession) {
+        if (vaultSession != null) {
+            vm.initVaultMode(vaultSession)
+            vm.onNavigateVault = { screen -> onNavigate(screen) }
+        }
+    }
+
+    // vault 模式保存回调注册
+    LaunchedEffect(vm.vaultSession, onVaultSaveReady) {
+        if (vm.vaultSession != null && onVaultSaveReady != null) {
+            onVaultSaveReady { content ->
+                vm.handleVaultTextSave(content)
+            }
+        }
+    }
 
     var hasStoragePermission by remember {
         mutableStateOf(Environment.isExternalStorageManager())
@@ -521,6 +544,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                 vm.exitRecycleBin()
             }
         } else if (!saveScrollAndGoUp()) {
+            // vault 模式退出时清理 DEK
+            if (vm.isVaultMode) {
+                vm.exitVaultMode()
+            }
             onBack()
         }
     }
@@ -554,7 +581,10 @@ fun FileManagerScreen(onBack: () -> Unit, onNavigate: (Screen) -> Unit = {}) {
                         }
                     },
                 actions = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        if (vm.isVaultMode) vm.exitVaultMode()
+                        onBack()
+                    }) {
                         Icon(Icons.Default.Home, contentDescription = "返回主页")
                     }
                     Box {

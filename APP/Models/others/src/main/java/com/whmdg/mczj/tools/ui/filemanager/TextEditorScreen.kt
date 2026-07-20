@@ -22,7 +22,7 @@ import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TextEditorScreen(filePath: String, onBack: () -> Unit) {
+fun TextEditorScreen(filePath: String, onBack: () -> Unit, onSave: ((String) -> Unit)? = null) {
     val context = LocalContext.current
     val file = remember { File(filePath) }
     var hasChanges by remember { mutableStateOf(false) }
@@ -43,7 +43,11 @@ fun TextEditorScreen(filePath: String, onBack: () -> Unit) {
                 TextButton(onClick = {
                     editorRef?.text?.toString()?.let { content ->
                         try {
-                            file.writeText(content)
+                            if (onSave != null) {
+                                onSave(content)
+                            } else {
+                                file.writeText(content)
+                            }
                             hasChanges = false
                             DiagnosticLog.log("TextEditor", "保存成功: $filePath")
                         } catch (e: Exception) {
@@ -85,7 +89,11 @@ fun TextEditorScreen(filePath: String, onBack: () -> Unit) {
                         onClick = {
                             editorRef?.text?.toString()?.let { content ->
                                 try {
-                                    file.writeText(content)
+                                    if (onSave != null) {
+                                        onSave(content)
+                                    } else {
+                                        file.writeText(content)
+                                    }
                                     hasChanges = false
                                     Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
                                     DiagnosticLog.log("TextEditor", "保存成功: $filePath")

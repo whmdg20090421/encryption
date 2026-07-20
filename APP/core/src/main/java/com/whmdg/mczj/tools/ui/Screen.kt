@@ -49,7 +49,7 @@ open class Screen {
 
     // 8 个模块入口
     object Encryption : Screen()
-    object FileManager : Screen()
+    data class FileManager(val vaultSession: VaultSession? = null) : Screen()
     object AppPermissions : Screen()
     object BatchDownloader : Screen()
     object Security : Screen()
@@ -119,7 +119,7 @@ data class ModuleEntry(
 
 val MODULE_REGISTRY: Map<ModuleId, ModuleEntry> = mapOf(
     ModuleId.ENCRYPTION to ModuleEntry("加密", "常用加密 / 解密工具", Icons.Default.Lock, Feature.ENCRYPTION_VAULT, Screen.Encryption),
-    ModuleId.FILE_MANAGER to ModuleEntry("文件管理器", "双面板文件浏览工具", Icons.Default.Folder, Feature.FILE_MANAGER, Screen.FileManager),
+    ModuleId.FILE_MANAGER to ModuleEntry("文件管理器", "双面板文件浏览工具", Icons.Default.Folder, Feature.FILE_MANAGER, Screen.FileManager()),
     ModuleId.APP_PERMISSIONS to ModuleEntry("应用权限管理", "查看和管理应用权限", Icons.Default.Security, Feature.APP_PERMISSIONS, Screen.AppPermissions),
     ModuleId.BATCH_DOWNLOADER to ModuleEntry("批量下载器", "FA 图片批量下载等工具", Icons.Default.Download, Feature.BATCH_DOWNLOADER, Screen.BatchDownloader),
     ModuleId.SECURITY to ModuleEntry("安全", "权限设置与特殊权限管理", Icons.Default.Lock, Feature.SECURITY_SETTINGS, Screen.Security),

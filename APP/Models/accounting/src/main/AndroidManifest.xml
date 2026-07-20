@@ -22,18 +22,5 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- Hook 模式悬浮窗服务 -->
-        <service
-            android:name=".ui.accounting.HookFloatingService"
-            android:exported="false" />
-
-        <!-- Hook 模式账单数据接收器 -->
-        <receiver
-            android:name=".ui.accounting.HookResultReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.whmdg.mczj.tools.ACTION_HOOK_BILL" />
-            </intent-filter>
-        </receiver>
     </application>
 </manifest>

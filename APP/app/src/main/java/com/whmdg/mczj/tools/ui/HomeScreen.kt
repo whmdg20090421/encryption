@@ -241,7 +241,8 @@ fun MainAppContainer() {
         is Screen.Encryption -> {
             EncryptionModuleScreen(
                 vaultService = vaultService,
-                onBack = { navigateBack() }
+                onBack = { navigateBack() },
+                onNavigate = { navigateTo(it) }
             )
         }
         is Screen.SpecialPermissions -> {
@@ -261,7 +262,8 @@ fun MainAppContainer() {
         }
         is Screen.FileManager -> {
             FileManagerModuleScreen(
-                onBack = { navigateBack() }
+                onBack = { navigateBack() },
+                vaultSession = screen.vaultSession
             )
         }
         is Screen.BatchDownloader -> {

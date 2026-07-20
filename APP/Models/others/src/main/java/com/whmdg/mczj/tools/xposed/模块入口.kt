@@ -15,10 +15,6 @@ class 模块入口(base: XposedContext, param: ModuleLoadedParam) : XposedModule
 
     override fun onPackageLoaded(param: PackageLoadedParam) {
         log("艨艟: 包已加载: ${param.packageName}, first=${param.isFirstPackage}")
-
-        if (param.packageName == "com.tencent.mm") {
-            com.whmdg.mczj.tools.xposed.hooks.微信账单拦截.注册(this, param)
-        }
     }
 
     override fun onSystemServerLoaded(param: SystemServerLoadedParam) {
