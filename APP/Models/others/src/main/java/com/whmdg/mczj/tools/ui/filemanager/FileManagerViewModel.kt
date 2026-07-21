@@ -1633,12 +1633,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
             // 按批处理：每积累 50 条更新一次 flow，避免每条 entry 都创建列表快照
             var lastEmittedSize = 0
-            val streamOk = listWithLsStreaming(displayPath, showHiddenFiles, entries, cancelFlag = cancelFlag, entryFilter = vaultFilter) { _ ->
+            val streamOk = listWithLsStreaming(displayPath, showHiddenFiles, entries, onEntry = { _ ->
                 if (entries.size - lastEmittedSize >= 50) {
                     lastEmittedSize = entries.size
                     entriesFlow.value = entries.toList()
                 }
-            }
+            }, cancelFlag = cancelFlag, entryFilter = vaultFilter)
             // 流式结束后 emit 最终快照（含不足 50 条的尾部）
             if (entries.size != lastEmittedSize) {
                 entriesFlow.value = entries.toList()
