@@ -4983,7 +4983,6 @@ private fun FileBrowserPanel(
     thumbnailLoader: ((FileEntry) -> ImageBitmap?)? = null
 ) {
     val isMultiSelectMode = selectedPaths.isNotEmpty()
-    var symlinkDialogEntry by remember { mutableStateOf<FileEntry?>(null) }
     Surface(
         modifier = modifier
             .fillMaxHeight()
@@ -5064,12 +5063,9 @@ private fun FileBrowserPanel(
                         onClick = {
                             if (isMultiSelectMode) {
                                 onToggleSelect(entry)
-                            } else if (entry.permission.startsWith("l")) {
-                                symlinkDialogEntry = entry
-                            } else if (entry.isDirectory) {
-                                onFolderClick(entry)
                             } else {
-                                onFileClick(entry)
+                                if (entry.isDirectory) onFolderClick(entry)
+                                else onFileClick(entry)
                             }
                         },
                         onLongClick = {
@@ -5088,19 +5084,6 @@ private fun FileBrowserPanel(
                 }
             }
         }
-    }
-
-    symlinkDialogEntry?.let { entry ->
-        StandardDialog(
-            onDismissRequest = { symlinkDialogEntry = null },
-            title = { Text("暂不支持") },
-            text = { Text("软链接「${entry.name}」暂不支持跳转和使用") },
-            confirmButton = {
-                TextButton(onClick = { symlinkDialogEntry = null }) {
-                    Text("确定")
-                }
-            }
-        )
     }
 }
 

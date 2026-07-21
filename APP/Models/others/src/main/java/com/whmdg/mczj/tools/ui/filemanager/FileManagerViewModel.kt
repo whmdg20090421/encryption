@@ -30,7 +30,6 @@ import com.whmdg.mczj.tools.util.FileAccessor
 import com.whmdg.mczj.tools.util.SizeCalcResult
 import com.whmdg.mczj.tools.util.calculateFolderSize
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -275,24 +274,26 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     leftPath = session.currentPath
                     leftEntries = session.currentEntries
                     rightPath = rHome
-                    loadDirectoryStreaming(rHome, isLeft = false)
+                    rightEntries = listDirectory(rHome)
                 } else {
                     rightPath = session.currentPath
                     rightEntries = session.currentEntries
                     leftPath = lHome
-                    loadDirectoryStreaming(lHome, isLeft = true)
+                    leftEntries = listDirectory(lHome)
                 }
                 ArchiveBrowser.clearSessionCache(context)
             } catch (e: Exception) {
                 DiagnosticLog.log("FileMgr", "恢复压缩包会话失败: ${e.message}")
                 ArchiveBrowser.clearSessionCache(context)
-                loadDirectoryStreaming(lHome, isLeft = true)
-                loadDirectoryStreaming(rHome, isLeft = false)
+                leftEntries = listDirectory(lHome)
+                rightEntries = listDirectory(rHome)
             }
         } else {
-            loadDirectoryStreaming(lHome, isLeft = true)
-            loadDirectoryStreaming(rHome, isLeft = false)
+            leftEntries = listDirectory(lHome)
+            rightEntries = listDirectory(rHome)
         }
+        loadExtFlagsForDir(leftPath, isLeft = true)
+        loadExtFlagsForDir(rightPath, isLeft = false)
     }
 
     /**
@@ -400,7 +401,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 通过 find -printf 列出目录内容（保留前导空格等特殊字符）。
-     * 输出格式: %f|%s|%T@|%M\n
+     * 输出格式: %f|%s|%T@|%m|%u|%g|%M\n
      * @return 原始行列表，调用方自行解析
      */
     private fun listDirViaFind(
@@ -410,86 +411,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val normalized = if (dirPath == "/") "/" else dirPath.trimEnd('/').ifEmpty { "/" }
         val escaped = SevenZipCommand.escape(normalized)
         val hiddenFilter = if (showHidden) "" else " -not -name '.*'"
-        val cmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%M\\n'"
+        val cmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
         return try {
             val stdout = ShellExecutor.execute(Permission.MAX, cmd, debug = true)
             stdout.lines().filter { it.isNotBlank() }
         } catch (_: Exception) {
             emptyList()
         }
-    }
-
-    /**
-     * 流式列出目录内容：逐行解析 find 输出并追加到 entries，实现渐进式渲染。
-     * 使用 ShellExecutor.executeStreaming，每收到一行 stdout 立即解析为 FileEntry。
-     *
-     * @param displayPath 显示路径（用于构建 childPath）
-     * @param showHidden 是否显示隐藏文件
-     * @param entries 目标列表引用，逐行追加
-     * @param onEntry 每解析一条 entry 后的回调（用于渐进更新 UI），默认 null 表示无回调
-     * @return true 成功（entries 可能为空 = 空目录），false 失败（loadError 已设置）
-     */
-    private fun listWithLsStreaming(
-        displayPath: String,
-        showHidden: Boolean,
-        entries: MutableList<FileEntry>,
-        onEntry: ((FileEntry) -> Unit)? = null,
-        cancelFlag: AtomicBoolean? = null,
-        entryFilter: ((FileEntry) -> FileEntry?)? = null
-    ): Boolean {
-        val normalizedPath = if (displayPath == "/") "/" else displayPath.trimEnd('/').ifEmpty { "/" }
-        val escaped = SevenZipCommand.escape(normalizedPath)
-        val hiddenFilter = if (showHidden) "" else " -not -name '.*'"
-        val cmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%M\\n'"
-
-        var hadError = false
-        try {
-            ShellExecutor.executeStreaming(Permission.MAX, cmd, onOutputLine = { line ->
-                if (line.isBlank()) return@executeStreaming
-                val parts = line.split("|")
-                if (parts.size < 4) return@executeStreaming
-                val name = parts[0]
-                if (name == "." || name == "..") return@executeStreaming
-                val size = parts[1].toLongOrNull() ?: 0L
-                val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
-                val perms = parts[3]
-                val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-                val isDir = perms.startsWith("d")
-                val entry = FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong())
-                if (entryFilter != null) {
-                    val filtered = entryFilter(entry) ?: return@executeStreaming
-                    entries.add(filtered)
-                    onEntry?.invoke(filtered)
-                } else {
-                    entries.add(entry)
-                    onEntry?.invoke(entry)
-                }
-            }, cancelFlag = cancelFlag)
-        } catch (e: Throwable) {
-            val isApkAssetsNoise = e is java.io.IOException && (
-                e.stackTrace.any { it.className == "android.content.res.ApkAssets" } ||
-                        (e.message?.contains("Failed to load asset path") == true) ||
-                        (e.message?.contains(".apk from fd") == true)
-            )
-            if (isApkAssetsNoise) {
-                DiagnosticLog.log("LsShell", "忽略 hook 注入的 ApkAssets 噪声: ${e.message}")
-                return false
-            }
-            DiagnosticLog.log("LsShell", "流式执行抛错: ${e.javaClass.simpleName}: ${e.message}")
-            loadError = if (e is Exception) e else RuntimeException(e)
-            hadError = true
-        }
-
-        if (!hadError && entries.isEmpty()) {
-            val file = File(normalizedPath)
-            if (!file.exists()) {
-                loadError = SecurityException("目录不存在: $normalizedPath")
-            } else if (!file.isDirectory) {
-                loadError = SecurityException("不是目录: $normalizedPath")
-            }
-        }
-
-        return !hadError
     }
 
     /**
@@ -510,16 +438,34 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         val entries = mutableListOf<FileEntry>()
 
+        // 收集软链接，批量检测目标类型
+        val symlinks = mutableMapOf<String, String>()
         for (line in findLines) {
             val parts = line.split("|")
-            if (parts.size < 4) continue
+            if (parts.size < 7) continue
+            val perms = parts[6]
+            if (perms.startsWith("l")) {
+                val name = parts[0]
+                val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
+                symlinks[childPath] = ""
+            }
+        }
+        checkSymlinkTargets(symlinks)
+
+        for (line in findLines) {
+            val parts = line.split("|")
+            if (parts.size < 7) continue
             val name = parts[0]
             if (name == "." || name == "..") continue
             val size = parts[1].toLongOrNull() ?: 0L
             val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
-            val perms = parts[3]
+            val perms = parts[6]
             val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
-            val isDir = perms.startsWith("d")
+            val isDir = when {
+                perms.startsWith("d") -> true
+                perms.startsWith("l") -> symlinkTypeCache[childPath] ?: false
+                else -> false
+            }
             entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong()))
         }
         return entries
@@ -568,25 +514,74 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
     }
 
-    // ── 核心导航：切换路径 + 流式刷新列表 ──
+    // ── 核心导航：切换路径 + 刷新列表 ──
     // path = 显示路径（软链接路径），realPath = 真实路径（用于读取文件列表）
     fun navigateTo(path: String, realPath: String = path) {
         if (recycleBinPanel == focusedPanel) recycleBinPanel = null
+        // path = 显示路径（软链接路径），realPath = 真实路径（用于读取文件列表）
+        // 后退/前进/返回上一级传入的 realPath 默认等于 path，需要解析真实路径
+        val resolvedRealPath = if (realPath == path && hasShellEngine) {
+            resolveIfSymlink(path)
+        } else {
+            realPath
+        }
         if (focusedPanel == FocusedPanel.LEFT) {
             if (leftPath == path) return
             leftNavState = leftNavState.navigate(path)
             leftPath = path
-            loadDirectoryStreaming(realPath, path, isLeft = true)
+            leftEntries = listDirectory(path, resolvedRealPath)
+            loadExtFlagsForDir(path, isLeft = true)
         } else {
             if (rightPath == path) return
             rightNavState = rightNavState.navigate(path)
             rightPath = path
-            loadDirectoryStreaming(realPath, path, isLeft = false)
+            rightEntries = listDirectory(path, resolvedRealPath)
+            loadExtFlagsForDir(path, isLeft = false)
+        }
+    }
+
+    /** 软链接路径 → 真实路径缓存（避免后退/前进时重复执行 readlink） */
+    private val symlinkResolveCache = mutableMapOf<String, String>()
+
+    /** 如果路径是软链接，解析真实目标路径；否则原样返回 */
+    private fun resolveIfSymlink(path: String): String {
+        if (!hasShellEngine) return path
+        symlinkResolveCache[path]?.let { return it }
+        val escaped = SevenZipCommand.escape(path)
+        val (out, _, exit) = try {
+            executeShell("readlink -f $escaped")
+        } catch (_: Exception) { Triple("", "", -1) }
+        val resolved = if (exit == 0 && out.isNotBlank() && out.trim() != path) out.trim() else path
+        symlinkResolveCache[path] = resolved
+        return resolved
+    }
+
+    /** 软链接目标类型缓存：path → 目标是否为目录（避免每次列表重复检测） */
+    private val symlinkTypeCache = mutableMapOf<String, Boolean>()
+
+    /**
+     * 批量检测软链接目标是否为目录（test -d 自动跟随软链接）。
+     * @param symlinks 软链接路径 → 目标路径 的映射
+     */
+    private fun checkSymlinkTargets(symlinks: Map<String, String>) {
+        if (symlinks.isEmpty() || !hasShellEngine) return
+        val toCheck = symlinks.filter { it.key !in symlinkTypeCache }
+        if (toCheck.isEmpty()) return
+        val cmd = toCheck.entries.joinToString("; ") { (path, _) ->
+            val escaped = SevenZipCommand.escape(path)
+            "test -d $escaped && echo '1' || echo '0'"
+        }
+        val (out, _, exit) = try { executeShell(cmd) } catch (_: Exception) { return }
+        if (exit != 0 && out.isBlank()) return
+        val results = out.lines().filter { it.isNotBlank() }
+        toCheck.keys.forEachIndexed { i, path ->
+            if (i < results.size) symlinkTypeCache[path] = results[i].trim() == "1"
         }
     }
 
     // ── 导航操作 ──
     fun navigateToFolder(entry: FileEntry, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
+        // 显示路径始终使用软链接本身的路径，真实路径由 navigateTo 内部 resolveIfSymlink 解析
         val displayPath = entry.path
 
         if (hasShellEngine) {
@@ -751,36 +746,40 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 后退，返回目标路径，null 表示无法后退（不执行跳转，由调用方通过 navigateToWithScroll 跳转） */
-    /** 后退一步：更新 nav state index + 切换路径 + 流式刷新列表，返回目标路径 */
+    /** 后退一步：更新 nav state index + 切换路径 + 刷新列表，返回目标路径 */
     fun goBack(): String? {
         if (focusedPanel == FocusedPanel.LEFT) {
             val back = leftNavState.back() ?: return null
             leftNavState = back
             leftPath = back.current
-            loadDirectoryStreaming(leftPath, isLeft = true)
+            leftEntries = listDirectory(leftPath)
+            loadExtFlagsForDir(leftPath, isLeft = true)
             return leftPath
         } else {
             val back = rightNavState.back() ?: return null
             rightNavState = back
             rightPath = back.current
-            loadDirectoryStreaming(rightPath, isLeft = false)
+            rightEntries = listDirectory(rightPath)
+            loadExtFlagsForDir(rightPath, isLeft = false)
             return rightPath
         }
     }
 
-    /** 前进一步：更新 nav state index + 切换路径 + 流式刷新列表，返回目标路径 */
+    /** 前进一步：更新 nav state index + 切换路径 + 刷新列表，返回目标路径 */
     fun goForward(): String? {
         if (focusedPanel == FocusedPanel.LEFT) {
             val fwd = leftNavState.forward() ?: return null
             leftNavState = fwd
             leftPath = fwd.current
-            loadDirectoryStreaming(leftPath, isLeft = true)
+            leftEntries = listDirectory(leftPath)
+            loadExtFlagsForDir(leftPath, isLeft = true)
             return leftPath
         } else {
             val fwd = rightNavState.forward() ?: return null
             rightNavState = fwd
             rightPath = fwd.current
-            loadDirectoryStreaming(rightPath, isLeft = false)
+            rightEntries = listDirectory(rightPath)
+            loadExtFlagsForDir(rightPath, isLeft = false)
             return rightPath
         }
     }
@@ -799,11 +798,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (focusedPanel == FocusedPanel.LEFT) {
             rightPath = leftPath
             rightNavState = rightNavState.navigate(leftPath)
-            loadDirectoryStreaming(rightPath, isLeft = false)
+            rightEntries = listDirectory(rightPath)
+            loadExtFlagsForDir(rightPath, isLeft = false)
         } else {
             leftPath = rightPath
             leftNavState = leftNavState.navigate(rightPath)
-            loadDirectoryStreaming(leftPath, isLeft = true)
+            leftEntries = listDirectory(leftPath)
+            loadExtFlagsForDir(leftPath, isLeft = true)
         }
     }
 
@@ -811,9 +812,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (focusedPanel == FocusedPanel.LEFT && isWebDavMode) {
             loadWebDavEntries()
         } else if (focusedPanel == FocusedPanel.LEFT) {
-            loadDirectoryStreaming(leftPath, isLeft = true)
+            leftEntries = listDirectory(leftPath)
+            loadExtFlagsForDir(leftPath, isLeft = true)
         } else {
-            loadDirectoryStreaming(rightPath, isLeft = false)
+            rightEntries = listDirectory(rightPath)
+            loadExtFlagsForDir(rightPath, isLeft = false)
         }
     }
 
@@ -821,9 +824,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (isWebDavMode) {
             loadWebDavEntries()
         } else {
-            loadDirectoryStreaming(leftPath, isLeft = true)
+            leftEntries = listDirectory(leftPath)
+            loadExtFlagsForDir(leftPath, isLeft = true)
         }
-        loadDirectoryStreaming(rightPath, isLeft = false)
+        rightEntries = listDirectory(rightPath)
+        loadExtFlagsForDir(rightPath, isLeft = false)
     }
 
     // ── Vault 模式 ──
@@ -834,8 +839,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 设置双面板初始路径为保险箱根目录
         leftPath = session.vaultDir.absolutePath
         rightPath = session.vaultDir.absolutePath
-        loadDirectoryStreaming(leftPath, isLeft = true)
-        loadDirectoryStreaming(rightPath, isLeft = false)
+        leftEntries = listDirectory(leftPath)
+        rightEntries = listDirectory(rightPath)
     }
 
     fun exitVaultMode() {
@@ -1437,8 +1442,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateShowHiddenFiles(value: Boolean) {
         showHiddenFiles = value
         fmPrefs.edit().putBoolean("show_hidden_files", value).apply()
-        loadDirectoryStreaming(leftPath, isLeft = true)
-        loadDirectoryStreaming(rightPath, isLeft = false)
+        leftEntries = listDirectory(leftPath)
+        rightEntries = listDirectory(rightPath)
     }
 
     fun updateJxlPackZip(value: Boolean) {
@@ -1453,8 +1458,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val entries = listRecycleBinDir(java.io.File(recycleBinPath))
             if (focusedPanel == FocusedPanel.LEFT) leftEntries = entries else rightEntries = entries
         } else {
-            loadDirectoryStreaming(leftPath, isLeft = true)
-            loadDirectoryStreaming(rightPath, isLeft = false)
+            leftEntries = listDirectory(leftPath)
+            rightEntries = listDirectory(rightPath)
         }
     }
 
@@ -1465,8 +1470,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val entries = listRecycleBinDir(java.io.File(recycleBinPath))
             if (focusedPanel == FocusedPanel.LEFT) leftEntries = entries else rightEntries = entries
         } else {
-            loadDirectoryStreaming(leftPath, isLeft = true)
-            loadDirectoryStreaming(rightPath, isLeft = false)
+            leftEntries = listDirectory(leftPath)
+            rightEntries = listDirectory(rightPath)
         }
     }
 
@@ -1498,15 +1503,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val t0 = System.currentTimeMillis()
         val effectiveRoot = if (isRootEngine) "/" else safeDefault
 
-        val streamingEntries = mutableListOf<FileEntry>()
-        val streamOk = listWithLsStreaming(displayPath, showHiddenFiles, streamingEntries)
-        var entries: List<FileEntry> = streamingEntries
+        var entries = listWithLs(realPath, showHiddenFiles, useRoot = isRootEngine, effectiveRoot = effectiveRoot, displayPath = displayPath)
 
-        // 兜底：流式完全没结果且报错 → 退到 File.listFiles
+        // 兜底：ls 完全没结果且报错 → 退到 File.listFiles
         // Android/data 等受保护路径跳过兜底，因为 File API 无法访问
         val isProtectedPath = realPath.contains("/Android/data") || realPath.contains("/Android/obb")
-        if (!streamOk && entries.isEmpty() && !isProtectedPath) {
-            DiagnosticLog.log("FileMgr", "流式 ls 失败，回退 File API")
+        if (entries.isEmpty() && loadError != null && !isProtectedPath) {
+            DiagnosticLog.log("FileMgr", "ls 失败，回退 File API")
             val prevErr = loadError
             loadError = null
             val fileEntries = listWithFile(realPath, showHiddenFiles, effectiveRoot)
@@ -1578,138 +1581,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val took = System.currentTimeMillis() - t0
         DiagnosticLog.log("FileMgr", "<<< listDirectory END displayPath=$displayPath entries=${entries.size} took=${took}ms err=${loadError?.javaClass?.simpleName}")
         return entries
-    }
-
-    /** 当前正在执行的流式加载协程，用于取消前一次加载 */
-    private var loadingJob: Job? = null
-    /** 当前 shell 进程的取消标志，导航时设为 true 终止旧进程 */
-    private var shellCancelFlag: AtomicBoolean? = null
-
-    /**
-     * 流式加载目录：在 IO 线程逐条解析 find 输出，通过 entriesFlow 渐进更新 UI。
-     * 导航/刷新时调用此函数替代 listDirectory，实现首屏快速出现。
-     */
-    private fun loadDirectoryStreaming(
-        realPath: String,
-        displayPath: String = realPath,
-        isLeft: Boolean
-    ) {
-        loadingJob?.cancel()
-        shellCancelFlag?.set(true) // 终止前一次 shell 进程
-        val cancelFlag = AtomicBoolean(false)
-        shellCancelFlag = cancelFlag
-        loadError = null
-
-        // 立即清空当前面板，显示空列表（避免看到上一个目录的残留）
-        if (isLeft) leftEntries = emptyList() else rightEntries = emptyList()
-
-        loadingJob = viewModelScope.launch(Dispatchers.IO) {
-            DiagnosticLog.log("FileMgr", ">>> loadDirectoryStreaming START displayPath=$displayPath realPath=$realPath")
-
-            // 1. 逐条解析，按帧批量同步到 UI
-            val entries = mutableListOf<FileEntry>()
-            val entriesFlow = MutableStateFlow(emptyList<FileEntry>())
-
-            // 监听 flow 变化，同步到 UI（cancel 时自动终止）
-            val syncJob = launch(start = CoroutineStart.UNDISPATCHED) {
-                entriesFlow.collect { snapshot ->
-                    withContext(Dispatchers.Main) {
-                        if (isLeft) leftEntries = snapshot else rightEntries = snapshot
-                    }
-                }
-            }
-
-            // vault 模式：流式过滤内部文件 + 解密文件名
-            val vaultFilter: ((FileEntry) -> FileEntry?)? = if (isVaultMode) {
-                val session = vaultSession!!
-                val vaultInternal = setOf("vault_config.json", "vault_config.backup.json", "name_mappings.json", "folder_sizes.json")
-                val f: (FileEntry) -> FileEntry? = { entry ->
-                    if (entry.name in vaultInternal) null
-                    else if (entry.isDirectory) entry
-                    else entry.copy(name = decryptVaultFileName(entry.name, session))
-                }
-                f
-            } else null
-
-            // 按批处理：每积累 50 条更新一次 flow，避免每条 entry 都创建列表快照
-            var lastEmittedSize = 0
-            val streamOk = listWithLsStreaming(displayPath, showHiddenFiles, entries, onEntry = { _ ->
-                if (entries.size - lastEmittedSize >= 50) {
-                    lastEmittedSize = entries.size
-                    entriesFlow.value = entries.toList()
-                }
-            }, cancelFlag = cancelFlag, entryFilter = vaultFilter)
-            // 流式结束后 emit 最终快照（含不足 50 条的尾部）
-            if (entries.size != lastEmittedSize) {
-                entriesFlow.value = entries.toList()
-            }
-
-            // 2. 兜底：流式失败 → File API
-            val effectiveRoot = if (isRootEngine) "/" else safeDefault
-            val isProtectedPath = realPath.contains("/Android/data") || realPath.contains("/Android/obb")
-            if (!streamOk && entries.isEmpty() && !isProtectedPath) {
-                DiagnosticLog.log("FileMgr", "流式 ls 失败，回退 File API")
-                val prevErr = loadError
-                loadError = null
-                val fileEntries = withContext(Dispatchers.IO) {
-                    listWithFile(realPath, showHiddenFiles, effectiveRoot)
-                }
-                if (fileEntries.isNotEmpty()) {
-                    entries.clear()
-                    entries.addAll(fileEntries)
-                } else if (loadError == null) {
-                    loadError = prevErr
-                }
-            }
-
-            syncJob.cancel() // 停止渐进同步，改为最终结果
-
-            // 3. 后处理（排序，vault 过滤已在流式阶段完成）
-            var finalEntries: List<FileEntry> = entries
-
-            if (sortField == SortField.CREATED && android.os.Build.VERSION.SDK_INT >= 26) {
-                finalEntries = finalEntries.map { e ->
-                    if (e.createdAt > 0) return@map e
-                    val ct = try {
-                        Files.readAttributes(File(e.path).toPath(), BasicFileAttributes::class.java).creationTime().toMillis()
-                    } catch (_: Exception) { e.lastModified }
-                    e.copy(createdAt = ct)
-                }
-            }
-
-            finalEntries = when (sortField) {
-                SortField.NAME -> if (sortOrder == SortOrder.ASC)
-                    finalEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
-                else
-                    finalEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
-                SortField.SIZE -> {
-                    fun effectiveSize(entry: FileEntry): Long {
-                        if (!entry.isDirectory) return entry.size
-                        val cached = folderSizeDb.get(entry.path)
-                        return cached?.size ?: -1L
-                    }
-                    if (sortOrder == SortOrder.ASC)
-                        finalEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { effectiveSize(it).let { s -> if (s < 0) Long.MAX_VALUE else s } })
-                    else
-                        finalEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { effectiveSize(it).let { s -> if (s < 0) Long.MIN_VALUE else s } })
-                }
-                SortField.MODIFIED -> if (sortOrder == SortOrder.ASC)
-                    finalEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.lastModified })
-                else
-                    finalEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.lastModified })
-                SortField.CREATED -> if (sortOrder == SortOrder.ASC)
-                    finalEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.createdAt })
-                else
-                    finalEntries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.createdAt })
-            }
-
-            // 4. 最终结果写入 UI
-            withContext(Dispatchers.Main) {
-                if (isLeft) leftEntries = finalEntries else rightEntries = finalEntries
-                loadExtFlagsForDir(displayPath, isLeft = isLeft)
-                DiagnosticLog.log("FileMgr", "<<< loadDirectoryStreaming END entries=${finalEntries.size}")
-            }
-        }
     }
 
     // ── 文件操作 ──
@@ -1853,16 +1724,31 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         val entries = mutableListOf<FileEntry>()
 
+        // 收集软链接，批量检测目标类型
+        val symlinks = mutableMapOf<String, String>()
         for (line in findLines) {
             val parts = line.split("|")
-            if (parts.size < 4) continue
+            if (parts.size < 7) continue
+            if (parts[6].startsWith("l")) {
+                symlinks["$normalized/${parts[0]}"] = ""
+            }
+        }
+        checkSymlinkTargets(symlinks)
+
+        for (line in findLines) {
+            val parts = line.split("|")
+            if (parts.size < 7) continue
             val name = parts[0]
             if (name == "." || name == "..") continue
             val size = parts[1].toLongOrNull() ?: 0L
             val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
-            val perms = parts[3]
+            val perms = parts[6]
             val childPath = "$normalized/$name"
-            val isDir = perms.startsWith("d")
+            val isDir = when {
+                perms.startsWith("d") -> true
+                perms.startsWith("l") -> symlinkTypeCache[childPath] ?: false
+                else -> false
+            }
             entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong()))
         }
         return entries
@@ -1918,6 +1804,85 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             entries.add(FileEntry(child.absolutePath, name, isDir, perm, sz, modified))
         }
         DiagnosticLog.log("FileEngine", "统计: dirs=$dirCount, files=$fileCount, hidden 过滤=$skipHidden")
+
+        val sorted = entries.sortedWith(
+            compareByDescending<FileEntry> { it.isDirectory }
+                .thenBy { it.name.lowercase() }
+        )
+        entries.clear()
+        entries.addAll(sorted)
+        return entries
+    }
+
+    private fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean, effectiveRoot: String, displayPath: String = path): List<FileEntry> {
+        val entries = mutableListOf<FileEntry>()
+        val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
+        val normalizedDisplayPath = if (displayPath == "/") "/" else displayPath.trimEnd('/').ifEmpty { "/" }
+
+        val findLines = try {
+            listDirViaFind(normalizedPath, showHidden)
+        } catch (e: Throwable) {
+            val isApkAssetsNoise = e is java.io.IOException && (
+                e.stackTrace.any { it.className == "android.content.res.ApkAssets" } ||
+                        (e.message?.contains("Failed to load asset path") == true) ||
+                        (e.message?.contains(".apk from fd") == true)
+            )
+            if (isApkAssetsNoise) {
+                DiagnosticLog.log("LsShell", "忽略 hook 注入的 ApkAssets 噪声: ${e.message}")
+                return emptyList()
+            }
+            DiagnosticLog.log("LsShell", "execute 抛错: ${e.javaClass.simpleName}: ${e.message}")
+            loadError = if (e is Exception) e else RuntimeException(e)
+            return emptyList()
+        }
+
+        DiagnosticLog.log("LsShell", "find 输出 ${findLines.size} 行")
+
+        if (findLines.isEmpty()) {
+            // 兜底：find 没结果 → 退到 Java File API
+            val file = File(normalizedPath)
+            if (!file.exists()) {
+                loadError = SecurityException("目录不存在: $normalizedPath")
+            } else if (!file.isDirectory) {
+                loadError = SecurityException("不是目录: $normalizedPath")
+            }
+            return emptyList()
+        }
+
+        var dirCount = 0
+        var fileCount = 0
+
+        // 收集软链接，批量检测目标类型
+        val symlinks = mutableMapOf<String, String>()
+        for (line in findLines) {
+            val parts = line.split("|")
+            if (parts.size < 7) continue
+            if (parts[6].startsWith("l")) {
+                val name = parts[0]
+                val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
+                symlinks[childPath] = ""
+            }
+        }
+        checkSymlinkTargets(symlinks)
+
+        for (line in findLines) {
+            val parts = line.split("|")
+            if (parts.size < 7) continue
+            val name = parts[0]
+            if (name == "." || name == "..") continue
+            val size = parts[1].toLongOrNull() ?: 0L
+            val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
+            val perms = parts[6]
+            val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
+            val isDir = when {
+                perms.startsWith("d") -> true
+                perms.startsWith("l") -> symlinkTypeCache[childPath] ?: false
+                else -> false
+            }
+            if (isDir) dirCount++ else fileCount++
+            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong()))
+        }
+        DiagnosticLog.log("LsShell", "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
 
         val sorted = entries.sortedWith(
             compareByDescending<FileEntry> { it.isDirectory }
@@ -2607,7 +2572,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun refreshPanel(isLeft: Boolean) {
-        loadDirectoryStreaming(if (isLeft) leftPath else rightPath, isLeft = isLeft)
+        if (isLeft) {
+            leftEntries = listDirectory(leftPath)
+            loadExtFlagsForDir(leftPath, isLeft = true)
+        } else {
+            rightEntries = listDirectory(rightPath)
+            loadExtFlagsForDir(rightPath, isLeft = false)
+        }
     }
 
     /** 递归展开目录树，获取扁平的文件大小列表（顺序与 7zzs l 一致） */
