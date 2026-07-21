@@ -204,6 +204,22 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     val isVaultMode: Boolean get() = vaultSession != null
     private val vaultRoot: String?
         get() = vaultSession?.vaultDir?.absolutePath
+
+    /** 判断路径是否在 vault 目录内（含根目录本身） */
+    private fun isPathInVault(path: String): Boolean {
+        val root = vaultRoot ?: return false
+        return path == root || path.startsWith("$root/")
+    }
+
+    /** 导航后检查当前聚焦面板是否离开了 vault，若是则销毁密钥 */
+    private fun checkVaultPanelExit() {
+        if (!isVaultMode) return
+        val currentPath = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
+        if (!isPathInVault(currentPath)) {
+            exitVaultMode()
+        }
+    }
+
     /** vault 模式下 TextEditor 的保存回调（临时文件路径 → 加密写回保险箱） */
     var pendingVaultTextEntry by mutableStateOf<FileEntry?>(null)
         private set
@@ -512,6 +528,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             rightEntries = listDirectory(path)
             loadExtFlagsForDir(path, isLeft = false)
         }
+        checkVaultPanelExit()
     }
 
     /** 软链接弹窗状态：null=不显示，FileEntry=被点击的软链接 */
