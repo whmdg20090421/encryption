@@ -425,9 +425,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 用于访问 Android/data 等受 Scoped Storage 保护的目录。
      * @return 条目列表，失败返回空列表并设置 lastShellStderr
      */
-    private fun listDirEntriesViaShell(path: String, showHidden: Boolean, longFormat: Boolean = false, displayPath: String = path): List<FileEntry> {
+    private fun listDirEntriesViaShell(path: String, showHidden: Boolean, longFormat: Boolean = false): List<FileEntry> {
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-        val normalizedDisplayPath = if (displayPath == "/") "/" else displayPath.trimEnd('/').ifEmpty { "/" }
 
         val findLines = listDirViaFind(normalizedPath, showHidden)
         if (findLines.isEmpty()) {
@@ -438,20 +437,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         val entries = mutableListOf<FileEntry>()
 
-        // 收集软链接，批量检测目标类型
-        val symlinks = mutableMapOf<String, String>()
-        for (line in findLines) {
-            val parts = line.split("|")
-            if (parts.size < 7) continue
-            val perms = parts[6]
-            if (perms.startsWith("l")) {
-                val name = parts[0]
-                val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
-                symlinks[childPath] = ""
-            }
-        }
-        checkSymlinkTargets(symlinks)
-
         for (line in findLines) {
             val parts = line.split("|")
             if (parts.size < 7) continue
@@ -460,12 +445,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val size = parts[1].toLongOrNull() ?: 0L
             val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
             val perms = parts[6]
-            val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
-            val isDir = when {
-                perms.startsWith("d") -> true
-                perms.startsWith("l") -> symlinkTypeCache[childPath] ?: false
-                else -> false
-            }
+            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+            val isDir = perms.startsWith("d")
             entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong()))
         }
         return entries
@@ -507,85 +488,42 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * @param scrollToIndex 滚动到第几个卡片（默认 0，即第一行）
      * @param scrollToOffset 滚动偏移量（默认 0）
      */
-    fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0, realPath: String = path) {
-        // 1. 执行路径跳转
-        navigateTo(path, realPath)
+    fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
+        navigateTo(path)
         // 2. 记录滚动位置（供 Compose 侧使用）
         pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
     }
 
     // ── 核心导航：切换路径 + 刷新列表 ──
-    // path = 显示路径（软链接路径），realPath = 真实路径（用于读取文件列表）
-    fun navigateTo(path: String, realPath: String = path) {
+    fun navigateTo(path: String) {
         if (recycleBinPanel == focusedPanel) recycleBinPanel = null
-        // path = 显示路径（软链接路径），realPath = 真实路径（用于读取文件列表）
-        // 后退/前进/返回上一级传入的 realPath 默认等于 path，需要解析真实路径
-        val resolvedRealPath = if (realPath == path && hasShellEngine) {
-            resolveIfSymlink(path)
-        } else {
-            realPath
-        }
         if (focusedPanel == FocusedPanel.LEFT) {
             if (leftPath == path) return
             leftNavState = leftNavState.navigate(path)
             leftPath = path
-            leftEntries = listDirectory(path, resolvedRealPath)
+            leftEntries = listDirectory(path)
             loadExtFlagsForDir(path, isLeft = true)
         } else {
             if (rightPath == path) return
             rightNavState = rightNavState.navigate(path)
             rightPath = path
-            rightEntries = listDirectory(path, resolvedRealPath)
+            rightEntries = listDirectory(path)
             loadExtFlagsForDir(path, isLeft = false)
         }
     }
 
-    /** 软链接路径 → 真实路径缓存（避免后退/前进时重复执行 readlink） */
-    private val symlinkResolveCache = mutableMapOf<String, String>()
-
-    /** 如果路径是软链接，解析真实目标路径；否则原样返回 */
-    private fun resolveIfSymlink(path: String): String {
-        if (!hasShellEngine) return path
-        symlinkResolveCache[path]?.let { return it }
-        val escaped = SevenZipCommand.escape(path)
-        val (out, _, exit) = try {
-            executeShell("readlink -f $escaped")
-        } catch (_: Exception) { Triple("", "", -1) }
-        val resolved = if (exit == 0 && out.isNotBlank() && out.trim() != path) out.trim() else path
-        symlinkResolveCache[path] = resolved
-        return resolved
-    }
-
-    /** 软链接目标类型缓存：path → 目标是否为目录（避免每次列表重复检测） */
-    private val symlinkTypeCache = mutableMapOf<String, Boolean>()
-
-    /**
-     * 批量检测软链接目标是否为目录（test -d 自动跟随软链接）。
-     * @param symlinks 软链接路径 → 目标路径 的映射
-     */
-    private fun checkSymlinkTargets(symlinks: Map<String, String>) {
-        if (symlinks.isEmpty() || !hasShellEngine) return
-        val toCheck = symlinks.filter { it.key !in symlinkTypeCache }
-        if (toCheck.isEmpty()) return
-        val cmd = toCheck.entries.joinToString("; ") { (path, _) ->
-            val escaped = SevenZipCommand.escape(path)
-            "test -d $escaped && echo '1' || echo '0'"
-        }
-        val (out, _, exit) = try { executeShell(cmd) } catch (_: Exception) { return }
-        if (exit != 0 && out.isBlank()) return
-        val results = out.lines().filter { it.isNotBlank() }
-        toCheck.keys.forEachIndexed { i, path ->
-            if (i < results.size) symlinkTypeCache[path] = results[i].trim() == "1"
-        }
-    }
+    /** 软链接弹窗状态：null=不显示，FileEntry=被点击的软链接 */
+    var pendingSymlinkEntry by mutableStateOf<FileEntry?>(null)
 
     // ── 导航操作 ──
     fun navigateToFolder(entry: FileEntry, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
-        // 显示路径始终使用软链接本身的路径，真实路径由 navigateTo 内部 resolveIfSymlink 解析
+        if (entry.permission.startsWith("l")) {
+            pendingSymlinkEntry = entry
+            return
+        }
         val displayPath = entry.path
 
         if (hasShellEngine) {
-            // 用软链接路径预检（shell 自动跟随软链接）
             listDirEntriesViaShell(displayPath, showHiddenFiles)
             if (lastShellStderr.isBlank()) {
                 navigateToWithScroll(displayPath, scrollToIndex, scrollToOffset)
@@ -1497,22 +1435,22 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── 目录列表 ──
-    fun listDirectory(displayPath: String, realPath: String = displayPath): List<FileEntry> {
-        DiagnosticLog.log("FileMgr", ">>> listDirectory START displayPath=$displayPath realPath=$realPath useRoot=$isRootEngine")
+    fun listDirectory(path: String): List<FileEntry> {
+        DiagnosticLog.log("FileMgr", ">>> listDirectory START path=$path useRoot=$isRootEngine")
         loadError = null
         val t0 = System.currentTimeMillis()
         val effectiveRoot = if (isRootEngine) "/" else safeDefault
 
-        var entries = listWithLs(realPath, showHiddenFiles, useRoot = isRootEngine, effectiveRoot = effectiveRoot, displayPath = displayPath)
+        var entries = listWithLs(path, showHiddenFiles, useRoot = isRootEngine, effectiveRoot = effectiveRoot)
 
         // 兜底：ls 完全没结果且报错 → 退到 File.listFiles
         // Android/data 等受保护路径跳过兜底，因为 File API 无法访问
-        val isProtectedPath = realPath.contains("/Android/data") || realPath.contains("/Android/obb")
+        val isProtectedPath = path.contains("/Android/data") || path.contains("/Android/obb")
         if (entries.isEmpty() && loadError != null && !isProtectedPath) {
             DiagnosticLog.log("FileMgr", "ls 失败，回退 File API")
             val prevErr = loadError
             loadError = null
-            val fileEntries = listWithFile(realPath, showHiddenFiles, effectiveRoot)
+            val fileEntries = listWithFile(path, showHiddenFiles, effectiveRoot)
             if (fileEntries.isNotEmpty()) {
                 entries = fileEntries
             } else if (loadError == null) {
@@ -1579,12 +1517,16 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         val took = System.currentTimeMillis() - t0
-        DiagnosticLog.log("FileMgr", "<<< listDirectory END displayPath=$displayPath entries=${entries.size} took=${took}ms err=${loadError?.javaClass?.simpleName}")
+        DiagnosticLog.log("FileMgr", "<<< listDirectory END path=$path entries=${entries.size} took=${took}ms err=${loadError?.javaClass?.simpleName}")
         return entries
     }
 
     // ── 文件操作 ──
     fun openFile(context: Context, entry: FileEntry, isDebug: Boolean = false): Screen? {
+        if (entry.permission.startsWith("l")) {
+            pendingSymlinkEntry = entry
+            return null
+        }
         // vault 模式：解密后打开
         if (isVaultMode) {
             return openVaultFile(entry)
@@ -1724,17 +1666,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         val entries = mutableListOf<FileEntry>()
 
-        // 收集软链接，批量检测目标类型
-        val symlinks = mutableMapOf<String, String>()
-        for (line in findLines) {
-            val parts = line.split("|")
-            if (parts.size < 7) continue
-            if (parts[6].startsWith("l")) {
-                symlinks["$normalized/${parts[0]}"] = ""
-            }
-        }
-        checkSymlinkTargets(symlinks)
-
         for (line in findLines) {
             val parts = line.split("|")
             if (parts.size < 7) continue
@@ -1744,11 +1675,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
             val perms = parts[6]
             val childPath = "$normalized/$name"
-            val isDir = when {
-                perms.startsWith("d") -> true
-                perms.startsWith("l") -> symlinkTypeCache[childPath] ?: false
-                else -> false
-            }
+            val isDir = perms.startsWith("d")
             entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong()))
         }
         return entries
@@ -1814,10 +1741,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return entries
     }
 
-    private fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean, effectiveRoot: String, displayPath: String = path): List<FileEntry> {
+    private fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean, effectiveRoot: String): List<FileEntry> {
         val entries = mutableListOf<FileEntry>()
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-        val normalizedDisplayPath = if (displayPath == "/") "/" else displayPath.trimEnd('/').ifEmpty { "/" }
 
         val findLines = try {
             listDirViaFind(normalizedPath, showHidden)
@@ -1839,7 +1765,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         DiagnosticLog.log("LsShell", "find 输出 ${findLines.size} 行")
 
         if (findLines.isEmpty()) {
-            // 兜底：find 没结果 → 退到 Java File API
             val file = File(normalizedPath)
             if (!file.exists()) {
                 loadError = SecurityException("目录不存在: $normalizedPath")
@@ -1852,19 +1777,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         var dirCount = 0
         var fileCount = 0
 
-        // 收集软链接，批量检测目标类型
-        val symlinks = mutableMapOf<String, String>()
-        for (line in findLines) {
-            val parts = line.split("|")
-            if (parts.size < 7) continue
-            if (parts[6].startsWith("l")) {
-                val name = parts[0]
-                val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
-                symlinks[childPath] = ""
-            }
-        }
-        checkSymlinkTargets(symlinks)
-
         for (line in findLines) {
             val parts = line.split("|")
             if (parts.size < 7) continue
@@ -1873,12 +1785,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val size = parts[1].toLongOrNull() ?: 0L
             val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
             val perms = parts[6]
-            val childPath = if (normalizedDisplayPath == "/") "/$name" else "$normalizedDisplayPath/$name"
-            val isDir = when {
-                perms.startsWith("d") -> true
-                perms.startsWith("l") -> symlinkTypeCache[childPath] ?: false
-                else -> false
-            }
+            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+            val isDir = perms.startsWith("d")
             if (isDir) dirCount++ else fileCount++
             entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong()))
         }

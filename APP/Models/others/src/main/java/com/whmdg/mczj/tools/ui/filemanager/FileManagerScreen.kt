@@ -2481,6 +2481,20 @@ fun FileManagerScreen(
         )
     }
 
+    // ── 软链接提示对话框 ──
+    vm.pendingSymlinkEntry?.let { entry ->
+        StandardDialog(
+            onDismissRequest = { vm.pendingSymlinkEntry = null },
+            title = { Text("暂不支持软链接跳转") },
+            text = { Text("「${entry.name}」是软链接，当前版本暂不支持跳转到目标路径。") },
+            confirmButton = {
+                TextButton(onClick = { vm.pendingSymlinkEntry = null }) {
+                    Text("关闭")
+                }
+            }
+        )
+    }
+
     // ── APK 信息弹窗 ──
     vm.pendingApkEntry?.let { entry ->
         ApkInfoDialog(
