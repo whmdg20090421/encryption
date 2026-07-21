@@ -1623,11 +1623,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val vaultFilter: ((FileEntry) -> FileEntry?)? = if (isVaultMode) {
                 val session = vaultSession!!
                 val vaultInternal = setOf("vault_config.json", "vault_config.backup.json", "name_mappings.json", "folder_sizes.json")
-                { entry ->
+                val f: (FileEntry) -> FileEntry? = { entry ->
                     if (entry.name in vaultInternal) null
                     else if (entry.isDirectory) entry
                     else entry.copy(name = decryptVaultFileName(entry.name, session))
                 }
+                f
             } else null
 
             // 按批处理：每积累 50 条更新一次 flow，避免每条 entry 都创建列表快照
