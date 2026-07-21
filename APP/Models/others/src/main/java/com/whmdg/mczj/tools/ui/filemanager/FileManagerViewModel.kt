@@ -202,6 +202,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var vaultSession by mutableStateOf<VaultSession?>(null)
         private set
     val isVaultMode: Boolean get() = vaultSession != null
+    private val vaultRoot: String?
+        get() = vaultSession?.vaultDir?.absolutePath
     /** vault 模式下 TextEditor 的保存回调（临时文件路径 → 加密写回保险箱） */
     var pendingVaultTextEntry by mutableStateOf<FileEntry?>(null)
         private set
@@ -724,7 +726,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 返回上级目录，返回目标路径，null 表示已在根目录（不执行跳转，由调用方通过 navigateToWithScroll 跳转） */
     fun goUp(): String? {
-        val effectiveRoot = if (isRootEngine) "/" else safeDefault
+        val effectiveRoot = vaultRoot ?: if (isRootEngine) "/" else safeDefault
         val path = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
         if (path == effectiveRoot || !path.contains('/')) return null
         val parent = path.substringBeforeLast('/').ifEmpty { "/" }
@@ -784,6 +786,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun exitVaultMode() {
         vaultSession?.dispose()
         vaultSession = null
+        leftPath = safeDefault
+        rightPath = safeDefault
+        leftEntries = listOf()
+        rightEntries = listOf()
         pendingVaultTextEntry = null
         pendingVaultOriginalPath = null
         onNavigateVault = null

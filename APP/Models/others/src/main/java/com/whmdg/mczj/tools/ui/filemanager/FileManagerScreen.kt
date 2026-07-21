@@ -819,6 +819,9 @@ fun FileManagerScreen(
                                 !vm.isAtArchiveRoot()
                             } else if (vm.recycleBinPanel == vm.focusedPanel) {
                                 !vm.isAtRecycleBinRoot
+                            } else if (vm.isVaultMode) {
+                                val vaultRoot = vm.vaultSession!!.vaultDir.absolutePath
+                                vm.currentPath != vaultRoot
                             } else {
                                 val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
                                 val parentPath = vm.currentPath.substringBeforeLast('/').ifEmpty { "/" }
@@ -1046,7 +1049,9 @@ fun FileManagerScreen(
                         isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
                         recycleBinPath = vm.recycleBinPath,
                         isRootEngine = vm.isRootEngine,
-                        canAccessPath = { vm.canAccessPath(it) }
+                        canAccessPath = { vm.canAccessPath(it) },
+                        isVaultMode = vm.isVaultMode,
+                        vaultRootPath = vm.vaultSession?.vaultDir?.absolutePath
                     )
 
                     val rightParentPath = computeParentPath(
@@ -1057,7 +1062,9 @@ fun FileManagerScreen(
                         isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
                         recycleBinPath = vm.recycleBinPath,
                         isRootEngine = vm.isRootEngine,
-                        canAccessPath = { vm.canAccessPath(it) }
+                        canAccessPath = { vm.canAccessPath(it) },
+                        isVaultMode = vm.isVaultMode,
+                        vaultRootPath = vm.vaultSession?.vaultDir?.absolutePath
                     )
 
                     val leftFocused = vm.focusedPanel == FocusedPanel.LEFT
@@ -4955,7 +4962,9 @@ private fun computeParentPath(
     isAtRecycleBinRoot: Boolean,
     recycleBinPath: String,
     isRootEngine: Boolean,
-    canAccessPath: (String) -> Boolean
+    canAccessPath: (String) -> Boolean,
+    isVaultMode: Boolean = false,
+    vaultRootPath: String? = null
 ): String? {
     if (isInArchiveMode) {
         return if (isAtArchiveRoot()) null else "__archive_parent__"
@@ -4965,6 +4974,10 @@ private fun computeParentPath(
         return java.io.File(recycleBinPath).parentFile?.absolutePath?.let { p ->
             if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
         }
+    }
+    if (isVaultMode && vaultRootPath != null) {
+        return if (currentPath == vaultRootPath) null
+        else currentPath.substringBeforeLast('/').ifEmpty { vaultRootPath }
     }
     val effectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
     if (currentPath != effectiveRoot && currentPath.contains('/')) {
