@@ -42,8 +42,10 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -1074,6 +1076,8 @@ fun FileManagerScreen(
                             FileBrowserPanel(
                                 entries = vm.leftEntries,
                                 isFocused = leftFocused,
+                                currentPath = vm.leftPath,
+                                isLeftPanel = true,
                                 onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.LEFT
@@ -1210,6 +1214,8 @@ fun FileManagerScreen(
                             FileBrowserPanel(
                                 entries = vm.rightEntries,
                                 isFocused = !leftFocused,
+                                currentPath = vm.rightPath,
+                                isLeftPanel = false,
                                 onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.RIGHT
@@ -4992,6 +4998,8 @@ private fun computeParentPath(
 private fun FileBrowserPanel(
     entries: List<FileEntry>,
     isFocused: Boolean,
+    currentPath: String = "",
+    isLeftPanel: Boolean = true,
     onFocus: () -> Unit,
     onFolderClick: (FileEntry) -> Unit,
     onFileClick: (FileEntry) -> Unit,
@@ -5051,6 +5059,12 @@ private fun FileBrowserPanel(
                 }
             }
 
+            // 交错滑入动画：仅在路径变化（导航）时触发，滚动不触发
+            var prevNavPath by remember { mutableStateOf(currentPath) }
+            val shouldStagger = remember(currentPath) {
+                (currentPath != prevNavPath).also { prevNavPath = currentPath }
+            }
+
             LazyColumn(
                 state = lazyListState,
                 modifier = Modifier.fillMaxSize(),
@@ -5070,6 +5084,20 @@ private fun FileBrowserPanel(
                 }
                 items(entries, key = { it.path }) { entry ->
                     val entryIndex = entries.indexOfFirst { it.path == entry.path }
+
+                    // 交错滑入：仅导航后首次渲染触发
+                    var hasAnimated by remember(entry.path) { mutableStateOf(!shouldStagger) }
+                    val animAlpha = remember(entry.path) { Animatable(if (hasAnimated) 1f else 0f) }
+                    val animOffset = remember(entry.path) { Animatable(if (hasAnimated) 0f else if (isLeftPanel) -0.3f else 0.3f) }
+                    LaunchedEffect(entry.path) {
+                        if (!hasAnimated) {
+                            hasAnimated = true
+                            val stagger = (entryIndex * 20).toLong()
+                            launch { animAlpha.animateTo(1f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
+                            launch { animOffset.animateTo(0f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
+                        }
+                    }
+
                     val dirSize = if (entry.isDirectory) {
                         if (archiveSizeProvider != null) archiveSizeProvider(entry)
                         else {
@@ -5086,6 +5114,10 @@ private fun FileBrowserPanel(
                     FileEntryRow(
                         entry = entry,
                         isFocused = isFocused,
+                        modifier = Modifier.graphicsLayer {
+                            alpha = animAlpha.value
+                            translationX = animOffset.value * size.width
+                        },
                         isSelected = entry.path in selectedPaths,
                         onClick = {
                             if (isMultiSelectMode) {
@@ -5118,6 +5150,7 @@ private fun FileBrowserPanel(
 private fun FileEntryRow(
     entry: FileEntry,
     isFocused: Boolean,
+    modifier: Modifier = Modifier,
     isSelected: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -5134,7 +5167,7 @@ private fun FileEntryRow(
                   else Color.Transparent
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .onGloballyPositioned { rowWidth = it.size.width }
             .clipToBounds()
