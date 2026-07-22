@@ -4,7 +4,7 @@
     <application>
         <!-- 文件操作前台服务 -->
         <service
-            android:name=".fileop.FileOperationService"
+            android:name="com.whmdg.mczj.tools.fileop.FileOperationService"
             android:label="文件操作"
             android:exported="false"
             android:foregroundServiceType="dataSync" />

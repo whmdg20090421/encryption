@@ -4,7 +4,7 @@
     <application>
         <!-- 无障碍服务 -->
         <service
-            android:name=".ui.accounting.MyAccessibilityService"
+            android:name="com.whmdg.mczj.tools.ui.accounting.MyAccessibilityService"
             android:label="艨艟战舰无障碍服务"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="true">
@@ -18,7 +18,7 @@
 
         <!-- OCR 前台服务 -->
         <service
-            android:name=".ui.accounting.OcrFloatingService"
+            android:name="com.whmdg.mczj.tools.ui.accounting.OcrFloatingService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
