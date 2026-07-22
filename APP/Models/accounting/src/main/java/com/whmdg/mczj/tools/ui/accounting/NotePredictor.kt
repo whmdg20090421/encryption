@@ -300,6 +300,32 @@ object NotePredictor {
     /** embedding 数量是否达到 AI 预测门槛 */
     fun hasEnoughData(): Boolean = initialized && embeddings.size >= MIN_RECORDS
 
+    // ─── 状态查询（供 UI 展示）───
+    data class ModelInfo(
+        val initialized: Boolean,
+        val sampleCount: Int,
+        val cat1Count: Int,
+        val cat2Count: Int,
+        val hitRate: Float,
+        val adamSteps: Int,
+        val totalCount: Int,
+        val hitCount: Int
+    )
+
+    fun getModelInfo(): ModelInfo {
+        val rate = if (totalCount > 0) hitCount.toFloat() / totalCount else 0f
+        return ModelInfo(
+            initialized = initialized,
+            sampleCount = embeddings.size,
+            cat1Count = cat1Emb.size,
+            cat2Count = cat2Emb.size,
+            hitRate = rate,
+            adamSteps = adamStep,
+            totalCount = totalCount,
+            hitCount = hitCount
+        )
+    }
+
     fun predict(cat1: String, cat2: String, amount: Float, hour: Int, partialNote: String): List<Prediction> {
         if (!initialized || embeddings.size < MIN_RECORDS || partialNote.isEmpty()) return emptyList()
         val features = getFeatures(cat1, cat2, amount, hour, partialNote)

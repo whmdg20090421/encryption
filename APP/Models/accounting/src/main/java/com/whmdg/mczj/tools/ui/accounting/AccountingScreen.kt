@@ -3421,6 +3421,18 @@ private fun CategoryIconStylePage() {
 @Composable
 private fun AutomationPage(onBack: () -> Unit) {
     val context = LocalContext.current
+    var pageStack by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    BackHandler(enabled = pageStack.isNotEmpty()) {
+        pageStack = pageStack.dropLast(1)
+    }
+
+    when {
+        pageStack == listOf("备注推测模型") -> {
+            NotePredictorSettingsPage(onBack = { pageStack = emptyList() })
+            return
+        }
+    }
 
     // 从数据库读取当前开关状态
     var autoLocation by remember {
@@ -3689,5 +3701,180 @@ private fun AutomationPage(onBack: () -> Unit) {
             }
         }
 
+        Spacer(Modifier.height(12.dp))
+
+        // ── 备注推测模型 ──
+        SettingCard(
+            icon = Icons.Outlined.Psychology,
+            title = "备注推测模型",
+            subtitle = "基于神经网络的备注自动推测",
+            onClick = { pageStack = listOf("备注推测模型") }
+        )
+    }
+}
+
+// ── 备注推测模型设置页 ──
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NotePredictorSettingsPage(onBack: () -> Unit) {
+    var showTrainingInfo by remember { mutableStateOf(false) }
+    var modelInfo by remember { mutableStateOf(NotePredictor.getModelInfo()) }
+
+    // 刷新状态
+    LaunchedEffect(showTrainingInfo) {
+        modelInfo = NotePredictor.getModelInfo()
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = {
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text("备注推测模型", fontWeight = FontWeight.Bold)
+                }
+            },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                }
+            },
+            actions = { Spacer(Modifier.width(48.dp)) }
+        )
+
+        Spacer(Modifier.height(8.dp))
+
+        // 模型训练信息（可展开）
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            )
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showTrainingInfo = !showTrainingInfo },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Analytics,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "模型训练信息",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            if (modelInfo.initialized) "样本 ${modelInfo.sampleCount} 条 · 命中率 ${(modelInfo.hitRate * 100).toInt()}%"
+                            else "未初始化",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        imageVector = if (showTrainingInfo) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                AnimatedVisibility(visible = showTrainingInfo) {
+                    Column {
+                        Spacer(Modifier.height(12.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Spacer(Modifier.height(12.dp))
+
+                        // 网络结构
+                        InfoSection("网络结构") {
+                            InfoRow("输入层", "83 维")
+                            InfoRow("  ├ 一级分类 embedding", "8 维")
+                            InfoRow("  ├ 二级分类 embedding", "8 维")
+                            InfoRow("  ├ 数值特征", "3 维")
+                            InfoRow("  └ 字符 bag-of-words", "64 维")
+                            InfoRow("隐藏层", "32 神经元 (ReLU)")
+                            InfoRow("输出层", "16 维 (线性)")
+                            InfoRow("总参数量", "3,184")
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+
+                        // 训练参数
+                        InfoSection("训练参数") {
+                            InfoRow("学习率", "0.001")
+                            InfoRow("优化器", "Adam (β₁=0.9, β₂=0.999)")
+                            InfoRow("每次训练步数", "2")
+                            InfoRow("最少记录数", "10 条")
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+
+                        // 当前状态
+                        InfoSection("当前状态") {
+                            InfoRow("模型状态", if (modelInfo.initialized) "已初始化" else "未初始化")
+                            InfoRow("训练样本数", "${modelInfo.sampleCount} 条")
+                            InfoRow("一级分类数", "${modelInfo.cat1Count} 个")
+                            InfoRow("二级分类数", "${modelInfo.cat2Count} 个")
+                            InfoRow("预测总次数", "${modelInfo.totalCount} 次")
+                            InfoRow("命中次数", "${modelInfo.hitCount} 次")
+                            InfoRow("命中率", "${(modelInfo.hitRate * 100).let { String.format("%.1f", it) }}%")
+                            InfoRow("Adam 步数", "${modelInfo.adamSteps}")
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+
+                        // 预测参数
+                        InfoSection("预测参数") {
+                            InfoRow("相似度阈值", "0.70")
+                            InfoRow("备注权重", "2.0")
+                            InfoRow("命中率阈值", "0.30")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InfoSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Text(
+        title,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.Bold
+    )
+    Spacer(Modifier.height(4.dp))
+    Column(modifier = Modifier.padding(start = 4.dp)) {
+        content()
+    }
+}
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
