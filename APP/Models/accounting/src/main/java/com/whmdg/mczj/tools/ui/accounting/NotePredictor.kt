@@ -317,8 +317,8 @@ object NotePredictor {
         return ModelInfo(
             initialized = initialized,
             sampleCount = embeddings.size,
-            cat1Count = cat1Emb.size,
-            cat2Count = cat2Emb.size,
+            cat1Count = 0,  // one-hot 编码，无独立分类计数
+            cat2Count = 0,  // one-hot 编码，无独立分类计数
             hitRate = rate,
             adamSteps = adamStep,
             totalCount = totalCount,
