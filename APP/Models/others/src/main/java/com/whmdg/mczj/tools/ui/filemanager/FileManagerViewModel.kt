@@ -505,10 +505,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 异步目录加载核心 ──
 
-    private companion object {
-        const val LOAD_DIRECTORY_BATCH_SIZE = 20
-    }
-
     /**
      * 异步加载目录内容，替代同步 listDirectory() + loadExtFlagsForDir()。
      * 逐行解析 find 输出，每 BATCH_SIZE 个切 Main 更新 entries，全部完成后最终排序。
@@ -2988,6 +2984,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
+        const val LOAD_DIRECTORY_BATCH_SIZE = 20
         var MAX_HISTORY_SIZE = 100
         private val RESTRICTED_ANDROID_PREFIXES = listOf(
             "/storage/emulated/0/Android/data/",
