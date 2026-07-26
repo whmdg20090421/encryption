@@ -127,6 +127,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 异步目录加载 ──
     private var loadDirectoryJob: Job? = null
+    private var loadMetadataJob: Job? = null
     var isLoadingDirectory by mutableStateOf(false)
         private set
     private var loadDirectoryVersion = 0L
@@ -428,21 +429,42 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 输出格式: %f|%s|%T@|%m|%u|%g|%M\n
      * @return 原始行列表，调用方自行解析
      */
-    private fun listDirViaFind(
+    /**
+     * ls -1aF 获取目录条目名称（快速，只读目录，不 stat 每个条目）。
+     * 返回格式：目录带 "/" 后缀，如 "Documents/"。
+     */
+    private fun listDirNamesViaLs(
         dirPath: String,
         showHidden: Boolean
     ): List<String> {
         val normalized = if (dirPath == "/") "/" else dirPath.trimEnd('/').ifEmpty { "/" }
         val escaped = SevenZipCommand.escape(normalized)
-        val hiddenFilter = if (showHidden) "" else " -not -name '.*'"
-        val cmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
+        val cmd = "ls -1aF $escaped"
         return try {
             val stdout = ShellExecutor.execute(Permission.MAX, cmd, debug = true)
-            stdout.lines().filter { it.isNotBlank() }
+            stdout.lines().filter { line ->
+                val name = line.trimEnd('\r')
+                if (name.isBlank()) return@filter false
+                val cleanName = if (name.endsWith("/")) name.dropLast(1) else name
+                if (cleanName == "." || cleanName == "..") return@filter false
+                if (!showHidden && cleanName.startsWith(".")) return@filter false
+                true
+            }
         } catch (_: Exception) {
             emptyList()
         }
     }
+
+    /** 从 ls -1aF 行解析文件名和 isDir */
+    private fun parseLsLine(line: String): Pair<String, Boolean>? {
+        val trimmed = line.trimEnd('\r')
+        if (trimmed.isBlank()) return null
+        val isDir = trimmed.endsWith("/")
+        val name = if (isDir) trimmed.dropLast(1) else trimmed
+        if (name == "." || name == "..") return null
+        return name to isDir
+    }
+
 
     /**
      * 通过 shell 命令列出目录内容（Shizuku / Root / 普通 shell）。
@@ -452,26 +474,45 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun listDirEntriesViaShell(path: String, showHidden: Boolean, longFormat: Boolean = false): List<FileEntry> {
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
 
-        val findLines = listDirViaFind(normalizedPath, showHidden)
-        if (findLines.isEmpty()) {
+        val lsLines = listDirNamesViaLs(normalizedPath, showHidden)
+        if (lsLines.isEmpty()) {
             lastShellStderr = ""
             return emptyList()
         }
         lastShellStderr = ""
 
         val entries = mutableListOf<FileEntry>()
+        for (line in lsLines) {
+            val (name, isDir) = parseLsLine(line) ?: continue
+            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+            entries.add(FileEntry(childPath, name, isDir))
+        }
 
-        for (line in findLines) {
+        // find -printf 批量填充元数据
+        val escaped = SevenZipCommand.escape(normalizedPath)
+        val hiddenFilter = if (showHidden) "" else " -not -name '.*'"
+        val findCmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
+        val findOut = try {
+            ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
+        } catch (_: Exception) {
+            return entries
+        }
+        val nameToIndex = entries.withIndex().associate { (i, e) -> e.name to i }
+        for (line in findOut.lines()) {
+            if (line.isBlank()) continue
             val parts = line.split("|")
             if (parts.size < 7) continue
             val name = parts[0]
-            if (name == "." || name == "..") continue
+            val pos = nameToIndex[name] ?: continue
             val size = parts[1].toLongOrNull() ?: 0L
             val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
             val perms = parts[6]
-            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
             val isDir = perms.startsWith("d")
-            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong()))
+            entries[pos] = entries[pos].copy(
+                permission = perms,
+                size = if (isDir) 0L else size,
+                lastModified = (mtimeSec * 1000).toLong()
+            )
         }
         return entries
     }
@@ -523,6 +564,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     ) {
         // 取消上一次未完成的加载
         loadDirectoryJob?.cancel()
+        loadMetadataJob?.cancel()
         loadDirectoryVersion++
         val myVersion = loadDirectoryVersion
 
@@ -535,66 +577,18 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         loadDirectoryJob = viewModelScope.launch(Dispatchers.IO) {
             val normalized = if (targetPath == "/") "/" else targetPath.trimEnd('/').ifEmpty { "/" }
-            val hiddenFilter = if (showHiddenFiles) "" else " -not -name '.*'"
             val escaped = SevenZipCommand.escape(normalized)
-            val cmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
 
-            val snapshot = mutableListOf<FileEntry>()
-            var firstBatchRendered = false
             // vault 配置文件名，用于过滤
             val vaultConfigNames = if (isVaultMode) setOf(
                 "vault_config.json", "vault_config.backup.json",
                 "name_mappings.json", "folder_sizes.json"
             ) else emptySet()
 
-            try {
-                ShellExecutor.executeStreaming(
-                    permission = Permission.MAX,
-                    command = cmd,
-                    onOutputLine = { line ->
-                        if (line.isBlank()) return@executeStreaming
-                        val parts = line.split("|")
-                        if (parts.size < 7) return@executeStreaming
-                        val name = parts[0]
-                        if (name == "." || name == "..") return@executeStreaming
-                        if (name in vaultConfigNames) return@executeStreaming
-                        val size = parts[1].toLongOrNull() ?: 0L
-                        val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
-                        val perms = parts[6]
-                        val childPath = if (normalized == "/") "/$name" else "$normalized/$name"
-                        val isDir = perms.startsWith("d")
-                        var entry = FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong())
-
-                        // vault 模式：文件名解密
-                        if (isVaultMode) {
-                            val session = vaultSession
-                            if (session != null && !isDir) {
-                                val displayName = decryptVaultFileName(name, session)
-                                entry = entry.copy(name = displayName)
-                            }
-                        }
-
-                        snapshot.add(entry)
-
-                        // 批量更新：每 BATCH_SIZE 个切 Main 更新一次
-                        if (snapshot.size % LOAD_DIRECTORY_BATCH_SIZE == 0) {
-                            val batch = snapshot.toList()
-                            viewModelScope.launch(Dispatchers.Main) {
-                                if (myVersion != loadDirectoryVersion) return@launch
-                                // 首批渲染时：同时切路径 + 清 loading 状态
-                                if (!firstBatchRendered) {
-                                    firstBatchRendered = true
-                                    isLoadingDirectory = false
-                                    if (!isRefresh) {
-                                        if (isLeft) leftPath = targetPath else rightPath = targetPath
-                                    }
-                                }
-                                if (isLeft) leftEntries = batch else rightEntries = batch
-                            }
-                        }
-                    },
-                    cancelFlag = AtomicBoolean(false)
-                )
+            // ── Phase 1: ls -1aF 获取文件名（阻塞，快速） ──
+            val lsCmd = "ls -1aF $escaped"
+            val lsOutput = try {
+                ShellExecutor.execute(Permission.MAX, lsCmd, debug = true)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) return@launch
                 withContext(Dispatchers.Main) {
@@ -606,17 +600,36 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            // 检查版本号（快速连续点击可能已过时）
+            // 检查版本号
             if (myVersion != loadDirectoryVersion) return@launch
 
-            // 最终排序
+            val snapshot = mutableListOf<FileEntry>()
+            for (raw in lsOutput.lines()) {
+                val line = raw.trimEnd('\r')
+                if (line.isBlank()) continue
+                val isDir = line.endsWith("/")
+                val name = if (isDir) line.dropLast(1) else line
+                if (name == "." || name == "..") continue
+                if (!showHiddenFiles && name.startsWith(".")) continue
+                if (name in vaultConfigNames) continue
+                val childPath = if (normalized == "/") "/$name" else "$normalized/$name"
+                var entry = FileEntry(childPath, name, isDir)
+                if (isVaultMode) {
+                    val session = vaultSession
+                    if (session != null && !isDir) {
+                        entry = entry.copy(name = decryptVaultFileName(name, session))
+                    }
+                }
+                snapshot.add(entry)
+            }
+
             val sorted = sortEntries(snapshot)
 
+            // 首批渲染：名称列表
             withContext(Dispatchers.Main) {
                 if (myVersion != loadDirectoryVersion) return@withContext
                 isLoadingDirectory = false
-                // 首批未触发（空目录）时在此切路径
-                if (!firstBatchRendered && !isRefresh) {
+                if (!isRefresh) {
                     if (isLeft) leftPath = targetPath else rightPath = targetPath
                 }
                 if (isLeft) leftEntries = sorted else rightEntries = sorted
@@ -625,6 +638,46 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
             // 异步加载 ext flags（不阻塞 entries 渲染）
             loadExtFlagsForDir(targetPath, isLeft = isLeft)
+
+            // ── Phase 2: find -printf 批量获取元数据（异步，单条命令） ──
+            loadMetadataJob = launch(Dispatchers.IO) {
+                val hiddenFilter = if (showHiddenFiles) "" else " -not -name '.*'"
+                val findCmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
+                val findOut = try {
+                    ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
+                } catch (_: Exception) {
+                    return@launch
+                }
+                if (myVersion != loadDirectoryVersion) return@launch
+
+                // 按文件名索引当前条目
+                val nameToIndex = sorted.withIndex().associate { (i, e) -> e.name to i }
+                val enriched = sorted.toMutableList()
+
+                for (line in findOut.lines()) {
+                    if (line.isBlank()) continue
+                    val parts = line.split("|")
+                    if (parts.size < 7) continue
+                    val name = parts[0]
+                    if (name == "." || name == "..") continue
+                    val pos = nameToIndex[name] ?: continue
+                    val old = enriched[pos]
+                    val size = parts[1].toLongOrNull() ?: 0L
+                    val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
+                    val perms = parts[6]
+                    enriched[pos] = old.copy(
+                        permission = perms,
+                        size = if (old.isDirectory) 0L else size,
+                        lastModified = (mtimeSec * 1000).toLong()
+                    )
+                }
+
+                val finalEntries = sortEntries(enriched)
+                withContext(Dispatchers.Main) {
+                    if (myVersion != loadDirectoryVersion) return@withContext
+                    if (isLeft) leftEntries = finalEntries else rightEntries = finalEntries
+                }
+            }
         }
     }
 
@@ -1898,22 +1951,40 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 通过 shell 列出目录直接子项（含文件大小），用于受保护目录 */
     private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? {
         val normalized = if (dirPath == "/") "/" else dirPath.trimEnd('/').ifEmpty { "/" }
-        val findLines = listDirViaFind(normalized, showHidden = true)
-        if (findLines.isEmpty()) return null
+        val lsLines = listDirNamesViaLs(normalized, showHidden = true)
+        if (lsLines.isEmpty()) return null
 
         val entries = mutableListOf<FileEntry>()
+        for (line in lsLines) {
+            val (name, isDir) = parseLsLine(line) ?: continue
+            val childPath = "$normalized/$name"
+            entries.add(FileEntry(childPath, name, isDir))
+        }
 
-        for (line in findLines) {
+        // find -printf 批量填充元数据
+        val escaped = SevenZipCommand.escape(normalized)
+        val findCmd = "find $escaped -maxdepth 1 -mindepth 1 -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
+        val findOut = try {
+            ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
+        } catch (_: Exception) {
+            return entries
+        }
+        val nameToIndex = entries.withIndex().associate { (i, e) -> e.name to i }
+        for (line in findOut.lines()) {
+            if (line.isBlank()) continue
             val parts = line.split("|")
             if (parts.size < 7) continue
             val name = parts[0]
-            if (name == "." || name == "..") continue
+            val pos = nameToIndex[name] ?: continue
             val size = parts[1].toLongOrNull() ?: 0L
             val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
             val perms = parts[6]
-            val childPath = "$normalized/$name"
             val isDir = perms.startsWith("d")
-            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong()))
+            entries[pos] = entries[pos].copy(
+                permission = perms,
+                size = if (isDir) 0L else size,
+                lastModified = (mtimeSec * 1000).toLong()
+            )
         }
         return entries
     }
@@ -1982,8 +2053,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val entries = mutableListOf<FileEntry>()
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
 
-        val findLines = try {
-            listDirViaFind(normalizedPath, showHidden)
+        val lsLines = try {
+            listDirNamesViaLs(normalizedPath, showHidden)
         } catch (e: Throwable) {
             val isApkAssetsNoise = e is java.io.IOException && (
                 e.stackTrace.any { it.className == "android.content.res.ApkAssets" } ||
@@ -1999,9 +2070,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return emptyList()
         }
 
-        DiagnosticLog.log("LsShell", "find 输出 ${findLines.size} 行")
+        DiagnosticLog.log("LsShell", "ls 输出 ${lsLines.size} 行")
 
-        if (findLines.isEmpty()) {
+        if (lsLines.isEmpty()) {
             val file = File(normalizedPath)
             if (!file.exists()) {
                 loadError = SecurityException("目录不存在: $normalizedPath")
@@ -2011,21 +2082,46 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return emptyList()
         }
 
+        // Phase 1: 名称 + isDir
+        for (line in lsLines) {
+            val (name, isDir) = parseLsLine(line) ?: continue
+            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+            entries.add(FileEntry(childPath, name, isDir))
+        }
+
+        // Phase 2: find -printf 批量填充元数据
+        val escaped = SevenZipCommand.escape(normalizedPath)
+        val hiddenFilter = if (showHidden) "" else " -not -name '.*'"
+        val findCmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
+        val findOut = try {
+            ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
+        } catch (_: Exception) {
+            ""
+        }
+        if (findOut.isNotBlank()) {
+            val nameToIndex = entries.withIndex().associate { (i, e) -> e.name to i }
+            for (line in findOut.lines()) {
+                if (line.isBlank()) continue
+                val parts = line.split("|")
+                if (parts.size < 7) continue
+                val name = parts[0]
+                val pos = nameToIndex[name] ?: continue
+                val size = parts[1].toLongOrNull() ?: 0L
+                val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
+                val perms = parts[6]
+                val isDir = perms.startsWith("d")
+                entries[pos] = entries[pos].copy(
+                    permission = perms,
+                    size = if (isDir) 0L else size,
+                    lastModified = (mtimeSec * 1000).toLong()
+                )
+            }
+        }
+
         var dirCount = 0
         var fileCount = 0
-
-        for (line in findLines) {
-            val parts = line.split("|")
-            if (parts.size < 7) continue
-            val name = parts[0]
-            if (name == "." || name == "..") continue
-            val size = parts[1].toLongOrNull() ?: 0L
-            val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
-            val perms = parts[6]
-            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-            val isDir = perms.startsWith("d")
-            if (isDir) dirCount++ else fileCount++
-            entries.add(FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong()))
+        for (entry in entries) {
+            if (entry.isDirectory) dirCount++ else fileCount++
         }
         DiagnosticLog.log("LsShell", "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
 
