@@ -125,6 +125,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var refreshVersion by mutableStateOf(0L)
         private set
 
+    // ── 异步目录加载 ──
+    private var loadDirectoryJob: Job? = null
+    var isLoadingDirectory by mutableStateOf(false)
+        private set
+    private var loadDirectoryVersion = 0L
+
     // ── 压缩任务 ──
     private val compressCancelFlag = AtomicBoolean(false)
     private var compressJob: Job? = null
@@ -497,6 +503,259 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 清空指定路径的滚动位置（前进导航时使用，确保目标从第一行开始） */
     fun clearScrollPosition(path: String) { scrollPositions.remove(path) }
 
+    // ── 异步目录加载核心 ──
+
+    private companion object {
+        const val LOAD_DIRECTORY_BATCH_SIZE = 20
+    }
+
+    /**
+     * 异步加载目录内容，替代同步 listDirectory() + loadExtFlagsForDir()。
+     * 逐行解析 find 输出，每 BATCH_SIZE 个切 Main 更新 entries，全部完成后最终排序。
+     * 路径切换在第一个条目解析成功后才执行，避免空白闪现。
+     *
+     * @param targetPath 目标目录路径
+     * @param isLeft 是否操作左面板
+     * @param isRefresh 是否为刷新操作（刷新时先清空再重新加载当前路径）
+     * @param onComplete 加载完成后回调（参数为最终路径）
+     */
+    private fun loadDirectoryAsync(
+        targetPath: String,
+        isLeft: Boolean,
+        isRefresh: Boolean = false,
+        onComplete: ((String) -> Unit)? = null
+    ) {
+        // 取消上一次未完成的加载
+        loadDirectoryJob?.cancel()
+        loadDirectoryVersion++
+        val myVersion = loadDirectoryVersion
+
+        // 清空旧条目，避免闪现旧目录内容
+        if (isLeft) leftEntries = emptyList() else rightEntries = emptyList()
+        isLoadingDirectory = true
+        loadError = null
+
+        // 不在此处切 leftPath/rightPath，等第一个条目解析成功后才切，避免空白闪现
+
+        loadDirectoryJob = viewModelScope.launch(Dispatchers.IO) {
+            val normalized = if (targetPath == "/") "/" else targetPath.trimEnd('/').ifEmpty { "/" }
+            val hiddenFilter = if (showHiddenFiles) "" else " -not -name '.*'"
+            val escaped = SevenZipCommand.escape(normalized)
+            val cmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
+
+            val snapshot = mutableListOf<FileEntry>()
+            var firstBatchRendered = false
+            // vault 配置文件名，用于过滤
+            val vaultConfigNames = if (isVaultMode) setOf(
+                "vault_config.json", "vault_config.backup.json",
+                "name_mappings.json", "folder_sizes.json"
+            ) else emptySet()
+
+            try {
+                ShellExecutor.executeStreaming(
+                    permission = Permission.MAX,
+                    command = cmd,
+                    onOutputLine = { line ->
+                        if (line.isBlank()) return@executeStreaming
+                        val parts = line.split("|")
+                        if (parts.size < 7) return@executeStreaming
+                        val name = parts[0]
+                        if (name == "." || name == "..") return@executeStreaming
+                        if (name in vaultConfigNames) return@executeStreaming
+                        val size = parts[1].toLongOrNull() ?: 0L
+                        val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
+                        val perms = parts[6]
+                        val childPath = if (normalized == "/") "/$name" else "$normalized/$name"
+                        val isDir = perms.startsWith("d")
+                        var entry = FileEntry(childPath, name, isDir, perms, if (isDir) 0L else size, (mtimeSec * 1000).toLong())
+
+                        // vault 模式：文件名解密
+                        if (isVaultMode) {
+                            val session = vaultSession
+                            if (session != null && !isDir) {
+                                val displayName = decryptVaultFileName(name, session)
+                                entry = entry.copy(name = displayName)
+                            }
+                        }
+
+                        snapshot.add(entry)
+
+                        // 批量更新：每 BATCH_SIZE 个切 Main 更新一次
+                        if (snapshot.size % LOAD_DIRECTORY_BATCH_SIZE == 0) {
+                            val batch = snapshot.toList()
+                            withContext(Dispatchers.Main) {
+                                if (myVersion != loadDirectoryVersion) return@withContext
+                                // 首批渲染时：同时切路径 + 清 loading 状态
+                                if (!firstBatchRendered) {
+                                    firstBatchRendered = true
+                                    isLoadingDirectory = false
+                                    if (!isRefresh) {
+                                        if (isLeft) leftPath = targetPath else rightPath = targetPath
+                                    }
+                                }
+                                if (isLeft) leftEntries = batch else rightEntries = batch
+                            }
+                        }
+                    },
+                    cancelFlag = AtomicBoolean(false)
+                )
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) return@launch
+                withContext(Dispatchers.Main) {
+                    if (myVersion == loadDirectoryVersion) {
+                        loadError = e
+                        isLoadingDirectory = false
+                    }
+                }
+                return@launch
+            }
+
+            // 检查版本号（快速连续点击可能已过时）
+            if (myVersion != loadDirectoryVersion) return@launch
+
+            // 最终排序
+            val sorted = sortEntries(snapshot)
+
+            withContext(Dispatchers.Main) {
+                if (myVersion != loadDirectoryVersion) return@withContext
+                isLoadingDirectory = false
+                // 首批未触发（空目录）时在此切路径
+                if (!firstBatchRendered && !isRefresh) {
+                    if (isLeft) leftPath = targetPath else rightPath = targetPath
+                }
+                if (isLeft) leftEntries = sorted else rightEntries = sorted
+                onComplete?.invoke(targetPath)
+            }
+
+            // 异步加载 ext flags（不阻塞 entries 渲染）
+            loadExtFlagsForDir(targetPath, isLeft = isLeft)
+        }
+    }
+
+    /**
+     * 对 FileEntry 列表执行排序（directories first + 当前排序字段）。
+     * 复用 listDirectory() 的排序逻辑。
+     */
+    private fun sortEntries(entries: List<FileEntry>): List<FileEntry> {
+        // vault 模式过滤配置文件
+        val filtered = if (isVaultMode) {
+            entries.filter { entry ->
+                val name = entry.name
+                name != "vault_config.json" &&
+                name != "vault_config.backup.json" &&
+                name != "name_mappings.json" &&
+                name != "folder_sizes.json"
+            }
+        } else entries
+
+        // 填充创建时间（异步阶段，不在首次渲染时执行 NIO）
+        val withCreationTime = if (sortField == SortField.CREATED && android.os.Build.VERSION.SDK_INT >= 26) {
+            filtered.map { e ->
+                if (e.createdAt > 0) return@map e
+                val ct = try {
+                    java.nio.file.Files.readAttributes(
+                        java.io.File(e.path).toPath(),
+                        java.nio.file.attribute.BasicFileAttributes::class.java
+                    ).creationTime().toMillis()
+                } catch (_: Exception) { e.lastModified }
+                e.copy(createdAt = ct)
+            }
+        } else filtered
+
+        return when (sortField) {
+            SortField.NAME -> if (sortOrder == SortOrder.ASC)
+                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
+            else
+                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
+            SortField.SIZE -> {
+                fun effectiveSize(entry: FileEntry): Long {
+                    if (!entry.isDirectory) return entry.size
+                    val cached = folderSizeDb.get(entry.path)
+                    return cached?.size ?: -1L
+                }
+                if (sortOrder == SortOrder.ASC)
+                    withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { effectiveSize(it).let { s -> if (s < 0) Long.MAX_VALUE else s } })
+                else
+                    withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { effectiveSize(it).let { s -> if (s < 0) Long.MIN_VALUE else s } })
+            }
+            SortField.MODIFIED -> if (sortOrder == SortOrder.ASC)
+                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.lastModified })
+            else
+                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.lastModified })
+            SortField.CREATED -> if (sortOrder == SortOrder.ASC)
+                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.createdAt })
+            else
+                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.createdAt })
+        }
+    }
+
+    /**
+     * Java File API 模式下的同步加载 + 异步赋值。
+     * 用于无 shell 引擎时的本地文件系统（通常很快）。
+     */
+    private fun loadDirectorySync(
+        targetPath: String,
+        isLeft: Boolean,
+        isRefresh: Boolean = false,
+        onComplete: ((String) -> Unit)? = null
+    ) {
+        loadDirectoryJob?.cancel()
+        loadDirectoryVersion++
+        val myVersion = loadDirectoryVersion
+        if (isLeft) leftEntries = emptyList() else rightEntries = emptyList()
+        isLoadingDirectory = true
+        loadError = null
+
+        // 不在此处切路径，等 entries 就绪后才切
+
+        loadDirectoryJob = viewModelScope.launch(Dispatchers.IO) {
+            val normalized = if (targetPath == "/") "/" else targetPath.trimEnd('/').ifEmpty { "/" }
+            val dir = java.io.File(normalized)
+            val entries = try {
+                dir.listFiles()?.map { f ->
+                    FileEntry(f.absolutePath, f.name, f.isDirectory, "", if (f.isDirectory) 0L else f.length(), f.lastModified())
+                }?.filter { f -> showHiddenFiles || !f.name.startsWith(".") }
+            } catch (_: Exception) { null }
+
+            if (entries == null) {
+                withContext(Dispatchers.Main) {
+                    if (myVersion == loadDirectoryVersion) {
+                        loadError = RuntimeException("权限不足或目录不存在: $targetPath")
+                        isLoadingDirectory = false
+                    }
+                }
+                return@launch
+            }
+
+            val sorted = sortEntries(entries)
+            withContext(Dispatchers.Main) {
+                if (myVersion != loadDirectoryVersion) return@withContext
+                isLoadingDirectory = false
+                if (!isRefresh) {
+                    if (isLeft) leftPath = targetPath else rightPath = targetPath
+                }
+                if (isLeft) leftEntries = sorted else rightEntries = sorted
+                onComplete?.invoke(targetPath)
+            }
+        }
+    }
+
+    /**
+     * 统一的异步目录加载入口：有 shell 引擎走 streaming，否则走 Java File API。
+     */
+    private fun loadDirectory(
+        targetPath: String,
+        isLeft: Boolean,
+        isRefresh: Boolean = false,
+        onComplete: ((String) -> Unit)? = null
+    ) {
+        if (hasShellEngine) {
+            loadDirectoryAsync(targetPath, isLeft, isRefresh, onComplete)
+        } else {
+            loadDirectorySync(targetPath, isLeft, isRefresh, onComplete)
+        }
+    }
+
     // ── 待滚动状态（绑定跳转+渲染） ──
     var pendingScrollTo by mutableStateOf<Triple<String, Int, Int>?>(null)
 
@@ -508,25 +767,20 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
         navigateTo(path)
-        // 2. 记录滚动位置（供 Compose 侧使用）
         pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
     }
 
-    // ── 核心导航：切换路径 + 刷新列表 ──
-    fun navigateTo(path: String) {
+    // ── 核心导航：切换路径 + 刷新列表（异步） ──
+    fun navigateTo(path: String, onComplete: ((String) -> Unit)? = null) {
         if (recycleBinPanel == focusedPanel) recycleBinPanel = null
         if (focusedPanel == FocusedPanel.LEFT) {
             if (leftPath == path) return
             leftNavState = leftNavState.navigate(path)
-            leftPath = path
-            leftEntries = listDirectory(path)
-            loadExtFlagsForDir(path, isLeft = true)
+            loadDirectory(path, isLeft = true, onComplete = onComplete)
         } else {
             if (rightPath == path) return
             rightNavState = rightNavState.navigate(path)
-            rightPath = path
-            rightEntries = listDirectory(path)
-            loadExtFlagsForDir(path, isLeft = false)
+            loadDirectory(path, isLeft = false, onComplete = onComplete)
         }
         checkVaultPanelExit()
     }
@@ -534,28 +788,32 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 软链接弹窗状态：null=不显示，FileEntry=被点击的软链接 */
     var pendingSymlinkEntry by mutableStateOf<FileEntry?>(null)
 
-    // ── 导航操作 ──
+    // ── 导航操作（异步） ──
     fun navigateToFolder(entry: FileEntry, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
         if (entry.permission.startsWith("l")) {
             pendingSymlinkEntry = entry
             return
         }
         val displayPath = entry.path
+        val targetIsLeft = focusedPanel == FocusedPanel.LEFT
 
         if (hasShellEngine) {
-            listDirEntriesViaShell(displayPath, showHiddenFiles)
-            if (lastShellStderr.isBlank()) {
-                navigateToWithScroll(displayPath, scrollToIndex, scrollToOffset)
-                addHistory(entry.name, displayPath, true)
-            } else {
-                loadError = RuntimeException("${formatShellError(entry.name, lastShellStderr)}\n路径: $displayPath")
-            }
+            loadDirectory(displayPath, isLeft = targetIsLeft, onComplete = { path ->
+                addHistory(entry.name, path, true)
+                if (scrollToIndex != 0 || scrollToOffset != 0) {
+                    pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
+                }
+            })
         } else {
             val testDir = File(displayPath)
             val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
             if (accessible != null) {
-                navigateToWithScroll(displayPath, scrollToIndex, scrollToOffset)
-                addHistory(entry.name, displayPath, true)
+                loadDirectory(displayPath, isLeft = targetIsLeft, onComplete = { path ->
+                    addHistory(entry.name, path, true)
+                    if (scrollToIndex != 0 || scrollToOffset != 0) {
+                        pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
+                    }
+                })
             } else if (!testDir.exists()) {
                 loadError = RuntimeException("文件夹不存在: ${entry.name}\n路径: $displayPath")
             } else {
@@ -566,12 +824,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun navigateToHistoryDir(entry: HistoryEntry) {
         if (hasShellEngine) {
-            listDirEntriesViaShell(entry.path, showHiddenFiles)
-            if (lastShellStderr.isBlank()) navigateTo(entry.path)
-            else loadError = RuntimeException("${formatShellError(entry.name, lastShellStderr)}\n路径: ${entry.path}")
+            loadDirectory(entry.path, isLeft = true)
         } else {
             val testDir = File(entry.path)
-            if (testDir.exists() && testDir.canRead()) navigateTo(entry.path)
+            if (testDir.exists() && testDir.canRead()) loadDirectory(entry.path, isLeft = true)
         }
     }
 
@@ -584,27 +840,20 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val file = File(entry.path)
         val parentDir = file.parentFile ?: return
         if (hasShellEngine) {
-            listDirEntriesViaShell(parentDir.absolutePath, showHiddenFiles)
-            if (lastShellStderr.isBlank()) {
-                pendingScrollToFile = file.name
-                navigateTo(parentDir.absolutePath)
-            } else {
-                loadError = RuntimeException("${formatShellError(parentDir.name, lastShellStderr)}\n路径: ${parentDir.absolutePath}")
-            }
+            pendingScrollToFile = file.name
+            loadDirectory(parentDir.absolutePath, isLeft = true)
         } else if (parentDir.exists() && parentDir.canRead()) {
             pendingScrollToFile = file.name
-            navigateTo(parentDir.absolutePath)
+            loadDirectory(parentDir.absolutePath, isLeft = true)
         }
     }
 
     fun navigateToBookmark(bm: BookmarkEntry) {
         if (hasShellEngine) {
-            listDirEntriesViaShell(bm.path, showHiddenFiles)
-            if (lastShellStderr.isBlank()) navigateTo(bm.path)
-            else loadError = RuntimeException("${formatShellError(bm.name, lastShellStderr)}\n路径: ${bm.path}")
+            loadDirectory(bm.path, isLeft = true)
         } else {
             val testDir = File(bm.path)
-            if (testDir.exists() && testDir.canRead()) navigateTo(bm.path)
+            if (testDir.exists() && testDir.canRead()) loadDirectory(bm.path, isLeft = true)
         }
     }
 
@@ -703,45 +952,37 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 后退，返回目标路径，null 表示无法后退（不执行跳转，由调用方通过 navigateToWithScroll 跳转） */
-    /** 后退一步：更新 nav state index + 切换路径 + 刷新列表，返回目标路径 */
+    /** 后退一步：更新 nav state index + 异步加载目录，返回目标路径 */
     fun goBack(): String? {
         if (focusedPanel == FocusedPanel.LEFT) {
             val back = leftNavState.back() ?: return null
             leftNavState = back
-            leftPath = back.current
-            leftEntries = listDirectory(leftPath)
-            loadExtFlagsForDir(leftPath, isLeft = true)
-            return leftPath
+            loadDirectory(back.current, isLeft = true)
+            return back.current
         } else {
             val back = rightNavState.back() ?: return null
             rightNavState = back
-            rightPath = back.current
-            rightEntries = listDirectory(rightPath)
-            loadExtFlagsForDir(rightPath, isLeft = false)
-            return rightPath
+            loadDirectory(back.current, isLeft = false)
+            return back.current
         }
     }
 
-    /** 前进一步：更新 nav state index + 切换路径 + 刷新列表，返回目标路径 */
+    /** 前进一步：更新 nav state index + 异步加载目录，返回目标路径 */
     fun goForward(): String? {
         if (focusedPanel == FocusedPanel.LEFT) {
             val fwd = leftNavState.forward() ?: return null
             leftNavState = fwd
-            leftPath = fwd.current
-            leftEntries = listDirectory(leftPath)
-            loadExtFlagsForDir(leftPath, isLeft = true)
-            return leftPath
+            loadDirectory(fwd.current, isLeft = true)
+            return fwd.current
         } else {
             val fwd = rightNavState.forward() ?: return null
             rightNavState = fwd
-            rightPath = fwd.current
-            rightEntries = listDirectory(rightPath)
-            loadExtFlagsForDir(rightPath, isLeft = false)
-            return rightPath
+            loadDirectory(fwd.current, isLeft = false)
+            return fwd.current
         }
     }
 
-    /** 返回上级目录，返回目标路径，null 表示已在根目录（不执行跳转，由调用方通过 navigateToWithScroll 跳转） */
+    /** 返回上级目录，返回目标路径，null 表示已在根目录 */
     fun goUp(): String? {
         val effectiveRoot = vaultRoot ?: if (isRootEngine) "/" else safeDefault
         val path = if (focusedPanel == FocusedPanel.LEFT) leftPath else rightPath
@@ -753,15 +994,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun syncPaths() {
         if (focusedPanel == FocusedPanel.LEFT) {
-            rightPath = leftPath
             rightNavState = rightNavState.navigate(leftPath)
-            rightEntries = listDirectory(rightPath)
-            loadExtFlagsForDir(rightPath, isLeft = false)
+            loadDirectory(leftPath, isLeft = false)
         } else {
-            leftPath = rightPath
             leftNavState = leftNavState.navigate(rightPath)
-            leftEntries = listDirectory(leftPath)
-            loadExtFlagsForDir(leftPath, isLeft = true)
+            loadDirectory(rightPath, isLeft = true)
         }
     }
 
@@ -769,11 +1006,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (focusedPanel == FocusedPanel.LEFT && isWebDavMode) {
             loadWebDavEntries()
         } else if (focusedPanel == FocusedPanel.LEFT) {
-            leftEntries = listDirectory(leftPath)
-            loadExtFlagsForDir(leftPath, isLeft = true)
+            loadDirectory(leftPath, isLeft = true, isRefresh = true)
         } else {
-            rightEntries = listDirectory(rightPath)
-            loadExtFlagsForDir(rightPath, isLeft = false)
+            loadDirectory(rightPath, isLeft = false, isRefresh = true)
         }
     }
 
@@ -781,11 +1016,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (isWebDavMode) {
             loadWebDavEntries()
         } else {
-            leftEntries = listDirectory(leftPath)
-            loadExtFlagsForDir(leftPath, isLeft = true)
+            loadDirectory(leftPath, isLeft = true, isRefresh = true)
         }
-        rightEntries = listDirectory(rightPath)
-        loadExtFlagsForDir(rightPath, isLeft = false)
+        loadDirectory(rightPath, isLeft = false, isRefresh = true)
     }
 
     // ── Vault 模式 ──
