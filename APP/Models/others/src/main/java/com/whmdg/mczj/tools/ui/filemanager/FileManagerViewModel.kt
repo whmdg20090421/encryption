@@ -1699,21 +1699,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         var entries = listWithLs(path, showHiddenFiles, useRoot = isRootEngine, effectiveRoot = effectiveRoot)
 
-        // 兜底：ls 完全没结果且报错 → 退到 File.listFiles
-        // Android/data 等受保护路径跳过兜底，因为 File API 无法访问
-        val isProtectedPath = path.contains("/Android/data") || path.contains("/Android/obb")
-        if (entries.isEmpty() && loadError != null && !isProtectedPath) {
-            DiagnosticLog.log("FileMgr", "ls 失败，回退 File API")
-            val prevErr = loadError
-            loadError = null
-            val fileEntries = listWithFile(path, showHiddenFiles, effectiveRoot)
-            if (fileEntries.isNotEmpty()) {
-                entries = fileEntries
-            } else if (loadError == null) {
-                loadError = prevErr
-            }
-        }
-
         // vault 模式：过滤配置文件 + 文件名解密
         if (isVaultMode) {
             val session = vaultSession!!
