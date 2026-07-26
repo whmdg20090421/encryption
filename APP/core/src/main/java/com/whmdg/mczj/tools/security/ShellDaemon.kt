@@ -136,7 +136,7 @@ object ShellDaemon {
             lock = ReentrantLock()
         )
         shells[permission] = shell
-        Log.i(TAG, "已创建 $permission 持久 shell (pid=${process.pid()})")
+        Log.i(TAG, "已创建 $permission 持久 shell")
         return shell
     }
 
@@ -200,7 +200,7 @@ object ShellDaemon {
                     }
                 }
                 // 不会到这里
-                ""
+                return ""
             } catch (e: ShellException) {
                 throw e
             } catch (e: Exception) {
