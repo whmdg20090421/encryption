@@ -579,8 +579,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         // 批量更新：每 BATCH_SIZE 个切 Main 更新一次
                         if (snapshot.size % LOAD_DIRECTORY_BATCH_SIZE == 0) {
                             val batch = snapshot.toList()
-                            withContext(Dispatchers.Main) {
-                                if (myVersion != loadDirectoryVersion) return@withContext
+                            viewModelScope.launch(Dispatchers.Main) {
+                                if (myVersion != loadDirectoryVersion) return@launch
                                 // 首批渲染时：同时切路径 + 清 loading 状态
                                 if (!firstBatchRendered) {
                                     firstBatchRendered = true
