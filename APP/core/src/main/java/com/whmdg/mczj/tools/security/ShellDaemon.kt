@@ -1,9 +1,12 @@
 package com.whmdg.mczj.tools.security
 
 import android.util.Log
+import com.topjohnwu.superuser.Shell
 import java.io.BufferedReader
 import java.io.InputStream
+import java.io.InputStreamReader
 import java.io.OutputStream
+import java.io.PrintStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
@@ -12,6 +15,9 @@ import kotlin.concurrent.withLock
 /**
  * Shell 守护进程管理器。
  * 维护按权限隔离的持久 shell 进程池，避免每次执行命令都 fork。
+ *
+ * ROOT 权限通过 libsu Shell 执行（正确的 SELinux 上下文 + FLAG_MOUNT_MASTER），
+ * ADB/APPLICANT 通过持久 shell 进程执行。
  *
  * 协议：通过 stdin 发送命令，stdout 读取到 marker 结束，解析输出和 exit code。
  */
@@ -40,6 +46,9 @@ object ShellDaemon {
      * @throws ShellException 命令执行失败
      */
     fun execute(permission: Permission, command: String): String {
+        if (permission == Permission.ROOT) {
+            return executeWithLibsu(command, permission)
+        }
         val shell = getOrCreateShell(permission)
         return executeInShell(shell, command, permission)
     }
@@ -54,6 +63,10 @@ object ShellDaemon {
         onOutputLine: (String) -> Unit,
         cancelFlag: AtomicBoolean? = null
     ) {
+        if (permission == Permission.ROOT) {
+            executeStreamingWithLibsu(command, permission, onOutputLine, cancelFlag)
+            return
+        }
         val shell = getOrCreateShell(permission)
         executeStreamingInShell(shell, command, permission, onOutputLine, cancelFlag)
     }
@@ -69,7 +82,6 @@ object ShellDaemon {
         onStderrLine: (String) -> Unit,
         cancelFlag: AtomicBoolean? = null
     ) {
-        val shell = getOrCreateShell(permission)
         // ponytail: stderr 流式需要独立进程，无法用持久 shell 的 stdin/stdout 管道
         // 回退到 fork 方式，但复用 shell 进程做其他命令
         executeWithStderrFork(command, permission, onStderrLine, cancelFlag)
@@ -85,6 +97,10 @@ object ShellDaemon {
         onStdoutLine: (String) -> Unit,
         cancelFlag: AtomicBoolean? = null
     ) {
+        if (permission == Permission.ROOT) {
+            executeStreamingWithLibsu(command, permission, onStdoutLine, cancelFlag)
+            return
+        }
         val shell = getOrCreateShell(permission)
         executeStreamingInShell(shell, command, permission, onStdoutLine, cancelFlag)
     }
@@ -104,10 +120,105 @@ object ShellDaemon {
         shells.clear()
     }
 
-    // ── 内部实现 ──────────────────────────────────────────────────────
+    // ── libsu Shell（ROOT 权限） ──────────────────────────────────────
+
+    /**
+     * 通过 libsu Shell 同步执行命令（ROOT 权限）。
+     * libsu 正确处理 SELinux 上下文，可访问 /data/data 等受保护目录。
+     */
+    private fun executeWithLibsu(command: String, permission: Permission): String {
+        val result = Shell.cmd("$command 2>&1").exec()
+        if (!result.isSuccess) {
+            val stderr = result.err.joinToString("\n").trim()
+            throw ShellException(
+                message = "命令执行失败",
+                command = command,
+                permission = permission,
+                stderr = stderr.ifBlank { "exit ${result.code}" },
+                exitCode = result.code
+            )
+        }
+        return result.out.joinToString("\n")
+    }
+
+    /**
+     * 通过 libsu Shell 流式执行命令（ROOT 权限）。
+     * 使用 execTask 获取持久 shell 的原始 stdin/stdout，逐行回调。
+     */
+    private fun executeStreamingWithLibsu(
+        command: String,
+        permission: Permission,
+        onOutputLine: (String) -> Unit,
+        cancelFlag: AtomicBoolean?
+    ) {
+        try {
+            val shell = Shell.getShell()
+            shell.execTask { stdin, stdout, _ ->
+                val marker = "${MARKER_PREFIX}${System.nanoTime()}${MARKER_SUFFIX}"
+                val ps = PrintStream(stdin)
+                ps.println("$command 2>&1")
+                ps.println("echo ${marker}\$?")
+                ps.flush()
+
+                val reader = BufferedReader(InputStreamReader(stdout))
+                val lineBuf = StringBuilder()
+                var exitCode = -1
+
+                while (true) {
+                    if (cancelFlag?.get() == true) {
+                        throw ShellException(
+                            message = "命令已取消",
+                            command = command,
+                            permission = permission
+                        )
+                    }
+
+                    val n = reader.read()
+                    if (n == -1) break
+
+                    val ch = n.toChar()
+                    if (ch == '\n') {
+                        val line = lineBuf.toString()
+                        lineBuf.clear()
+
+                        if (line.startsWith(marker)) {
+                            exitCode = line.substring(marker.length).trim().toIntOrNull() ?: -1
+                            if (exitCode != 0) {
+                                throw ShellException(
+                                    message = "流式命令执行失败",
+                                    command = command,
+                                    permission = permission,
+                                    exitCode = exitCode
+                                )
+                            }
+                            return@execTask
+                        }
+
+                        if (line.isNotBlank()) {
+                            onOutputLine(line)
+                        }
+                    } else if (ch != '\r') {
+                        lineBuf.append(ch)
+                    }
+                }
+            }
+        } catch (e: ShellException) {
+            throw e
+        } catch (e: Exception) {
+            throw ShellException(
+                message = "libsu 流式执行异常: ${e.message}",
+                command = command,
+                permission = permission,
+                stderr = e.message ?: ""
+            )
+        }
+    }
+
+    // ── 持久 Shell（ADB / APPLICANT 权限） ────────────────────────────
 
     /**
      * 获取或创建指定权限的持久 shell 进程。
+     * ROOT 权限通过 libsu Shell 执行，不走此处。
      */
     private fun getOrCreateShell(permission: Permission): PersistentShell {
         shells[permission]?.let { shell ->
@@ -119,7 +230,6 @@ object ShellDaemon {
 
         // 创建新的持久 shell
         val process = when (permission) {
-            Permission.ROOT -> ProcessBuilder("su").start()
             Permission.ADB -> ProcessBuilder("sh").start()
             Permission.APPLICANT -> ProcessBuilder("sh").start()
             else -> throw ShellException(
