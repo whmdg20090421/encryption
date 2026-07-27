@@ -249,9 +249,7 @@ fun FileManagerScreen(
     var showCreateTypeDialog by remember { mutableStateOf(false) }
     var createMode by remember { mutableStateOf(CreateMode.FILE) }
     var showNameDialog by remember { mutableStateOf(false) }
-    var createName by remember { mutableStateOf("") }
     var showRenameDialog by remember { mutableStateOf(false) }
-    var renameText by remember { mutableStateOf("") }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var hideToolbarForDelete by remember { mutableStateOf(false) }
     var showDeleteProgress by remember { mutableStateOf(false) }
@@ -334,8 +332,6 @@ fun FileManagerScreen(
         mutableStateOf(list)
     }
     var showAddQaDialog by remember { mutableStateOf(false) }
-    var qaNameInput by remember { mutableStateOf("") }
-    var qaPathInput by remember { mutableStateOf("") }
 
     // ── WebDAV 快捷访问 ──
     var showQaTypeSelector by remember { mutableStateOf(false) }
@@ -2202,7 +2198,6 @@ fun FileManagerScreen(
                                         .weight(1f)
                                         .clickable(enabled = !isMultiSelect) {
                                             val entry = selectedEntry ?: return@clickable
-                                            renameText = entry.name
                                             showRenameDialog = true
                                         }
                                         .padding(vertical = 16.dp),
@@ -2750,144 +2745,54 @@ fun FileManagerScreen(
     }
 
     // ── 新建类型选择对话框 ──
-    if (showCreateTypeDialog) {
-        StandardDialog(
-            onDismissRequest = { showCreateTypeDialog = false },
-            title = { Text("新建") },
-            text = {
-                Column {
-                    TextButton(
-                        onClick = {
-                            createMode = CreateMode.FILE
-                            showCreateTypeDialog = false
-                            createName = ""
-                            showNameDialog = true
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("创建文件")
-                    }
-                    TextButton(
-                        onClick = {
-                            createMode = CreateMode.FOLDER
-                            showCreateTypeDialog = false
-                            createName = ""
-                            showNameDialog = true
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("创建文件夹")
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showCreateTypeDialog = false }) {
-                    Text("取消")
-                }
-            }
-        )
-    }
+    CreateTypeDialog(
+        show = showCreateTypeDialog,
+        onDismiss = { showCreateTypeDialog = false },
+        onSelect = { mode ->
+            createMode = mode
+            showCreateTypeDialog = false
+            showNameDialog = true
+        }
+    )
 
     // ── 名称输入对话框 ──
-    if (showNameDialog) {
-        StandardDialog(
-            onDismissRequest = {
-                showNameDialog = false
-                createName = ""
-            },
-            title = { Text(if (createMode == CreateMode.FILE) "创建文件" else "创建文件夹") },
-            text = {
-                OutlinedTextField(
-                    value = createName,
-                    onValueChange = { createName = it },
-                    label = { Text("名称") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val name = createName.trim()
-                        if (name.isBlank()) return@TextButton
-                        val currentPath = vm.currentPath
-                        val isFolder = createMode == CreateMode.FOLDER
-                        val error = vm.createEntry(currentPath, name, isFolder)
-                        if (error == null) {
-                            Toast.makeText(context, "创建成功", Toast.LENGTH_SHORT).show()
-                            vm.refreshCurrent()
-                        } else {
-                            Toast.makeText(context, "创建失败: $error", Toast.LENGTH_SHORT).show()
-                        }
-                        showNameDialog = false
-                        createName = ""
-                    },
-                    enabled = createName.isNotBlank()
-                ) {
-                    Text("确定")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showNameDialog = false
-                    createName = ""
-                }) {
-                    Text("取消")
-                }
+    NameInputDialog(
+        show = showNameDialog,
+        createMode = createMode,
+        onDismiss = { showNameDialog = false },
+        onConfirm = { name ->
+            if (name.isBlank()) return@NameInputDialog
+            val currentPath = vm.currentPath
+            val isFolder = createMode == CreateMode.FOLDER
+            val error = vm.createEntry(currentPath, name, isFolder)
+            if (error == null) {
+                Toast.makeText(context, "创建成功", Toast.LENGTH_SHORT).show()
+                vm.refreshCurrent()
+            } else {
+                Toast.makeText(context, "创建失败: $error", Toast.LENGTH_SHORT).show()
             }
-        )
-    }
+            showNameDialog = false
+        }
+    )
 
     // ── 重命名对话框 ──
-    if (showRenameDialog && selectedEntry != null) {
-        val entry = selectedEntry!!
-        StandardDialog(
-            onDismissRequest = {
-                showRenameDialog = false
-                renameText = ""
-            },
-            title = { Text("重命名") },
-            text = {
-                OutlinedTextField(
-                    value = renameText,
-                    onValueChange = { renameText = it },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val newName = renameText.trim()
-                    if (newName.isBlank() || newName == entry.name) {
-                        showRenameDialog = false
-                        renameText = ""
-                        return@TextButton
-                    }
-                    val error = vm.renameEntry(entry, newName)
-                    if (error == null) {
-                        Toast.makeText(context, "重命名成功", Toast.LENGTH_SHORT).show()
-                        vm.refreshBoth()
-                    } else {
-                        Toast.makeText(context, "重命名失败: $error", Toast.LENGTH_SHORT).show()
-                    }
-                    showRenameDialog = false
-                    renameText = ""
-                    selectedEntry = null
-                }) {
-                    Text("确认")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showRenameDialog = false
-                    renameText = ""
-                }) {
-                    Text("取消")
-                }
+    RenameDialog(
+        show = showRenameDialog && selectedEntry != null,
+        currentName = selectedEntry?.name ?: "",
+        onDismiss = { showRenameDialog = false },
+        onConfirm = { newName ->
+            val entry = selectedEntry ?: return@RenameDialog
+            val error = vm.renameEntry(entry, newName)
+            if (error == null) {
+                Toast.makeText(context, "重命名成功", Toast.LENGTH_SHORT).show()
+                vm.refreshBoth()
+            } else {
+                Toast.makeText(context, "重命名失败: $error", Toast.LENGTH_SHORT).show()
             }
-        )
-    }
+            showRenameDialog = false
+            selectedEntry = null
+        }
+    )
 
     // ── 删除确认对话框 ──
     val delMultiSelect = if (vm.focusedPanel == FocusedPanel.LEFT) leftSelectedPaths.size > 1 else rightSelectedPaths.size > 1
@@ -2895,458 +2800,171 @@ fun FileManagerScreen(
         vm.leftEntries.filter { it.path in leftSelectedPaths }
     else
         vm.rightEntries.filter { it.path in rightSelectedPaths }
-    if (showDeleteDialog && (selectedEntry != null || delMultiSelect)) {
-        StandardDialog(
-            onDismissRequest = { showDeleteDialog = false },
-            title = { Text("删除") },
-            text = {
-                Column {
-                    if (delMultiSelect) {
-                        Text("确定要删除选中的 ${delSelectedEntries.size} 个项目吗？")
-                    } else {
-                        Text("确定要删除「${selectedEntry!!.name}」吗？")
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clickable { recycleBinEnabled = !recycleBinEnabled }
-                            .padding(start = 4.dp)
-                    ) {
-                        Checkbox(
-                            checked = recycleBinEnabled,
-                            onCheckedChange = { recycleBinEnabled = it }
-                        )
-                        Text("移动到回收站")
-                    }
+    DeleteConfirmDialog(
+        show = showDeleteDialog && (selectedEntry != null || delMultiSelect),
+        isMultiDel = delMultiSelect,
+        delCount = delSelectedEntries.size,
+        entryName = selectedEntry?.name ?: "",
+        onDismiss = { showDeleteDialog = false; hideToolbarForDelete = false },
+        onConfirm = { recycleBinEnabled ->
+            showDeleteDialog = false
+            showDeleteProgress = true
+            val deleteEntries = if (delMultiSelect) {
+                delSelectedEntries.map { entry ->
+                    DeleteEntry(entry.path, entry.name, entry.isDirectory, entry.size)
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showDeleteDialog = false
-                    showDeleteProgress = true
-                    val deleteEntries = if (delMultiSelect) {
-                        delSelectedEntries.map { entry ->
-                            DeleteEntry(entry.path, entry.name, entry.isDirectory, entry.size)
-                        }
-                    } else {
-                        val entry = selectedEntry ?: return@TextButton
-                        listOf(DeleteEntry(entry.path, entry.name, entry.isDirectory, entry.size))
-                    }
-                    val accessLevel = when {
-                        vm.isRootEngine -> com.whmdg.mczj.tools.util.FileAccessLevel.ROOT
-                        com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> com.whmdg.mczj.tools.util.FileAccessLevel.SHIZUKU
-                        else -> com.whmdg.mczj.tools.util.FileAccessLevel.NORMAL
-                    }
-                    FileOperationManager.delete(deleteEntries, recycleBinEnabled, accessLevel, context)
-                    if (vm.focusedPanel == FocusedPanel.LEFT) {
-                        leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
-                    } else {
-                        rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
-                    }
-                }) {
-                    Text("确定")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showDeleteDialog = false
-                    hideToolbarForDelete = false
-                }) {
-                    Text("取消")
-                }
+            } else {
+                val entry = selectedEntry ?: return@DeleteConfirmDialog
+                listOf(DeleteEntry(entry.path, entry.name, entry.isDirectory, entry.size))
             }
-        )
-    }
+            val accessLevel = when {
+                vm.isRootEngine -> FileAccessLevel.ROOT
+                com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> FileAccessLevel.SHIZUKU
+                else -> FileAccessLevel.NORMAL
+            }
+            FileOperationManager.delete(deleteEntries, recycleBinEnabled, accessLevel, context)
+            if (vm.focusedPanel == FocusedPanel.LEFT) {
+                leftSelectedPaths = emptySet(); leftSwipeSelectFlag = 0; leftLastSwipeIndex = -1
+            } else {
+                rightSelectedPaths = emptySet(); rightSwipeSelectFlag = 0; rightLastSwipeIndex = -1
+            }
+        }
+    )
 
     // ── 删除进度对话框 ──
-    if (showDeleteProgress) {
-        val isMultiDel = if (vm.focusedPanel == FocusedPanel.LEFT) leftSelectedPaths.size > 1 else rightSelectedPaths.size > 1
-        StandardDialog(
-            onDismissRequest = { /* 不可手动关闭 */ },
-            title = { Text("删除") },
-            text = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        if (isMultiDel) "正在删除..."
-                        else "正在删除「${selectedEntry?.name ?: ""}」"
-                    )
-                }
-            },
-            confirmButton = {},
-            dismissButton = {}
-        )
-        // 删除完成（progress 变为 null）→ 自动关闭对话框、清除状态
-        LaunchedEffect(fileOpManagerProgress) {
-            if (fileOpManagerProgress == null) {
-                showDeleteProgress = false
-                selectedEntry = null
-                hideToolbarForDelete = false
-            }
+    DeleteProgressDialog(
+        show = showDeleteProgress,
+        isMultiDel = if (vm.focusedPanel == FocusedPanel.LEFT) leftSelectedPaths.size > 1 else rightSelectedPaths.size > 1,
+        entryName = selectedEntry?.name ?: "",
+        onAutoDismiss = {
+            showDeleteProgress = false
+            selectedEntry = null
+            hideToolbarForDelete = false
         }
-    }
+    )
 
     // ── 复制/移动确认对话框 ──
-    if (showCopyMoveConfirmDialog) {
-        val sourceNames = copyMoveConfirmSourcePaths.map { path ->
-            path.substringAfterLast('/')
-        }
-        val sourceDisplay = if (sourceNames.size == 1) {
-            sourceNames[0]
-        } else {
-            "${sourceNames[0]} 等 ${sourceNames.size} 个文件"
-        }
-        val sourceDir = copyMoveConfirmSourcePaths.firstOrNull()?.substringBeforeLast('/') ?: ""
-        StandardDialog(
-            onDismissRequest = { showCopyMoveConfirmDialog = false },
-            title = { Text(if (copyMoveConfirmIsCopy) "确认复制" else "确认移动") },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = if (copyMoveConfirmIsCopy) "复制到以下目录：" else "移动到以下目录：",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = copyMoveConfirmTargetDir,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        text = "源文件：",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = sourceDisplay,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2
-                    )
-                    Text(
-                        text = sourceDir,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showCopyMoveConfirmDialog = false
-                    val accessLevel = when {
-                        vm.isRootEngine -> com.whmdg.mczj.tools.util.FileAccessLevel.ROOT
-                        com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> com.whmdg.mczj.tools.util.FileAccessLevel.SHIZUKU
-                        else -> com.whmdg.mczj.tools.util.FileAccessLevel.NORMAL
-                    }
-                    if (copyMoveConfirmIsCopy) {
-                        FileOperationManager.copy(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode)
-                    } else {
-                        FileOperationManager.move(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode)
-                    }
-                    showFileOpProgress = true
-                    selectedEntry = null
-                    leftSelectedPaths = emptySet()
-                    rightSelectedPaths = emptySet()
-                }) {
-                    Text("确认")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCopyMoveConfirmDialog = false }) {
-                    Text("取消")
-                }
+    CopyMoveConfirmDialog(
+        show = showCopyMoveConfirmDialog,
+        isCopy = copyMoveConfirmIsCopy,
+        sourcePaths = copyMoveConfirmSourcePaths,
+        targetDir = copyMoveConfirmTargetDir,
+        onDismiss = { showCopyMoveConfirmDialog = false },
+        onConfirm = {
+            showCopyMoveConfirmDialog = false
+            val accessLevel = when {
+                vm.isRootEngine -> FileAccessLevel.ROOT
+                com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> FileAccessLevel.SHIZUKU
+                else -> FileAccessLevel.NORMAL
             }
-        )
-    }
+            if (copyMoveConfirmIsCopy) {
+                FileOperationManager.copy(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode)
+            } else {
+                FileOperationManager.move(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode)
+            }
+            showFileOpProgress = true
+            selectedEntry = null
+            leftSelectedPaths = emptySet()
+            rightSelectedPaths = emptySet()
+        }
+    )
 
     // ── 复制/移动进度对话框 ──
-    if (showFileOpProgress) {
-        val progress = fileOpManagerProgress
-        var isCancelling by remember { mutableStateOf(false) }
-        StandardDialog(
-            onDismissRequest = { /* 不可手动关闭 */ },
-            title = { Text(if (isCancelling) "正在取消" else progress?.phase ?: "处理中") },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    if (isCancelling) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "正在取消...",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else if (progress != null) {
-                        if (progress.currentFileName.isNotEmpty()) {
-                            Text(
-                                text = progress.currentFileName,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
-                            )
-                            Spacer(Modifier.height(8.dp))
-                        }
-                        if (progress.isScanning) {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        } else if (progress.totalBytes > 0) {
-                            LinearProgressIndicator(
-                                progress = { progress.fraction.coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = if (progress.isScanning) {
-                                if (progress.totalBytes > 0) "${FormatUtils.formatBytes(progress.totalBytes)} (正在统计)"
-                                else "正在统计..."
-                            } else {
-                                "${FormatUtils.formatBytes(progress.currentBytes)} / ${FormatUtils.formatBytes(progress.totalBytes)}"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                    }
-                }
-            },
-            confirmButton = {
-                if (!isCancelling) {
-                    TextButton(onClick = {
-                        isCancelling = true
-                        FileOperationManager.cancelHard()
-                    }) {
-                        Text("取消", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            },
-            dismissButton = {
-                if (isDebugMode) {
-                    TextButton(onClick = {
-                        val diag = com.whmdg.mczj.tools.fileop.FileOpDiagnostics
-                        // 写入剪贴板（摘要）
-                        val summary = diag.exportSummary()
-                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("file_op_diag", summary))
-                        // 写入文件（完整报告）
-                        try {
-                            val diagDir = com.whmdg.mczj.tools.AppDataPaths.diagnostics(context)
-                            val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
-                            val file = java.io.File(diagDir, "file_op_report_$timestamp.log")
-                            file.writeText(diag.export())
-                            android.widget.Toast.makeText(context, "报告已保存: ${file.absolutePath}", android.widget.Toast.LENGTH_LONG).show()
-                        } catch (e: Exception) {
-                            android.widget.Toast.makeText(context, "保存失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    }) {
-                        Text("提取报告")
-                    }
-                }
-            }
-        )
-        // 操作完成（progress 变为 null）→ 自动关闭对话框
-        LaunchedEffect(fileOpManagerProgress) {
-            if (fileOpManagerProgress == null) {
-                showFileOpProgress = false
+    CopyMoveProgressDialog(
+        show = showFileOpProgress,
+        isDebugMode = isDebugMode,
+        onDismiss = { showFileOpProgress = false },
+        onCancel = { FileOperationManager.cancelHard() },
+        onExtractReport = {
+            val diag = com.whmdg.mczj.tools.fileop.FileOpDiagnostics
+            val summary = diag.exportSummary()
+            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("file_op_diag", summary))
+            try {
+                val diagDir = com.whmdg.mczj.tools.AppDataPaths.diagnostics(context)
+                val timestamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
+                val file = java.io.File(diagDir, "file_op_report_$timestamp.log")
+                file.writeText(diag.export())
+                android.widget.Toast.makeText(context, "报告已保存: ${file.absolutePath}", android.widget.Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                android.widget.Toast.makeText(context, "保存失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
-    }
+    )
 
     // ── 文件操作冲突/错误弹窗 ──
     FileConflictDialog()
     FileErrorDialog()
 
     // ── 强制删除确认对话框（移动到回收站失败时） ──
-    if (showForceDeleteDialog && forceDeleteEntry != null) {
-        StandardDialog(
-            onDismissRequest = { showForceDeleteDialog = false; forceDeleteEntry = null },
-            title = { Text("删除") },
-            text = { Text("无法移动到回收站，是否永久删除？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    val entry = forceDeleteEntry ?: return@TextButton
-                    val error = vm.deleteEntry(entry)
-                    if (error == null) {
-                        Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
-                        vm.refreshBoth()
-                    } else {
-                        Toast.makeText(context, "删除失败: $error", Toast.LENGTH_SHORT).show()
-                    }
-                    showForceDeleteDialog = false
-                    forceDeleteEntry = null
-                }) {
-                    Text("是")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showForceDeleteDialog = false; forceDeleteEntry = null }) {
-                    Text("否")
-                }
+    ForceDeleteDialog(
+        show = showForceDeleteDialog && forceDeleteEntry != null,
+        entryName = forceDeleteEntry?.name ?: "",
+        onDismiss = { showForceDeleteDialog = false; forceDeleteEntry = null },
+        onConfirm = {
+            val entry = forceDeleteEntry ?: return@ForceDeleteDialog
+            val error = vm.deleteEntry(entry)
+            if (error == null) {
+                Toast.makeText(context, "删除成功", Toast.LENGTH_SHORT).show()
+                vm.refreshBoth()
+            } else {
+                Toast.makeText(context, "删除失败: $error", Toast.LENGTH_SHORT).show()
             }
-        )
-    }
+            showForceDeleteDialog = false
+            forceDeleteEntry = null
+        }
+    )
 
     // ── 回收站永久删除确认对话框 ──
-    if (showPermanentDeleteDialog && (permanentDeleteTarget != null || permanentDeleteMultiNames.isNotEmpty())) {
-        val isMultiDelete = permanentDeleteMultiNames.isNotEmpty()
-        StandardDialog(
-            onDismissRequest = {
-                showPermanentDeleteDialog = false; permanentDeleteTarget = null; permanentDeleteMultiNames = emptyList()
-            },
-            title = { Text("永久删除") },
-            text = {
-                if (isMultiDelete) Text("确定要永久删除选中的 ${permanentDeleteMultiNames.size} 个项目吗？此操作不可撤销。")
-                else Text("确定要永久删除「${permanentDeleteTarget}」吗？此操作不可撤销。")
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (isMultiDelete) {
-                        var failCount = 0
-                        for (name in permanentDeleteMultiNames) {
-                            val error = vm.permanentDelete(name)
-                            if (error != null) failCount++
-                        }
-                        if (failCount == 0) {
-                            Toast.makeText(context, "已永久删除 ${permanentDeleteMultiNames.size} 个项目", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(context, "删除完成，${failCount} 个失败", Toast.LENGTH_SHORT).show()
-                        }
-                        if (vm.focusedPanel == FocusedPanel.LEFT) leftSelectedPaths = emptySet()
-                        else rightSelectedPaths = emptySet()
-                    } else {
-                        val name = permanentDeleteTarget ?: return@TextButton
-                        val error = vm.permanentDelete(name)
-                        if (error == null) {
-                            Toast.makeText(context, "已永久删除", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(context, "删除失败: $error", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                    vm.enterRecycleBin()
-                    showPermanentDeleteDialog = false
-                    permanentDeleteTarget = null
-                    permanentDeleteMultiNames = emptyList()
-                    selectedEntry = null
-                }) {
-                    Text("确定", color = MaterialTheme.colorScheme.error)
+    PermanentDeleteDialog(
+        show = showPermanentDeleteDialog && (permanentDeleteTarget != null || permanentDeleteMultiNames.isNotEmpty()),
+        isMultiDelete = permanentDeleteMultiNames.isNotEmpty(),
+        count = permanentDeleteMultiNames.size,
+        targetName = permanentDeleteTarget ?: "",
+        onDismiss = { showPermanentDeleteDialog = false; permanentDeleteTarget = null; permanentDeleteMultiNames = emptyList() },
+        onConfirm = {
+            if (permanentDeleteMultiNames.isNotEmpty()) {
+                var failCount = 0
+                for (name in permanentDeleteMultiNames) {
+                    val error = vm.permanentDelete(name)
+                    if (error != null) failCount++
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showPermanentDeleteDialog = false; permanentDeleteTarget = null; permanentDeleteMultiNames = emptyList()
-                }) {
-                    Text("取消")
+                if (failCount == 0) {
+                    Toast.makeText(context, "已永久删除 ${permanentDeleteMultiNames.size} 个项目", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "删除完成，${failCount} 个失败", Toast.LENGTH_SHORT).show()
+                }
+                if (vm.focusedPanel == FocusedPanel.LEFT) leftSelectedPaths = emptySet()
+                else rightSelectedPaths = emptySet()
+            } else {
+                val name = permanentDeleteTarget ?: return@PermanentDeleteDialog
+                val error = vm.permanentDelete(name)
+                if (error == null) {
+                    Toast.makeText(context, "已永久删除", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "删除失败: $error", Toast.LENGTH_SHORT).show()
                 }
             }
-        )
-    }
+            vm.enterRecycleBin()
+            showPermanentDeleteDialog = false
+            permanentDeleteTarget = null
+            permanentDeleteMultiNames = emptyList()
+            selectedEntry = null
+        }
+    )
 
     // ── 添加快捷访问对话框 ──
-    if (showAddQaDialog) {
-        // 路径规范化：支持完整绝对路径和相对内部储存的路径
-        // /storage/emulated/0/DCIM → 绝对路径，原样使用
-        // /DCIM → 相对内部储存，补全为 /storage/emulated/0/DCIM
-        // DCIM → 同上
-        fun normalizeQaPath(raw: String): String {
-            val trimmed = raw.trim()
-            if (trimmed.isEmpty()) return ""
-            val full = when {
-                trimmed.startsWith("/storage/emulated/") ||
-                trimmed.startsWith("/data/") ||
-                trimmed.startsWith("/sdcard/") -> trimmed
-                trimmed.startsWith("/") -> "/storage/emulated/0$trimmed"
-                else -> "/storage/emulated/0/${trimmed.trimStart('/')}"
-            }
-            return if (full.endsWith("/") || full.endsWith("\\")) full.dropLast(1) else full
+    AddQuickAccessDialog(
+        show = showAddQaDialog,
+        existingNames = quickAccessList.map { it.name },
+        isPathValid = { path -> vm.isDirectoryShell(path) },
+        onDismiss = { showAddQaDialog = false },
+        onConfirm = { name, path ->
+            quickAccessList = quickAccessList + QuickAccessEntry(name, path)
+            saveQuickAccess()
+            showAddQaDialog = false
         }
-
-        val name = qaNameInput.trim()
-        val isDuplicate = name.isNotEmpty() && quickAccessList.any { it.name == name }
-        val normalizedPath = normalizeQaPath(qaPathInput)
-        val pathInvalid = qaPathInput.trim().isNotEmpty() &&
-            normalizedPath.isNotEmpty() &&
-            !vm.isDirectoryShell(normalizedPath)
-
-        StandardDialog(
-            onDismissRequest = {
-                showAddQaDialog = false
-                qaNameInput = ""; qaPathInput = ""
-            },
-            title = { Text("添加快捷访问") },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = qaNameInput,
-                        onValueChange = {
-                            qaNameInput = it
-                        },
-                        label = { Text("命名") },
-                        singleLine = true,
-                        isError = isDuplicate,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (isDuplicate) {
-                        Text(
-                            "该名称已存在",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(start = 16.dp, top = 4.dp)
-                        )
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = qaPathInput,
-                        onValueChange = {
-                            qaPathInput = it
-                        },
-                        label = { Text("绝对路径") },
-                        singleLine = true,
-                        isError = pathInvalid,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (pathInvalid) {
-                        Text(
-                            "当前文件夹路径似乎无效",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(start = 16.dp, top = 4.dp)
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val finalPath = normalizeQaPath(qaPathInput)
-                        if (name.isNotEmpty() && finalPath.isNotEmpty() && !isDuplicate && !pathInvalid) {
-                            quickAccessList = quickAccessList + QuickAccessEntry(name, finalPath)
-                            saveQuickAccess()
-                            showAddQaDialog = false
-                            qaNameInput = ""; qaPathInput = ""
-                        } else if (name.isEmpty() || finalPath.isEmpty()) {
-                            Toast.makeText(context, "请填写完整", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    enabled = name.isNotEmpty() && qaPathInput.trim().isNotEmpty() && !isDuplicate && !pathInvalid
-                ) {
-                    Text("添加")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showAddQaDialog = false
-                    qaNameInput = ""; qaPathInput = ""
-                }) {
-                    Text("取消")
-                }
-            }
-        )
-    }
+    )
 
     // ── 添加快捷访问类型选择 ──
     if (showQaTypeSelector) {
@@ -5556,41 +5174,4 @@ private fun DrawerMenuItem(
  * 宽度统一为 [DialogWidthFraction]，与长按工具栏一致。
  */
 @Composable
-private fun StandardDialog(
-    onDismissRequest: () -> Unit,
-    title: (@Composable () -> Unit)? = null,
-    text: (@Composable () -> Unit)? = null,
-    confirmButton: (@Composable () -> Unit)? = null,
-    dismissButton: (@Composable () -> Unit)? = null,
-) {
-    Dialog(onDismissRequest = onDismissRequest, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Card(
-            modifier = Modifier.fillMaxWidth(DialogWidthFraction),
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                title?.let {
-                    Box { it() }
-                }
-                text?.let {
-                    Box(modifier = Modifier.weight(1f, fill = false)) { it() }
-                }
-                if (confirmButton != null || dismissButton != null) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        dismissButton?.invoke()
-                        Spacer(Modifier.width(8.dp))
-                        confirmButton?.invoke()
-                    }
-                }
-            }
-        }
-    }
-}
+// StandardDialog 已移至 FileManagerDialogs_FileOps.kt
