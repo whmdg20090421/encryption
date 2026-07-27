@@ -5169,9 +5169,4 @@ private fun DrawerMenuItem(
     }
 }
 
-/**
- * 统一弹窗包装，参数与 AlertDialog 兼容，内部使用 Dialog+Card 实现。
- * 宽度统一为 [DialogWidthFraction]，与长按工具栏一致。
- */
-@Composable
 // StandardDialog 已移至 FileManagerDialogs_FileOps.kt
