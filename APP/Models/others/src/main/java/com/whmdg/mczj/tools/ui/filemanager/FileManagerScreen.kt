@@ -44,7 +44,6 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -1077,8 +1076,6 @@ fun FileManagerScreen(
                                 isFocused = leftFocused,
                                 currentPath = vm.leftPath,
                                 isLeftPanel = true,
-                                shouldAnimate = vm.shouldAnimate,
-                                onAnimationComplete = { vm.shouldAnimate = false },
                                 onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.LEFT
@@ -1217,8 +1214,6 @@ fun FileManagerScreen(
                                 isFocused = !leftFocused,
                                 currentPath = vm.rightPath,
                                 isLeftPanel = false,
-                                shouldAnimate = vm.shouldAnimate,
-                                onAnimationComplete = { vm.shouldAnimate = false },
                                 onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.RIGHT
@@ -5010,8 +5005,6 @@ private fun FileBrowserPanel(
     isFocused: Boolean,
     currentPath: String = "",
     isLeftPanel: Boolean = true,
-    shouldAnimate: Boolean = false,
-    onAnimationComplete: () -> Unit = {},
     onFocus: () -> Unit,
     onFolderClick: (FileEntry) -> Unit,
     onFileClick: (FileEntry) -> Unit,
@@ -5091,22 +5084,6 @@ private fun FileBrowserPanel(
                 items(entries, key = { it.path }) { entry ->
                     val entryIndex = entries.indexOfFirst { it.path == entry.path }
 
-                    // 交错滑入：仅 shouldAnimate 时播放，滚动不触发
-                    val animAlpha = remember { Animatable(if (shouldAnimate) 0f else 1f) }
-                    val animOffset = remember { Animatable(if (shouldAnimate) (if (isLeftPanel) -0.3f else 0.3f) else 0f) }
-                    LaunchedEffect(shouldAnimate) {
-                        if (shouldAnimate) {
-                            val stagger = (entryIndex * 20).toLong()
-                            launch { animAlpha.animateTo(1f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
-                            launch { animOffset.animateTo(0f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
-                            // 最后一个条目动画完成后重置标志
-                            if (entryIndex == entries.size - 1) {
-                                kotlinx.coroutines.delay(100 + stagger)
-                                onAnimationComplete()
-                            }
-                        }
-                    }
-
                     val dirSize = if (entry.isDirectory) {
                         if (archiveSizeProvider != null) archiveSizeProvider(entry)
                         else {
@@ -5123,10 +5100,6 @@ private fun FileBrowserPanel(
                     FileEntryRow(
                         entry = entry,
                         isFocused = isFocused,
-                        modifier = Modifier.graphicsLayer {
-                            alpha = animAlpha.value
-                            translationX = animOffset.value * size.width
-                        },
                         isSelected = entry.path in selectedPaths,
                         onClick = {
                             if (isMultiSelectMode) {
