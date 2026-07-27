@@ -824,7 +824,6 @@ fun FileManagerScreen(
                                 vm.currentPath != effectiveRoot
                                     && vm.currentPath.contains('/')
                                     && parentPath != vm.currentPath
-                                    && vm.canAccessPath(parentPath)
                             }
 
                             IconButton(
@@ -1045,7 +1044,6 @@ fun FileManagerScreen(
                         isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
                         recycleBinPath = vm.recycleBinPath,
                         isRootEngine = vm.isRootEngine,
-                        canAccessPath = { vm.canAccessPath(it) },
                         isVaultMode = vm.isVaultMode,
                         vaultRootPath = vm.vaultSession?.vaultDir?.absolutePath
                     )
@@ -1058,7 +1056,6 @@ fun FileManagerScreen(
                         isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
                         recycleBinPath = vm.recycleBinPath,
                         isRootEngine = vm.isRootEngine,
-                        canAccessPath = { vm.canAccessPath(it) },
                         isVaultMode = vm.isVaultMode,
                         vaultRootPath = vm.vaultSession?.vaultDir?.absolutePath
                     )
@@ -4591,7 +4588,6 @@ private fun computeParentPath(
     isAtRecycleBinRoot: Boolean,
     recycleBinPath: String,
     isRootEngine: Boolean,
-    canAccessPath: (String) -> Boolean,
     isVaultMode: Boolean = false,
     vaultRootPath: String? = null
 ): String? {
@@ -4611,7 +4607,7 @@ private fun computeParentPath(
     val effectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
     if (currentPath != effectiveRoot && currentPath.contains('/')) {
         return currentPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-            if (p != currentPath && canAccessPath(p)) p else null
+            if (p != currentPath) p else null
         }
     }
     return null
