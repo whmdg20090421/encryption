@@ -2365,6 +2365,11 @@ fun FileManagerScreen(
                                                 propertyData = vm.getPropertyData(entry)
                                                 propertyEntry = entry
                                                 showPropertyDialog = true
+                                                // 异步统计文件/文件夹数量
+                                                if (entry.isDirectory) {
+                                                    val (folders, files) = vm.countFilesInFolder(entry.path)
+                                                    propertyData = propertyData?.copy(fileCount = files, folderCount = folders)
+                                                }
                                             }
                                         }
                                         .padding(vertical = 16.dp),
@@ -3514,8 +3519,8 @@ fun FileManagerScreen(
                     }
 
                     if (data.isDirectory) {
-                        PropertyRow("文件数", data.fileCount.toString())
-                        PropertyRow("文件夹数", data.folderCount.toString())
+                        PropertyRow("文件数", data.fileCount?.toString() ?: "正在统计")
+                        PropertyRow("文件夹数", data.folderCount?.toString() ?: "正在统计")
                     }
 
                     HorizontalDivider(
@@ -5078,12 +5083,13 @@ private fun FileBrowserPanel(
                     }
                 }
                 items(entries, key = { it.path }) { entry ->
+                    key(currentPath) {
                     val entryIndex = entries.indexOfFirst { it.path == entry.path }
 
-                    // 交错滑入：remember(entry.path) 保证每个条目只播放一次
-                    val animAlpha = remember(entry.path) { Animatable(0f) }
-                    val animOffset = remember(entry.path) { Animatable(if (isLeftPanel) -0.3f else 0.3f) }
-                    LaunchedEffect(entry.path) {
+                    // 交错滑入：key(currentPath) 保证路径变化时重建，滚动时不重建
+                    val animAlpha = remember { Animatable(0f) }
+                    val animOffset = remember { Animatable(if (isLeftPanel) -0.3f else 0.3f) }
+                    LaunchedEffect(Unit) {
                         val stagger = (entryIndex * 20).toLong()
                         launch { animAlpha.animateTo(1f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
                         launch { animOffset.animateTo(0f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
@@ -5131,6 +5137,7 @@ private fun FileBrowserPanel(
                         extFlags = extFlagsMap[entry.name] ?: "",
                         thumbnail = thumb
                     )
+                    } // key(currentPath)
                 }
             }
         }

@@ -70,8 +70,8 @@ data class FilePropertyData(
     val permission: String,
     val owner: String,
     val group: String,
-    val fileCount: Int,
-    val folderCount: Int,
+    val fileCount: Int? = null,  // null 表示正在统计
+    val folderCount: Int? = null,  // null 表示正在统计
     val isDirectory: Boolean
 )
 
@@ -2225,34 +2225,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        var fileCount = 0
-        var folderCount = 0
-        if (entry.isDirectory) {
-            if (hasShellEngine) {
-                // shell 模式：一条 find 命令递归统计文件和文件夹数量
-                val escaped = SevenZipCommand.escape(entry.path)
-                val cmd = "d=\$(find $escaped -mindepth 1 -type d | wc -l); f=\$(find $escaped -type f | wc -l); echo \"\$d \$f\""
-                val (out, _, exit) = try { executeShell(cmd) } catch (_: Exception) { Triple("", "", -1) }
-                if (exit == 0 && out.isNotBlank()) {
-                    val parts = out.trim().split("\\s+".toRegex())
-                    if (parts.size >= 2) {
-                        folderCount = parts[0].toIntOrNull() ?: 0
-                        fileCount = parts[1].toIntOrNull() ?: 0
-                    }
-                }
-            } else {
-                // 无 shell 引擎：Java API 递归统计
-                fun countRecursive(dir: File) {
-                    val children = try { dir.listFiles() } catch (_: Exception) { null } ?: return
-                    for (child in children) {
-                        if (child.isDirectory) { folderCount++; countRecursive(child) }
-                        else fileCount++
-                    }
-                }
-                countRecursive(file)
-            }
-        }
-
         FilePropertyData(
             name = entry.name,
             directory = parentPath,
@@ -2263,10 +2235,37 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             permission = permission,
             owner = owner,
             group = group,
-            fileCount = fileCount,
-            folderCount = folderCount,
             isDirectory = entry.isDirectory
         )
+    }
+
+    /** 异步统计目录内文件和文件夹数量 */
+    suspend fun countFilesInFolder(path: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val file = File(path)
+        var fileCount = 0
+        var folderCount = 0
+        if (hasShellEngine) {
+            val escaped = SevenZipCommand.escape(path)
+            val cmd = "d=\$(find $escaped -mindepth 1 -type d | wc -l); f=\$(find $escaped -type f | wc -l); echo \"\$d \$f\""
+            val (out, _, exit) = try { executeShell(cmd) } catch (_: Exception) { Triple("", "", -1) }
+            if (exit == 0 && out.isNotBlank()) {
+                val parts = out.trim().split("\\s+".toRegex())
+                if (parts.size >= 2) {
+                    folderCount = parts[0].toIntOrNull() ?: 0
+                    fileCount = parts[1].toIntOrNull() ?: 0
+                }
+            }
+        } else {
+            fun countRecursive(dir: File) {
+                val children = try { dir.listFiles() } catch (_: Exception) { null } ?: return
+                for (child in children) {
+                    if (child.isDirectory) { folderCount++; countRecursive(child) }
+                    else fileCount++
+                }
+            }
+            countRecursive(file)
+        }
+        Pair(folderCount, fileCount)
     }
 
     // ── 权限编辑 ──
