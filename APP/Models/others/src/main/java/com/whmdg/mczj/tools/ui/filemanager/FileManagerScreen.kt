@@ -2360,10 +2360,12 @@ fun FileManagerScreen(
                                         .weight(1f)
                                         .clickable(enabled = !isMultiSelect) {
                                             val entry = selectedEntry ?: return@clickable
-                                            propertyData = vm.getPropertyData(entry)
-                                            propertyEntry = entry
-                                            showPropertyDialog = true
                                             selectedEntry = null
+                                            coroutineScope.launch {
+                                                propertyData = vm.getPropertyData(entry)
+                                                propertyEntry = entry
+                                                showPropertyDialog = true
+                                            }
                                         }
                                         .padding(vertical = 16.dp),
                                     contentAlignment = Alignment.Center
@@ -5058,12 +5060,6 @@ private fun FileBrowserPanel(
                 }
             }
 
-            // 交错滑入动画：仅在路径变化（导航）时触发，滚动不触发
-            var prevNavPath by remember { mutableStateOf(currentPath) }
-            val shouldStagger = remember(currentPath) {
-                (currentPath != prevNavPath).also { prevNavPath = currentPath }
-            }
-
             LazyColumn(
                 state = lazyListState,
                 modifier = Modifier.fillMaxSize(),
@@ -5084,17 +5080,13 @@ private fun FileBrowserPanel(
                 items(entries, key = { it.path }) { entry ->
                     val entryIndex = entries.indexOfFirst { it.path == entry.path }
 
-                    // 交错滑入：仅导航后首次渲染触发
-                    var hasAnimated by remember(entry.path) { mutableStateOf(!shouldStagger) }
-                    val animAlpha = remember(entry.path) { Animatable(if (hasAnimated) 1f else 0f) }
-                    val animOffset = remember(entry.path) { Animatable(if (hasAnimated) 0f else if (isLeftPanel) -0.3f else 0.3f) }
+                    // 交错滑入：remember(entry.path) 保证每个条目只播放一次
+                    val animAlpha = remember(entry.path) { Animatable(0f) }
+                    val animOffset = remember(entry.path) { Animatable(if (isLeftPanel) -0.3f else 0.3f) }
                     LaunchedEffect(entry.path) {
-                        if (!hasAnimated) {
-                            hasAnimated = true
-                            val stagger = (entryIndex * 20).toLong()
-                            launch { animAlpha.animateTo(1f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
-                            launch { animOffset.animateTo(0f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
-                        }
+                        val stagger = (entryIndex * 20).toLong()
+                        launch { animAlpha.animateTo(1f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
+                        launch { animOffset.animateTo(0f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
                     }
 
                     val dirSize = if (entry.isDirectory) {

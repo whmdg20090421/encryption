@@ -6,7 +6,6 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.webkit.WebView
-import android.widget.Toast
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.disk.DiskCache
@@ -193,8 +192,22 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
                 mainHandler.post { pingReceived.set(true) }
                 Thread.sleep(3000)
                 if (!pingReceived.get()) {
-                    Toast.makeText(appCtx, "检测到主线程无响应，日志已记录", Toast.LENGTH_LONG).show()
-                    startAnrSampling(Looper.getMainLooper().thread)
+                    val mainThread = Looper.getMainLooper().thread
+                    val anrText = buildAnrReport(mainThread)
+                    // 写 crash 文件供 ErrorReportActivity 读取
+                    try {
+                        val crashDir = File(AppDataPaths.diagnostics(appCtx), "crash_tmp").apply { mkdirs() }
+                        File(crashDir, "latest_crash.txt").writeText(anrText)
+                    } catch (_: Exception) {}
+                    DiagnosticLog.log("ANR-Watchdog", anrText)
+                    // 启动错误报告 Activity
+                    try {
+                        val intent = Intent(appCtx, ErrorReportActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                        appCtx.startActivity(intent)
+                    } catch (_: Exception) {}
+                    // 继续采样主线程栈
+                    startAnrSampling(mainThread)
                     break
                 }
             }
@@ -202,6 +215,19 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
             isDaemon = true
             start()
         }
+    }
+
+    private fun buildAnrReport(mainThread: Thread): String {
+        val sb = StringBuilder()
+        sb.appendLine("异常类型: ANR (Application Not Responding)")
+        sb.appendLine("消息: 主线程无响应超过3秒")
+        sb.appendLine("线程: ${mainThread.name} (id=${mainThread.id})")
+        sb.appendLine()
+        sb.appendLine("--- 主线程调用栈 ---")
+        mainThread.stackTrace.forEachIndexed { i, f ->
+            sb.appendLine("  #${i.toString().padStart(2, '0')}  ${f.className}.${f.methodName}(${f.fileName ?: "?"}:${f.lineNumber})")
+        }
+        return sb.toString()
     }
 
     /**

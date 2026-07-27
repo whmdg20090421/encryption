@@ -2134,7 +2134,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return entries
     }
 
-    fun getPropertyData(entry: FileEntry): FilePropertyData {
+    suspend fun getPropertyData(entry: FileEntry): FilePropertyData = withContext(Dispatchers.IO) {
         val file = File(entry.path)
 
         // shell 路径: stat -c 一次获取权限/用户名/组名/UID/GID
@@ -2253,7 +2253,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        return FilePropertyData(
+        FilePropertyData(
             name = entry.name,
             directory = parentPath,
             type = type,
