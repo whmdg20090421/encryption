@@ -822,6 +822,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     // ── 核心导航：切换路径 + 刷新列表（异步） ──
     fun navigateTo(path: String, onComplete: ((String) -> Unit)? = null) {
         if (recycleBinPanel == focusedPanel) recycleBinPanel = null
+        shouldAnimate = true
         if (focusedPanel == FocusedPanel.LEFT) {
             if (leftPath == path) return
             leftNavState = leftNavState.navigate(path)
@@ -837,12 +838,16 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 软链接弹窗状态：null=不显示，FileEntry=被点击的软链接 */
     var pendingSymlinkEntry by mutableStateOf<FileEntry?>(null)
 
+    /** 路径切换动画标志：navigateToFolder/goUp 时设为 true，动画播放后重置 */
+    var shouldAnimate by mutableStateOf(false)
+
     // ── 导航操作（异步） ──
     fun navigateToFolder(entry: FileEntry, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
         if (entry.permission.startsWith("l")) {
             pendingSymlinkEntry = entry
             return
         }
+        shouldAnimate = true
         val displayPath = entry.path
         val targetIsLeft = focusedPanel == FocusedPanel.LEFT
 

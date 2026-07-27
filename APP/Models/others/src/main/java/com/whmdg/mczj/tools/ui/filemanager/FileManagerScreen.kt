@@ -1077,6 +1077,8 @@ fun FileManagerScreen(
                                 isFocused = leftFocused,
                                 currentPath = vm.leftPath,
                                 isLeftPanel = true,
+                                shouldAnimate = vm.shouldAnimate,
+                                onAnimationComplete = { vm.shouldAnimate = false },
                                 onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.LEFT
@@ -1215,6 +1217,8 @@ fun FileManagerScreen(
                                 isFocused = !leftFocused,
                                 currentPath = vm.rightPath,
                                 isLeftPanel = false,
+                                shouldAnimate = vm.shouldAnimate,
+                                onAnimationComplete = { vm.shouldAnimate = false },
                                 onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
                                 onFolderClick = { entry ->
                                     vm.focusedPanel = FocusedPanel.RIGHT
@@ -5006,6 +5010,8 @@ private fun FileBrowserPanel(
     isFocused: Boolean,
     currentPath: String = "",
     isLeftPanel: Boolean = true,
+    shouldAnimate: Boolean = false,
+    onAnimationComplete: () -> Unit = {},
     onFocus: () -> Unit,
     onFolderClick: (FileEntry) -> Unit,
     onFileClick: (FileEntry) -> Unit,
@@ -5083,16 +5089,22 @@ private fun FileBrowserPanel(
                     }
                 }
                 items(entries, key = { it.path }) { entry ->
-                    key(currentPath) {
                     val entryIndex = entries.indexOfFirst { it.path == entry.path }
 
-                    // 交错滑入：key(currentPath) 保证路径变化时重建，滚动时不重建
-                    val animAlpha = remember { Animatable(0f) }
-                    val animOffset = remember { Animatable(if (isLeftPanel) -0.3f else 0.3f) }
-                    LaunchedEffect(Unit) {
-                        val stagger = (entryIndex * 20).toLong()
-                        launch { animAlpha.animateTo(1f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
-                        launch { animOffset.animateTo(0f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
+                    // 交错滑入：仅 shouldAnimate 时播放，滚动不触发
+                    val animAlpha = remember { Animatable(if (shouldAnimate) 0f else 1f) }
+                    val animOffset = remember { Animatable(if (shouldAnimate) (if (isLeftPanel) -0.3f else 0.3f) else 0f) }
+                    LaunchedEffect(shouldAnimate) {
+                        if (shouldAnimate) {
+                            val stagger = (entryIndex * 20).toLong()
+                            launch { animAlpha.animateTo(1f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
+                            launch { animOffset.animateTo(0f, animationSpec = tween(100, delayMillis = stagger.toInt())) }
+                            // 最后一个条目动画完成后重置标志
+                            if (entryIndex == entries.size - 1) {
+                                kotlinx.coroutines.delay(100 + stagger)
+                                onAnimationComplete()
+                            }
+                        }
                     }
 
                     val dirSize = if (entry.isDirectory) {
@@ -5137,7 +5149,6 @@ private fun FileBrowserPanel(
                         extFlags = extFlagsMap[entry.name] ?: "",
                         thumbnail = thumb
                     )
-                    } // key(currentPath)
                 }
             }
         }
