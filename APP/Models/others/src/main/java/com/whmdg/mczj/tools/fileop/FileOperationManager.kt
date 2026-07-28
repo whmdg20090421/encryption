@@ -191,7 +191,7 @@ data class ConflictResult(val action: ConflictAction, val newName: String? = nul
 
 enum class ErrorAction { RETRY, SKIP, SKIP_ALL, CANCEL }
 
-data class ErrorRequest(val fileName: String, val errorMessage: String)
+data class ErrorRequest(val fileName: String, val errorMessage: String, val detailMessage: String = "")
 
 data class ErrorResult(val action: ErrorAction)
 

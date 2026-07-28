@@ -145,6 +145,11 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- libsu RootService（root 进程 FD 获取） -->
+        <service
+            android:name="com.whmdg.mczj.tools.security.RootShellService"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

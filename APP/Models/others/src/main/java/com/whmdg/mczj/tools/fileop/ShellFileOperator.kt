@@ -48,7 +48,8 @@ class ShellFileOperator(
     override fun copyFile(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob?) {
         when (accessLevel) {
             FileAccessLevel.NORMAL -> copyWithJavaStream(src, dst, onProgress)
-            FileAccessLevel.SHIZUKU, FileAccessLevel.ROOT -> copyWithPfd(src, dst, onProgress, job)
+            FileAccessLevel.SHIZUKU -> copyWithPfd(src, dst, onProgress, job)
+            FileAccessLevel.ROOT -> copyWithShell(src, dst, onProgress, job)
         }
     }
 
@@ -155,18 +156,51 @@ class ShellFileOperator(
         }
     }
 
+    /**
+     * Shell 流式复制：通过持久 root shell 执行 dd 逐块复制，stdout 输出 PROGRESS 进度。
+     * 整个操作在 root shell 内完成，不跨进程传 FD。
+     */
+    private fun copyWithShell(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob?) {
+        val srcEsc = escape(src)
+        val dstEsc = escape(dst)
+        val script = """
+sz=\$(stat -c %s $srcEsc 2>/dev/null) || { echo "ERROR stat失败"; exit 1; }
+i=0
+bs=131072
+while [ \$i -lt \$sz ]; do
+    dd if=$srcEsc of=$dstEsc bs=\$bs count=1 skip=\$((i/bs)) seek=\$((i/bs)) conv=notrunc 2>/dev/null
+    i=\$((i + bs))
+    echo "PROGRESS \$i"
+done
+""".trimIndent()
+
+        ShellExecutor.executeWithStdout(
+            Permission.ROOT,
+            script,
+            onStdoutLine = { line ->
+                when {
+                    line.startsWith("PROGRESS ") -> {
+                        val bytes = line.removePrefix("PROGRESS ").trim().toLongOrNull() ?: return@executeWithStdout
+                        onProgress(bytes)
+                    }
+                    line.startsWith("ERROR ") -> {
+                        throw IOException("复制失败: ${line.removePrefix("ERROR ")}")
+                    }
+                }
+            },
+            cancelFlag = job?.cancelFlag
+        )
+    }
+
     // ── 移动 ──
 
     override fun moveFile(src: String, dst: String, job: FileOperationJob?): Boolean {
-        return try {
-            when (accessLevel) {
-                FileAccessLevel.NORMAL -> moveWithJavaStream(src, dst)
-                FileAccessLevel.SHIZUKU, FileAccessLevel.ROOT -> moveWithPfd(src, dst, job)
-            }
-            true
-        } catch (e: Exception) {
-            false
+        when (accessLevel) {
+            FileAccessLevel.NORMAL -> moveWithJavaStream(src, dst)
+            FileAccessLevel.SHIZUKU -> moveWithPfd(src, dst, job)
+            FileAccessLevel.ROOT -> moveWithShell(src, dst, job)
         }
+        return true
     }
 
     private fun moveWithJavaStream(src: String, dst: String) {
@@ -190,6 +224,25 @@ class ShellFileOperator(
         }
         // 移动完成后删除源文件（通过 Shell 删除，因为源可能在应用无权目录）
         deleteFile(src)
+    }
+
+    /**
+     * Shell 移动：同分区 mv 快速路径，跨分区 shell 复制 + 删除。
+     */
+    private fun moveWithShell(src: String, dst: String, job: FileOperationJob?) {
+        val srcEsc = escape(src)
+        val dstEsc = escape(dst)
+        // 检查是否同分区
+        val srcDev = try { exec("stat -c %d $srcEsc").trim() } catch (_: Exception) { "" }
+        val dstDev = try { exec("stat -c %d ${escape(dst.substringBeforeLast('/'))}").trim() } catch (_: Exception) { "" }
+        if (srcDev.isNotEmpty() && srcDev == dstDev) {
+            // 同分区：mv 原子操作
+            exec("mv -f $srcEsc $dstEsc")
+        } else {
+            // 跨分区：shell 复制 + 删除
+            copyWithShell(src, dst, onProgress = {}, job = job)
+            deleteFile(src)
+        }
     }
 
     // ── 其他操作 ──

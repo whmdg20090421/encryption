@@ -19,7 +19,7 @@ interface FileOperator {
     fun copyFile(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob? = null)
 
     /**
-     * 尝试原子移动（renameTo）。成功返回 true，失败返回 false（调用方回退到 copy+delete）。
+     * 移动文件。成功返回 true，失败抛出异常。
      */
     fun moveFile(src: String, dst: String, job: FileOperationJob? = null): Boolean
 

@@ -109,10 +109,19 @@ class CopyJob(
                 // 3. 打开报错弹窗
                 if (errorToShow != null) {
                     val errorMsg = if (purpose == CopyPurpose.MOVE) "移动失败" else "复制失败"
+                    val detail = buildString {
+                        var e: Throwable? = errorToShow
+                        while (e != null) {
+                            if (isNotEmpty()) append("\n\nCaused by: ")
+                            append("${e.javaClass.simpleName}: ${e.message}")
+                            e = e.cause
+                        }
+                    }
                     runBlocking {
                         manager.resolveError(ErrorRequest(
                             fileName = "",
-                            errorMessage = errorToShow!!.message ?: errorMsg
+                            errorMessage = errorToShow!!.message ?: errorMsg,
+                            detailMessage = detail
                         ))
                     }
                 }
@@ -375,9 +384,10 @@ class CopyJob(
 
             // 执行 mv
             currentStep = "移动: $targetName"
-            val success = operator.moveFile(node, resolvedTarget, job = this)
-            if (!success) {
-                throw IOException("移动失败: $targetName")
+            try {
+                operator.moveFile(node, resolvedTarget, job = this)
+            } catch (e: Exception) {
+                throw IOException("移动失败: $targetName", e)
             }
 
             movedBytes += fileSize
