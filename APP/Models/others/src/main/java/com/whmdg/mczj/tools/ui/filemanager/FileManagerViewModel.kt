@@ -41,6 +41,7 @@ import java.io.FileInputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import java.nio.file.Files
 import java.nio.file.attribute.BasicFileAttributes
+import android.system.ErrnoException
 import android.system.Os
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -2478,28 +2479,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 如果中途失败，会尝试回滚到原始权限。
      */
     fun applyPermissions(path: String, mode: Int, uid: Int, gid: Int, originalMode: Int, originalUid: Int, originalGid: Int): String? {
+        // chmod：使用 Os.chmod（API 21+），FUSE 层会正确抛 ErrnoException
+        try {
+            Os.chmod(path, mode and 0x1FF)
+        } catch (e: ErrnoException) { return "chmod 失败: ${e.message}\n路径: $path\n\n${e.stackTraceToString()}" }
+        catch (e: Exception) { return "chmod 异常: ${e.message}\n\n${e.stackTraceToString()}" }
+
+        // chown：shell 执行后 stat 验证
         val escapedPath = SevenZipCommand.escape(path)
-        val octal = String.format("%o", mode and 0x1FF)
-        val rollbackOctal = String.format("%o", originalMode and 0x1FF)
-
-        // chmod
-        try {
-            ShellExecutor.execute(Permission.ROOT, "chmod $octal $escapedPath")
-        } catch (e: Exception) { return "chmod 执行异常: ${e.message}\n\n${e.stackTraceToString()}" }
-        // 验证 chmod 是否真正生效（FUSE 层会静默忽略 chmod）
-        try {
-            val stat = Os.stat(path)
-            val actualMode = stat.st_mode and 0x1FF
-            if (actualMode != (mode and 0x1FF)) {
-                return "chmod 未生效: 期望 $octal, 实际 ${String.format("%o", actualMode)}\n路径: $path\nFUSE 挂载层可能不支持权限修改"
-            }
-        } catch (e: Exception) { return "chmod 验证失败: ${e.message}\n\n${e.stackTraceToString()}" }
-
-        // chown
         try {
             ShellExecutor.execute(Permission.ROOT, "chown $uid:$gid $escapedPath")
         } catch (e: Exception) {
-            try { ShellExecutor.execute(Permission.ROOT, "chmod $rollbackOctal $escapedPath") } catch (_: Exception) {}
+            // 回滚 chmod
+            try { Os.chmod(path, originalMode and 0x1FF) } catch (_: Exception) {}
             return "chown 执行异常: ${e.message}\n\n${e.stackTraceToString()}"
         }
         try {
