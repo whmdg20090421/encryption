@@ -385,7 +385,17 @@ class CopyJob(
             // 执行 mv
             currentStep = "移动: $targetName"
             try {
-                operator.moveFile(node, resolvedTarget, job = this)
+                operator.moveFile(node, resolvedTarget, onProgress = { copied ->
+                    heartbeat()
+                    manager.updateProgress(FileOpProgress(
+                        phase = "正在移动",
+                        currentBytes = movedBytes + copied,
+                        totalBytes = scanInfo.totalBytes,
+                        currentFileName = targetName,
+                        fileIndex = processedNodes,
+                        fileCount = scanInfo.fileCount
+                    ))
+                }, job = this)
             } catch (e: Exception) {
                 throw IOException("移动失败: $targetName", e)
             }

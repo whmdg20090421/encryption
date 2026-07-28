@@ -19,9 +19,11 @@ interface FileOperator {
     fun copyFile(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob? = null)
 
     /**
-     * 移动文件。成功返回 true，失败抛出异常。
+     * 移动文件。进度通过 [onProgress] 回调已移动字节数（增量）。
+     * 同分区 mv 为原子操作，完成后一次性回调文件大小；跨分区走复制+删除，每128KB回调。
+     * @throws IOException 移动失败
      */
-    fun moveFile(src: String, dst: String, job: FileOperationJob? = null): Boolean
+    fun moveFile(src: String, dst: String, onProgress: (Long) -> Unit = {}, job: FileOperationJob? = null): Boolean
 
     /** 删除文件或目录。 */
     fun deleteFile(path: String)

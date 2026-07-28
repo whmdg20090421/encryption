@@ -194,18 +194,18 @@ done
 
     // ── 移动 ──
 
-    override fun moveFile(src: String, dst: String, job: FileOperationJob?): Boolean {
+    override fun moveFile(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob?): Boolean {
         when (accessLevel) {
-            FileAccessLevel.NORMAL -> moveWithJavaStream(src, dst)
-            FileAccessLevel.SHIZUKU -> moveWithPfd(src, dst, job)
-            FileAccessLevel.ROOT -> moveWithShell(src, dst, job)
+            FileAccessLevel.NORMAL -> moveWithJavaStream(src, dst, onProgress)
+            FileAccessLevel.SHIZUKU -> moveWithPfd(src, dst, onProgress, job)
+            FileAccessLevel.ROOT -> moveWithShell(src, dst, onProgress, job)
         }
         return true
     }
 
-    private fun moveWithJavaStream(src: String, dst: String) {
+    private fun moveWithJavaStream(src: String, dst: String, onProgress: (Long) -> Unit) {
         try {
-            copyWithJavaStream(src, dst) { /* moveFile 不需要进度 */ }
+            copyWithJavaStream(src, dst, onProgress)
         } catch (e: Exception) {
             try { File(dst).delete() } catch (_: Exception) {}
             throw e
@@ -215,32 +215,28 @@ done
         }
     }
 
-    private fun moveWithPfd(src: String, dst: String, job: FileOperationJob?) {
+    private fun moveWithPfd(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob?) {
         try {
-            copyWithPfd(src, dst, onProgress = {}, job = job)
+            copyWithPfd(src, dst, onProgress, job)
         } catch (e: Exception) {
             try { if (exists(dst)) deleteFile(dst) } catch (_: Exception) {}
             throw e
         }
-        // 移动完成后删除源文件（通过 Shell 删除，因为源可能在应用无权目录）
         deleteFile(src)
     }
 
     /**
      * Shell 移动：同分区 mv 快速路径，跨分区 shell 复制 + 删除。
      */
-    private fun moveWithShell(src: String, dst: String, job: FileOperationJob?) {
+    private fun moveWithShell(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob?) {
         val srcEsc = escape(src)
         val dstEsc = escape(dst)
-        // 检查是否同分区
         val srcDev = try { exec("stat -c %d $srcEsc").trim() } catch (_: Exception) { "" }
         val dstDev = try { exec("stat -c %d ${escape(dst.substringBeforeLast('/'))}").trim() } catch (_: Exception) { "" }
         if (srcDev.isNotEmpty() && srcDev == dstDev) {
-            // 同分区：mv 原子操作
             exec("mv -f $srcEsc $dstEsc")
         } else {
-            // 跨分区：shell 复制 + 删除
-            copyWithShell(src, dst, onProgress = {}, job = job)
+            copyWithShell(src, dst, onProgress, job)
             deleteFile(src)
         }
     }
