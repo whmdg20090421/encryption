@@ -2479,13 +2479,21 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun applyPermissions(path: String, mode: Int, uid: Int, gid: Int, originalMode: Int, originalUid: Int, originalGid: Int): String? {
         val escapedPath = SevenZipCommand.escape(path)
+        val octal = String.format("%o", mode and 0x1FF)
         val rollbackOctal = String.format("%o", originalMode and 0x1FF)
 
         // chmod
-        val octal = String.format("%o", mode and 0x1FF)
         try {
             ShellExecutor.execute(Permission.ROOT, "chmod $octal $escapedPath")
         } catch (e: Exception) { return "chmod 执行异常: ${e.message}\n\n${e.stackTraceToString()}" }
+        // 验证 chmod 是否真正生效（FUSE 层会静默忽略 chmod）
+        try {
+            val stat = Os.stat(path)
+            val actualMode = stat.st_mode and 0x1FF
+            if (actualMode != (mode and 0x1FF)) {
+                return "chmod 未生效: 期望 $octal, 实际 ${String.format("%o", actualMode)}\n路径: $path\nFUSE 挂载层可能不支持权限修改"
+            }
+        } catch (e: Exception) { return "chmod 验证失败: ${e.message}\n\n${e.stackTraceToString()}" }
 
         // chown
         try {
@@ -2494,6 +2502,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             try { ShellExecutor.execute(Permission.ROOT, "chmod $rollbackOctal $escapedPath") } catch (_: Exception) {}
             return "chown 执行异常: ${e.message}\n\n${e.stackTraceToString()}"
         }
+        try {
+            val stat = Os.stat(path)
+            if (stat.st_uid != uid || stat.st_gid != gid) {
+                return "chown 未生效: 期望 $uid:$gid, 实际 ${stat.st_uid}:${stat.st_gid}\n路径: $path"
+            }
+        } catch (e: Exception) { return "chown 验证失败: ${e.message}\n\n${e.stackTraceToString()}" }
 
         return null
     }

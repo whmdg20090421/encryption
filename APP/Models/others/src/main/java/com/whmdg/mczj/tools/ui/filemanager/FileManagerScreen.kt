@@ -3466,7 +3466,19 @@ fun FileManagerScreen(
                                 }
 
                                 showPermissionEditor = false
+                                // 保存滚动位置，刷新后恢复
+                                vm.saveScrollPosition(
+                                    leftListState.firstVisibleItemIndex,
+                                    leftListState.firstVisibleItemScrollOffset,
+                                    rightListState.firstVisibleItemIndex,
+                                    rightListState.firstVisibleItemScrollOffset
+                                )
+                                val targetPath = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPath else vm.rightPath
+                                val saved = vm.getScrollPosition(targetPath)
                                 vm.refreshCurrent()
+                                if (saved != null) {
+                                    vm.pendingScrollTo = Triple(targetPath, saved.first, saved.second)
+                                }
                             },
                             enabled = !applying
                         ) {
