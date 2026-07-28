@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.ui.filemanager
 
 import android.app.Application
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.util.Log
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
@@ -2403,7 +2404,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return try {
             val pm = getApplication<Application>().packageManager
             val packages = pm.getPackagesForUid(uid)
-            packages?.firstOrNull()?.let { pm.getApplicationLabel(it).toString() } ?: ""
+            val pkg = packages?.firstOrNull() ?: return ""
+            val appInfo = pm.getApplicationInfo(pkg, 0)
+            pm.getApplicationLabel(appInfo).toString()
         } catch (_: Exception) { "" }
     }
 
