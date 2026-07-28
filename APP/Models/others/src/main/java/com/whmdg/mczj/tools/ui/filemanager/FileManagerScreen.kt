@@ -78,8 +78,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -3198,6 +3200,7 @@ fun FileManagerScreen(
         // 应用状态
         var applying by remember { mutableStateOf(false) }
         var errorMsg by remember { mutableStateOf<String?>(null) }
+        var showErrorDetail by remember { mutableStateOf(false) }
 
         // 计算当前权限数字和符号
         val currentMode = (if (ownerRead) 0b100_000_000 else 0) or
@@ -3407,7 +3410,7 @@ fun FileManagerScreen(
 
                     // 错误信息
                     if (errorMsg != null) {
-                        Text(errorMsg!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        Text(errorMsg!!.substringBefore("\n\n"), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
 
                     // ── 按钮 ──
@@ -3435,6 +3438,7 @@ fun FileManagerScreen(
                                     if (extResult != null) {
                                         applying = false
                                         errorMsg = extResult
+                                        showErrorDetail = true
                                         return@TextButton
                                     }
                                 }
@@ -3454,6 +3458,7 @@ fun FileManagerScreen(
                                     applying = false
                                     if (result != null) {
                                         errorMsg = result
+                                        showErrorDetail = true
                                         return@TextButton
                                     }
                                 } else {
@@ -3621,9 +3626,51 @@ fun FileManagerScreen(
                 }
             }
         }
-    }
 
-    // ── 排序对话框 ──
+        // ── 权限修改错误详情弹窗 ──
+        if (showErrorDetail && errorMsg != null) {
+            val clipboardManager = LocalClipboardManager.current
+            Dialog(onDismissRequest = { showErrorDetail = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("权限修改失败", style = MaterialTheme.typography.titleLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        val message = errorMsg!!.substringBefore("\n\n")
+                        Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                        val stackTrace = errorMsg!!.substringAfter("\n\n", "")
+                        if (stackTrace.isNotBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.3f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                val scrollState = rememberScrollState()
+                                Text(
+                                    text = stackTrace,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.padding(8.dp).heightIn(max = 200.dp).verticalScroll(scrollState)
+                                )
+                            }
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = {
+                                clipboardManager.setText(AnnotatedString(errorMsg!!))
+                            }) { Text("复制") }
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(onClick = { showErrorDetail = false }) { Text("关闭") }
+                        }
+                    }
+                }
+            }
+        }
+    }
     if (showSortDialog) {
         val fieldLabels = mapOf(
             SortField.NAME to "名称",

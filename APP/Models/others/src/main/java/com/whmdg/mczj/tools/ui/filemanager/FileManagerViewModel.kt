@@ -455,12 +455,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 从 ls -1aF 行解析文件名和 isDir */
+    /** 从 ls -1aF 行解析文件名和 isDir。剥离 -F 后缀：/=目录 *=可执行 @=符号链接 |=FIFO ==Socket */
     private fun parseLsLine(line: String): Pair<String, Boolean>? {
         val trimmed = line.trimEnd('\r')
         if (trimmed.isBlank()) return null
         val isDir = trimmed.endsWith("/")
-        val name = if (isDir) trimmed.dropLast(1) else trimmed
+        val name = if (isDir) trimmed.dropLast(1) else trimmed.trimEnd('*', '@', '|', '=')
         if (name == "." || name == "..") return null
         return name to isDir
     }
@@ -608,7 +608,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val line = raw.trimEnd('\r')
                 if (line.isBlank()) continue
                 val isDir = line.endsWith("/")
-                val name = if (isDir) line.dropLast(1) else line
+                val name = if (isDir) line.dropLast(1) else line.trimEnd('*', '@', '|', '=')
                 if (name == "." || name == "..") continue
                 if (!showHiddenFiles && name.startsWith(".")) continue
                 if (name in vaultConfigNames) continue
@@ -2485,14 +2485,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val octal = String.format("%o", mode and 0x1FF)
         try {
             ShellExecutor.execute(Permission.ROOT, "chmod $octal $escapedPath")
-        } catch (e: Exception) { return "chmod 执行异常: ${e.message}" }
+        } catch (e: Exception) { return "chmod 执行异常: ${e.message}\n\n${e.stackTraceToString()}" }
 
         // chown
         try {
             ShellExecutor.execute(Permission.ROOT, "chown $uid:$gid $escapedPath")
         } catch (e: Exception) {
             try { ShellExecutor.execute(Permission.ROOT, "chmod $rollbackOctal $escapedPath") } catch (_: Exception) {}
-            return "chown 执行异常: ${e.message}"
+            return "chown 执行异常: ${e.message}\n\n${e.stackTraceToString()}"
         }
 
         return null
@@ -2578,12 +2578,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (toAdd.isNotEmpty()) {
             try {
                 ShellExecutor.execute(Permission.ROOT, "chattr +${toAdd.joinToString("")} $escaped")
-            } catch (e: Exception) { return "chattr +${toAdd.joinToString("")} 执行异常: ${e.message}" }
+            } catch (e: Exception) { return "chattr +${toAdd.joinToString("")} 执行异常: ${e.message}\n\n${e.stackTraceToString()}" }
         }
         if (toRemove.isNotEmpty()) {
             try {
                 ShellExecutor.execute(Permission.ROOT, "chattr -${toRemove.joinToString("")} $escaped")
-            } catch (e: Exception) { return "chattr -${toRemove.joinToString("")} 执行异常: ${e.message}" }
+            } catch (e: Exception) { return "chattr -${toRemove.joinToString("")} 执行异常: ${e.message}\n\n${e.stackTraceToString()}" }
         }
         return null
     }
