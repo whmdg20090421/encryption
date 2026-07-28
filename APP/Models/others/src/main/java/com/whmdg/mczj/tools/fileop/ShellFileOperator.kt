@@ -164,13 +164,13 @@ class ShellFileOperator(
         val srcEsc = escape(src)
         val dstEsc = escape(dst)
         val script = """
-sz=\$(stat -c %s $srcEsc 2>/dev/null) || { echo "ERROR stat失败"; exit 1; }
+sz=${"$"}(stat -c %s $srcEsc 2>/dev/null) || { echo "ERROR stat失败"; exit 1; }
 i=0
 bs=131072
-while [ \$i -lt \$sz ]; do
-    dd if=$srcEsc of=$dstEsc bs=\$bs count=1 skip=\$((i/bs)) seek=\$((i/bs)) conv=notrunc 2>/dev/null
-    i=\$((i + bs))
-    echo "PROGRESS \$i"
+while [ ${"$"}i -lt ${"$"}sz ]; do
+    dd if=$srcEsc of=$dstEsc bs=${"$"}bs count=1 skip=${"$"}((i/bs)) seek=${"$"}((i/bs)) conv=notrunc 2>/dev/null
+    i=${"$"}((i + bs))
+    echo "PROGRESS ${"$"}i"
 done
 """.trimIndent()
 
