@@ -277,6 +277,12 @@ fun FileManagerScreen(
     var showPermissionEditor by remember { mutableStateOf(false) }
     var permissionEditorData by remember { mutableStateOf<FilePropertyData?>(null) }
     var permissionEditorEntry by remember { mutableStateOf<FileEntry?>(null) }
+    // FUSE 确认对话框
+    var showFuseConfirm by remember { mutableStateOf(false) }
+    var fuseRealPath by remember { mutableStateOf("") }
+    var fusePendingMode by remember { mutableStateOf(0) }
+    var fusePendingUid by remember { mutableStateOf(0) }
+    var fusePendingGid by remember { mutableStateOf(0) }
     // APK 信息弹窗
     var showApkDialog by remember { mutableStateOf(false) }
     var apkDialogPath by remember { mutableStateOf("") }
@@ -3240,8 +3246,8 @@ fun FileManagerScreen(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text("权限编辑", style = MaterialTheme.typography.titleLarge, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
                     Text(entry.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -3252,10 +3258,10 @@ fun FileManagerScreen(
                         color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.3f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
+                        Column(modifier = Modifier.padding(8.dp)) {
                             // 表头
                             Row(modifier = Modifier.fillMaxWidth()) {
-                                Spacer(modifier = Modifier.width(80.dp))
+                                Spacer(modifier = Modifier.width(40.dp))
                                 listOf("所有者", "用户组", "其他").forEach { header ->
                                     Text(
                                         text = header,
@@ -3266,7 +3272,7 @@ fun FileManagerScreen(
                                     )
                                 }
                             }
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(2.dp))
 
                             // 三行：读、写、执行
                             data class PermRow(val label: String, val ownerGet: () -> Boolean, val ownerSet: (Boolean) -> Unit, val groupGet: () -> Boolean, val groupSet: (Boolean) -> Unit, val otherGet: () -> Boolean, val otherSet: (Boolean) -> Unit)
@@ -3277,13 +3283,13 @@ fun FileManagerScreen(
                             )
                             rows.forEach { row ->
                                 Row(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
                                         text = row.label,
                                         style = MaterialTheme.typography.bodyMedium,
-                                        modifier = Modifier.width(80.dp)
+                                        modifier = Modifier.width(40.dp)
                                     )
                                     listOf(
                                         row.ownerGet to row.ownerSet,
@@ -3291,7 +3297,7 @@ fun FileManagerScreen(
                                         row.otherGet to row.otherSet
                                     ).forEach { (get, set) ->
                                         Box(
-                                            modifier = Modifier.weight(1f),
+                                            modifier = Modifier.weight(1f).requiredSize(32.dp),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Checkbox(
@@ -3303,15 +3309,15 @@ fun FileManagerScreen(
                                 }
                             }
                             // ── 第4行：特殊扩展属性 ──
-                            HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(vertical = 4.dp))
+                            HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(vertical = 2.dp))
                             Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
                                     text = "特殊",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.width(80.dp)
+                                    modifier = Modifier.width(40.dp)
                                 )
                                 data class ExtFlag(val label: String, val key: Char, val get: () -> Boolean, val set: (Boolean) -> Unit)
                                 val extFlags = listOf(
@@ -3320,7 +3326,7 @@ fun FileManagerScreen(
                                 )
                                 extFlags.forEach { flag ->
                                     Box(
-                                        modifier = Modifier.weight(1f),
+                                        modifier = Modifier.weight(1f).requiredSize(32.dp),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -3385,7 +3391,7 @@ fun FileManagerScreen(
                         color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.3f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth().clickable { showUserPicker = true },
                                 verticalAlignment = Alignment.CenterVertically
@@ -3446,7 +3452,7 @@ fun FileManagerScreen(
                                 // 第二步：仅当基本权限（rwx/uid/gid）发生变化时才执行 chmod/chown
                                 val permChanged = currentMode != originalMode || selectedUid != originalUid || selectedGid != originalGid
                                 if (permChanged) {
-                                    val result = vm.applyPermissions(
+                                    val (errMsg, fusePath) = vm.applyPermissions(
                                         path = entry.path,
                                         mode = currentMode,
                                         uid = selectedUid,
@@ -3456,8 +3462,17 @@ fun FileManagerScreen(
                                         originalGid = originalGid
                                     )
                                     applying = false
-                                    if (result != null) {
-                                        errorMsg = result
+                                    if (fusePath != null) {
+                                        // FUSE 虚拟层：弹确认对话框
+                                        fuseRealPath = fusePath
+                                        fusePendingMode = currentMode
+                                        fusePendingUid = selectedUid
+                                        fusePendingGid = selectedGid
+                                        showFuseConfirm = true
+                                        return@TextButton
+                                    }
+                                    if (errMsg != null) {
+                                        errorMsg = errMsg
                                         showErrorDetail = true
                                         return@TextButton
                                     }
@@ -3489,6 +3504,38 @@ fun FileManagerScreen(
             }
         }
 
+        // ── FUSE 虚拟层确认对话框 ──
+        if (showFuseConfirm) {
+            Dialog(onDismissRequest = { showFuseConfirm = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("无法修改权限", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(
+                            "该文件位于 FUSE 虚拟挂载层，无法直接修改权限。\n\n如需修改，请通过以下真实路径操作：",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            fuseRealPath,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = {
+                                showFuseConfirm = false
+                                // 还原所有更改变量，关闭权限编辑器
+                                showPermissionEditor = false
+                            }) { Text("确认") }
+                        }
+                    }
+                }
+            }
+        }
+
         // ── 用户选择弹窗 ──
         if (showUserPicker) {
             val allUsers = remember { vm.getSystemUsers() }
@@ -3500,16 +3547,17 @@ fun FileManagerScreen(
             }
             Dialog(onDismissRequest = { showUserPicker = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(DialogWidthFraction).fillMaxHeight(0.6f),
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction).fillMaxHeight(0.75f),
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("选择所有者", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         LazyColumn(modifier = Modifier.weight(1f)) {
                             items(sortedUsers) { user ->
                                 val isCurrent = user.uid == originalUid
+                                val displayName = if (user.appLabel.isNotEmpty()) "${user.username}（${user.appLabel}）" else user.username
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -3518,11 +3566,11 @@ fun FileManagerScreen(
                                             selectedUserName = user.username
                                             showUserPicker = false
                                         }
-                                        .padding(vertical = 10.dp, horizontal = 8.dp),
+                                        .padding(vertical = 4.dp, horizontal = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = if (isCurrent) "${user.username} (当前)" else user.username,
+                                        text = if (isCurrent) "$displayName (当前)" else displayName,
                                         style = MaterialTheme.typography.bodyMedium,
                                         modifier = Modifier.weight(1f),
                                         color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
@@ -3559,16 +3607,17 @@ fun FileManagerScreen(
             }
             Dialog(onDismissRequest = { showGroupPicker = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Card(
-                    modifier = Modifier.fillMaxWidth(DialogWidthFraction).fillMaxHeight(0.6f),
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction).fillMaxHeight(0.75f),
                     shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("选择用户组", style = MaterialTheme.typography.titleMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         LazyColumn(modifier = Modifier.weight(1f)) {
                             items(sortedGroups) { group ->
                                 val isCurrent = group.gid == originalGid
+                                val displayName = if (group.appLabel.isNotEmpty()) "${group.groupname}（${group.appLabel}）" else group.groupname
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -3577,11 +3626,11 @@ fun FileManagerScreen(
                                             selectedGroupName = group.groupname
                                             showGroupPicker = false
                                         }
-                                        .padding(vertical = 10.dp, horizontal = 8.dp),
+                                        .padding(vertical = 4.dp, horizontal = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = if (isCurrent) "${group.groupname} (当前)" else group.groupname,
+                                        text = if (isCurrent) "$displayName (当前)" else displayName,
                                         style = MaterialTheme.typography.bodyMedium,
                                         modifier = Modifier.weight(1f),
                                         color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface

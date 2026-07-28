@@ -2271,8 +2271,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 权限编辑 ──
 
-    data class SystemUser(val uid: Int, val username: String)
-    data class SystemGroup(val gid: Int, val groupname: String)
+    data class SystemUser(val uid: Int, val username: String, val appLabel: String = "")
+    data class SystemGroup(val gid: Int, val groupname: String, val appLabel: String = "")
 
     /**
      * android_filesystem_config.h 完整 AID 映射（AOSP 源码）。
@@ -2397,6 +2397,16 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         9999 to "nobody",
     )
 
+    /** 通过 UID 解析应用桌面名称（如 "艨艟战舰"） */
+    private fun resolveAppLabel(uid: Int): String {
+        if (uid < 10000) return ""
+        return try {
+            val pm = getApplication<Application>().packageManager
+            val packages = pm.getPackagesForUid(uid)
+            packages?.firstOrNull()?.let { pm.getApplicationLabel(it).toString() } ?: ""
+        } catch (_: Exception) { "" }
+    }
+
     /** 读取全部系统用户：系统 UID 映射 + pm list packages -U（应用 UID） */
     fun getSystemUsers(): List<SystemUser> {
         val result = mutableMapOf<Int, String>()
@@ -2422,7 +2432,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        return result.map { (uid, name) -> SystemUser(uid, name) }.sortedBy { it.uid }
+        return result.map { (uid, name) ->
+            val label = resolveAppLabel(uid)
+            SystemUser(uid, name, label)
+        }.sortedBy { it.uid }
     }
 
     /** 读取全部系统用户组：系统 GID 映射 + pm list packages -G（应用 GID） */
@@ -2449,7 +2462,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        return result.map { (gid, name) -> SystemGroup(gid, name) }.sortedBy { it.gid }
+        return result.map { (gid, name) ->
+            val label = resolveAppLabel(gid)
+            SystemGroup(gid, name, label)
+        }.sortedBy { it.gid }
     }
 
     /** 读取 /etc/passwd 解析 UID→用户名（无需 root） */
@@ -2475,33 +2491,79 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 应用权限修改。成功返回 null，失败返回错误信息。
-     * 如果中途失败，会尝试回滚到原始权限。
+     * 检测路径是否在 FUSE 虚拟挂载层上。
+     * 解析 /proc/self/mountinfo，找到包含该路径的 FUSE 挂载条目，
+     * 返回真实底层路径（如 /storage/emulated/0/xxx → /data/media/0/xxx）。
+     * 非 FUSE 路径返回 null。
      */
-    fun applyPermissions(path: String, mode: Int, uid: Int, gid: Int, originalMode: Int, originalUid: Int, originalGid: Int): String? {
-        // chmod：使用 Os.chmod（API 21+），FUSE 层会正确抛 ErrnoException
+    fun resolveFuseRealPath(path: String): String? {
+        try {
+            val mountInfo = File("/proc/self/mountinfo").readText()
+            // 按 " - " 分割，左边含挂载点，右边含文件系统类型
+            for (line in mountInfo.lines()) {
+                val sepIndex = line.indexOf(" - ")
+                if (sepIndex < 0) continue
+                val leftPart = line.substring(0, sepIndex)
+                val rightPart = line.substring(sepIndex + 3)
+
+                val leftFields = leftPart.split(" ")
+                if (leftFields.size < 5) continue
+                val sourcePath = leftFields[3]    // 真实源路径
+                val mountPoint = leftFields[4]     // 挂载点
+
+                val rightFields = rightPart.split(" ")
+                if (rightFields.isEmpty()) continue
+                val fsType = rightFields[0]
+
+                if (fsType != "fuse" && fsType != "fuseblk") continue
+                // 最长前缀匹配
+                val normalizedMount = mountPoint.trimEnd('/')
+                if (!path.startsWith(normalizedMount)) continue
+                val remaining = path.removePrefix(normalizedMount)
+                // 确保是完整路径段匹配（避免 /storage/emulated 匹配 /storage/emulated_extra）
+                if (remaining.isNotEmpty() && remaining[0] != '/') continue
+
+                return sourcePath + remaining
+            }
+        } catch (_: Exception) {}
+        return null
+    }
+
+    /**
+     * 应用权限修改。成功返回 null，失败返回错误信息。
+     * 返回 Pair(errorMessage, fuseRealPath)：
+     * - (null, null) = 成功
+     * - (errorMsg, null) = 失败
+     * - (null, realPath) = 检测到 FUSE，需要用户确认后通过 shell 执行
+     */
+    fun applyPermissions(path: String, mode: Int, uid: Int, gid: Int, originalMode: Int, originalUid: Int, originalGid: Int): Pair<String?, String?> {
+        // 先检测 FUSE
+        val fuseRealPath = resolveFuseRealPath(path)
+        if (fuseRealPath != null) {
+            return null to fuseRealPath
+        }
+
+        // 非 FUSE：直接 Os.chmod + shell chown
         try {
             Os.chmod(path, mode and 0x1FF)
-        } catch (e: ErrnoException) { return "chmod 失败: ${e.message}\n路径: $path\n\n${e.stackTraceToString()}" }
-        catch (e: Exception) { return "chmod 异常: ${e.message}\n\n${e.stackTraceToString()}" }
+        } catch (e: ErrnoException) { return "chmod 失败: ${e.message}\n路径: $path\n\n${e.stackTraceToString()}" to null }
+        catch (e: Exception) { return "chmod 异常: ${e.message}\n\n${e.stackTraceToString()}" to null }
 
-        // chown：shell 执行后 stat 验证
         val escapedPath = SevenZipCommand.escape(path)
         try {
             ShellExecutor.execute(Permission.ROOT, "chown $uid:$gid $escapedPath")
         } catch (e: Exception) {
-            // 回滚 chmod
             try { Os.chmod(path, originalMode and 0x1FF) } catch (_: Exception) {}
-            return "chown 执行异常: ${e.message}\n\n${e.stackTraceToString()}"
+            return "chown 执行异常: ${e.message}\n\n${e.stackTraceToString()}" to null
         }
         try {
             val stat = Os.stat(path)
             if (stat.st_uid != uid || stat.st_gid != gid) {
-                return "chown 未生效: 期望 $uid:$gid, 实际 ${stat.st_uid}:${stat.st_gid}\n路径: $path"
+                return "chown 未生效: 期望 $uid:$gid, 实际 ${stat.st_uid}:${stat.st_gid}\n路径: $path" to null
             }
-        } catch (e: Exception) { return "chown 验证失败: ${e.message}\n\n${e.stackTraceToString()}" }
+        } catch (e: Exception) { return "chown 验证失败: ${e.message}\n\n${e.stackTraceToString()}" to null }
 
-        return null
+        return null to null
     }
 
     // ── 扩展文件属性（chattr/lsattr） ──
