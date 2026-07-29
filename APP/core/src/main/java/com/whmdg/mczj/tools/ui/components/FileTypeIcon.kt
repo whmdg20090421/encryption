@@ -110,7 +110,7 @@ fun FileTypeIcon(
     filename: String,
     filePath: String? = null,
     modifier: Modifier = Modifier,
-    iconSize: Dp = 22.dp,
+    iconSize: Dp = 18.dp,
     fallbackIcon: ImageVector = Icons.Default.InsertDriveFile
 ) {
     val category = categorizeFile(extractExtension(filename))
