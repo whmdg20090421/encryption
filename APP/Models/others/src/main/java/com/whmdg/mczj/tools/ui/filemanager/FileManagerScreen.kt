@@ -5068,12 +5068,12 @@ private fun FileEntryRow(
                 }
                 Text(
                     text = entry.name,
-                    modifier = Modifier.weight(4f).fillMaxHeight().wrapContentHeight(align = Alignment.CenterVertically),
+                    modifier = Modifier.weight(4f).wrapContentHeight(align = Alignment.CenterVertically),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     softWrap = true,
                     textAlign = TextAlign.Start,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                 )
             }
             // Bottom 3/10: date/permission (left, aligned to icon left) + size (right, aligned to filename right)
