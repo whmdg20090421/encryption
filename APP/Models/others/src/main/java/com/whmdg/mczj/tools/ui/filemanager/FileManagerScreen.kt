@@ -3120,11 +3120,47 @@ fun FileManagerScreen(
                         fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                     )
 
-                    PropertyRow("名称", data.name)
-                    PropertyRow("目录", data.directory)
-                    PropertyRow("类型", data.type)
-                    PropertyRow("大小", data.sizeDisplay)
-                    PropertyRow("修改时间", data.modifiedTime)
+                    PropertyRow("名称", data.name,
+                        onClick = {
+                            val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            clip.setPrimaryClip(android.content.ClipData.newPlainText("name", data.name))
+                            Toast.makeText(context, "已复制: ${data.name}", Toast.LENGTH_SHORT).show()
+                        },
+                        onLongClick = {
+                            val fullPath = if (data.directory.endsWith("/")) "${data.directory}${data.name}" else "${data.directory}/${data.name}"
+                            val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            clip.setPrimaryClip(android.content.ClipData.newPlainText("path", fullPath))
+                            Toast.makeText(context, "已复制: $fullPath", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                    PropertyRow("目录", data.directory,
+                        onLongClick = {
+                            val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            clip.setPrimaryClip(android.content.ClipData.newPlainText("path", data.directory))
+                            Toast.makeText(context, "已复制: ${data.directory}", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                    PropertyRow("类型", data.type,
+                        onLongClick = {
+                            val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            clip.setPrimaryClip(android.content.ClipData.newPlainText("type", data.type))
+                            Toast.makeText(context, "已复制: ${data.type}", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                    PropertyRow("大小", data.sizeDisplay,
+                        onLongClick = {
+                            val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            clip.setPrimaryClip(android.content.ClipData.newPlainText("size", data.sizeDisplay))
+                            Toast.makeText(context, "已复制: ${data.sizeDisplay}", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                    PropertyRow("修改时间", data.modifiedTime,
+                        onLongClick = {
+                            val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            clip.setPrimaryClip(android.content.ClipData.newPlainText("time", data.modifiedTime))
+                            Toast.makeText(context, "已复制: ${data.modifiedTime}", Toast.LENGTH_SHORT).show()
+                        }
+                    )
 
                     // 权限信息容器
                     Surface(
@@ -3148,8 +3184,22 @@ fun FileManagerScreen(
                     }
 
                     if (data.isDirectory) {
-                        PropertyRow("文件数", data.fileCount?.toString() ?: "正在统计")
-                        PropertyRow("文件夹数", data.folderCount?.toString() ?: "正在统计")
+                        PropertyRow("文件数", data.fileCount?.toString() ?: "正在统计",
+                            onLongClick = {
+                                val text = data.fileCount?.toString() ?: return@PropertyRow
+                                val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clip.setPrimaryClip(android.content.ClipData.newPlainText("fileCount", text))
+                                Toast.makeText(context, "已复制: $text", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                        PropertyRow("文件夹数", data.folderCount?.toString() ?: "正在统计",
+                            onLongClick = {
+                                val text = data.folderCount?.toString() ?: return@PropertyRow
+                                val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clip.setPrimaryClip(android.content.ClipData.newPlainText("folderCount", text))
+                                Toast.makeText(context, "已复制: $text", Toast.LENGTH_SHORT).show()
+                            }
+                        )
                     }
 
                     HorizontalDivider(
@@ -5068,7 +5118,7 @@ private fun FileEntryRow(
                 }
                 Text(
                     text = entry.name,
-                    modifier = Modifier.weight(4f).wrapContentHeight(align = Alignment.CenterVertically),
+                    modifier = Modifier.weight(4f),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     softWrap = true,
@@ -5186,7 +5236,12 @@ private fun StartEllipsisText(
 }
 
 @Composable
-private fun PropertyRow(label: String, value: String) {
+private fun PropertyRow(
+    label: String,
+    value: String,
+    onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top
@@ -5197,10 +5252,21 @@ private fun PropertyRow(label: String, value: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.width(80.dp)
         )
+        val valueModifier = if (onClick != null || onLongClick != null) {
+            Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(4.dp))
+                .combinedClickable(
+                    onClick = { onClick?.invoke() },
+                    onLongClick = { onLongClick?.invoke() }
+                )
+        } else {
+            Modifier.weight(1f)
+        }
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f),
+            modifier = valueModifier,
             softWrap = true
         )
     }
