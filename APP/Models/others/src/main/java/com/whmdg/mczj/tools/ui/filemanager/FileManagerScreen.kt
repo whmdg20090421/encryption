@@ -3454,7 +3454,8 @@ fun FileManagerScreen(
                                 }
 
                                 // 执行权限修改 + 后台验证的 lambda（可重试）
-                                val doApply: () -> Unit = {
+                                lateinit var doApply: () -> Unit
+                                doApply = {
                                     scope.launch {
                                         applying = true
                                         errorMsg = null
