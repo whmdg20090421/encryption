@@ -8,6 +8,7 @@ import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
 import android.widget.Toast
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -140,6 +141,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         var pendingScrollTo by mutableStateOf<Triple<String, Int, Int>?>(null)
             internal set
         var pendingScrollToFile by mutableStateOf<String?>(null)
+            internal set
+        // 当前滚动位置（由 UI 层持续更新，供 refreshCurrent 读取）
+        var currentScrollIndex by mutableIntStateOf(0)
+            internal set
+        var currentScrollOffset by mutableIntStateOf(0)
             internal set
 
         // ── Vault 临时状态 ──
@@ -1110,6 +1116,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshCurrent() {
         val panel = currentPanel
+        val idx = panel.currentScrollIndex
+        val off = panel.currentScrollOffset
+        if (idx != 0 || off != 0) {
+            panel.pendingScrollTo = Triple(panel.path, idx, off)
+        }
         if (panel.isWebDavMode) {
             loadWebDavEntries(panel)
         } else {

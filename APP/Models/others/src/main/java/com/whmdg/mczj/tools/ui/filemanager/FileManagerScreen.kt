@@ -34,6 +34,7 @@ import com.whmdg.mczj.tools.fileop.DeleteEntry
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -414,6 +415,16 @@ fun FileManagerScreen(
         val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
         listState.scrollToItem(index, offset)
         vm.currentPanel.pendingScrollTo = null
+    }
+
+    // ── 持续同步滚动位置到 ViewModel（供 refreshCurrent 读取） ──
+    LaunchedEffect(leftListState) {
+        snapshotFlow { leftListState.firstVisibleItemIndex to leftListState.firstVisibleItemScrollOffset }
+            .collect { (idx, off) -> vm.leftPanel.currentScrollIndex = idx; vm.leftPanel.currentScrollOffset = off }
+    }
+    LaunchedEffect(rightListState) {
+        snapshotFlow { rightListState.firstVisibleItemIndex to rightListState.firstVisibleItemScrollOffset }
+            .collect { (idx, off) -> vm.rightPanel.currentScrollIndex = idx; vm.rightPanel.currentScrollOffset = off }
     }
 
     // 保存当前滚动位置并返回上一级
@@ -1704,243 +1715,90 @@ fun FileManagerScreen(
                                     .fillMaxSize()
                                     .verticalScroll(rememberScrollState())
                             ) {
-                                // ── 本地 ──
-                                DrawerSectionHeader(
-                                    title = "本地",
-                                    expandable = true,
-                                    expanded = localExpanded,
-                                    onClick = {
-                                        localExpanded = !localExpanded
-                                        drawerPrefs.edit().putBoolean("drawer_local_expanded", localExpanded).apply()
-                                    }
-                                )
-                                AnimatedVisibility(visible = localExpanded) {
-                                Column {
-                                // 内部储存空间卡片（手机总存储）
-                                run {
-                                    val stat = try { StatFs(Environment.getDataDirectory().path) } catch (_: Exception) { null }
-                                    if (stat != null) {
-                                        val total = stat.totalBytes
-                                        val available = stat.availableBytes
-                                        val used = total - available
-                                        val progress = if (total > 0) used.toFloat() / total.toFloat() else 0f
-                                        val barColor = if (isSystemInDarkTheme()) Color(0xFF00838F) else Color(0xFF00BCD4)
-                                        Box(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Card(
-                                                modifier = Modifier
-                                                    .fillMaxWidth(0.85f)
-                                                    .padding(vertical = 6.dp)
-                                                    .clickable {
-                                                        vm.navigateToWithScroll("/storage/emulated/0/")
-                                                        showDrawer = false
-                                                    },
-                                                colors = CardDefaults.cardColors(
-                                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                                )
-                                            ) {
-                                                Column(
-                                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                                                ) {
-                                                    Text(
-                                                        "内部储存",
-                                                        style = MaterialTheme.typography.bodyMedium,
-                                                        fontWeight = FontWeight.Medium
-                                                    )
-                                                    Spacer(Modifier.height(6.dp))
-                                                    LinearProgressIndicator(
-                                                        progress = { progress },
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .height(6.dp)
-                                                            .clip(RoundedCornerShape(3.dp)),
-                                                        color = barColor,
-                                                        trackColor = barColor.copy(alpha = 0.2f),
-                                                    )
-                                                    Spacer(Modifier.height(4.dp))
-                                                    Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement = Arrangement.SpaceBetween
-                                                    ) {
-                                                        Text(
-                                                            "${compactSize(used)} / ${compactSize(total)}",
-                                                            style = MaterialTheme.typography.bodySmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
-                                                        Text(
-                                                            "%.1f%%".format(progress * 100),
-                                                            style = MaterialTheme.typography.bodySmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                // 根目录空间卡片
-                                run {
-                                    val stat = try { StatFs("/") } catch (_: Exception) { null }
-                                    if (stat != null) {
-                                        val total = stat.totalBytes
-                                        val available = stat.availableBytes
-                                        val used = total - available
-                                        val progress = if (total > 0) used.toFloat() / total.toFloat() else 0f
-                                        val barColor = if (isSystemInDarkTheme()) Color(0xFF00838F) else Color(0xFF00BCD4)
-                                        Box(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Card(
-                                                modifier = Modifier
-                                                    .fillMaxWidth(0.85f)
-                                                    .padding(vertical = 6.dp)
-                                                    .clickable {
-                                                        vm.navigateToWithScroll("/")
-                                                        showDrawer = false
-                                                    },
-                                                colors = CardDefaults.cardColors(
-                                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                                )
-                                            ) {
-                                                Column(
-                                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                                                ) {
-                                                    Text(
-                                                        "根目录",
-                                                        style = MaterialTheme.typography.bodyMedium,
-                                                        fontWeight = FontWeight.Medium
-                                                    )
-                                                    Spacer(Modifier.height(6.dp))
-                                                    LinearProgressIndicator(
-                                                        progress = { progress },
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .height(6.dp)
-                                                            .clip(RoundedCornerShape(3.dp)),
-                                                        color = barColor,
-                                                        trackColor = barColor.copy(alpha = 0.2f),
-                                                    )
-                                                    Spacer(Modifier.height(4.dp))
-                                                    Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        horizontalArrangement = Arrangement.SpaceBetween
-                                                    ) {
-                                                        Text(
-                                                            "${compactSize(used)} / ${compactSize(total)}",
-                                                            style = MaterialTheme.typography.bodySmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
-                                                        Text(
-                                                            "%.1f%%".format(progress * 100),
-                                                            style = MaterialTheme.typography.bodySmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                // 自定义快捷访问
-                                quickAccessList.forEach { entry ->
-                                    Box(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Card(
-                                            modifier = Modifier
-                                                .fillMaxWidth(0.85f)
-                                                .padding(vertical = 6.dp)
-                                                .clickable {
-                                                    vm.navigateToWithScroll(entry.path)
-                                                    showDrawer = false
-                                                },
-                                            colors = CardDefaults.cardColors(
-                                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                            )
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.SubdirectoryArrowRight,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(20.dp),
-                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                                Spacer(Modifier.width(8.dp))
-                                                Text(
-                                                    entry.name,
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                                // WebDAV 快捷访问
-                                webDavServers.forEach { server ->
-                                    Box(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Card(
-                                            modifier = Modifier
-                                                .fillMaxWidth(0.85f)
-                                                .padding(vertical = 6.dp)
-                                                .clickable {
-                                                    vm.navigateToWebDav(server)
-                                                    showDrawer = false
-                                                },
-                                            colors = CardDefaults.cardColors(
-                                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                            )
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.Cloud,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(20.dp),
-                                                    tint = MaterialTheme.colorScheme.primary
-                                                )
-                                                Spacer(Modifier.width(8.dp))
-                                                Text(
-                                                    server.name.ifEmpty { server.getDefaultName() },
-                                                    style = MaterialTheme.typography.bodyMedium
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                                // 添加快捷访问按钮
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { showQaTypeSelector = true }
-                                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                // ── 本地存储 + 快捷访问 ──
+                                val barColor = if (isSystemInDarkTheme()) Color(0xFF00838F) else Color(0xFF00BCD4)
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 3.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                                 ) {
-                                    Icon(
-                                        Icons.Default.Add,
-                                        contentDescription = "添加快捷访问",
-                                        modifier = Modifier.size(20.dp),
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        "添加快捷访问",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
+                                    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                        // 内部储存
+                                        val internalStat = try { StatFs(Environment.getDataDirectory().path) } catch (_: Exception) { null }
+                                        if (internalStat != null) {
+                                            val total = internalStat.totalBytes
+                                            val available = internalStat.availableBytes
+                                            val used = total - available
+                                            val progress = if (total > 0) used.toFloat() / total.toFloat() else 0f
+                                            Column(
+                                                modifier = Modifier.fillMaxWidth().clickable { vm.navigateToWithScroll("/storage/emulated/0/"); showDrawer = false }.padding(horizontal = 12.dp, vertical = 8.dp)
+                                            ) {
+                                                Text("内部储存", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                                Spacer(Modifier.height(4.dp))
+                                                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp)), color = barColor, trackColor = barColor.copy(alpha = 0.2f))
+                                                Spacer(Modifier.height(2.dp))
+                                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Text("${compactSize(used)} / ${compactSize(total)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    Text("%.1f%%".format(progress * 100), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                }
+                                            }
+                                        }
+                                        // 根目录
+                                        val rootStat = try { StatFs("/") } catch (_: Exception) { null }
+                                        if (rootStat != null) {
+                                            HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                                            val total = rootStat.totalBytes
+                                            val available = rootStat.availableBytes
+                                            val used = total - available
+                                            val progress = if (total > 0) used.toFloat() / total.toFloat() else 0f
+                                            Column(
+                                                modifier = Modifier.fillMaxWidth().clickable { vm.navigateToWithScroll("/"); showDrawer = false }.padding(horizontal = 12.dp, vertical = 8.dp)
+                                            ) {
+                                                Text("根目录", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                                Spacer(Modifier.height(4.dp))
+                                                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp)), color = barColor, trackColor = barColor.copy(alpha = 0.2f))
+                                                Spacer(Modifier.height(2.dp))
+                                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Text("${compactSize(used)} / ${compactSize(total)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    Text("%.1f%%".format(progress * 100), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                }
+                                            }
+                                        }
+                                        // 自定义快捷访问
+                                        quickAccessList.forEach { entry ->
+                                            HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().clickable { vm.navigateToWithScroll(entry.path); showDrawer = false }.padding(horizontal = 12.dp, vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(Icons.Default.SubdirectoryArrowRight, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(entry.name, style = MaterialTheme.typography.bodyMedium)
+                                            }
+                                        }
+                                        // WebDAV 快捷访问
+                                        webDavServers.forEach { server ->
+                                            HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().clickable { vm.navigateToWebDav(server); showDrawer = false }.padding(horizontal = 12.dp, vertical = 8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(Icons.Default.Cloud, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(server.name.ifEmpty { server.getDefaultName() }, style = MaterialTheme.typography.bodyMedium)
+                                            }
+                                        }
+                                        // 添加快捷访问
+                                        HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().clickable { showQaTypeSelector = true }.padding(horizontal = 12.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Default.Add, contentDescription = "添加快捷访问", modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("添加快捷访问", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                                        }
+                                    }
                                 }
-                                } // AnimatedVisibility
-                                } // Column
                                 HorizontalDivider()
                                 // ── 工具 ──
                                 DrawerSectionHeader(
@@ -5116,15 +4974,17 @@ private fun FileEntryRow(
                         }
                     }
                 }
-                Text(
-                    text = entry.name,
-                    modifier = Modifier.weight(4f),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    softWrap = true,
-                    textAlign = TextAlign.Start,
-                    fontSize = 12.sp,
-                )
+                Box(modifier = Modifier.weight(4f).fillMaxHeight()) {
+                    Text(
+                        text = entry.name,
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        softWrap = true,
+                        textAlign = TextAlign.Start,
+                        fontSize = 12.sp,
+                    )
+                }
             }
             // Bottom 3/10: date/permission (left, aligned to icon left) + size (right, aligned to filename right)
             Row(
