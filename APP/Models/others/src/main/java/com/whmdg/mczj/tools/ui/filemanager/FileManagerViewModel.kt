@@ -2547,14 +2547,16 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 检测路径是否在 FUSE 虚拟挂载层上。
-     * 解析 /proc/self/mountinfo，找到包含该路径的 FUSE 挂载条目，
-     * 返回真实底层路径（如 /storage/emulated/0/xxx → /data/media/0/xxx）。
+     * 解析 /proc/self/mountinfo，找到包含该路径的 FUSE 挂载条目。
+     * 对 /storage/emulated（用户内部存储），直接映射到 /data/media/{userId}/。
      * 非 FUSE 路径返回 null。
      */
     fun resolveFuseRealPath(path: String): String? {
         try {
             val mountInfo = File("/proc/self/mountinfo").readText()
-            // 按 " - " 分割，左边含挂载点，右边含文件系统类型
+            var fuseMountPoint: String? = null
+            var fuseSource = ""
+
             for (line in mountInfo.lines()) {
                 val sepIndex = line.indexOf(" - ")
                 if (sepIndex < 0) continue
@@ -2563,25 +2565,54 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
                 val leftFields = leftPart.split(" ")
                 if (leftFields.size < 5) continue
-                val sourcePath = leftFields[3]    // 真实源路径
-                val mountPoint = leftFields[4]     // 挂载点
-
                 val rightFields = rightPart.split(" ")
                 if (rightFields.isEmpty()) continue
+
+                val mountPoint = leftFields[4]
                 val fsType = rightFields[0]
+                val source = if (rightFields.size >= 2) rightFields[1] else ""
 
                 if (fsType != "fuse" && fsType != "fuseblk") continue
-                // 最长前缀匹配
-                val normalizedMount = mountPoint.trimEnd('/')
-                if (!path.startsWith(normalizedMount)) continue
-                val remaining = path.removePrefix(normalizedMount)
-                // 确保是完整路径段匹配（避免 /storage/emulated 匹配 /storage/emulated_extra）
-                if (remaining.isNotEmpty() && remaining[0] != '/') continue
+                if (mountPoint == "/") continue
 
-                return sourcePath + remaining
+                val normalized = mountPoint.trimEnd('/')
+                if (!path.startsWith(normalized)) continue
+                if (path.length != normalized.length && path[normalized.length] != '/') continue
+
+                // 最长前缀匹配
+                if (fuseMountPoint == null || mountPoint.length > fuseMountPoint.length) {
+                    fuseMountPoint = mountPoint
+                    fuseSource = source
+                }
             }
+
+            if (fuseMountPoint == null) return null
+
+            // 非 /dev/fuse 源（真实块设备），直接用 source 拼接
+            if (fuseSource.isNotEmpty() && !fuseSource.startsWith("/dev/")) {
+                val remaining = path.removePrefix(fuseMountPoint.trimEnd('/'))
+                return normalizePath(fuseSource.trimEnd('/') + remaining)
+            }
+
+            // /storage/emulated → /data/media/{userId}
+            // 正则匹配 /storage/emulated/{id}/... 或 /storage/emulated/{id}
+            val emulatedRegex = Regex("^/storage/emulated/(\\d+)(.*)")
+            val match = emulatedRegex.find(path)
+            if (match != null) {
+                val userId = match.groupValues[1]
+                val subPath = match.groupValues[2]
+                return "/data/media/$userId$subPath"
+            }
+
         } catch (_: Exception) {}
         return null
+    }
+
+    /** 规范化路径：去除连续斜杠和尾部斜杠。 */
+    private fun normalizePath(path: String): String {
+        var result = path.replace(Regex("/+"), "/")
+        if (result.length > 1) result = result.trimEnd('/')
+        return result
     }
 
     /**
@@ -2619,6 +2650,43 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) { return "chown 验证失败: ${e.message}\n\n${e.stackTraceToString()}" to null }
 
         return null to null
+    }
+
+    /**
+     * 后台验证权限修改是否生效。
+     * 文件夹：随机抽取最多 5 个子项验证。文件：直接验证。
+     * 返回未生效的路径列表（空 = 全部成功）。
+     */
+    fun verifyPermissions(path: String, expectedMode: Int, expectedUid: Int, expectedGid: Int): List<String> {
+        if (!hasShellEngine) return emptyList()
+        val targets = mutableListOf(path)
+        try {
+            if (File(path).isDirectory) {
+                val escaped = SevenZipCommand.escape(path)
+                val (out, _, exit) = try { executeShell("ls -1A $escaped") } catch (_: Exception) { Triple("", "", -1) }
+                if (exit == 0 && out.isNotBlank()) {
+                    val children = out.lines().filter { it.isNotBlank() }
+                    val picked = children.shuffled().take(5)
+                    targets.clear()
+                    targets.addAll(picked.map { "$path/$it" })
+                }
+            }
+        } catch (_: Exception) {}
+
+        val failed = mutableListOf<String>()
+        val expectedOctal = String.format("%03o", expectedMode and 0x1FF)
+        for (t in targets) {
+            val escaped = SevenZipCommand.escape(t)
+            val (out, _, exit) = try { executeShell("stat -c '%a|%u|%g' $escaped") } catch (_: Exception) { Triple("", "", -1) }
+            if (exit != 0) { failed.add(t); continue }
+            val parts = out.trim().split("|")
+            if (parts.size < 3) { failed.add(t); continue }
+            val (actualMode, actualUid, actualGid) = parts
+            if (actualMode != expectedOctal || actualUid != expectedUid.toString() || actualGid != expectedGid.toString()) {
+                failed.add(t)
+            }
+        }
+        return failed
     }
 
     // ── 扩展文件属性（chattr/lsattr） ──

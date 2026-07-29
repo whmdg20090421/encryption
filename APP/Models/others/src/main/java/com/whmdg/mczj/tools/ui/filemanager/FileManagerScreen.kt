@@ -34,7 +34,9 @@ import com.whmdg.mczj.tools.fileop.DeleteEntry
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -280,12 +282,13 @@ fun FileManagerScreen(
     var showPermissionEditor by remember { mutableStateOf(false) }
     var permissionEditorData by remember { mutableStateOf<FilePropertyData?>(null) }
     var permissionEditorEntry by remember { mutableStateOf<FileEntry?>(null) }
-    // FUSE 确认对话框
-    var showFuseConfirm by remember { mutableStateOf(false) }
-    var fuseRealPath by remember { mutableStateOf("") }
-    var fusePendingMode by remember { mutableStateOf(0) }
-    var fusePendingUid by remember { mutableStateOf(0) }
-    var fusePendingGid by remember { mutableStateOf(0) }
+    // 统一阻断错误弹窗
+    var showBlockErrors by remember { mutableStateOf(false) }
+    var blockErrorMessages by remember { mutableStateOf<List<String>>(emptyList()) }
+    // 权限验证失败重试弹窗
+    var showVerifyFailed by remember { mutableStateOf(false) }
+    var verifyFailedPaths by remember { mutableStateOf<List<String>>(emptyList()) }
+    var verifyRetryCallback by remember { mutableStateOf<(() -> Unit)?>(null) }
     // APK 信息弹窗
     var showApkDialog by remember { mutableStateOf(false) }
     var apkDialogPath by remember { mutableStateOf("") }
@@ -3133,7 +3136,7 @@ fun FileManagerScreen(
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            PropertyRowWithButton("权限", data.permission, hasRoot = vm.isRootEngine, onClick = {
+                            PropertyRowWithButton("权限", data.permission, onClick = {
                                 permissionEditorData = data
                                 permissionEditorEntry = propertyEntry
                                 showPropertyDialog = false
@@ -3175,6 +3178,7 @@ fun FileManagerScreen(
     // ── 权限编辑弹窗 ──
     if (showPermissionEditor && permissionEditorData != null && permissionEditorEntry != null) {
         val entry = permissionEditorEntry!!
+        val scope = rememberCoroutineScope()
         val stat = try { android.system.Os.stat(entry.path) } catch (_: Exception) { null }
         val originalMode = stat?.st_mode ?: 0
         val originalUid = stat?.st_uid ?: 0
@@ -3434,70 +3438,72 @@ fun FileManagerScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         TextButton(
                             onClick = {
-                                applying = true
-                                errorMsg = null
-
-                                // 第一步：处理扩展属性（chattr），优先于基本权限
-                                val desiredFlags = buildSet {
-                                    if (extImmutable) add('i')
-                                    if (extAppend) add('a')
+                                // 前置检查：收集所有阻断错误
+                                val errors = mutableListOf<String>()
+                                val fusePath = vm.resolveFuseRealPath(entry.path)
+                                if (fusePath != null) {
+                                    errors.add("该文件位于 FUSE 虚拟挂载层，无法直接修改权限。如需修改，请通过以下真实路径操作：\n$fusePath")
                                 }
-                                val originalFlagSet = originalExtFlags.filter { it == 'i' || it == 'a' }.toSet()
-                                if (desiredFlags != originalFlagSet) {
-                                    val extResult = vm.applyExtFlags(entry.path, desiredFlags, originalExtFlags)
-                                    if (extResult != null) {
+                                if (!vm.isRootEngine) {
+                                    errors.add("当前无 Root 权限，无法执行 chmod/chown 操作。")
+                                }
+                                if (errors.isNotEmpty()) {
+                                    blockErrorMessages = errors
+                                    showBlockErrors = true
+                                    return@TextButton
+                                }
+
+                                // 执行权限修改 + 后台验证的 lambda（可重试）
+                                val doApply: () -> Unit = {
+                                    scope.launch {
+                                        applying = true
+                                        errorMsg = null
+
+                                        val extResult = withContext(Dispatchers.IO) {
+                                            val desiredFlags = buildSet {
+                                                if (extImmutable) add('i')
+                                                if (extAppend) add('a')
+                                            }
+                                            val originalFlagSet = originalExtFlags.filter { it == 'i' || it == 'a' }.toSet()
+                                            if (desiredFlags != originalFlagSet) vm.applyExtFlags(entry.path, desiredFlags, originalExtFlags) else null
+                                        }
+                                        if (extResult != null) {
+                                            applying = false
+                                            errorMsg = extResult
+                                            showErrorDetail = true
+                                            return@launch
+                                        }
+
+                                        val permResult = withContext(Dispatchers.IO) {
+                                            val permChanged = currentMode != originalMode || selectedUid != originalUid || selectedGid != originalGid
+                                            if (permChanged) vm.applyPermissions(entry.path, currentMode, selectedUid, selectedGid, originalMode, originalUid, originalGid).first else null
+                                        }
                                         applying = false
-                                        errorMsg = extResult
-                                        showErrorDetail = true
-                                        return@TextButton
-                                    }
-                                }
+                                        if (permResult != null) {
+                                            errorMsg = permResult
+                                            showErrorDetail = true
+                                            return@launch
+                                        }
 
-                                // 第二步：仅当基本权限（rwx/uid/gid）发生变化时才执行 chmod/chown
-                                val permChanged = currentMode != originalMode || selectedUid != originalUid || selectedGid != originalGid
-                                if (permChanged) {
-                                    val (errMsg, fusePath) = vm.applyPermissions(
-                                        path = entry.path,
-                                        mode = currentMode,
-                                        uid = selectedUid,
-                                        gid = selectedGid,
-                                        originalMode = originalMode,
-                                        originalUid = originalUid,
-                                        originalGid = originalGid
-                                    )
-                                    applying = false
-                                    if (fusePath != null) {
-                                        // FUSE 虚拟层：弹确认对话框
-                                        fuseRealPath = fusePath
-                                        fusePendingMode = currentMode
-                                        fusePendingUid = selectedUid
-                                        fusePendingGid = selectedGid
-                                        showFuseConfirm = true
-                                        return@TextButton
-                                    }
-                                    if (errMsg != null) {
-                                        errorMsg = errMsg
-                                        showErrorDetail = true
-                                        return@TextButton
-                                    }
-                                } else {
-                                    applying = false
-                                }
+                                        showPermissionEditor = false
+                                        vm.saveScrollPosition(leftListState.firstVisibleItemIndex, leftListState.firstVisibleItemScrollOffset, rightListState.firstVisibleItemIndex, rightListState.firstVisibleItemScrollOffset)
+                                        val targetPath = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPath else vm.rightPath
+                                        val saved = vm.getScrollPosition(targetPath)
+                                        vm.refreshCurrent()
+                                        if (saved != null) vm.currentPanel.pendingScrollTo = Triple(targetPath, saved.first, saved.second)
 
-                                showPermissionEditor = false
-                                // 保存滚动位置，刷新后恢复
-                                vm.saveScrollPosition(
-                                    leftListState.firstVisibleItemIndex,
-                                    leftListState.firstVisibleItemScrollOffset,
-                                    rightListState.firstVisibleItemIndex,
-                                    rightListState.firstVisibleItemScrollOffset
-                                )
-                                val targetPath = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPath else vm.rightPath
-                                val saved = vm.getScrollPosition(targetPath)
-                                vm.refreshCurrent()
-                                if (saved != null) {
-                                    vm.currentPanel.pendingScrollTo = Triple(targetPath, saved.first, saved.second)
+                                        // 后台验证
+                                        val failed = withContext(Dispatchers.IO) {
+                                            vm.verifyPermissions(entry.path, currentMode, selectedUid, selectedGid)
+                                        }
+                                        if (failed.isNotEmpty()) {
+                                            verifyFailedPaths = failed
+                                            verifyRetryCallback = { scope.launch { doApply() } }
+                                            showVerifyFailed = true
+                                        }
+                                    }
                                 }
+                                doApply()
                             },
                             enabled = !applying
                         ) {
@@ -3508,9 +3514,9 @@ fun FileManagerScreen(
             }
         }
 
-        // ── FUSE 虚拟层确认对话框 ──
-        if (showFuseConfirm) {
-            Dialog(onDismissRequest = { showFuseConfirm = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        // ── 统一阻断错误弹窗 ──
+        if (showBlockErrors) {
+            Dialog(onDismissRequest = { showBlockErrors = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Card(
                     modifier = Modifier.fillMaxWidth(DialogWidthFraction),
                     shape = RoundedCornerShape(24.dp),
@@ -3518,22 +3524,42 @@ fun FileManagerScreen(
                 ) {
                     Column(modifier = Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("无法修改权限", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        blockErrorMessages.forEachIndexed { index, msg ->
+                            if (index > 0) Spacer(modifier = Modifier.height(4.dp))
+                            Text(msg, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { showBlockErrors = false }) { Text("确认") }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── 权限验证失败弹窗 ──
+        if (showVerifyFailed) {
+            Dialog(onDismissRequest = { showVerifyFailed = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("权限未能正确赋予", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         Text(
-                            "该文件位于 FUSE 虚拟挂载层，无法直接修改权限。\n\n如需修改，请通过以下真实路径操作：",
+                            "以下文件权限未生效：",
                             style = MaterialTheme.typography.bodyMedium
                         )
-                        Text(
-                            fuseRealPath,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        verifyFailedPaths.take(5).forEach { p ->
+                            Text(p, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.error)
+                        }
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { showVerifyFailed = false }) { Text("取消") }
+                            Spacer(modifier = Modifier.width(8.dp))
                             TextButton(onClick = {
-                                showFuseConfirm = false
-                                // 还原所有更改变量，关闭权限编辑器
-                                showPermissionEditor = false
-                            }) { Text("确认") }
+                                showVerifyFailed = false
+                                verifyRetryCallback?.invoke()
+                            }) { Text("重新尝试") }
                         }
                     }
                 }
@@ -5180,7 +5206,7 @@ private fun PropertyRow(label: String, value: String) {
 }
 
 @Composable
-private fun PropertyRowWithButton(label: String, value: String, hasRoot: Boolean = false, onClick: () -> Unit = {}) {
+private fun PropertyRowWithButton(label: String, value: String, onClick: () -> Unit = {}) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
@@ -5196,15 +5222,8 @@ private fun PropertyRowWithButton(label: String, value: String, hasRoot: Boolean
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f)
         )
-        TextButton(
-            onClick = onClick,
-            enabled = hasRoot
-        ) {
-            Text(
-                "更改",
-                color = if (hasRoot) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-            )
+        TextButton(onClick = onClick) {
+            Text("更改", color = MaterialTheme.colorScheme.primary)
         }
     }
 }
