@@ -238,7 +238,7 @@ fun FileManagerScreen(
     // ── 多选状态（左右列表独立） ──
     val leftSwipe = remember { SwipeUiState() }
     val rightSwipe = remember { SwipeUiState() }
-    val currentSwipe get() = if (vm.focusedPanel == FocusedPanel.LEFT) leftSwipe else rightSwipe
+    val currentSwipe = if (vm.focusedPanel == FocusedPanel.LEFT) leftSwipe else rightSwipe
     val sortAscLabels = mapOf(
         SortField.NAME to "A到Z",
         SortField.SIZE to "小到大",
