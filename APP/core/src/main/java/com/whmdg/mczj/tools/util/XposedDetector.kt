@@ -99,7 +99,7 @@ object XposedDetector {
 
             // Extract package names
             scopeList = scope.mapNotNull { app ->
-                try { app.javaClass.getField("packageName").get(app) as? String } catch (_: Throwable) { null }
+                try { app.javaClass.getField("packageName")?.get(app) as? String } catch (_: Throwable) { null }
             }
             steps.add("解析 scope packageName" to "OK (${scopeList.size} apps)")
 
