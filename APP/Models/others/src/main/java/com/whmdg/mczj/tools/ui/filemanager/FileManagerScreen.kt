@@ -5064,29 +5064,26 @@ private fun compactDate(millis: Long): String {
  */
 @Composable
 private fun SmartWrapText(text: String) {
-    var phase by remember(text) { mutableIntStateOf(0) } // 0=探测, 1=已分割
+    var phase by remember(text) { mutableIntStateOf(0) } // 0=探测, 1=单行, 2=双行
     var line1 by remember(text) { mutableStateOf("") }
     var remaining by remember(text) { mutableStateOf("") }
-    var line2Done by remember(text) { mutableIntStateOf(0) } // 0=探测, 1=完成
+    var line2Done by remember(text) { mutableIntStateOf(0) }
     var line2Display by remember(text) { mutableStateOf("") }
 
     if (phase == 0) {
-        // 阶段1：单行渲染，探测是否溢出
+        // 阶段0：softWrap=false + maxLines=1 探测是否溢出，获取精确行断点
         Text(
             text = text,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(0.dp),
             maxLines = 1,
             overflow = TextOverflow.Clip,
             softWrap = false,
-            textAlign = TextAlign.Start,
             fontSize = 12.sp,
             onTextLayout = { result ->
                 if (!result.hasVisualOverflow) {
-                    // 一行放得下，不做任何处理
                     phase = 1
                     line1 = text
                 } else {
-                    // 溢出，按第一行末尾分割
                     val end = result.getLineEnd(0, visibleEnd = true)
                     if (end > 0 && end < text.length) {
                         line1 = text.substring(0, end)
@@ -5095,32 +5092,54 @@ private fun SmartWrapText(text: String) {
                         line1 = text
                         remaining = ""
                     }
-                    phase = 1
+                    phase = if (remaining.isNotEmpty()) 2 else 1
                 }
             }
         )
-    } else {
-        // 阶段2：显示第一行 + 第二行
-        Column(modifier = Modifier.fillMaxWidth()) {
+    } else if (phase == 1) {
+        // 单行：垂直居中
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
             Text(
                 text = line1,
                 modifier = Modifier.fillMaxWidth(),
                 maxLines = 1,
                 overflow = TextOverflow.Clip,
                 softWrap = false,
-                textAlign = TextAlign.Start,
+                textAlign = TextAlign.Center,
                 fontSize = 12.sp,
             )
-            if (remaining.isNotEmpty()) {
+        }
+    } else {
+        // 双行：上下各 50%，每行在各自区域内居中
+        Column(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = line1,
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 1,
+                    overflow = TextOverflow.Clip,
+                    softWrap = false,
+                    textAlign = TextAlign.Center,
+                    fontSize = 12.sp,
+                )
+            }
+            Box(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
                 if (line2Done == 0) {
-                    // 第二行探测
                     Text(
                         text = remaining,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().height(0.dp),
                         maxLines = 1,
                         overflow = TextOverflow.Clip,
                         softWrap = false,
-                        textAlign = TextAlign.Start,
                         fontSize = 12.sp,
                         onTextLayout = { result ->
                             line2Display = if (result.hasVisualOverflow) {
@@ -5131,14 +5150,15 @@ private fun SmartWrapText(text: String) {
                             line2Done = 1
                         }
                     )
-                } else {
+                }
+                if (line2Done == 1) {
                     Text(
                         text = line2Display,
                         modifier = Modifier.fillMaxWidth(),
                         maxLines = 1,
                         overflow = TextOverflow.Clip,
                         softWrap = false,
-                        textAlign = TextAlign.Start,
+                        textAlign = TextAlign.Center,
                         fontSize = 12.sp,
                     )
                 }

@@ -3,6 +3,11 @@ package com.whmdg.mczj.tools.util
 import android.os.IBinder
 import android.util.Log
 
+/**
+ * 模块激活状态检测。
+ *
+ * 通过 LSPosed binder 链查询模块作用域：启用的模块必须至少有一个作用域（LSPosed 规则）。
+ */
 object XposedDetector {
 
     private const val TAG = "XposedDetector"
@@ -11,9 +16,9 @@ object XposedDetector {
     fun isModuleActive(): Boolean {
         return try {
             val manager = getManagerService() ?: return false
-            val enabledModules = manager.javaClass.getMethod("enabledModules")
-            val modules = enabledModules.invoke(manager) as? Array<*> ?: return false
-            modules.any { it == MODULE_PKG }
+            val getScope = manager.javaClass.getMethod("getModuleScope", String::class.java)
+            val scope = getScope.invoke(manager, MODULE_PKG) as? List<*> ?: return false
+            scope.isNotEmpty()
         } catch (t: Throwable) {
             Log.w(TAG, "isModuleActive failed: ${t.message}")
             false

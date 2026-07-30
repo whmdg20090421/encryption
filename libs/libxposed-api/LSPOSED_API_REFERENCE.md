@@ -222,3 +222,25 @@ val scope = manager.javaClass.getMethod("getModuleScope", String::class.java)
 ```
 
 **注意**：此链路仅在模块进程内有效（`BridgeService.getService()` 非 null）。UI 进程中如果模块已注入也可使用。
+
+## 11. 模块激活状态检测（作用域反查法）
+
+### 原理
+
+LSPosed 规则：**启用的模块必须至少有一个作用域**。因此通过 `getModuleScope()` 查询模块作用域列表，非空 = 模块已启用。
+
+```kotlin
+fun isModuleActive(): Boolean {
+    val manager = getManagerService() ?: return false
+    val scope = manager.getModuleScope("com.whmdg.mczj.tools") as List<*>
+    return scope.isNotEmpty()
+}
+```
+
+### 其他检测方式为什么不可靠
+
+| 方式 | 问题 |
+|------|------|
+| `Class.forName("XposedInterface")` | 类在模块 APK 中始终存在，不表示被启用 |
+| `SystemProperties.set()` | Android 8+ SELinux 禁止普通进程写入 |
+| `enabledModules()` | 需要通过 binder 链，同 `getModuleScope` |
