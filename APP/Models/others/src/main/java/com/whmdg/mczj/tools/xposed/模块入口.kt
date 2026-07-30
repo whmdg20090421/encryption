@@ -1,6 +1,5 @@
 package com.whmdg.mczj.tools.xposed
 
-import android.content.Context
 import android.util.Log
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
@@ -41,7 +40,7 @@ class 模块入口 : XposedModule() {
 
     private fun isScopeEnabled(packageName: String): Boolean {
         return try {
-            val prefs = getSharedPreferences("hook_prefs", Context.MODE_PRIVATE)
+            val prefs = getRemotePreferences("hook_prefs")
             prefs.getBoolean("${packageName}_SCOPE", false)
         } catch (t: Throwable) {
             log(Log.WARN, TAG, "读取 hook 作用域开关失败: ${t.message}")

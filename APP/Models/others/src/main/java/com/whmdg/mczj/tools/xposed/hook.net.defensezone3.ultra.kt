@@ -33,7 +33,7 @@ object DefenseZone3AdHook {
     fun handlePackageLoaded(module: XposedInterface, param: PackageLoadedParam) {
         if (param.packageName != TARGET) return
 
-        val classLoader = param.classLoader
+        val classLoader = param.defaultClassLoader
         val handler = Handler(Looper.getMainLooper())
 
         hookActivity(module, classLoader, handler, "com.google.android.gms.ads.AdActivity")
