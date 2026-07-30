@@ -66,6 +66,6 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // NanoHTTPD
     implementation("org.nanohttpd:nanohttpd:2.3.1")
-    // libxposed API 102 (本地 AAR)
-    compileOnly(files("${rootProject.projectDir}/libs/api-102.0.0.aar"))
+    // libxposed API 102 (本地源码模块)
+    compileOnly(project(":libs:libxposed-api"))
 }

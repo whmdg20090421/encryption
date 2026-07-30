@@ -3,6 +3,7 @@ package com.whmdg.mczj.tools.ui.hook
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -10,6 +11,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.XposedDetector
+import kotlinx.coroutines.launch
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -22,7 +24,14 @@ fun HookDetailScreen(
     val target = remember { HookConfig.TARGETS.find { it.packageName == packageName } }
     val version = remember { HookConfig.getVersionName(context, packageName) }
     val moduleActive = remember { XposedDetector.isModuleActive() }
-    val scopeEnabled = remember { mutableStateOf(HookConfig.isScopeEnabled(context, packageName)) }
+    var refreshKey by remember { mutableIntStateOf(0) }
+    val currentScope = remember(refreshKey) { HookConfig.isScopeEnabled(packageName) }
+    var scopeEnabled by remember { mutableStateOf(currentScope) }
+    LaunchedEffect(refreshKey) { scopeEnabled = currentScope }
+    var scopeDialogVisible by remember { mutableStateOf(false) }
+    var scopeRequestLoading by remember { mutableStateOf(false) }
+    var scopeRequestError by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
 
     if (target == null) {
         Scaffold(
@@ -45,7 +54,70 @@ fun HookDetailScreen(
     }
 
     // L1 + L2 是否全部开启
-    val allGatesOn = moduleActive && scopeEnabled.value
+    val allGatesOn = moduleActive && scopeEnabled
+
+    // ── 作用域申请弹窗 ──
+    if (scopeDialogVisible) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!scopeRequestLoading) {
+                    scopeDialogVisible = false
+                    scopeRequestError = null
+                }
+            },
+            title = { Text("申请 Hook 作用域") },
+            text = {
+                Column {
+                    Text("是否向 LSPosed 申请 ${target.displayName} 的作用域？\n\n申请后 LSPosed 将弹出确认窗口，请确认授权。")
+                    if (scopeRequestError != null) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            scopeRequestError!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scopeRequestLoading = true
+                        scopeRequestError = null
+                        coroutineScope.launch {
+                            val ok = HookConfig.addScope(packageName)
+                            if (ok) {
+                                scopeDialogVisible = false
+                                scopeRequestLoading = false
+                                refreshKey++
+                            } else {
+                                scopeRequestLoading = false
+                                scopeRequestError = "申请失败，请在 LSPosed 中手动勾选"
+                            }
+                        }
+                    },
+                    enabled = !scopeRequestLoading
+                ) {
+                    if (scopeRequestLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("确认")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        scopeDialogVisible = false
+                        scopeRequestError = null
+                    },
+                    enabled = !scopeRequestLoading
+                ) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -54,6 +126,11 @@ fun HookDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { refreshKey++ }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "刷新", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             )
@@ -119,10 +196,15 @@ fun HookDetailScreen(
                 },
                 trailingContent = {
                     Switch(
-                        checked = scopeEnabled.value,
+                        checked = scopeEnabled,
                         onCheckedChange = {
-                            scopeEnabled.value = it
-                            HookConfig.setScopeEnabled(context, packageName, it)
+                            if (it) {
+                                scopeDialogVisible = true
+                                scopeRequestError = null
+                            } else {
+                                scopeEnabled = false
+                                HookConfig.removeScope(packageName)
+                            }
                         },
                         enabled = moduleActive
                     )
@@ -145,7 +227,7 @@ fun HookDetailScreen(
             )
 
             target.hookFeatures.forEach { feature ->
-                var featureOn by remember {
+                var featureOn by remember(refreshKey) {
                     mutableStateOf(HookConfig.isFeatureEnabled(context, packageName, feature))
                 }
 
@@ -161,7 +243,7 @@ fun HookDetailScreen(
                         Text(
                             buildString {
                                 append(feature.description)
-                                if (!scopeEnabled.value) append("\n需先开启作用域开关")
+                                if (!scopeEnabled) append("\n需先开启作用域开关")
                                 else if (!moduleActive) append("\n模块未激活")
                             },
                             style = MaterialTheme.typography.bodySmall,
@@ -196,7 +278,7 @@ fun HookDetailScreen(
             val diagDir = remember {
                 AppDataPaths.diagnostics(context).let { File(it, "Hook/$packageName") }
             }
-            val diagFileCount = remember { diagDir.listFiles()?.size ?: 0 }
+            val diagFileCount = remember(refreshKey) { diagDir.listFiles()?.size ?: 0 }
 
             ListItem(
                 headlineContent = { Text("Hook 日志") },

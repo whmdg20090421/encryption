@@ -2,23 +2,20 @@ package io.github.libxposed.api;
 
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
-import android.content.res.Resources;
+import android.os.ParcelFileDescriptor;
 
-import androidx.annotation.Discouraged;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import java.io.FileInputStream;
 import java.io.FileNotFoundException;
-import java.io.IOException;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Executable;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.nio.ByteBuffer;
-import java.util.ConcurrentModificationException;
+import java.util.List;
 
-import io.github.libxposed.api.errors.HookFailedError;
-import io.github.libxposed.api.utils.DexParser;
+import io.github.libxposed.api.error.HookFailedError;
+import io.github.libxposed.annotation.SinceApi;
 
 /**
  * Xposed interface for modules to operate on application processes.
@@ -26,627 +23,542 @@ import io.github.libxposed.api.utils.DexParser;
 @SuppressWarnings("unused")
 public interface XposedInterface {
     /**
-     * SDK API version.
+     * API version 101.
+     * <p>Behavior changes: all modules</p>
+     * <ul>
+     * <li>Modules cannot be injected into zygote;
+     * they are only loaded within the process of the scope.</li>
+     * </ul>
+     * <p>Behavior changes: Modules targeting 101 or higher</p>
+     * <ul>
+     * <li>This is the first API version.</li>
+     * </ul>
      */
-    int API = 100;
+    int API_101 = 101;
 
     /**
-     * Indicates that the framework is running as root.
+     * API version 102.
+     * <p>New features</p>
+     * <ul>
+     * <li>Hot reload allows modules to be updated without restarting the process.</li>
+     * <li>Module entries can stop receiving subsequent lifecycle callbacks.</li>
+     * <li>Hooks can be atomically replaced by api or same id.</li>
+     * </ul>
+     * <p>Behavior changes: Modules targeting 102 or higher</p>
+     * <ul>
+     * <li>Libxposed modules can not call legacy {@code de.robv.android.xposed} APIs.</li>
+     * </ul>
      */
-    int FRAMEWORK_PRIVILEGE_ROOT = 0;
+    int API_102 = 102;
+
     /**
-     * Indicates that the framework is running in a container with a fake system_server.
+     * The API version of this <b>library</b>. This is a static value for the framework.
+     * Modules should use {@link #getApiVersion()} to check the API version at runtime.
      */
-    int FRAMEWORK_PRIVILEGE_CONTAINER = 1;
+    int LIB_API = API_102;
+
     /**
-     * Indicates that the framework is running as a different app, which may have at most shell permission.
+     * The framework has the capability to hook system_server and other system processes.
      */
-    int FRAMEWORK_PRIVILEGE_APP = 2;
+    long PROP_CAP_SYSTEM = 1L;
     /**
-     * Indicates that the framework is embedded in the hooked app,
-     * which means {@link #getSharedPreferences} will be null and remote file is unsupported.
+     * The framework provides remote preferences and remote files support.
      */
-    int FRAMEWORK_PRIVILEGE_EMBEDDED = 3;
+    long PROP_CAP_REMOTE = 1L << 1;
+    /**
+     * The framework disallows accessing Xposed API via reflection or dynamically loaded code.
+     */
+    long PROP_RT_API_PROTECTION = 1L << 2;
 
     /**
      * The default hook priority.
      */
     int PRIORITY_DEFAULT = 50;
     /**
-     * Execute the hook callback late.
+     * Execute at the end of the interception chain.
      */
-    int PRIORITY_LOWEST = -10000;
+    int PRIORITY_LOWEST = Integer.MIN_VALUE;
     /**
-     * Execute the hook callback early.
+     * Execute at the beginning of the interception chain.
      */
-    int PRIORITY_HIGHEST = 10000;
+    int PRIORITY_HIGHEST = Integer.MAX_VALUE;
 
     /**
-     * The interface Before hook callback.
-     *
-     * @param <T> the type parameter
+     * Invoker for a method or constructor. Invocations through invokers will bypass access checks.
      */
-    interface BeforeHookCallback<T> {
+    interface Invoker<T extends Invoker<T, U>, U extends Executable> {
         /**
-         * Gets origin.
-         *
-         * @return the origin
+         * Type of the invoker, which determines the hook chain to be invoked
          */
-        @NonNull
-        T getOrigin();
+        sealed interface Type permits Type.Origin, Type.Chain {
+            /**
+             * A convenience constant for {@link Origin}.
+             */
+            Origin ORIGIN = new Origin();
+
+            /**
+             * Invokes the original executable, skipping all hooks.
+             */
+            record Origin() implements Type {
+            }
+
+            /**
+             * Invokes the executable starting from the middle of the hook chain, skipping all
+             * hooks with priority higher than the given value.
+             *
+             * @param maxPriority The maximum priority of hooks to include in the chain
+             */
+            record Chain(int maxPriority) implements Type {
+                /**
+                 * Invoking the executable with full hook chain.
+                 */
+                public static final Chain FULL = new Chain(PRIORITY_HIGHEST);
+            }
+        }
 
         /**
-         * Gets this.
-         *
-         * @return the this
+         * Sets the type of the invoker, which determines the hook chain to be invoked
          */
-        @Nullable
-        Object getThis();
+        T setType(@NonNull Type type);
 
         /**
-         * Get args object [ ].
+         * Invokes the method (or the constructor as a method) through the hook chain determined by
+         * the invoker's type.
          *
-         * @return the object [ ]
+         * @param thisObject For non-static calls, the {@code this} pointer, otherwise {@code null}
+         * @param args       The arguments used for the method call
+         * @return The result returned from the invoked method
+         * <p>For void methods and constructors, always returns {@code null}.</p>
+         * @see Method#invoke(Object, Object...)
          */
-        @NonNull
-        Object[] getArgs();
+        Object invoke(Object thisObject, Object... args) throws InvocationTargetException, IllegalArgumentException, IllegalAccessException;
 
         /**
-         * Gets arg.
+         * Invokes the special (non-virtual) method (or the constructor as a method) on a given object
+         * instance, similar to the functionality of {@code CallNonVirtual<type>Method} in JNI, which invokes
+         * an instance (nonstatic) method on a Java object. This method is useful when you need to call
+         * a specific method on an object, bypassing any overridden methods in subclasses and
+         * directly invoking the method defined in the specified class.
          *
-         * @param <U>   the type parameter
-         * @param index the index
-         * @return the arg
-         */
-        @Nullable
-        <U> U getArg(int index);
-
-        /**
-         * Sets arg.
+         * <p>This method is useful when you need to call {@code super.xxx()} in a hooked constructor.</p>
          *
-         * @param <U>   the type parameter
-         * @param index the index
-         * @param value the value
+         * @param thisObject The {@code this} pointer
+         * @param args       The arguments used for the method call
+         * @return The result returned from the invoked method
+         * <p>For void methods and constructors, always returns {@code null}.</p>
+         * @see Method#invoke(Object, Object...)
          */
-        <U> void setArg(int index, U value);
-
-        /**
-         * Return and skip.
-         *
-         * @param returnValue the return value
-         */
-        void returnAndSkip(@Nullable Object returnValue);
-
-        /**
-         * Throw and skip.
-         *
-         * @param throwable the throwable
-         */
-        void throwAndSkip(@Nullable Throwable throwable);
-
-        /**
-         * Invoke origin object.
-         *
-         * @return the object
-         * @throws InvocationTargetException the invocation target exception
-         * @throws IllegalArgumentException  the illegal argument exception
-         * @throws IllegalAccessException    the illegal access exception
-         */
-        @Nullable
-        Object invokeOrigin() throws InvocationTargetException, IllegalArgumentException, IllegalAccessException;
-
-        /**
-         * Sets extra.
-         *
-         * @param <U>   the type parameter
-         * @param key   the key
-         * @param value the value
-         * @throws ConcurrentModificationException the concurrent modification exception
-         */
-        <U> void setExtra(@NonNull String key, @Nullable U value) throws ConcurrentModificationException;
+        Object invokeSpecial(@NonNull Object thisObject, Object... args) throws InvocationTargetException, IllegalArgumentException, IllegalAccessException;
     }
 
     /**
-     * The interface After hook callback.
+     * Invoker for a constructor.
      *
-     * @param <T> the type parameter
+     * @param <T> The type of the constructor
      */
-    interface AfterHookCallback<T> {
+    interface CtorInvoker<T> extends Invoker<CtorInvoker<T>, Constructor<T>> {
         /**
-         * Gets origin.
+         * Creates a new instance through the hook chain determined by the invoker's type.
          *
-         * @return the origin
+         * @param args The arguments used for the construction
+         * @return The instance created and initialized by the constructor
+         * @see Constructor#newInstance(Object...)
          */
         @NonNull
-        T getOrigin();
+        T newInstance(Object... args) throws InvocationTargetException, IllegalArgumentException, IllegalAccessException, InstantiationException;
 
         /**
-         * Gets this.
+         * Creates a new instance of the given subclass, but initializes it with a parent constructor. This could
+         * leave the object in an invalid state, where the subclass constructor is not called and the fields
+         * of the subclass are not initialized.
          *
-         * @return the this
-         */
-        @Nullable
-        Object getThis();
-
-        /**
-         * Get args object [ ].
+         * <p>This method is useful when you need to initialize some fields in the subclass by yourself.</p>
          *
-         * @return the object [ ]
+         * @param <U>      The type of the subclass
+         * @param subClass The subclass to create a new instance
+         * @param args     The arguments used for the construction
+         * @return The instance of subclass initialized by the constructor
+         * @see Constructor#newInstance(Object...)
          */
         @NonNull
-        Object[] getArgs();
-
-        /**
-         * Gets result.
-         *
-         * @return the result
-         */
-        @Nullable
-        Object getResult();
-
-        /**
-         * Gets throwable.
-         *
-         * @return the throwable
-         */
-        @Nullable
-        Throwable getThrowable();
-
-        /**
-         * Is skipped boolean.
-         *
-         * @return the boolean
-         */
-        boolean isSkipped();
-
-        /**
-         * Sets result.
-         *
-         * @param result the result
-         */
-        void setResult(@Nullable Object result);
-
-        /**
-         * Sets throwable.
-         *
-         * @param throwable the throwable
-         */
-        void setThrowable(@Nullable Throwable throwable);
-
-        /**
-         * Invoke origin object.
-         *
-         * @return the object
-         * @throws InvocationTargetException the invocation target exception
-         * @throws IllegalAccessException    the illegal access exception
-         */
-        @Nullable
-        Object invokeOrigin() throws InvocationTargetException, IllegalAccessException;
-
-        /**
-         * Gets extra.
-         *
-         * @param <U> the type parameter
-         * @param key the key
-         * @return the extra
-         */
-        @Nullable
-        <U> U getExtra(@NonNull String key);
+        <U> U newInstanceSpecial(@NonNull Class<U> subClass, Object... args) throws InvocationTargetException, IllegalArgumentException, IllegalAccessException, InstantiationException;
     }
 
     /**
-     * The interface Before hooker.
-     *
-     * @param <T> the type parameter
+     * Interceptor chain for a method or constructor. Chain objects cannot be shared among threads or
+     * reused after {@link Hooker#intercept(Chain)} ends.
      */
-    interface BeforeHooker<T> {
+    interface Chain {
         /**
-         * Before.
-         *
-         * @param callback the callback
-         */
-        void before(@NonNull BeforeHookCallback<T> callback);
-    }
-
-    /**
-     * The interface After hooker.
-     *
-     * @param <T> the type parameter
-     */
-    interface AfterHooker<T> {
-        /**
-         * After.
-         *
-         * @param callback the callback
-         */
-        void after(@NonNull AfterHookCallback<T> callback);
-    }
-
-    /**
-     * The interface Hooker.
-     *
-     * @param <T> the type parameter
-     */
-    interface Hooker<T> extends BeforeHooker<T>, AfterHooker<T> {
-    }
-
-    /**
-     * The interface Method unhooker.
-     *
-     * @param <T> the type parameter
-     * @param <U> the type parameter
-     */
-    interface MethodUnhooker<T, U> {
-        /**
-         * Gets origin.
-         *
-         * @return the origin
+         * Gets the method / constructor being hooked.
          */
         @NonNull
-        U getOrigin();
+        Executable getExecutable();
 
         /**
-         * Gets hooker.
-         *
-         * @return the hooker
+         * Gets the {@code this} pointer for the call, or {@code null} for static methods.
+         */
+        Object getThisObject();
+
+        /**
+         * Gets the arguments. The returned list is immutable. If you want to change the arguments, you
+         * should call {@code proceed(Object...)} or {@code proceedWith(Object, Object...)} with the new
+         * arguments.
          */
         @NonNull
-        T getHooker();
+        List<Object> getArgs();
 
         /**
-         * Unhook.
+         * Gets the argument at the given index.
+         *
+         * @param index The argument index
+         * @return The argument at the given index
+         * @throws IndexOutOfBoundsException if index is out of bounds
+         * @throws ClassCastException        if the argument cannot be cast to the expected type
+         */
+        Object getArg(int index) throws IndexOutOfBoundsException, ClassCastException;
+
+        /**
+         * Proceeds to the next interceptor in the chain with the same arguments and {@code this} pointer.
+         *
+         * @return The result returned from next interceptor or the original executable if current
+         * interceptor is the last one in the chain.
+         * <p>For void methods and constructors, always returns {@code null}.</p>
+         * @throws Throwable if any interceptor or the original executable throws an exception
+         */
+        Object proceed() throws Throwable;
+
+        /**
+         * Proceeds to the next interceptor in the chain with the given arguments and the same {@code this} pointer.
+         *
+         * @param args The arguments used for the call
+         * @return The result returned from next interceptor or the original executable if current
+         * interceptor is the last one in the chain.
+         * <p>For void methods and constructors, always returns {@code null}.</p>
+         * @throws Throwable if any interceptor or the original executable throws an exception
+         */
+        Object proceed(@NonNull Object[] args) throws Throwable;
+
+        /**
+         * Proceeds to the next interceptor in the chain with the same arguments and given {@code this} pointer.
+         * Static method interceptors should not call this.
+         *
+         * @param thisObject The {@code this} pointer for the call
+         * @return The result returned from next interceptor or the original executable if current
+         * interceptor is the last one in the chain.
+         * <p>For void methods and constructors, always returns {@code null}.</p>
+         * @throws Throwable if any interceptor or the original executable throws an exception
+         */
+        Object proceedWith(@NonNull Object thisObject) throws Throwable;
+
+        /**
+         * Proceeds to the next interceptor in the chain with the given arguments and {@code this} pointer.
+         * Static method interceptors should not call this.
+         *
+         * @param thisObject The {@code this} pointer for the call
+         * @param args       The arguments used for the call
+         * @return The result returned from next interceptor or the original executable if current
+         * interceptor is the last one in the chain.
+         * <p>For void methods and constructors, always returns {@code null}.</p>
+         * @throws Throwable if any interceptor or the original executable throws an exception
+         */
+        Object proceedWith(@NonNull Object thisObject, @NonNull Object[] args) throws Throwable;
+    }
+
+    /**
+     * Hooker for a method or constructor.
+     */
+    interface Hooker {
+        /**
+         * Intercepts a method / constructor call.
+         *
+         * @param chain The interceptor chain for the call
+         * @return The result to be returned from the interceptor. If the hooker does not want to
+         * change the result, it should call {@code chain.proceed()} and return its result.
+         * <p>For void methods and constructors, the return value is ignored by the framework.</p>
+         * @throws Throwable Throw any exception from the interceptor. The exception will
+         *                   propagate to the caller if not caught by any interceptor.
+         */
+        Object intercept(@NonNull Chain chain) throws Throwable;
+    }
+
+    /**
+     * Handle for a hook.
+     */
+    interface HookHandle {
+        /**
+         * Gets the method / constructor being hooked.
+         */
+        @NonNull
+        Executable getExecutable();
+
+        /**
+         * Cancels the hook. This method is idempotent. It is safe to call this method multiple times.
          */
         void unhook();
+
+        /**
+         * Gets the unique id of the hook, or null if the hook is not assigned with an id.
+         */
+        @SinceApi(API_102)
+        @Nullable
+        String getId();
+
+        /**
+         * Atomically replaces this hook with a new hooker and returns the new hook handle.
+         * <p>
+         * The replacement keeps the executable, priority, exception handling mode, and id of this hook.
+         * For a hook with an id, this targets the same hook as creating a new hook on the same executable
+         * with the same id. This method is the handle-based form of replacement and can also replace a
+         * hook without an id. It is useful during hot reloading when new code receives old hook handles
+         * from {@link XposedModuleInterface.HotReloadedParam#getOldHookHandles()}. After a successful
+         * replacement, this handle is no longer valid.
+         * </p>
+         * <p>The hook chain is snapshot based. Replacing a hook while a call is running does not affect
+         * that in-flight call.</p>
+         *
+         * @param hooker The new hooker object
+         * @return The new handle for the replaced hook
+         * @throws IllegalArgumentException if hooker is invalid
+         * @throws IllegalStateException    if this hook handle is no longer valid
+         * @throws HookFailedError          if replacement fails due to framework internal error
+         */
+        @SinceApi(API_102)
+        @NonNull
+        HookHandle replaceHook(@NonNull Hooker hooker);
     }
 
     /**
-     * Get the Xposed framework name of current implementation.
-     *
-     * @return Framework name
+     * Exception handling mode for hookers. This determines how the framework handles exceptions
+     * thrown by hookers. The default mode is {@link ExceptionMode#DEFAULT}.
+     */
+    enum ExceptionMode {
+        /**
+         * Follows the global exception mode configured in {@code module.prop}. Defaults to {@link #PROTECTIVE}
+         * if not specified.
+         */
+        DEFAULT,
+
+        /**
+         * Any exception thrown by the <b>hooker</b> will be caught and logged, and the call will proceed as
+         * if no hook exists. This mode is recommended for most cases, as it can prevent crashes caused by
+         * hook errors.
+         * <p>
+         * If the exception is thrown before {@link Chain#proceed()}, the framework will
+         * continue the chain without the hook; if the exception is thrown after proceed, the framework
+         * will return the value / exception proceeded as the result.
+         * </p>
+         * <p>Exceptions thrown by proceed will always be propagated.</p>
+         */
+        PROTECTIVE,
+
+        /**
+         * Any exception thrown by the hooker will be propagated to the caller as usual. This mode is
+         * recommended for debugging purposes, as it can help you find and fix errors in your hooks.
+         */
+        PASSTHROUGH,
+    }
+
+    /**
+     * Builder for configuring a hook.
+     */
+    interface HookBuilder {
+        /**
+         * Sets the priority of the hook. Hooks with higher priority will be called before hooks with lower
+         * priority. The default priority is {@link XposedInterface#PRIORITY_DEFAULT}.
+         *
+         * @param priority The priority of the hook
+         * @return The builder itself for chaining
+         */
+        HookBuilder setPriority(int priority);
+
+        /**
+         * Sets the exception handling mode for the hook. The default mode is {@link ExceptionMode#DEFAULT}.
+         *
+         * @param mode The exception handling mode
+         * @return The builder itself for chaining
+         */
+        HookBuilder setExceptionMode(@NonNull ExceptionMode mode);
+
+        /**
+         * Sets the hooker for the method / constructor and builds the hook.
+         *
+         * @param hooker The hooker object
+         * @return The handle for the hook
+         * @throws IllegalArgumentException if origin is framework internal or {@link Constructor#newInstance},
+         *                                  or hooker is invalid
+         * @throws HookFailedError          if hook fails due to framework internal error
+         */
+        @NonNull
+        HookHandle intercept(@NonNull Hooker hooker);
+
+        /**
+         * Sets a unique id for the hook, default to {@code null}. An id is used for exclusively identifying
+         * a hook in the same module on the executable. A new hook with the same id in the same module on
+         * the executable will replace the old one atomically, and the old hook handle will be invalid.
+         * Hook ids are isolated between modules.
+         *
+         * <p>The hook chain is snapshot based. Replacing or adding a hook while a call is running does not
+         * affect that in-flight call.</p>
+         *
+         * @param id The id for the hook. It can be null if you don't care about replacing the hook later.
+         * @return The builder itself for chaining
+         */
+        @SinceApi(API_102)
+        HookBuilder setId(@Nullable String id);
+    }
+
+    /**
+     * Gets the runtime Xposed API version. Framework implementations <b>must not</b> override this method.
+     */
+    default int getApiVersion() {
+        return LIB_API;
+    }
+
+    /**
+     * Gets the Xposed framework name of current implementation.
      */
     @NonNull
     String getFrameworkName();
 
     /**
-     * Get the Xposed framework version of current implementation.
-     *
-     * @return Framework version
+     * Gets the Xposed framework version of current implementation.
      */
     @NonNull
     String getFrameworkVersion();
 
     /**
-     * Get the Xposed framework version code of current implementation.
-     *
-     * @return Framework version code
+     * Gets the Xposed framework version code of current implementation.
      */
     long getFrameworkVersionCode();
 
     /**
-     * Get the Xposed framework privilege of current implementation.
-     *
-     * @return Framework privilege
+     * Gets the Xposed framework properties.
+     * Properties with prefix {@code PROP_RT_} may change among launches.
      */
-    int getFrameworkPrivilege();
+    long getFrameworkProperties();
 
     /**
-     * Additional methods provided by specific Xposed framework.
+     * Hook a method / constructor.
      *
-     * @param name Featured method name
-     * @param args Featured method arguments
-     * @return Featured method result
-     * @throws UnsupportedOperationException If the framework does not provide a method with given name
-     */
-    @Discouraged(message = "Normally, modules should never rely on specific implementation of the Xposed framework. But if really necessary, this method can be used to acquire such information.")
-    @Nullable
-    Object featuredMethod(String name, Object... args);
-
-    /**
-     * Hook before method unhooker.
-     *
-     * @param origin the origin
-     * @param hooker the hooker
-     * @return the method unhooker
-     * @throws IllegalArgumentException if origin is abstract, framework internal or {@link Method#invoke}
-     * @throws HookFailedError          if hook fails due to framework internal error
+     * @param origin The executable to be hooked
+     * @return The builder for the hook
      */
     @NonNull
-    MethodUnhooker<BeforeHooker<Method>, Method> hookBefore(@NonNull Method origin, @NonNull BeforeHooker<Method> hooker);
+    HookBuilder hook(@NonNull Executable origin);
 
     /**
-     * Hook after method unhooker.
+     * Hook the static initializer ({@code <clinit>}) of a class.
      *
-     * @param origin the origin
-     * @param hooker the hooker
-     * @return the method unhooker
-     * @throws IllegalArgumentException if origin is abstract, framework internal or {@link Method#invoke}
-     * @throws HookFailedError          if hook fails due to framework internal error
+     * <p>The static initializer is treated as a regular {@code static void()} method with no parameters.
+     * Accordingly, in the {@link Chain} passed to the hooker:</p>
+     * <ul>
+     *     <li>{@link Chain#getExecutable()} returns a synthetic {@link Method} representing
+     *     the static initializer.</li>
+     *     <li>{@link Chain#getThisObject()} always returns {@code null}.</li>
+     *     <li>{@link Chain#getArgs()} returns an empty list.</li>
+     *     <li>{@link Chain#proceed()} returns {@code null}.</li>
+     * </ul>
+     *
+     * <p>Note: If the class is already initialized, the hook will never be called.</p>
+     *
+     * @param origin The class whose static initializer is to be hooked
+     * @return The builder for the hook
      */
     @NonNull
-    MethodUnhooker<AfterHooker<Method>, Method> hookAfter(@NonNull Method origin, @NonNull AfterHooker<Method> hooker);
+    HookBuilder hookClassInitializer(@NonNull Class<?> origin);
 
     /**
-     * Hook method unhooker.
+     * Deoptimizes a method / constructor in case hooked callee is not called because of inline.
      *
-     * @param origin the origin
-     * @param hooker the hooker
-     * @return the method unhooker
-     * @throws IllegalArgumentException if origin is abstract, framework internal or {@link Method#invoke}
-     * @throws HookFailedError          if hook fails due to framework internal error
+     * <p>By deoptimizing the method, the runtime will fall back to calling all callees without inlining.
+     * For example, when a short hooked method B is invoked by method A, the callback to B is not invoked
+     * after hooking, which may mean A has inlined B inside its method body. To force A to call the hooked B,
+     * you can deoptimize A and then your hook can take effect.</p>
+     *
+     * <p>Generally, you need to find all the callers of your hooked callee, and that can hardly be achieved
+     * (but you can still search all callers by using <a href="https://github.com/LuckyPray/DexKit">DexKit</a>).
+     * Use this method if you are sure the deoptimized callers are all you need. Otherwise, it would be better to
+     * change the hook point or to deoptimize the whole app manually (by simply reinstalling the app without uninstall).</p>
+     *
+     * @param executable The method / constructor to deoptimize
+     * @return Indicate whether the deoptimizing succeed or not
+     */
+    boolean deoptimize(@NonNull Executable executable);
+
+    /**
+     * Get a method invoker for the given method. Invocations through invokers will bypass access
+     * checks. The default type of the invoker is {@link Invoker.Type.Chain#FULL}.
+     *
+     * @param method The method to get the invoker for
+     * @return The method invoker
      */
     @NonNull
-    MethodUnhooker<Hooker<Method>, Method> hook(@NonNull Method origin, @NonNull Hooker<Method> hooker);
+    Invoker<?, Method> getInvoker(@NonNull Method method);
 
     /**
-     * Hook before method unhooker.
+     * Get a constructor invoker for the given constructor. Invocations through invokers will bypass
+     * access checks. The default type of the invoker is {@link Invoker.Type.Chain#FULL}.
      *
-     * @param origin   the origin
-     * @param priority the priority
-     * @param hooker   the hooker
-     * @return the method unhooker
-     * @throws IllegalArgumentException if origin is abstract, framework internal or {@link Method#invoke}
-     * @throws HookFailedError          if hook fails due to framework internal error
+     * @param constructor The constructor to get the invoker for
+     * @param <T>         The type of the constructor
+     * @return The constructor invoker
      */
     @NonNull
-    MethodUnhooker<BeforeHooker<Method>, Method> hookBefore(@NonNull Method origin, int priority, @NonNull BeforeHooker<Method> hooker);
+    <T> CtorInvoker<T> getInvoker(@NonNull Constructor<T> constructor);
 
     /**
-     * Hook after method unhooker.
+     * Writes a message to the Xposed log.
      *
-     * @param origin   the origin
-     * @param priority the priority
-     * @param hooker   the hooker
-     * @return the method unhooker
-     * @throws IllegalArgumentException if origin is abstract, framework internal or {@link Method#invoke}
-     * @throws HookFailedError          if hook fails due to framework internal error
+     * @param priority The log priority, see {@link android.util.Log}
+     * @param tag      The log tag
+     * @param msg      The log message
+     */
+    void log(int priority, @Nullable String tag, @NonNull String msg);
+
+    /**
+     * Writes a message to the Xposed log.
+     *
+     * @param priority The log priority, see {@link android.util.Log}
+     * @param tag      The log tag
+     * @param msg      The log message
+     * @param tr       An exception to log
+     */
+    void log(int priority, @Nullable String tag, @NonNull String msg, @Nullable Throwable tr);
+
+    /**
+     * Gets the application info of the module.
      */
     @NonNull
-    MethodUnhooker<AfterHooker<Method>, Method> hookAfter(@NonNull Method origin, int priority, @NonNull AfterHooker<Method> hooker);
+    ApplicationInfo getModuleApplicationInfo();
 
     /**
-     * Hook method unhooker.
+     * Gets remote preferences stored in Xposed framework. Note that those are read-only in hooked apps.
      *
-     * @param origin   the origin
-     * @param priority the priority
-     * @param hooker   the hooker
-     * @return the method unhooker
-     * @throws IllegalArgumentException if origin is abstract, framework internal or {@link Method#invoke}
-     * @throws HookFailedError          if hook fails due to framework internal error
+     * @param group Group name
+     * @return The preferences
+     * @throws UnsupportedOperationException If the framework is embedded
      */
     @NonNull
-    MethodUnhooker<Hooker<Method>, Method> hook(@NonNull Method origin, int priority, @NonNull Hooker<Method> hooker);
+    SharedPreferences getRemotePreferences(@NonNull String group);
 
     /**
-     * Hook before method unhooker.
+     * List all files in the module's shared data directory.
      *
-     * @param <T>    the type parameter
-     * @param origin the origin
-     * @param hooker the hooker
-     * @return the method unhooker
-     * @throws IllegalArgumentException if origin is abstract, framework internal or {@link Method#invoke}
-     * @throws HookFailedError          if hook fails due to framework internal error
+     * @return The file list
+     * @throws UnsupportedOperationException If the framework is embedded
      */
     @NonNull
-    <T> MethodUnhooker<BeforeHooker<Constructor<T>>, Constructor<T>> hookBefore(@NonNull Constructor<T> origin, @NonNull BeforeHooker<Constructor<T>> hooker);
+    String[] listRemoteFiles();
 
     /**
-     * Hook after method unhooker.
+     * Open a file in the module's shared data directory. The file is opened in read-only mode.
      *
-     * @param <T>    the type parameter
-     * @param origin the origin
-     * @param hooker the hooker
-     * @return the method unhooker
-     * @throws IllegalArgumentException if origin is abstract, framework internal or {@link Method#invoke}
-     * @throws HookFailedError          if hook fails due to framework internal error
+     * @param name File name, must not contain path separators and . or ..
+     * @return The file descriptor
+     * @throws FileNotFoundException         If the file does not exist or the path is forbidden
+     * @throws UnsupportedOperationException If the framework is embedded
      */
     @NonNull
-    <T> MethodUnhooker<AfterHooker<Constructor<T>>, Constructor<T>> hookAfter(@NonNull Constructor<T> origin, @NonNull AfterHooker<Constructor<T>> hooker);
-
-    /**
-     * Hook method unhooker.
-     *
-     * @param <T>    the type parameter
-     * @param origin the origin
-     * @param hooker the hooker
-     * @return the method unhooker
-     * @throws IllegalArgumentException if origin is abstract, framework internal or {@link Method#invoke}
-     * @throws HookFailedError          if hook fails due to framework internal error
-     */
-    @NonNull
-    <T> MethodUnhooker<Hooker<Constructor<T>>, Constructor<T>> hook(@NonNull Constructor<T> origin, @NonNull Hooker<Constructor<T>> hooker);
-
-    /**
-     * Hook before method unhooker.
-     *
-     * @param <T>      the type parameter
-     * @param origin   the origin
-     * @param priority the priority
-     * @param hooker   the hooker
-     * @return the method unhooker
-     * @throws IllegalArgumentException if origin is abstract, framework internal or {@link Method#invoke}
-     * @throws HookFailedError          if hook fails due to framework internal error
-     */
-    @NonNull
-    <T> MethodUnhooker<BeforeHooker<Constructor<T>>, Constructor<T>> hookBefore(@NonNull Constructor<T> origin, int priority, @NonNull BeforeHooker<Constructor<T>> hooker);
-
-    /**
-     * Hook after method unhooker.
-     *
-     * @param <T>      the type parameter
-     * @param origin   the origin
-     * @param priority the priority
-     * @param hooker   the hooker
-     * @return the method unhooker
-     * @throws IllegalArgumentException if origin is abstract, framework internal or {@link Method#invoke}
-     * @throws HookFailedError          if hook fails due to framework internal error
-     */
-    @NonNull
-    <T> MethodUnhooker<AfterHooker<Constructor<T>>, Constructor<T>> hookAfter(@NonNull Constructor<T> origin, int priority, @NonNull AfterHooker<Constructor<T>> hooker);
-
-    /**
-     * Hook method unhooker.
-     *
-     * @param <T>      the type parameter
-     * @param origin   the origin
-     * @param priority the priority
-     * @param hooker   the hooker
-     * @return the method unhooker
-     * @throws IllegalArgumentException if origin is abstract, framework internal or {@link Method#invoke}
-     * @throws HookFailedError          if hook fails due to framework internal error
-     */
-    @NonNull
-    <T> MethodUnhooker<Hooker<Constructor<T>>, Constructor<T>> hook(@NonNull Constructor<T> origin, int priority, @NonNull Hooker<Constructor<T>> hooker);
-
-    /**
-     * Deoptimize boolean.
-     *
-     * @param method the method
-     * @return the boolean
-     */
-    boolean deoptimize(@NonNull Method method);
-
-    /**
-     * Deoptimize boolean.
-     *
-     * @param <T>         the type parameter
-     * @param constructor the constructor
-     * @return the boolean
-     */
-    <T> boolean deoptimize(@NonNull Constructor<T> constructor);
-
-    /**
-     * Invoke origin object.
-     *
-     * @param method     the method
-     * @param thisObject the this object
-     * @param args       the args
-     * @return the object
-     * @throws InvocationTargetException the invocation target exception
-     * @throws IllegalArgumentException  the illegal argument exception
-     * @throws IllegalAccessException    the illegal access exception
-     */
-    @Nullable
-    Object invokeOrigin(@NonNull Method method, @Nullable Object thisObject, Object... args) throws InvocationTargetException, IllegalArgumentException, IllegalAccessException;
-
-    /**
-     * Invoke special object.
-     *
-     * @param method     the method
-     * @param thisObject the this object
-     * @param args       the args
-     * @return the object
-     * @throws InvocationTargetException the invocation target exception
-     * @throws IllegalArgumentException  the illegal argument exception
-     * @throws IllegalAccessException    the illegal access exception
-     */
-    @Nullable
-    Object invokeSpecial(@NonNull Method method, @NonNull Object thisObject, Object... args) throws InvocationTargetException, IllegalArgumentException, IllegalAccessException;
-
-    /**
-     * new origin object.
-     *
-     * @param <T>         the type parameter
-     * @param constructor the constructor
-     * @param args        the args
-     * @return the object
-     * @throws InvocationTargetException the invocation target exception
-     * @throws IllegalArgumentException  the illegal argument exception
-     * @throws IllegalAccessException    the illegal access exception
-     * @throws InstantiationException    the instantiation exception
-     */
-    @NonNull
-    <T> T newInstanceOrigin(@NonNull Constructor<T> constructor, Object... args) throws InvocationTargetException, IllegalArgumentException, IllegalAccessException, InstantiationException;
-
-
-    /**
-     * New instance special u.
-     *
-     * @param <T>         the type parameter
-     * @param <U>         the type parameter
-     * @param constructor the constructor
-     * @param subClass    the sub class
-     * @param args        the args
-     * @return the u
-     * @throws InvocationTargetException the invocation target exception
-     * @throws IllegalArgumentException  the illegal argument exception
-     * @throws IllegalAccessException    the illegal access exception
-     * @throws InstantiationException    the instantiation exception
-     */
-    @NonNull
-    <T, U> U newInstanceSpecial(@NonNull Constructor<T> constructor, @NonNull Class<U> subClass, Object... args) throws InvocationTargetException, IllegalArgumentException, IllegalAccessException, InstantiationException;
-
-    /**
-     * Log.
-     *
-     * @param message the message
-     */
-    void log(@NonNull String message);
-
-    /**
-     * Log.
-     *
-     * @param message   the message
-     * @param throwable the throwable
-     */
-    void log(@NonNull String message, @NonNull Throwable throwable);
-
-    /**
-     * Parse dex dex parser.
-     *
-     * @param dexData            the dex data
-     * @param includeAnnotations the include annotations
-     * @return the dex parser
-     * @throws IOException the io exception
-     */
-    @Nullable
-    DexParser parseDex(@NonNull ByteBuffer dexData, boolean includeAnnotations) throws IOException;
-
-
-    // Methods the same with Context
-
-    /**
-     * Gets shared preferences.
-     *
-     * @param name the name
-     * @param mode the mode
-     * @return the shared preferences
-     */
-    SharedPreferences getSharedPreferences(String name, int mode);
-
-    /**
-     * Open file input file input stream.
-     *
-     * @param name the name
-     * @return the file input stream
-     * @throws FileNotFoundException the file not found exception
-     */
-    FileInputStream openFileInput(String name) throws FileNotFoundException;
-
-    /**
-     * File list string [ ].
-     *
-     * @return the string [ ]
-     */
-    String[] fileList();
-
-    /**
-     * Gets resources.
-     *
-     * @return the resources
-     */
-    Resources getResources();
-
-    /**
-     * Gets class loader.
-     *
-     * @return the class loader
-     */
-    ClassLoader getClassLoader();
-
-    /**
-     * Gets application info.
-     *
-     * @return the application info
-     */
-    ApplicationInfo getApplicationInfo();
+    ParcelFileDescriptor openRemoteFile(@NonNull String name) throws FileNotFoundException;
 }
