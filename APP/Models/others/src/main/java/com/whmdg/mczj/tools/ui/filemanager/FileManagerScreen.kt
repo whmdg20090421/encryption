@@ -52,6 +52,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.*
@@ -5074,7 +5075,7 @@ private fun SmartWrapText(text: String) {
         // 阶段0：softWrap=false + maxLines=1 探测是否溢出，获取精确行断点
         Text(
             text = text,
-            modifier = Modifier.fillMaxWidth().height(0.dp),
+            modifier = Modifier.fillMaxWidth().alpha(0f),
             maxLines = 1,
             overflow = TextOverflow.Clip,
             softWrap = false,
@@ -5136,7 +5137,7 @@ private fun SmartWrapText(text: String) {
                 if (line2Done == 0) {
                     Text(
                         text = remaining,
-                        modifier = Modifier.fillMaxWidth().height(0.dp),
+                        modifier = Modifier.fillMaxWidth().alpha(0f),
                         maxLines = 1,
                         overflow = TextOverflow.Clip,
                         softWrap = false,

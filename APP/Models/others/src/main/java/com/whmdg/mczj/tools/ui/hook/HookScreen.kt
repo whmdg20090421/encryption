@@ -3,8 +3,11 @@ package com.whmdg.mczj.tools.ui.hook
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
@@ -12,9 +15,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.whmdg.mczj.tools.ui.isDebugAuth
+import com.whmdg.mczj.tools.util.XposedDebugInfo
 import com.whmdg.mczj.tools.util.XposedDetector
 import kotlinx.coroutines.launch
 
@@ -26,11 +33,15 @@ fun HookScreen(
 ) {
     val context = LocalContext.current
     val moduleActive = remember { XposedDetector.isModuleActive() }
+    val isDebugMode = remember { isDebugAuth(context) }
     var refreshKey by remember { mutableIntStateOf(0) }
     var scopeDialogTarget by remember { mutableStateOf<HookTarget?>(null) }
     var scopeRequestLoading by remember { mutableStateOf(false) }
     var scopeRequestError by remember { mutableStateOf<String?>(null) }
+    var showDebugDialog by remember { mutableStateOf(false) }
+    var debugInfo by remember { mutableStateOf<XposedDebugInfo?>(null) }
     val coroutineScope = rememberCoroutineScope()
+    val clipboardManager = LocalClipboardManager.current
 
     val installed = remember { HookConfig.TARGETS.filter { HookConfig.isInstalled(context, it.packageName) } }
     val notInstalled = remember { HookConfig.TARGETS.filter { !HookConfig.isInstalled(context, it.packageName) } }
@@ -100,6 +111,67 @@ fun HookScreen(
         )
     }
 
+    // ── Debug 弹窗 ──
+    if (showDebugDialog) {
+        val info = debugInfo
+        AlertDialog(
+            onDismissRequest = { showDebugDialog = false },
+            icon = { Icon(Icons.Default.BugReport, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Hook 调试信息") },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    if (info == null) {
+                        Text("正在采集...")
+                    } else {
+                        Text("模块激活: ${if (info.moduleActive) "是" else "否"}", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Binder 链:", style = MaterialTheme.typography.labelMedium)
+                        info.steps.forEach { (step, result) ->
+                            Text("  $step → $result", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (info.scopeList.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text("作用域 (${info.scopeList.size}):", style = MaterialTheme.typography.labelMedium)
+                            info.scopeList.forEach { pkg ->
+                                Text("  • $pkg", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        if (info.exception != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Text("异常: ${info.exception}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (info != null) {
+                        val text = buildString {
+                            appendLine("=== Hook 调试信息 ===")
+                            appendLine("模块激活: ${if (info.moduleActive) "是" else "否"}")
+                            appendLine()
+                            appendLine("Binder 链:")
+                            info.steps.forEach { (step, result) -> appendLine("  $step → $result") }
+                            if (info.scopeList.isNotEmpty()) {
+                                appendLine()
+                                appendLine("作用域 (${info.scopeList.size}):")
+                                info.scopeList.forEach { appendLine("  • $it") }
+                            }
+                            if (info.exception != null) {
+                                appendLine()
+                                appendLine("异常: ${info.exception}")
+                            }
+                        }
+                        clipboardManager.setText(AnnotatedString(text))
+                    }
+                }) { Text("复制") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDebugDialog = false }) { Text("关闭") }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -110,6 +182,17 @@ fun HookScreen(
                     }
                 },
                 actions = {
+                    if (isDebugMode) {
+                        IconButton(onClick = {
+                            debugInfo = null
+                            showDebugDialog = true
+                            coroutineScope.launch {
+                                debugInfo = XposedDetector.collectDebugInfo()
+                            }
+                        }) {
+                            Icon(Icons.Default.BugReport, contentDescription = "调试", tint = MaterialTheme.colorScheme.error)
+                        }
+                    }
                     IconButton(onClick = { refreshKey++ }) {
                         Icon(Icons.Default.Refresh, contentDescription = "刷新", tint = MaterialTheme.colorScheme.primary)
                     }
@@ -128,7 +211,12 @@ fun HookScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .then(if (isDebugMode) Modifier.clickable {
+                                debugInfo = null
+                                showDebugDialog = true
+                                coroutineScope.launch { debugInfo = XposedDetector.collectDebugInfo() }
+                            } else Modifier),
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.errorContainer
                         )
