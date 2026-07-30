@@ -100,8 +100,8 @@ object XposedDetector {
             // Extract package names
             scopeList = scope.mapNotNull { app ->
                 try {
-                    val field = app.javaClass.getField("packageName") as? java.lang.reflect.Field
-                    field?.get(app) as? String
+                    val field = app?.javaClass?.getField("packageName") ?: return@mapNotNull null
+                    field.get(app) as? String
                 } catch (_: Throwable) { null }
             }
             steps.add("解析 scope packageName" to "OK (${scopeList.size} apps)")
