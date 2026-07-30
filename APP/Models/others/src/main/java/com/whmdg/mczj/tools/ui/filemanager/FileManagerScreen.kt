@@ -89,6 +89,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -4975,15 +4976,7 @@ private fun FileEntryRow(
                     }
                 }
                 Box(modifier = Modifier.weight(4f).fillMaxHeight()) {
-                    Text(
-                        text = entry.name,
-                        modifier = Modifier.fillMaxWidth(),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        softWrap = true,
-                        textAlign = TextAlign.Start,
-                        fontSize = 12.sp,
-                    )
+                    SmartWrapText(text = entry.name)
                 }
             }
             // Bottom 3/10: date/permission (left, aligned to icon left) + size (right, aligned to filename right)
@@ -5063,6 +5056,114 @@ private fun compactDate(millis: Long): String {
     if (millis <= 0) return ""
     val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
     return sdf.format(java.util.Date(millis))
+}
+
+/**
+ * 智能换行文本：一行显示不下时自动分两行，第二行溢出则保留扩展名截断。
+ * 利用 onTextLayout 由 Compose 排版引擎精确计算行断点，自适应中英文混排和不同屏幕。
+ */
+@Composable
+private fun SmartWrapText(text: String) {
+    var phase by remember(text) { mutableIntStateOf(0) } // 0=探测, 1=已分割
+    var line1 by remember(text) { mutableStateOf("") }
+    var remaining by remember(text) { mutableStateOf("") }
+    var line2Done by remember(text) { mutableIntStateOf(0) } // 0=探测, 1=完成
+    var line2Display by remember(text) { mutableStateOf("") }
+
+    if (phase == 0) {
+        // 阶段1：单行渲染，探测是否溢出
+        Text(
+            text = text,
+            modifier = Modifier.fillMaxWidth(),
+            maxLines = 1,
+            overflow = TextOverflow.Clip,
+            softWrap = false,
+            textAlign = TextAlign.Start,
+            fontSize = 12.sp,
+            onTextLayout = { result ->
+                if (!result.hasVisualOverflow) {
+                    // 一行放得下，不做任何处理
+                    phase = 1
+                    line1 = text
+                } else {
+                    // 溢出，按第一行末尾分割
+                    val end = result.getLineEnd(0, visibleEnd = true)
+                    if (end > 0 && end < text.length) {
+                        line1 = text.substring(0, end)
+                        remaining = text.substring(end)
+                    } else {
+                        line1 = text
+                        remaining = ""
+                    }
+                    phase = 1
+                }
+            }
+        )
+    } else {
+        // 阶段2：显示第一行 + 第二行
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = line1,
+                modifier = Modifier.fillMaxWidth(),
+                maxLines = 1,
+                overflow = TextOverflow.Clip,
+                softWrap = false,
+                textAlign = TextAlign.Start,
+                fontSize = 12.sp,
+            )
+            if (remaining.isNotEmpty()) {
+                if (line2Done == 0) {
+                    // 第二行探测
+                    Text(
+                        text = remaining,
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                        softWrap = false,
+                        textAlign = TextAlign.Start,
+                        fontSize = 12.sp,
+                        onTextLayout = { result ->
+                            line2Display = if (result.hasVisualOverflow) {
+                                truncateWithExtension(remaining, result)
+                            } else {
+                                remaining
+                            }
+                            line2Done = 1
+                        }
+                    )
+                } else {
+                    Text(
+                        text = line2Display,
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                        softWrap = false,
+                        textAlign = TextAlign.Start,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 第二行溢出时截断：保留文件扩展名，格式为 "前部...扩展名" */
+private fun truncateWithExtension(text: String, layout: TextLayoutResult): String {
+    val visibleEnd = layout.getLineEnd(0, visibleEnd = true)
+    if (visibleEnd <= 0) return text.take(10) + "..."
+    val visible = text.substring(0, visibleEnd)
+
+    val lastDot = text.lastIndexOf('.')
+    val hasExt = lastDot > 0 && lastDot < text.length - 1 && (text.length - lastDot) <= 10
+    if (!hasExt) {
+        return visible.dropLast(3) + "..."
+    }
+
+    val ext = text.substring(lastDot) // ".txt"
+    val ellipsis = "..."
+    val available = visibleEnd - ext.length - ellipsis.length
+    val frontKeep = available.coerceAtLeast(3)
+    return text.take(frontKeep) + ellipsis + ext
 }
 
 @Composable
