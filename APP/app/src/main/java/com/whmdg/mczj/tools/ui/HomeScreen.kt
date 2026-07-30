@@ -104,6 +104,7 @@ import com.whmdg.mczj.tools.ui.download.DownloaderModuleScreen
 import com.whmdg.mczj.tools.ui.rphub.RpHubModuleScreen
 import com.whmdg.mczj.tools.ui.diary.DiaryModuleScreen
 import com.whmdg.mczj.tools.ui.wifi.WifiModuleScreen
+import com.whmdg.mczj.tools.ui.hook.HookModuleScreen
 
 @Composable
 fun MainAppContainer() {
@@ -293,6 +294,11 @@ fun MainAppContainer() {
         }
         is Screen.Accounting -> {
             AccountingModuleScreen(
+                onBack = { navigateBack() }
+            )
+        }
+        is Screen.Hook -> {
+            HookModuleScreen(
                 onBack = { navigateBack() }
             )
         }
@@ -704,7 +710,7 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
             title = "应用",
             icon = Icons.Default.Apps
         ) {
-            listOf(ModuleId.RP_HUB, ModuleId.DIARY, ModuleId.ACCOUNTING).forEach { moduleId ->
+            listOf(ModuleId.RP_HUB, ModuleId.DIARY, ModuleId.ACCOUNTING, ModuleId.HOOK).forEach { moduleId ->
                 val entry = MODULE_REGISTRY[moduleId]!!
                 CompactSettingsItem(
                     title = entry.title,

@@ -10,5 +10,6 @@ enum class Feature {
     DEBUG_MODE,
     WIFI,
     DIARY,
-    ACCOUNTING
+    ACCOUNTING,
+    HOOK
 }

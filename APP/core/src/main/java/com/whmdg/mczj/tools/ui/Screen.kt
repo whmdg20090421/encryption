@@ -57,6 +57,8 @@ open class Screen {
     object Diary : Screen()
     object Wifi : Screen()
     object Accounting : Screen()
+    object Hook : Screen()
+    data class HookDetail(val packageName: String) : Screen()
 
     // ── 以下为各模块内部子页面（过渡期保留在 core，后续逐步迁移到各模块 Route） ──
 
@@ -106,7 +108,8 @@ enum class ModuleId {
     RP_HUB,
     WIFI,
     DIARY,
-    ACCOUNTING
+    ACCOUNTING,
+    HOOK
 }
 
 data class ModuleEntry(
@@ -126,7 +129,8 @@ val MODULE_REGISTRY: Map<ModuleId, ModuleEntry> = mapOf(
     ModuleId.RP_HUB to ModuleEntry("RP-Hub", "本地角色扮演对话工具", Icons.Default.SmartToy, Feature.RP_HUB, Screen.RpHub),
     ModuleId.WIFI to ModuleEntry("WiFi", "WiFi 网络扫描与分析", Icons.Default.Wifi, Feature.WIFI, Screen.Wifi),
     ModuleId.DIARY to ModuleEntry("日记", "记录每日心情与想法", Icons.Default.Edit, Feature.DIARY, Screen.Diary),
-    ModuleId.ACCOUNTING to ModuleEntry("记账本", "日常收支记录", Icons.Default.AccountBalance, Feature.ACCOUNTING, Screen.Accounting)
+    ModuleId.ACCOUNTING to ModuleEntry("记账本", "日常收支记录", Icons.Default.AccountBalance, Feature.ACCOUNTING, Screen.Accounting),
+    ModuleId.HOOK to ModuleEntry("Hook", "应用钩子管理", Icons.Default.Extension, Feature.HOOK, Screen.Hook)
 )
 
 /** 鉴权调试开关：由 debug_mode SharedPreferences 控制 */
@@ -145,6 +149,7 @@ fun featureDisplayName(f: Feature): String = when (f) {
     Feature.WIFI -> "WiFi"
     Feature.DIARY -> "日记"
     Feature.ACCOUNTING -> "记账本"
+    Feature.HOOK -> "Hook"
 }
 
 /**

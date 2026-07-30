@@ -189,6 +189,9 @@ object AppDataPaths {
     /** 记账本 SharedPreferences */
     const val PREFS_ACCOUNTING = "accounting_prefs"
 
+    /** Hook 模块 SharedPreferences */
+    const val PREFS_HOOK = "hook_prefs"
+
     /** 分类图标主题色 SharedPreferences Key（十六进制颜色值，如 "#00BCD4"） */
     const val PREF_KEY_ICON_COLOR = "category_icon_color"
 
