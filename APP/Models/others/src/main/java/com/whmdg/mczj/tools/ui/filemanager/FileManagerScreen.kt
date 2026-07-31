@@ -1086,6 +1086,7 @@ fun FileManagerScreen(
                     }
 
                     val leftFocused = vm.focusedPanel == FocusedPanel.LEFT
+                    val currentFontSize = vm.fileNameFontSize  // ponytail: 在 Layout 外读取，使状态变化触发重组
                     Layout(
                         modifier = Modifier.fillMaxSize(),
                         content = {
@@ -1205,7 +1206,7 @@ fun FileManagerScreen(
                                         }
                                     },
                                     extFlagsMap = panel.extFlagsMap,
-                                    fileNameFontSize = vm.fileNameFontSize
+                                    fileNameFontSize = currentFontSize
                                 )
                             }
                         }
