@@ -2114,7 +2114,7 @@ class FilePaneController(
         }.sortedBy { it.gid }
     }
 
-    private fun openWithExternalApp(file: File, displayName: String) {
+    internal fun openWithExternalApp(file: File, displayName: String) {
         try {
             val uri = androidx.core.content.FileProvider.getUriForFile(
                 context,
