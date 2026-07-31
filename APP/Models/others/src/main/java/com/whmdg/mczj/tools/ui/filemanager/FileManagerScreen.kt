@@ -126,7 +126,9 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.viewmodel.compose.viewModel
 
-enum class FocusedPanel { LEFT, RIGHT }
+enum class FocusedPanel { LEFT, RIGHT;
+    val index: Int get() = ordinal
+}
 enum class CreateMode { FILE, FOLDER }
 enum class SortField { NAME, SIZE, MODIFIED, CREATED }
 enum class SortOrder { ASC, DESC }
@@ -226,9 +228,8 @@ fun FileManagerScreen(
     var diagnosticMessage by remember { mutableStateOf<String?>(null) }
     var diagnosticError by remember { mutableStateOf<Throwable?>(null) }
 
-    // ── 滚动状态 ──
-    val leftListState = rememberLazyListState()
-    val rightListState = rememberLazyListState()
+    // ── 滚动状态（按面板索引：0=左, 1=右） ──
+    val listStates = listOf(rememberLazyListState(), rememberLazyListState())
 
     // ── UI 本地状态 ──
     var showDrawer by remember { mutableStateOf(false) }
@@ -240,10 +241,8 @@ fun FileManagerScreen(
     var showSortSizeRefreshDialog by remember { mutableStateOf(false) }
     var unmeasuredDirs by remember { mutableStateOf(listOf<FileEntry>()) }
     var selectedEntry by remember { mutableStateOf<FileEntry?>(null) }
-    // ── 多选状态（左右列表独立） ──
-    val leftSwipe = remember { SwipeUiState() }
-    val rightSwipe = remember { SwipeUiState() }
-    val currentSwipe = if (vm.focusedPanel == FocusedPanel.LEFT) leftSwipe else rightSwipe
+    // ── 多选状态（按面板索引：0=左, 1=右） ──
+    val swipeStates = listOf(remember { SwipeUiState() }, remember { SwipeUiState() })
     val sortAscLabels = mapOf(
         SortField.NAME to "A到Z",
         SortField.SIZE to "小到大",
@@ -379,10 +378,10 @@ fun FileManagerScreen(
         vm.saveBookmarks()
     }
     // 历史记录点击文件后滚动到目标文件
-    LaunchedEffect(vm.pendingScrollToFile, vm.leftEntries, vm.rightEntries, vm.leftPath, vm.rightPath) {
+    LaunchedEffect(vm.pendingScrollToFile, vm.左.entries, vm.右.entries, vm.左.path, vm.右.path) {
         val targetName = vm.pendingScrollToFile ?: return@LaunchedEffect
-        val entries = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftEntries else vm.rightEntries
-        val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
+        val entries = if (vm.focusedPanel == FocusedPanel.LEFT) vm.左.entries else vm.右.entries
+        val listState = if (vm.focusedPanel == FocusedPanel.LEFT) listStates[0] else listStates[1]
         val index = entries.indexOfFirst { !it.isDirectory && it.name == targetName }
         if (index >= 0) {
             listState.scrollToItem(index)
@@ -414,36 +413,31 @@ fun FileManagerScreen(
     LaunchedEffect(vm.pendingScrollTo) {
         val pending = vm.pendingScrollTo ?: return@LaunchedEffect
         val (path, index, offset) = pending
-        val listState = if (vm.focusedPanel == FocusedPanel.LEFT) leftListState else rightListState
+        val listState = if (vm.focusedPanel == FocusedPanel.LEFT) listStates[0] else listStates[1]
         listState.scrollToItem(index, offset)
         vm.currentPanel.pendingScrollTo = null
     }
 
     // ── 持续同步滚动位置到 ViewModel（供 refreshCurrent 读取） ──
-    LaunchedEffect(leftListState) {
-        snapshotFlow { leftListState.firstVisibleItemIndex to leftListState.firstVisibleItemScrollOffset }
-            .collect { (idx, off) -> vm.leftPanel.currentScrollIndex = idx; vm.leftPanel.currentScrollOffset = off }
+    LaunchedEffect(listStates[0]) {
+        snapshotFlow { listStates[0].firstVisibleItemIndex to listStates[0].firstVisibleItemScrollOffset }
+            .collect { (idx, off) -> vm.左.currentScrollIndex = idx; vm.左.currentScrollOffset = off }
     }
-    LaunchedEffect(rightListState) {
-        snapshotFlow { rightListState.firstVisibleItemIndex to rightListState.firstVisibleItemScrollOffset }
-            .collect { (idx, off) -> vm.rightPanel.currentScrollIndex = idx; vm.rightPanel.currentScrollOffset = off }
+    LaunchedEffect(listStates[1]) {
+        snapshotFlow { listStates[1].firstVisibleItemIndex to listStates[1].firstVisibleItemScrollOffset }
+            .collect { (idx, off) -> vm.右.currentScrollIndex = idx; vm.右.currentScrollOffset = off }
     }
 
     // 保存当前滚动位置并返回上一级
     val saveScrollAndGoUp: () -> Boolean = {
-        vm.saveScrollPosition(
-            leftListState.firstVisibleItemIndex,
-            leftListState.firstVisibleItemScrollOffset,
-            rightListState.firstVisibleItemIndex,
-            rightListState.firstVisibleItemScrollOffset
-        )
+        listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
         val targetPath = vm.goUp()
         if (targetPath != null) {
             // 导航时清空当前面板的多选状态
             if (vm.focusedPanel == FocusedPanel.LEFT) {
-                vm.leftPanel.selectedPaths = emptySet(); leftSwipe.selectFlag = 0; leftSwipe.lastIndex = -1
+                vm.左.selectedPaths = emptySet(); swipeStates[0].selectFlag = 0; swipeStates[0].lastIndex = -1
             } else {
-                vm.rightPanel.selectedPaths = emptySet(); rightSwipe.selectFlag = 0; rightSwipe.lastIndex = -1
+                vm.右.selectedPaths = emptySet(); swipeStates[1].selectFlag = 0; swipeStates[1].lastIndex = -1
             }
             val saved = vm.getScrollPosition(targetPath)
             vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
@@ -680,12 +674,12 @@ fun FileManagerScreen(
                                 },
                                 onClick = {
                                     showSettingsMenu = false
-                                    val entriesToSize = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftEntries else vm.rightEntries
+                                    val entriesToSize = if (vm.focusedPanel == FocusedPanel.LEFT) vm.左.entries else vm.右.entries
                                     val dirs = entriesToSize.filter { it.isDirectory }
                                     if (dirs.isEmpty()) {
                                         Toast.makeText(context, "当前列表没有文件夹", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        val parentPath = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPath else vm.rightPath
+                                        val parentPath = if (vm.focusedPanel == FocusedPanel.LEFT) vm.左.path else vm.右.path
                                         vm.calculateFolderSizeAsync(parentPath)
                                     }
                                 }
@@ -723,7 +717,7 @@ fun FileManagerScreen(
                 // 上方 60dp：按钮区域（排除系统手势识别 + 上滑触发历史面板）
                 val view = LocalView.current
                 val leftFocused = vm.focusedPanel == FocusedPanel.LEFT
-                val activeSelectedPaths = if (leftFocused) vm.leftPanel.selectedPaths else vm.rightPanel.selectedPaths
+                val activeSelectedPaths = if (leftFocused) vm.左.selectedPaths else vm.右.selectedPaths
                 val isMultiSelectMode = activeSelectedPaths.isNotEmpty()
                 // 旋转动画：+ 旋转45°变×
                 val rotation by animateFloatAsState(
@@ -890,14 +884,14 @@ fun FileManagerScreen(
                                 .combinedClickable(
                                     onClick = {
                                         // 短按：全选所有项目
-                                        val entries = if (leftFocused) vm.leftEntries else vm.rightEntries
+                                        val entries = if (leftFocused) vm.左.entries else vm.右.entries
                                         val allPaths = entries.map { it.path }.toSet()
-                                        if (leftFocused) vm.leftPanel.selectedPaths = allPaths else vm.rightPanel.selectedPaths = allPaths
+                                        if (leftFocused) vm.左.selectedPaths = allPaths else vm.右.selectedPaths = allPaths
                                     },
                                     onLongClick = {
                                         // 长按：按已选类型全选
-                                        val entries = if (leftFocused) vm.leftEntries else vm.rightEntries
-                                        val currentPaths = if (leftFocused) vm.leftPanel.selectedPaths else vm.rightPanel.selectedPaths
+                                        val entries = if (leftFocused) vm.左.entries else vm.右.entries
+                                        val currentPaths = if (leftFocused) vm.左.selectedPaths else vm.右.selectedPaths
                                         val hasFiles = entries.any { it.path in currentPaths && !it.isDirectory }
                                         val hasFolders = entries.any { it.path in currentPaths && it.isDirectory }
                                         val newPaths = when {
@@ -908,7 +902,7 @@ fun FileManagerScreen(
                                             // 都有 → 全选所有
                                             else -> entries.map { it.path }.toSet()
                                         }
-                                        if (leftFocused) vm.leftPanel.selectedPaths = newPaths else vm.rightPanel.selectedPaths = newPaths
+                                        if (leftFocused) vm.左.selectedPaths = newPaths else vm.右.selectedPaths = newPaths
                                     }
                                 ),
                             contentAlignment = Alignment.Center
@@ -923,15 +917,15 @@ fun FileManagerScreen(
                                     onClick = {
                                         // 短按：清空所有选中
                                         if (leftFocused) {
-                                            vm.leftPanel.selectedPaths = emptySet(); leftSwipe.selectFlag = 0; leftSwipe.lastIndex = -1
+                                            vm.左.selectedPaths = emptySet(); swipeStates[0].selectFlag = 0; swipeStates[0].lastIndex = -1
                                         } else {
-                                            vm.rightPanel.selectedPaths = emptySet(); rightSwipe.selectFlag = 0; rightSwipe.lastIndex = -1
+                                            vm.右.selectedPaths = emptySet(); swipeStates[1].selectFlag = 0; swipeStates[1].lastIndex = -1
                                         }
                                     },
                                     onLongClick = {
                                         // 长按：按已选类型反选
-                                        val entries = if (leftFocused) vm.leftEntries else vm.rightEntries
-                                        val currentPaths = if (leftFocused) vm.leftPanel.selectedPaths else vm.rightPanel.selectedPaths
+                                        val entries = if (leftFocused) vm.左.entries else vm.右.entries
+                                        val currentPaths = if (leftFocused) vm.左.selectedPaths else vm.右.selectedPaths
                                         val hasFiles = entries.any { it.path in currentPaths && !it.isDirectory }
                                         val hasFolders = entries.any { it.path in currentPaths && it.isDirectory }
                                         val newPaths = when {
@@ -950,7 +944,7 @@ fun FileManagerScreen(
                                             // 都有 → 全选所有（等同于短按全选）
                                             else -> entries.map { it.path }.toSet()
                                         }
-                                        if (leftFocused) vm.leftPanel.selectedPaths = newPaths else vm.rightPanel.selectedPaths = newPaths
+                                        if (leftFocused) vm.左.selectedPaths = newPaths else vm.右.selectedPaths = newPaths
                                     }
                                 ),
                             contentAlignment = Alignment.Center
@@ -964,9 +958,9 @@ fun FileManagerScreen(
                         ) {
                             IconButton(onClick = {
                                 if (leftFocused) {
-                                    vm.leftPanel.selectedPaths = emptySet(); leftSwipe.selectFlag = 0; leftSwipe.lastIndex = -1
+                                    vm.左.selectedPaths = emptySet(); swipeStates[0].selectFlag = 0; swipeStates[0].lastIndex = -1
                                 } else {
-                                    vm.rightPanel.selectedPaths = emptySet(); rightSwipe.selectFlag = 0; rightSwipe.lastIndex = -1
+                                    vm.右.selectedPaths = emptySet(); swipeStates[1].selectFlag = 0; swipeStates[1].lastIndex = -1
                                 }
                                 selectedEntry = null // 同时隐藏工具栏
                             }) {
@@ -983,8 +977,8 @@ fun FileManagerScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             IconButton(onClick = {
-                                val entries = if (leftFocused) vm.leftEntries else vm.rightEntries
-                                val currentPaths = if (leftFocused) vm.leftPanel.selectedPaths else vm.rightPanel.selectedPaths
+                                val entries = if (leftFocused) vm.左.entries else vm.右.entries
+                                val currentPaths = if (leftFocused) vm.左.selectedPaths else vm.右.selectedPaths
                                 // 获取已选中文件的后缀（排除文件夹）
                                 val selectedFiles = entries.filter { it.path in currentPaths && !it.isDirectory }
                                 val extensions = selectedFiles
@@ -997,8 +991,8 @@ fun FileManagerScreen(
                                         .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in extensions }
                                         .map { it.path }
                                         .toSet()
-                                    if (leftFocused) vm.leftPanel.selectedPaths = currentPaths + matchingPaths
-                                    else vm.rightPanel.selectedPaths = currentPaths + matchingPaths
+                                    if (leftFocused) vm.左.selectedPaths = currentPaths + matchingPaths
+                                    else vm.右.selectedPaths = currentPaths + matchingPaths
                                 }
                             }) {
                                 Icon(Icons.Default.FilterList, contentDescription = "选择相同后缀")
@@ -1011,8 +1005,8 @@ fun FileManagerScreen(
                         ) {
                             IconButton(onClick = {
                                 // 触发与长按相同的逻辑：设置 selectedEntry
-                                val currentPaths = if (leftFocused) vm.leftPanel.selectedPaths else vm.rightPanel.selectedPaths
-                                val entries = if (leftFocused) vm.leftEntries else vm.rightEntries
+                                val currentPaths = if (leftFocused) vm.左.selectedPaths else vm.右.selectedPaths
+                                val entries = if (leftFocused) vm.左.entries else vm.右.entries
                                 val firstSelected = entries.firstOrNull { it.path in currentPaths }
                                 if (firstSelected != null) selectedEntry = firstSelected
                             }) {
@@ -1075,305 +1069,145 @@ fun FileManagerScreen(
                         }
                     }
                 } else {
-                    val leftParentPath = computeParentPath(
-                        currentPath = vm.leftPath,
-                        isInArchiveMode = vm.leftPanel.isInArchiveMode,
-                        isAtArchiveRoot = { vm.isAtArchiveRoot() },
-                        isRecycleBinPanel = vm.recycleBinPanel == FocusedPanel.LEFT,
-                        isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
-                        recycleBinPath = vm.leftPanel.recycleBinPath,
-                        isRootEngine = vm.isRootEngine,
-                        isVaultMode = vm.isVaultMode,
-                        vaultRootPath = vm.vaultSession?.vaultDir?.absolutePath
-                    )
-
-                    val rightParentPath = computeParentPath(
-                        currentPath = vm.rightPath,
-                        isInArchiveMode = vm.rightPanel.isInArchiveMode,
-                        isAtArchiveRoot = { vm.isAtArchiveRoot() },
-                        isRecycleBinPanel = vm.recycleBinPanel == FocusedPanel.RIGHT,
-                        isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
-                        recycleBinPath = vm.rightPanel.recycleBinPath,
-                        isRootEngine = vm.isRootEngine,
-                        isVaultMode = vm.isVaultMode,
-                        vaultRootPath = vm.vaultSession?.vaultDir?.absolutePath
-                    )
+                    // 按面板索引计算父路径
+                    val parentPaths = FocusedPanel.entries.map { side ->
+                        val panel = if (side == FocusedPanel.LEFT) vm.左 else vm.右
+                        computeParentPath(
+                            currentPath = panel.path,
+                            isInArchiveMode = panel.isInArchiveMode,
+                            isAtArchiveRoot = { vm.isAtArchiveRoot() },
+                            isRecycleBinPanel = vm.recycleBinPanel == side,
+                            isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
+                            recycleBinPath = panel.recycleBinPath,
+                            isRootEngine = vm.isRootEngine,
+                            isVaultMode = vm.isVaultMode,
+                            vaultRootPath = vm.vaultSession?.vaultDir?.absolutePath
+                        )
+                    }
 
                     val leftFocused = vm.focusedPanel == FocusedPanel.LEFT
                     Layout(
                         modifier = Modifier.fillMaxSize(),
                         content = {
-                            FileBrowserPanel(
-                                entries = vm.leftEntries,
-                                isFocused = leftFocused,
-                                currentPath = vm.leftPath,
-                                isLeftPanel = true,
-                                onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
-                                onFolderClick = { entry ->
-                                    vm.focusedPanel = FocusedPanel.LEFT
-                                    if (vm.leftPanel.isInArchiveMode) {
-                                        vm.navigateInArchive(entry)
-                                    } else if (vm.recycleBinPanel == vm.focusedPanel) {
-                                        vm.navigateInRecycleBin(entry)
-                                    } else {
-                                        DiagnosticLog.beginSession("[LEFT] 点击文件夹 '${entry.name}'")
-                                        DiagnosticLog.log("FileMgr", "[LEFT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.leftPath}")
-                                        vm.saveScrollPosition(
-                                            leftListState.firstVisibleItemIndex,
-                                            leftListState.firstVisibleItemScrollOffset,
-                                            rightListState.firstVisibleItemIndex,
-                                            rightListState.firstVisibleItemScrollOffset
-                                        )
-                                        if (vm.leftPanel.isWebDavMode) {
-                                            vm.navigateToWebDavFolder(entry.name)
+                            FocusedPanel.entries.forEach { side ->
+                                val panel = if (side == FocusedPanel.LEFT) vm.左 else vm.右
+                                val idx = side.index
+                                FileBrowserPanel(
+                                    entries = panel.entries,
+                                    isFocused = vm.focusedPanel == side,
+                                    currentPath = panel.path,
+                                    isLeftPanel = side == FocusedPanel.LEFT,
+                                    onFocus = { vm.focusedPanel = side },
+                                    onFolderClick = { entry ->
+                                        vm.focusedPanel = side
+                                        if (panel.isInArchiveMode) {
+                                            vm.navigateInArchive(entry)
+                                        } else if (vm.recycleBinPanel == vm.focusedPanel) {
+                                            vm.navigateInRecycleBin(entry)
                                         } else {
-                                            vm.navigateToFolder(entry)
-                                        }
-                                        vm.leftPanel.selectedPaths = emptySet(); leftSwipe.selectFlag = 0; leftSwipe.lastIndex = -1
-                                    }
-                                },
-                                onFileClick = { entry ->
-                                    if (vm.leftPanel.isInArchiveMode) {
-                                        DiagnosticLog.beginSession("[LEFT] 压缩包内点击文件 '${entry.name}'")
-                                        DiagnosticLog.log("FileMgr", "[LEFT] 压缩包内文件 name='${entry.name}'")
-                                        vm.focusedPanel = FocusedPanel.LEFT
-                                        coroutineScope.launch {
-                                            val screen = vm.openArchiveFile(context, entry)
-                                            if (screen != null) {
-                                                vm.saveScrollPosition(
-                                                    leftListState.firstVisibleItemIndex,
-                                                    leftListState.firstVisibleItemScrollOffset,
-                                                    rightListState.firstVisibleItemIndex,
-                                                    rightListState.firstVisibleItemScrollOffset
-                                                )
-                                                onNavigate(screen)
+                                            DiagnosticLog.beginSession("[$side] 点击文件夹 '${entry.name}'")
+                                            DiagnosticLog.log("FileMgr", "[$side] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${panel.path}")
+                                            listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
+                                            if (panel.isWebDavMode) {
+                                                vm.navigateToWebDavFolder(entry.name)
                                             } else {
-                                                Toast.makeText(context, "文件提取失败", Toast.LENGTH_SHORT).show()
+                                                vm.navigateToFolder(entry)
                                             }
+                                            panel.selectedPaths = emptySet(); swipeStates[idx].selectFlag = 0; swipeStates[idx].lastIndex = -1
                                         }
-                                        return@FileBrowserPanel
-                                    }
-                                    DiagnosticLog.beginSession("[LEFT] 点击文件 '${entry.name}'")
-                                    DiagnosticLog.log("FileMgr", "[LEFT] 点击文件 name='${entry.name}' path='${entry.path}'")
-                                    vm.focusedPanel = FocusedPanel.LEFT
-                                    val screen = vm.openFile(context, entry, isDebugMode)
-                                    if (screen != null) {
-                                        vm.saveScrollPosition(
-                                            leftListState.firstVisibleItemIndex,
-                                            leftListState.firstVisibleItemScrollOffset,
-                                            rightListState.firstVisibleItemIndex,
-                                            rightListState.firstVisibleItemScrollOffset
-                                        )
-                                        onNavigate(screen)
-                                    }
-                                    vm.addHistory(entry.name, entry.path, false)
-                                },
-                                onLongClick = { entry ->
-                                    selectedEntry = entry
-                                    vm.focusedPanel = FocusedPanel.LEFT
-                                },
-                                modifier = Modifier,
-                                folderSizeDb = vm.folderSizeDb,
-                                parentPath = leftParentPath,
-                                lazyListState = leftListState,
-                                onNavigateUp = {
-                                    if (vm.leftPanel.isInArchiveMode) {
-                                        vm.focusedPanel = FocusedPanel.LEFT
-                                        vm.archiveGoUp()
-                                    } else if (vm.recycleBinPanel == vm.focusedPanel) {
-                                        vm.focusedPanel = FocusedPanel.LEFT
-                                        vm.goUpInRecycleBin()
-                                    } else if (leftParentPath != null) {
-                                        vm.focusedPanel = FocusedPanel.LEFT
-                                        vm.saveScrollPosition(
-                                            leftListState.firstVisibleItemIndex,
-                                            leftListState.firstVisibleItemScrollOffset,
-                                            rightListState.firstVisibleItemIndex,
-                                            rightListState.firstVisibleItemScrollOffset
-                                        )
-                                        val saved = vm.getScrollPosition(leftParentPath)
-                                        vm.navigateToWithScroll(leftParentPath, saved?.first ?: 0, saved?.second ?: 0)
-                                        vm.leftPanel.selectedPaths = emptySet(); leftSwipe.selectFlag = 0; leftSwipe.lastIndex = -1
-                                    }
-                                },
-                                archiveSizeProvider = if (vm.leftPanel.isInArchiveMode) { entry ->
-                                    if (entry.compressedSize > 0 || entry.size > 0)
-                                        "${compactSize(entry.compressedSize)}(${compactSize(entry.size)})"
-                                    else "--"
-                                } else null,
-                                onVisibleRangeChanged = null,
-                                thumbnailLoader = null,
-                                selectedPaths = vm.leftPanel.selectedPaths,
-                                onSwipeSelect = { entry, index ->
-                                    vm.focusedPanel = FocusedPanel.LEFT
-                                    // 右滑已选中的唯一卡片 → 取消选中，退出多选
-                                    if (vm.leftPanel.selectedPaths.size == 1 && entry.path in vm.leftPanel.selectedPaths) {
-                                        vm.leftPanel.selectedPaths = emptySet(); leftSwipe.selectFlag = 0; leftSwipe.lastIndex = -1
-                                    } else if (vm.leftPanel.selectedPaths.isEmpty()) {
-                                        // 首次滑动：进入多选模式
-                                        vm.leftPanel.selectedPaths = setOf(entry.path)
-                                        leftSwipe.selectFlag = 1
-                                        leftSwipe.lastIndex = index
-                                    } else if (leftSwipe.selectFlag == 1) {
-                                        // 范围选中：选中两次滑动之间的所有条目
-                                        val from = minOf(leftSwipe.lastIndex, index)
-                                        val to = maxOf(leftSwipe.lastIndex, index)
-                                        val rangePaths = vm.leftEntries.subList(from, to + 1).map { it.path }.toSet()
-                                        vm.leftPanel.selectedPaths = vm.leftPanel.selectedPaths + rangePaths
-                                        leftSwipe.selectFlag = 0
-                                    } else {
-                                        // 单个追加
-                                        vm.leftPanel.selectedPaths = vm.leftPanel.selectedPaths + entry.path
-                                        leftSwipe.selectFlag = 1
-                                        leftSwipe.lastIndex = index
-                                    }
-                                },
-                                onToggleSelect = { entry ->
-                                    vm.leftPanel.selectedPaths = if (entry.path in vm.leftPanel.selectedPaths) {
-                                        vm.leftPanel.selectedPaths - entry.path
-                                    } else {
-                                        vm.leftPanel.selectedPaths + entry.path
-                                    }
-                                    if (vm.leftPanel.selectedPaths.isEmpty()) {
-                                        leftSwipe.selectFlag = 0
-                                        leftSwipe.lastIndex = -1
-                                    }
-                                },
-                                extFlagsMap = vm.leftExtFlagsMap,
-                                fileNameFontSize = vm.fileNameFontSize
-                            )
-                            FileBrowserPanel(
-                                entries = vm.rightEntries,
-                                isFocused = !leftFocused,
-                                currentPath = vm.rightPath,
-                                isLeftPanel = false,
-                                onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
-                                onFolderClick = { entry ->
-                                    vm.focusedPanel = FocusedPanel.RIGHT
-                                    if (vm.rightPanel.isInArchiveMode) {
-                                        vm.navigateInArchive(entry)
-                                    } else if (vm.recycleBinPanel == vm.focusedPanel) {
-                                        vm.navigateInRecycleBin(entry)
-                                    } else {
-                                        DiagnosticLog.beginSession("[RIGHT] 点击文件夹 '${entry.name}'")
-                                        DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${vm.rightPath}")
-                                        vm.saveScrollPosition(
-                                            leftListState.firstVisibleItemIndex,
-                                            leftListState.firstVisibleItemScrollOffset,
-                                            rightListState.firstVisibleItemIndex,
-                                            rightListState.firstVisibleItemScrollOffset
-                                        )
-                                        vm.navigateToFolder(entry)
-                                        vm.rightPanel.selectedPaths = emptySet(); rightSwipe.selectFlag = 0; rightSwipe.lastIndex = -1
-                                    }
-                                },
-                                onFileClick = { entry ->
-                                    if (vm.rightPanel.isInArchiveMode) {
-                                        DiagnosticLog.beginSession("[RIGHT] 压缩包内点击文件 '${entry.name}'")
-                                        DiagnosticLog.log("FileMgr", "[RIGHT] 压缩包内文件 name='${entry.name}'")
-                                        vm.focusedPanel = FocusedPanel.RIGHT
-                                        coroutineScope.launch {
-                                            val screen = vm.openArchiveFile(context, entry)
-                                            if (screen != null) {
-                                                vm.saveScrollPosition(
-                                                    leftListState.firstVisibleItemIndex,
-                                                    leftListState.firstVisibleItemScrollOffset,
-                                                    rightListState.firstVisibleItemIndex,
-                                                    rightListState.firstVisibleItemScrollOffset
-                                                )
-                                                onNavigate(screen)
-                                            } else {
-                                                Toast.makeText(context, "文件提取失败", Toast.LENGTH_SHORT).show()
+                                    },
+                                    onFileClick = { entry ->
+                                        if (panel.isInArchiveMode) {
+                                            DiagnosticLog.beginSession("[$side] 压缩包内点击文件 '${entry.name}'")
+                                            DiagnosticLog.log("FileMgr", "[$side] 压缩包内文件 name='${entry.name}'")
+                                            vm.focusedPanel = side
+                                            coroutineScope.launch {
+                                                val screen = vm.openArchiveFile(context, entry)
+                                                if (screen != null) {
+                                                    listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
+                                                    onNavigate(screen)
+                                                } else {
+                                                    Toast.makeText(context, "文件提取失败", Toast.LENGTH_SHORT).show()
+                                                }
                                             }
+                                            return@FileBrowserPanel
                                         }
-                                        return@FileBrowserPanel
-                                    }
-                                    DiagnosticLog.beginSession("[RIGHT] 点击文件 '${entry.name}'")
-                                    DiagnosticLog.log("FileMgr", "[RIGHT] 点击文件 name='${entry.name}' path='${entry.path}'")
-                                    vm.focusedPanel = FocusedPanel.RIGHT
-                                    val screen = vm.openFile(context, entry, isDebugMode)
-                                    if (screen != null) {
-                                        vm.saveScrollPosition(
-                                            leftListState.firstVisibleItemIndex,
-                                            leftListState.firstVisibleItemScrollOffset,
-                                            rightListState.firstVisibleItemIndex,
-                                            rightListState.firstVisibleItemScrollOffset
-                                        )
-                                        onNavigate(screen)
-                                    }
-                                    vm.addHistory(entry.name, entry.path, false)
-                                },
-                                onLongClick = { entry ->
-                                    selectedEntry = entry
-                                    vm.focusedPanel = FocusedPanel.RIGHT
-                                },
-                                modifier = Modifier,
-                                folderSizeDb = vm.folderSizeDb,
-                                parentPath = rightParentPath,
-                                lazyListState = rightListState,
-                                onNavigateUp = {
-                                    if (vm.rightPanel.isInArchiveMode) {
-                                        vm.focusedPanel = FocusedPanel.RIGHT
-                                        vm.archiveGoUp()
-                                    } else if (vm.recycleBinPanel == vm.focusedPanel) {
-                                        vm.focusedPanel = FocusedPanel.RIGHT
-                                        vm.goUpInRecycleBin()
-                                    } else if (rightParentPath != null) {
-                                        vm.focusedPanel = FocusedPanel.RIGHT
-                                        vm.saveScrollPosition(
-                                            leftListState.firstVisibleItemIndex,
-                                            leftListState.firstVisibleItemScrollOffset,
-                                            rightListState.firstVisibleItemIndex,
-                                            rightListState.firstVisibleItemScrollOffset
-                                        )
-                                        val saved = vm.getScrollPosition(rightParentPath)
-                                        vm.navigateToWithScroll(rightParentPath, saved?.first ?: 0, saved?.second ?: 0)
-                                        vm.rightPanel.selectedPaths = emptySet(); rightSwipe.selectFlag = 0; rightSwipe.lastIndex = -1
-                                    }
-                                },
-                                archiveSizeProvider = if (vm.rightPanel.isInArchiveMode) { entry ->
-                                    if (entry.compressedSize > 0 || entry.size > 0)
-                                        "${compactSize(entry.compressedSize)}(${compactSize(entry.size)})"
-                                    else "--"
-                                } else null,
-                                onVisibleRangeChanged = null,
-                                thumbnailLoader = null,
-                                selectedPaths = vm.rightPanel.selectedPaths,
-                                onSwipeSelect = { entry, index ->
-                                    vm.focusedPanel = FocusedPanel.RIGHT
-                                    // 右滑已选中的唯一卡片 → 取消选中，退出多选
-                                    if (vm.rightPanel.selectedPaths.size == 1 && entry.path in vm.rightPanel.selectedPaths) {
-                                        vm.rightPanel.selectedPaths = emptySet(); rightSwipe.selectFlag = 0; rightSwipe.lastIndex = -1
-                                    } else if (vm.rightPanel.selectedPaths.isEmpty()) {
-                                        vm.rightPanel.selectedPaths = setOf(entry.path)
-                                        rightSwipe.selectFlag = 1
-                                        rightSwipe.lastIndex = index
-                                    } else if (rightSwipe.selectFlag == 1) {
-                                        val from = minOf(rightSwipe.lastIndex, index)
-                                        val to = maxOf(rightSwipe.lastIndex, index)
-                                        val rangePaths = vm.rightEntries.subList(from, to + 1).map { it.path }.toSet()
-                                        vm.rightPanel.selectedPaths = vm.rightPanel.selectedPaths + rangePaths
-                                        rightSwipe.selectFlag = 0
-                                    } else {
-                                        vm.rightPanel.selectedPaths = vm.rightPanel.selectedPaths + entry.path
-                                        rightSwipe.selectFlag = 1
-                                        rightSwipe.lastIndex = index
-                                    }
-                                },
-                                onToggleSelect = { entry ->
-                                    vm.rightPanel.selectedPaths = if (entry.path in vm.rightPanel.selectedPaths) {
-                                        vm.rightPanel.selectedPaths - entry.path
-                                    } else {
-                                        vm.rightPanel.selectedPaths + entry.path
-                                    }
-                                    if (vm.rightPanel.selectedPaths.isEmpty()) {
-                                        rightSwipe.selectFlag = 0
-                                        rightSwipe.lastIndex = -1
-                                    }
-                                },
-                                extFlagsMap = vm.rightExtFlagsMap,
-                                fileNameFontSize = vm.fileNameFontSize
-                            )
+                                        DiagnosticLog.beginSession("[$side] 点击文件 '${entry.name}'")
+                                        DiagnosticLog.log("FileMgr", "[$side] 点击文件 name='${entry.name}' path='${entry.path}'")
+                                        vm.focusedPanel = side
+                                        val screen = vm.openFile(context, entry, isDebugMode)
+                                        if (screen != null) {
+                                            listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
+                                            onNavigate(screen)
+                                        }
+                                        vm.addHistory(entry.name, entry.path, false)
+                                    },
+                                    onLongClick = { entry ->
+                                        selectedEntry = entry
+                                        vm.focusedPanel = side
+                                    },
+                                    modifier = Modifier,
+                                    folderSizeDb = vm.folderSizeDb,
+                                    parentPath = parentPaths[idx],
+                                    lazyListState = listStates[idx],
+                                    onNavigateUp = {
+                                        if (panel.isInArchiveMode) {
+                                            vm.focusedPanel = side
+                                            vm.archiveGoUp()
+                                        } else if (vm.recycleBinPanel == vm.focusedPanel) {
+                                            vm.focusedPanel = side
+                                            vm.goUpInRecycleBin()
+                                        } else if (parentPaths[idx] != null) {
+                                            vm.focusedPanel = side
+                                            listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
+                                            val saved = vm.getScrollPosition(parentPaths[idx]!!)
+                                            vm.navigateToWithScroll(parentPaths[idx]!!, saved?.first ?: 0, saved?.second ?: 0)
+                                            panel.selectedPaths = emptySet(); swipeStates[idx].selectFlag = 0; swipeStates[idx].lastIndex = -1
+                                        }
+                                    },
+                                    archiveSizeProvider = if (panel.isInArchiveMode) { entry ->
+                                        if (entry.compressedSize > 0 || entry.size > 0)
+                                            "${compactSize(entry.compressedSize)}(${compactSize(entry.size)})"
+                                        else "--"
+                                    } else null,
+                                    onVisibleRangeChanged = null,
+                                    thumbnailLoader = null,
+                                    selectedPaths = panel.selectedPaths,
+                                    onSwipeSelect = { entry, index ->
+                                        vm.focusedPanel = side
+                                        if (panel.selectedPaths.size == 1 && entry.path in panel.selectedPaths) {
+                                            panel.selectedPaths = emptySet(); swipeStates[idx].selectFlag = 0; swipeStates[idx].lastIndex = -1
+                                        } else if (panel.selectedPaths.isEmpty()) {
+                                            panel.selectedPaths = setOf(entry.path)
+                                            swipeStates[idx].selectFlag = 1
+                                            swipeStates[idx].lastIndex = index
+                                        } else if (swipeStates[idx].selectFlag == 1) {
+                                            val from = minOf(swipeStates[idx].lastIndex, index)
+                                            val to = maxOf(swipeStates[idx].lastIndex, index)
+                                            val rangePaths = panel.entries.subList(from, to + 1).map { it.path }.toSet()
+                                            panel.selectedPaths = panel.selectedPaths + rangePaths
+                                            swipeStates[idx].selectFlag = 0
+                                        } else {
+                                            panel.selectedPaths = panel.selectedPaths + entry.path
+                                            swipeStates[idx].selectFlag = 1
+                                            swipeStates[idx].lastIndex = index
+                                        }
+                                    },
+                                    onToggleSelect = { entry ->
+                                        panel.selectedPaths = if (entry.path in panel.selectedPaths) {
+                                            panel.selectedPaths - entry.path
+                                        } else {
+                                            panel.selectedPaths + entry.path
+                                        }
+                                        if (panel.selectedPaths.isEmpty()) {
+                                            swipeStates[idx].selectFlag = 0
+                                            swipeStates[idx].lastIndex = -1
+                                        }
+                                    },
+                                    extFlagsMap = panel.extFlagsMap,
+                                    fileNameFontSize = vm.fileNameFontSize
+                                )
+                            }
                         }
                     ) { measurables, constraints ->
                         val halfWidth = constraints.maxWidth / 2
@@ -1852,12 +1686,12 @@ fun FileManagerScreen(
                 exit = fadeOut()
             ) {
                 val isToRight = vm.focusedPanel == FocusedPanel.LEFT
-                val activeSelectedPaths = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPanel.selectedPaths else vm.rightPanel.selectedPaths
+                val activeSelectedPaths = if (vm.focusedPanel == FocusedPanel.LEFT) vm.左.selectedPaths else vm.右.selectedPaths
                 val isMultiSelect = activeSelectedPaths.size > 1
                 val selectedEntries = if (vm.focusedPanel == FocusedPanel.LEFT)
-                    vm.leftEntries.filter { it.path in vm.leftPanel.selectedPaths }
+                    vm.左.entries.filter { it.path in vm.左.selectedPaths }
                 else
-                    vm.rightEntries.filter { it.path in vm.rightPanel.selectedPaths }
+                    vm.右.entries.filter { it.path in vm.右.selectedPaths }
 
                 Box(
                     modifier = Modifier
@@ -1869,9 +1703,9 @@ fun FileManagerScreen(
                                 selectedEntry = null
                                 // 清空多选状态
                                 if (vm.focusedPanel == FocusedPanel.LEFT) {
-                                    vm.leftPanel.selectedPaths = emptySet(); leftSwipe.selectFlag = 0; leftSwipe.lastIndex = -1
+                                    vm.左.selectedPaths = emptySet(); swipeStates[0].selectFlag = 0; swipeStates[0].lastIndex = -1
                                 } else {
-                                    vm.rightPanel.selectedPaths = emptySet(); rightSwipe.selectFlag = 0; rightSwipe.lastIndex = -1
+                                    vm.右.selectedPaths = emptySet(); swipeStates[1].selectFlag = 0; swipeStates[1].lastIndex = -1
                                 }
                             }
                         ),
@@ -1965,8 +1799,8 @@ fun FileManagerScreen(
                                                 }
                                                 vm.enterRecycleBin()
                                                 selectedEntry = null
-                                                if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPanel.selectedPaths = emptySet()
-                                                else vm.rightPanel.selectedPaths = emptySet()
+                                                if (vm.focusedPanel == FocusedPanel.LEFT) vm.左.selectedPaths = emptySet()
+                                                else vm.右.selectedPaths = emptySet()
                                             }
                                             .padding(vertical = 16.dp),
                                         contentAlignment = Alignment.Center
@@ -2014,7 +1848,7 @@ fun FileManagerScreen(
                                                 Toast.makeText(context, "请先选择文件", Toast.LENGTH_SHORT).show()
                                                 return@clickable
                                             }
-                                            val targetDir = if (isToRight) vm.rightPath else vm.leftPath
+                                            val targetDir = if (isToRight) vm.右.path else vm.左.path
                                             copyMoveConfirmIsCopy = true
                                             copyMoveConfirmSourcePaths = sourcePaths
                                             copyMoveConfirmTargetDir = targetDir
@@ -2050,7 +1884,7 @@ fun FileManagerScreen(
                                                 Toast.makeText(context, "请先选择文件", Toast.LENGTH_SHORT).show()
                                                 return@clickable
                                             }
-                                            val targetDir = if (isToRight) vm.rightPath else vm.leftPath
+                                            val targetDir = if (isToRight) vm.右.path else vm.左.path
                                             copyMoveConfirmIsCopy = false
                                             copyMoveConfirmSourcePaths = sourcePaths
                                             copyMoveConfirmTargetDir = targetDir
@@ -2680,11 +2514,11 @@ fun FileManagerScreen(
     )
 
     // ── 删除确认对话框 ──
-    val delMultiSelect = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPanel.selectedPaths.size > 1 else vm.rightPanel.selectedPaths.size > 1
+    val delMultiSelect = if (vm.focusedPanel == FocusedPanel.LEFT) vm.左.selectedPaths.size > 1 else vm.右.selectedPaths.size > 1
     val delSelectedEntries = if (vm.focusedPanel == FocusedPanel.LEFT)
-        vm.leftEntries.filter { it.path in vm.leftPanel.selectedPaths }
+        vm.左.entries.filter { it.path in vm.左.selectedPaths }
     else
-        vm.rightEntries.filter { it.path in vm.rightPanel.selectedPaths }
+        vm.右.entries.filter { it.path in vm.右.selectedPaths }
     DeleteConfirmDialog(
         show = showDeleteDialog && (selectedEntry != null || delMultiSelect),
         isMultiDel = delMultiSelect,
@@ -2709,9 +2543,9 @@ fun FileManagerScreen(
             }
             FileOperationManager.delete(deleteEntries, recycleBinEnabled, accessLevel, context)
             if (vm.focusedPanel == FocusedPanel.LEFT) {
-                vm.leftPanel.selectedPaths = emptySet(); leftSwipe.selectFlag = 0; leftSwipe.lastIndex = -1
+                vm.左.selectedPaths = emptySet(); swipeStates[0].selectFlag = 0; swipeStates[0].lastIndex = -1
             } else {
-                vm.rightPanel.selectedPaths = emptySet(); rightSwipe.selectFlag = 0; rightSwipe.lastIndex = -1
+                vm.右.selectedPaths = emptySet(); swipeStates[1].selectFlag = 0; swipeStates[1].lastIndex = -1
             }
         }
     )
@@ -2719,7 +2553,7 @@ fun FileManagerScreen(
     // ── 删除进度对话框 ──
     DeleteProgressDialog(
         show = showDeleteProgress,
-        isMultiDel = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPanel.selectedPaths.size > 1 else vm.rightPanel.selectedPaths.size > 1,
+        isMultiDel = if (vm.focusedPanel == FocusedPanel.LEFT) vm.左.selectedPaths.size > 1 else vm.右.selectedPaths.size > 1,
         entryName = selectedEntry?.name ?: "",
         onAutoDismiss = {
             showDeleteProgress = false
@@ -2750,8 +2584,8 @@ fun FileManagerScreen(
             }
             showFileOpProgress = true
             selectedEntry = null
-            vm.leftPanel.selectedPaths = emptySet()
-            vm.rightPanel.selectedPaths = emptySet()
+            vm.左.selectedPaths = emptySet()
+            vm.右.selectedPaths = emptySet()
         }
     )
 
@@ -2820,8 +2654,8 @@ fun FileManagerScreen(
                 } else {
                     Toast.makeText(context, "删除完成，${failCount} 个失败", Toast.LENGTH_SHORT).show()
                 }
-                if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPanel.selectedPaths = emptySet()
-                else vm.rightPanel.selectedPaths = emptySet()
+                if (vm.focusedPanel == FocusedPanel.LEFT) vm.左.selectedPaths = emptySet()
+                else vm.右.selectedPaths = emptySet()
             } else {
                 val name = permanentDeleteTarget ?: return@PermanentDeleteDialog
                 val error = vm.permanentDelete(name)
@@ -3411,8 +3245,8 @@ fun FileManagerScreen(
                                         }
 
                                         showPermissionEditor = false
-                                        vm.saveScrollPosition(leftListState.firstVisibleItemIndex, leftListState.firstVisibleItemScrollOffset, rightListState.firstVisibleItemIndex, rightListState.firstVisibleItemScrollOffset)
-                                        val targetPath = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPath else vm.rightPath
+                                        listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
+                                        val targetPath = if (vm.focusedPanel == FocusedPanel.LEFT) vm.左.path else vm.右.path
                                         val saved = vm.getScrollPosition(targetPath)
                                         vm.refreshCurrent()
                                         if (saved != null) vm.currentPanel.pendingScrollTo = Triple(targetPath, saved.first, saved.second)
@@ -3821,7 +3655,7 @@ fun FileManagerScreen(
                 TextButton(onClick = {
                     if (tempSortField == SortField.SIZE) {
                         // 检查是否有未统计大小的文件夹
-                        val currentEntries = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftEntries else vm.rightEntries
+                        val currentEntries = if (vm.focusedPanel == FocusedPanel.LEFT) vm.左.entries else vm.右.entries
                         val unmeasured = currentEntries.filter { entry ->
                             if (!entry.isDirectory) return@filter false
                             val cached = vm.folderSizeDb.get(entry.path)
@@ -3866,7 +3700,7 @@ fun FileManagerScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showSortSizeRefreshDialog = false
-                    val parentPath = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPath else vm.rightPath
+                    val parentPath = if (vm.focusedPanel == FocusedPanel.LEFT) vm.左.path else vm.右.path
                     vm.calculateFolderSizeAsync(parentPath)
                     // 统计完成后由 refreshCurrent 触发列表刷新，但排序字段需在此立即应用
                     vm.updateSortField(tempSortField)
@@ -3908,9 +3742,9 @@ fun FileManagerScreen(
             compressEntries[0].name + ".zip"
         } else {
             val dirName = if (vm.focusedPanel == FocusedPanel.LEFT) {
-                vm.leftPath.substringAfterLast('/').ifEmpty { "压缩包" }
+                vm.左.path.substringAfterLast('/').ifEmpty { "压缩包" }
             } else {
-                vm.rightPath.substringAfterLast('/').ifEmpty { "压缩包" }
+                vm.右.path.substringAfterLast('/').ifEmpty { "压缩包" }
             }
             "$dirName.zip"
         }
@@ -3924,9 +3758,9 @@ fun FileManagerScreen(
                 compressEntries[0].name.substringBeforeLast(".")
             } else {
                 val dirName = if (vm.focusedPanel == FocusedPanel.LEFT) {
-                    vm.leftPath.substringAfterLast('/').ifEmpty { "压缩包" }
+                    vm.左.path.substringAfterLast('/').ifEmpty { "压缩包" }
                 } else {
-                    vm.rightPath.substringAfterLast('/').ifEmpty { "压缩包" }
+                    vm.右.path.substringAfterLast('/').ifEmpty { "压缩包" }
                 }
                 dirName
             }
@@ -4183,7 +4017,7 @@ fun FileManagerScreen(
                             TextButton(
                                 onClick = {
                                     val outDir = if (compressOutputToOtherPanel) {
-                                        if (vm.focusedPanel == FocusedPanel.LEFT) vm.rightPath else vm.leftPath
+                                        if (vm.focusedPanel == FocusedPanel.LEFT) vm.右.path else vm.左.path
                                     } else {
                                         compressEntries[0].path.substringBeforeLast('/')
                                     }
@@ -4343,7 +4177,7 @@ fun FileManagerScreen(
         val firstEntry = extractTargetEntries.first()
         val archiveParent = firstEntry.path.substringBeforeLast('/')
         val strippedName = ArchiveBrowser.stripArchiveExtension(firstEntry.name)
-        val currentDir = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPath else vm.rightPath
+        val currentDir = if (vm.focusedPanel == FocusedPanel.LEFT) vm.左.path else vm.右.path
 
         var extractMode by remember { mutableStateOf(0) }  // 0=压缩包所在文件夹, 1=当前文件夹
 

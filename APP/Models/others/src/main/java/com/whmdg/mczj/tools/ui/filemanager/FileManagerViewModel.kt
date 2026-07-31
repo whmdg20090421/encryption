@@ -96,7 +96,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 单面板状态容器（普通嵌套类，非 inner class） ──
     class VmPanelState(
-        val id: FocusedPanel,
         defaultPath: String
     ) {
         var path by mutableStateOf(defaultPath)
@@ -169,16 +168,20 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── 面板实例 ──
-    val leftPanel = VmPanelState(FocusedPanel.LEFT, safeDefault)
-    val rightPanel = VmPanelState(FocusedPanel.RIGHT, safeDefault)
+    val 左 = VmPanelState(safeDefault)
+    val 右 = VmPanelState(safeDefault)
 
     /** 当前聚焦面板的状态实例 */
     val currentPanel: VmPanelState
-        get() = if (focusedPanel == FocusedPanel.LEFT) leftPanel else rightPanel
+        get() = if (focusedPanel == FocusedPanel.LEFT) 左 else 右
 
     /** 非聚焦面板的状态实例 */
     val otherPanel: VmPanelState
-        get() = if (focusedPanel == FocusedPanel.LEFT) rightPanel else leftPanel
+        get() = if (focusedPanel == FocusedPanel.LEFT) 右 else 左
+
+    /** 判断 panel 是左面板还是右面板 */
+    private fun panelSide(panel: VmPanelState): String =
+        if (panel === 左) "LEFT" else "RIGHT"
 
     // ── 全局状态（非面板专属） ──
     var focusedPanel by mutableStateOf(FocusedPanel.LEFT)
@@ -201,22 +204,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 向后兼容：任一面板正在加载时为 true */
     val isLoadingDirectory: Boolean
-        get() = leftPanel.isLoading || rightPanel.isLoading
+        get() = 左.isLoading || 右.isLoading
 
     /** 向后兼容：当前聚焦面板的 loadError */
     var loadError: Throwable?
         get() = currentPanel.loadError
         internal set(value) { currentPanel.loadError = value }
-
-    // ── 向后兼容属性（UI 层迁移前临时使用） ──
-    val leftPath get() = leftPanel.path
-    val rightPath get() = rightPanel.path
-    val leftEntries get() = leftPanel.entries
-    val rightEntries get() = rightPanel.entries
-    val leftExtFlagsMap get() = leftPanel.extFlagsMap
-    val rightExtFlagsMap get() = rightPanel.extFlagsMap
-    val leftNavState get() = leftPanel.navState
-    val rightNavState get() = rightPanel.navState
 
     // ── 压缩任务 ──
     private val compressCancelFlag = AtomicBoolean(false)
@@ -243,8 +236,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 向后兼容：哪个面板处于回收站视图 */
     val recycleBinPanel: FocusedPanel?
         get() = when {
-            leftPanel.isInRecycleBin -> FocusedPanel.LEFT
-            rightPanel.isInRecycleBin -> FocusedPanel.RIGHT
+            左.isInRecycleBin -> FocusedPanel.LEFT
+            右.isInRecycleBin -> FocusedPanel.RIGHT
             else -> null
         }
     var jxlPackZip by mutableStateOf(false)
@@ -346,10 +339,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 ?: legacySp.getString("right_home_directory", safeDefault)
                 ?: safeDefault
         )
-        leftPanel.path = lHome
-        rightPanel.path = rHome
-        leftPanel.navState = PanelNavState(paths = listOf(lHome), index = 0)
-        rightPanel.navState = PanelNavState(paths = listOf(rHome), index = 0)
+        左.path = lHome
+        右.path = rHome
+        左.navState = PanelNavState(paths = listOf(lHome), index = 0)
+        右.navState = PanelNavState(paths = listOf(rHome), index = 0)
 
         // 读取设置
         showHiddenFiles = fmPrefs.getBoolean("show_hidden_files", false)
@@ -372,33 +365,33 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val (cache, sourcePanel) = cachedArchive
             try {
                 val session = ArchiveBrowser.restoreSession(cache)
-                val targetPanel = if (sourcePanel == "LEFT") leftPanel else rightPanel
+                val targetPanel = if (sourcePanel == "LEFT") 左 else 右
                 targetPanel.isInArchiveMode = true
                 targetPanel.archiveSession = session
                 if (sourcePanel == "LEFT") {
-                    leftPanel.path = session.currentPath
-                    leftPanel.entries = session.currentEntries
-                    rightPanel.path = rHome
-                    rightPanel.entries = listDirectory(rHome)
+                    左.path = session.currentPath
+                    左.entries = session.currentEntries
+                    右.path = rHome
+                    右.entries = listDirectory(rHome)
                 } else {
-                    rightPanel.path = session.currentPath
-                    rightPanel.entries = session.currentEntries
-                    leftPanel.path = lHome
-                    leftPanel.entries = listDirectory(lHome)
+                    右.path = session.currentPath
+                    右.entries = session.currentEntries
+                    左.path = lHome
+                    左.entries = listDirectory(lHome)
                 }
                 ArchiveBrowser.clearSessionCache(context)
             } catch (e: Exception) {
                 DiagnosticLog.log("FileMgr", "恢复压缩包会话失败: ${e.message}")
                 ArchiveBrowser.clearSessionCache(context)
-                leftPanel.entries = listDirectory(lHome)
-                rightPanel.entries = listDirectory(rHome)
+                左.entries = listDirectory(lHome)
+                右.entries = listDirectory(rHome)
             }
         } else {
-            leftPanel.entries = listDirectory(lHome)
-            rightPanel.entries = listDirectory(rHome)
+            左.entries = listDirectory(lHome)
+            右.entries = listDirectory(rHome)
         }
-        loadExtFlagsForDir(leftPanel.path, panel = leftPanel)
-        loadExtFlagsForDir(rightPanel.path, panel = rightPanel)
+        loadExtFlagsForDir(左.path, panel = 左)
+        loadExtFlagsForDir(右.path, panel = 右)
     }
 
     /**
@@ -611,23 +604,29 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
     val currentNavState: PanelNavState get() = currentPanel.navState
 
-    // ── 滚动位置保存（按路径记忆，内存中，应用关闭自动清空） ──
+    // ── 滚动位置保存（按路径+面板记忆，内存中，应用关闭自动清空） ──
     private val scrollPositions = HashMap<String, Pair<Int, Int>>()
 
-    /** 保存当前聚焦面板的滚动位置（按路径存储） */
-    fun saveScrollPosition(leftIndex: Int, leftOffset: Int, rightIndex: Int, rightOffset: Int) {
-        if (focusedPanel == FocusedPanel.LEFT) {
-            scrollPositions[leftPanel.path] = leftIndex to leftOffset
-        } else {
-            scrollPositions[rightPanel.path] = rightIndex to rightOffset
-        }
+    /** 生成面板感知的 key: "L:/path" 或 "R:/path" */
+    private fun scrollKey(panel: VmPanelState, path: String): String {
+        val side = if (panel === 左) "L" else "R"
+        return "$side:$path"
+    }
+
+    /** 保存当前聚焦面板的滚动位置 */
+    fun saveScrollPosition(index: Int, offset: Int) {
+        val panel = currentPanel
+        scrollPositions[scrollKey(panel, panel.path)] = index to offset
     }
 
     /** 读取指定路径的滚动位置 */
-    fun getScrollPosition(path: String): Pair<Int, Int>? = scrollPositions[path]
+    fun getScrollPosition(path: String, panel: VmPanelState = currentPanel): Pair<Int, Int>? =
+        scrollPositions[scrollKey(panel, path)]
 
     /** 清空指定路径的滚动位置（前进导航时使用，确保目标从第一行开始） */
-    fun clearScrollPosition(path: String) { scrollPositions.remove(path) }
+    fun clearScrollPosition(path: String, panel: VmPanelState = currentPanel) {
+        scrollPositions.remove(scrollKey(panel, path))
+    }
 
     // ── 异步目录加载核心 ──
 
@@ -949,11 +948,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun navigateToHistoryDir(entry: HistoryEntry) {
+        val panel = currentPanel
         if (hasShellEngine) {
-            loadDirectory(entry.path, panel = leftPanel)
+            loadDirectory(entry.path, panel = panel)
         } else {
             val testDir = File(entry.path)
-            if (testDir.exists() && testDir.canRead()) loadDirectory(entry.path, panel = leftPanel)
+            if (testDir.exists() && testDir.canRead()) loadDirectory(entry.path, panel = panel)
         }
     }
 
@@ -966,21 +966,23 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun navigateToHistoryFile(entry: HistoryEntry) {
         val file = File(entry.path)
         val parentDir = file.parentFile ?: return
+        val panel = currentPanel
         if (hasShellEngine) {
-            leftPanel.pendingScrollToFile = file.name
-            loadDirectory(parentDir.absolutePath, panel = leftPanel)
+            panel.pendingScrollToFile = file.name
+            loadDirectory(parentDir.absolutePath, panel = panel)
         } else if (parentDir.exists() && parentDir.canRead()) {
-            leftPanel.pendingScrollToFile = file.name
-            loadDirectory(parentDir.absolutePath, panel = leftPanel)
+            panel.pendingScrollToFile = file.name
+            loadDirectory(parentDir.absolutePath, panel = panel)
         }
     }
 
     fun navigateToBookmark(bm: BookmarkEntry) {
+        val panel = currentPanel
         if (hasShellEngine) {
-            loadDirectory(bm.path, panel = leftPanel)
+            loadDirectory(bm.path, panel = panel)
         } else {
             val testDir = File(bm.path)
-            if (testDir.exists() && testDir.canRead()) loadDirectory(bm.path, panel = leftPanel)
+            if (testDir.exists() && testDir.canRead()) loadDirectory(bm.path, panel = panel)
         }
     }
 
@@ -1132,15 +1134,15 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshBoth() {
-        if (leftPanel.isWebDavMode) {
-            loadWebDavEntries(leftPanel)
+        if (左.isWebDavMode) {
+            loadWebDavEntries(左)
         } else {
-            loadDirectory(leftPanel.path, panel = leftPanel, isRefresh = true)
+            loadDirectory(左.path, panel = 左, isRefresh = true)
         }
-        if (rightPanel.isWebDavMode) {
-            loadWebDavEntries(rightPanel)
+        if (右.isWebDavMode) {
+            loadWebDavEntries(右)
         } else {
-            loadDirectory(rightPanel.path, panel = rightPanel, isRefresh = true)
+            loadDirectory(右.path, panel = 右, isRefresh = true)
         }
     }
 
@@ -1151,23 +1153,23 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         session.loadNameMapping(context)
         // 设置双面板初始路径为保险箱根目录
         val vaultPath = session.vaultDir.absolutePath
-        leftPanel.path = vaultPath
-        rightPanel.path = vaultPath
-        leftPanel.entries = listDirectory(vaultPath)
-        rightPanel.entries = listDirectory(vaultPath)
+        左.path = vaultPath
+        右.path = vaultPath
+        左.entries = listDirectory(vaultPath)
+        右.entries = listDirectory(vaultPath)
     }
 
     fun exitVaultMode() {
         vaultSession?.dispose()
         vaultSession = null
-        leftPanel.path = safeDefault
-        rightPanel.path = safeDefault
-        leftPanel.entries = listOf()
-        rightPanel.entries = listOf()
-        leftPanel.pendingVaultTextEntry = null
-        leftPanel.pendingVaultOriginalPath = null
-        rightPanel.pendingVaultTextEntry = null
-        rightPanel.pendingVaultOriginalPath = null
+        左.path = safeDefault
+        右.path = safeDefault
+        左.entries = listOf()
+        右.entries = listOf()
+        左.pendingVaultTextEntry = null
+        左.pendingVaultOriginalPath = null
+        右.pendingVaultTextEntry = null
+        右.pendingVaultOriginalPath = null
         onNavigateVault = null
         cleanupVaultTempFiles()
     }
@@ -1754,8 +1756,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateShowHiddenFiles(value: Boolean) {
         showHiddenFiles = value
         fmPrefs.edit().putBoolean("show_hidden_files", value).apply()
-        leftPanel.entries = listDirectory(leftPanel.path)
-        rightPanel.entries = listDirectory(rightPanel.path)
+        loadDirectory(左.path, panel = 左, isRefresh = true)
+        loadDirectory(右.path, panel = 右, isRefresh = true)
     }
 
     fun updateJxlPackZip(value: Boolean) {
@@ -1775,8 +1777,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (panel.isInRecycleBin) {
             panel.entries = listRecycleBinDir(java.io.File(recycleBinPath))
         } else {
-            leftPanel.entries = listDirectory(leftPanel.path)
-            rightPanel.entries = listDirectory(rightPanel.path)
+            loadDirectory(左.path, panel = 左, isRefresh = true)
+            loadDirectory(右.path, panel = 右, isRefresh = true)
         }
     }
 
@@ -1787,8 +1789,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (panel.isInRecycleBin) {
             panel.entries = listRecycleBinDir(java.io.File(recycleBinPath))
         } else {
-            leftPanel.entries = listDirectory(leftPanel.path)
-            rightPanel.entries = listDirectory(rightPanel.path)
+            loadDirectory(左.path, panel = 左, isRefresh = true)
+            loadDirectory(右.path, panel = 右, isRefresh = true)
         }
     }
 
@@ -3185,7 +3187,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         panel.path = session.currentPath
         panel.archiveSession = session
         panel.isInArchiveMode = true
-        ArchiveBrowser.saveSessionCache(context, session, panel.id.name)
+        ArchiveBrowser.saveSessionCache(context, session, panelSide(panel))
     }
 
     /** 从 Screen 层调用进入压缩包浏览模式（密码验证成功后） */
@@ -3205,7 +3207,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         panel.archiveSession = newSession
         panel.entries = newSession.currentEntries
         panel.path = newSession.currentPath
-        ArchiveBrowser.saveSessionCache(context, newSession, panel.id.name)
+        ArchiveBrowser.saveSessionCache(context, newSession, panelSide(panel))
     }
 
     /** 压缩包内返回上一级，返回 false 表示已在根目录 */
@@ -3221,7 +3223,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         panel.archiveSession = newSession
         panel.entries = newSession.currentEntries
         panel.path = newSession.currentPath
-        ArchiveBrowser.saveSessionCache(context, newSession, panel.id.name)
+        ArchiveBrowser.saveSessionCache(context, newSession, panelSide(panel))
         return true
     }
 
