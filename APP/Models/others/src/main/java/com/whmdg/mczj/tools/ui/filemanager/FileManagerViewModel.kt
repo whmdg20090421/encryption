@@ -78,23 +78,91 @@ data class FilePropertyData(
     val isDirectory: Boolean
 )
 
-class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
+/** 面板标识（仅 Coordinator 层使用，不传入 Controller） */
+enum class PanelId { LEFT, RIGHT }
 
-    private val context: Context get() = getApplication()
+/**
+ * 单面板控制器 — 沙箱实例。
+ *
+ * 一份代码，运行时被实例化两次。内部完全没有 left/right/左/右字样，
+ * 不知道自己会被贴什么标签，不知道另一个实例的存在。
+ *
+ * 所有可变状态封装在 [VmPanelState] 中。
+ */
+class FilePaneController(
+    private val context: Context,
+    private val scope: CoroutineScope,
+    private val hasShellEngine: () -> Boolean,
+    private val isRootEngine: () -> Boolean,
+    private val permissionLevel: String,
+    private val safeDefault: String,
+    // 共享设置通过 lambda 注入（由 Coordinator 维护实际值）
+    private val showHiddenFiles: () -> Boolean,
+    private val sortField: () -> SortField,
+    private val sortOrder: () -> SortOrder,
+    private val folderSizeDb: () -> FolderSizeDb,
+    private val isVaultMode: () -> Boolean,
+    private val vaultSession: () -> VaultSession?
+) {
+    // ── 面板状态（沙箱数据，不含任何身份标识） ──
+    val state = VmPanelState("/storage/emulated/0")
 
-    // ── 引擎 & 权限 ──
-    private val legacySp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
-    val isRootEngine: Boolean
-    private val permissionLevel: String
-    /** 当前是否有可用的 shell 引擎（Root/libsu 或 Shizuku/ADB） */
-    private val hasShellEngine: Boolean
-        get() = isRootEngine || SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+    // ── 回调（由 Coordinator 注入，用于处理需要身份信息的副作用） ──
+    /** 进入压缩包模式时触发（Coordinator 用于保存会话缓存） */
+    var onArchiveSessionEntered: ((ArchiveBrowser.ArchiveSession) -> Unit)? = null
 
-    // ── 文件管理器偏好 ──
-    private val fmPrefs = context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE)
-    private val safeDefault = "/storage/emulated/0"
+    // 最近一次 listDirEntriesViaShell 的 stderr，用于调用方判断失败原因
+    private var lastShellStderr = ""
 
-    // ── 单面板状态容器（普通嵌套类，非 inner class） ──
+    // ── 压缩/解压任务 ──
+    internal val compressCancelFlag = AtomicBoolean(false)
+    internal var compressJob: Job? = null
+    internal val extractCancelFlag = AtomicBoolean(false)
+    internal var extractJob: Job? = null
+
+    // ── 文件操作进度 ──
+    data class FileOpProgress(
+        val phase: String,
+        val currentBytes: Long,
+        val totalBytes: Long,
+        val currentFileName: String = "",
+        val isRunning: Boolean = true,
+        val fileIndex: Int = 0,
+        val fileCount: Int = 0
+    ) {
+        val fraction: Float get() {
+            if (fileCount > 0) return fileIndex.toFloat() / fileCount
+            return if (totalBytes > 0) currentBytes.toFloat() / totalBytes else 0f
+        }
+    }
+
+    internal val _fileOpProgress = MutableStateFlow<FileOpProgress?>(null)
+    val fileOpProgress: StateFlow<FileOpProgress?> = _fileOpProgress
+    val fileOpCancelFlag = AtomicBoolean(false)
+
+    /** 递归计算文件/文件夹总大小（字节） */
+    fun calculateTotalSize(path: String): Long {
+        val file = File(path)
+        if (!file.exists()) return 0L
+        if (file.isFile) return file.length()
+        var total = 0L
+        val stack = ArrayDeque<File>()
+        stack.add(file)
+        while (stack.isNotEmpty()) {
+            val f = stack.removeLast()
+            if (f.isDirectory) {
+                val children = f.listFiles()
+                if (children != null) {
+                    for (child in children) stack.add(child)
+                }
+            } else {
+                total += f.length()
+            }
+        }
+        return total
+    }
+
+    // ── 单面板状态容器 ──
     class VmPanelState(
         defaultPath: String
     ) {
@@ -141,7 +209,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             internal set
         var pendingScrollToFile by mutableStateOf<String?>(null)
             internal set
-        // 当前滚动位置（由 UI 层持续更新，供 refreshCurrent 读取）
         var currentScrollIndex by mutableIntStateOf(0)
             internal set
         var currentScrollOffset by mutableIntStateOf(0)
@@ -167,20 +234,2080 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ── 面板实例 ──
-    val 左 = VmPanelState(safeDefault)
-    val 右 = VmPanelState(safeDefault)
+    // ── 滚动位置保存（每个 Controller 独立，直接用 path 作 key） ──
+    private val scrollPositions = HashMap<String, Pair<Int, Int>>()
+
+    fun saveScrollPosition(path: String, index: Int, offset: Int) {
+        scrollPositions[path] = index to offset
+    }
+
+    fun getScrollPosition(path: String): Pair<Int, Int>? = scrollPositions[path]
+
+    fun clearScrollPosition(path: String) {
+        scrollPositions.remove(path)
+    }
+
+
+
+    // ═══ Phase 2: Shell 工具 + 目录加载（从 FileManagerViewModel 迁入） ═══
+
+    /**
+     * 判断路径是否位于受 Scoped Storage 保护的目录下。
+     */
+    private fun isProtectedPath(path: String): Boolean =
+        path.contains("/Android/data") || path.contains("/Android/obb")
+
+    /**
+     * 通过 shell 检查路径是否存在（对 Android/data 等受保护路径使用 Shizuku/Root）。
+     * 普通路径直接用 Java File API。
+     */
+    private fun shellPathExists(path: String): Boolean {
+        if (!hasShellEngine()) return File(path).exists()
+        val escaped = SevenZipCommand.escape(path)
+        return try {
+            ShellExecutor.execute(Permission.MAX, "test -e $escaped")
+            true
+        } catch (_: Exception) { false }
+    }
+
+    /**
+     * 通过 shell 检查路径是否为目录。
+     */
+    private fun shellIsDirectory(path: String): Boolean {
+        if (!hasShellEngine()) return File(path).isDirectory
+        val escaped = SevenZipCommand.escape(path)
+        return try {
+            ShellExecutor.execute(Permission.MAX, "test -d $escaped")
+            true
+        } catch (_: Exception) { false }
+    }
+
+    /**
+     * 检查文件是否可通过 Java API 读取。
+     * Android/data 和 Android/obb 是受限目录，除自己包名外均不可读。
+     */
+    private fun shellCanRead(path: String): Boolean {
+        if (!hasShellEngine()) return File(path).canRead()
+        if (isRestrictedAndroidDir(path)) return false
+        return File(path).canRead()
+    }
+
+    /** 判断路径是否在受限的 Android/data 或 Android/obb 下（排除自身包名） */
+    private fun isRestrictedAndroidDir(path: String): Boolean {
+        val p = path.replace("//", "/")
+        for (prefix in RESTRICTED_ANDROID_PREFIXES) {
+            if (p.startsWith(prefix)) {
+                val rest = p.removePrefix(prefix)
+                if (rest.startsWith(OWN_PACKAGE_NAME)) return false
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * 检查路径是否可读（受保护路径走 shell，普通路径走 Java API）。
+     */
+    fun canAccessPath(path: String): Boolean = shellPathExists(path)
+
+    /**
+     * 检查路径是否为目录（受保护路径走 shell，普通路径走 Java API）。
+     */
+    fun isDirectoryShell(path: String): Boolean = shellIsDirectory(path)
+
+    /**
+     * 通过 shell 列出目录直接子项，返回列表（空目录返回空列表，失败返回 null）。
+     * 用于替代 Java File.listFiles()，受保护路径走 shell。
+     */
+    fun listChildrenOrNull(path: String): List<FileEntry>? {
+        if (hasShellEngine()) return listDirChildrenViaShell(path)
+        return try { File(path).listFiles()?.map { f ->
+            FileEntry(f.absolutePath, f.name, f.isDirectory, "", if (f.isDirectory) 0L else f.length(), f.lastModified())
+        } } catch (_: Exception) { null }
+    }
+
+    /**
+     * 根据当前引擎执行 shell 命令（Root 优先，回退 Shizuku）。
+     * 委托给 ShellExecutor.execute(Permission.MAX)。
+     * 保留 Triple 返回类型供调用方解构使用。
+     */
+    private fun executeShell(cmd: String): Triple<String, String, Int> {
+        return try {
+            val stdout = ShellExecutor.execute(Permission.MAX, cmd, debug = true)
+            Triple(stdout, "", 0)
+        } catch (e: ShellException) {
+            Triple("", "${e.message}\n${e.stderr}", e.exitCode)
+        } catch (e: Exception) {
+            Triple("", e.message ?: "Shell 执行异常", -1)
+        }
+    }
+
+    /**
+     * 格式化 shell 错误信息，输出中文提示 + 原始英文报错。
+     */
+    private fun formatShellError(name: String, stderr: String): String {
+        val detail = stderr.trim().ifBlank { "未知错误" }
+        return when {
+            detail.contains("Permission denied", ignoreCase = true) -> "$name 权限不足: $detail"
+            detail.contains("No such file or directory", ignoreCase = true) -> "$name 不存在: $detail"
+            else -> "$name 错误: $detail"
+        }
+    }
+
+    /**
+     * ls -1aF 获取目录条目名称（快速，只读目录，不 stat 每个条目）。
+     * 返回格式：目录带 "/" 后缀，如 "Documents/"。
+     */
+    private fun listDirNamesViaLs(
+        dirPath: String,
+        showHidden: Boolean
+    ): List<String> {
+        val normalized = if (dirPath == "/") "/" else dirPath.trimEnd('/').ifEmpty { "/" }
+        val escaped = SevenZipCommand.escape(normalized)
+        val cmd = "ls -1aF $escaped"
+        return try {
+            val stdout = ShellExecutor.execute(Permission.MAX, cmd, debug = true)
+            stdout.lines().filter { line ->
+                val name = line.trimEnd('\r')
+                if (name.isBlank()) return@filter false
+                val cleanName = if (name.endsWith("/")) name.dropLast(1) else name
+                if (cleanName == "." || cleanName == "..") return@filter false
+                if (!showHidden && cleanName.startsWith(".")) return@filter false
+                true
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /** 从 ls -1aF 行解析文件名和 isDir。剥离 -F 后缀：/=目录 *=可执行 @=符号链接 |=FIFO ==Socket */
+    private fun parseLsLine(line: String): Pair<String, Boolean>? {
+        val trimmed = line.trimEnd('\r')
+        if (trimmed.isBlank()) return null
+        val isDir = trimmed.endsWith("/")
+        val name = if (isDir) trimmed.dropLast(1) else trimmed.trimEnd('*', '@', '|', '=')
+        if (name == "." || name == "..") return null
+        return name to isDir
+    }
+
+    /**
+     * 通过 shell 命令列出目录内容（Shizuku / Root / 普通 shell）。
+     * 用于访问 Android/data 等受 Scoped Storage 保护的目录。
+     * @return 条目列表，失败返回空列表并设置 lastShellStderr
+     */
+    private fun listDirEntriesViaShell(path: String, showHidden: Boolean, longFormat: Boolean = false): List<FileEntry> {
+        val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
+
+        val lsLines = listDirNamesViaLs(normalizedPath, showHidden)
+        if (lsLines.isEmpty()) {
+            lastShellStderr = ""
+            return emptyList()
+        }
+        lastShellStderr = ""
+
+        val entries = mutableListOf<FileEntry>()
+        for (line in lsLines) {
+            val (name, isDir) = parseLsLine(line) ?: continue
+            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+            entries.add(FileEntry(childPath, name, isDir))
+        }
+
+        // find -printf 批量填充元数据
+        val escaped = SevenZipCommand.escape(normalizedPath)
+        val hiddenFilter = if (showHidden) "" else " -not -name '.*'"
+        val findCmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
+        val findOut = try {
+            ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
+        } catch (_: Exception) {
+            return entries
+        }
+        val nameToIndex = entries.withIndex().associate { (i, e) -> e.name to i }
+        for (line in findOut.lines()) {
+            if (line.isBlank()) continue
+            val parts = line.split("|")
+            if (parts.size < 7) continue
+            val name = parts[0]
+            val pos = nameToIndex[name] ?: continue
+            val size = parts[1].toLongOrNull() ?: 0L
+            val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
+            val perms = parts[6]
+            val isDir = perms.startsWith("d")
+            entries[pos] = entries[pos].copy(
+                permission = perms,
+                size = if (isDir) 0L else size,
+                lastModified = (mtimeSec * 1000).toLong()
+            )
+        }
+        return entries
+    }
+
+    /**
+     * 异步加载目录内容，替代同步 listDirectory() + loadExtFlagsForDir()。
+     * 逐行解析 find 输出，每 BATCH_SIZE 个切 Main 更新 entries，全部完成后最终排序。
+     * 路径切换在第一个条目解析成功后才执行，避免空白闪现。
+     *
+     * @param targetPath 目标目录路径
+     * @param panel 目标面板实例
+     * @param isRefresh 是否为刷新操作（刷新时先清空再重新加载当前路径）
+     * @param onComplete 加载完成后回调（参数为最终路径）
+     */
+    private fun loadDirectoryAsync(
+        targetPath: String,
+        panel: FilePaneController.VmPanelState,
+        isRefresh: Boolean = false,
+        onComplete: ((String) -> Unit)? = null
+    ) {
+        panel.loadMetadataJob?.cancel()
+        val myVersion = panel.loadVersion
+
+        // 不在此处切 panel.path，等第一个条目解析成功后才切，避免空白闪现
+
+        val job = scope.launch(Dispatchers.IO) {
+            val normalized = if (targetPath == "/") "/" else targetPath.trimEnd('/').ifEmpty { "/" }
+            val escaped = SevenZipCommand.escape(normalized)
+
+            // vault 配置文件名，用于过滤
+            val vaultConfigNames = if (isVaultMode()) setOf(
+                "vault_config.json", "vault_config.backup.json",
+                "name_mappings.json", "folder_sizes.json"
+            ) else emptySet()
+
+            // ── Phase 1: ls -1aF 获取文件名（阻塞，快速） ──
+            val lsCmd = "ls -1aF $escaped"
+            val lsOutput = try {
+                ShellExecutor.execute(Permission.MAX, lsCmd, debug = true)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) return@launch
+                withContext(Dispatchers.Main) {
+                    if (myVersion == panel.loadVersion) {
+                        panel.loadError = e
+                        panel.isLoading = false
+                    }
+                }
+                return@launch
+            }
+
+            // 检查版本号
+            if (myVersion != panel.loadVersion) return@launch
+
+            val snapshot = mutableListOf<FileEntry>()
+            for (raw in lsOutput.lines()) {
+                val line = raw.trimEnd('\r')
+                if (line.isBlank()) continue
+                val isDir = line.endsWith("/")
+                val name = if (isDir) line.dropLast(1) else line.trimEnd('*', '@', '|', '=')
+                if (name == "." || name == "..") continue
+                if (!showHiddenFiles() && name.startsWith(".")) continue
+                if (name in vaultConfigNames) continue
+                val childPath = if (normalized == "/") "/$name" else "$normalized/$name"
+                var entry = FileEntry(childPath, name, isDir)
+                if (isVaultMode()) {
+                    val session = vaultSession()
+                    if (session != null && !isDir) {
+                        entry = entry.copy(name = decryptVaultFileName(name, session))
+                    }
+                }
+                snapshot.add(entry)
+            }
+
+            val sorted = sortEntries(snapshot)
+
+            // 首批渲染：名称列表
+            withContext(Dispatchers.Main) {
+                if (myVersion != panel.loadVersion) return@withContext
+                panel.isLoading = false
+                if (!isRefresh) {
+                    panel.path = targetPath
+                }
+                panel.entries = sorted
+                onComplete?.invoke(targetPath)
+            }
+
+            // 异步加载 ext flags（不阻塞 entries 渲染）
+            loadExtFlagsForDir(targetPath, panel = panel)
+
+            // ── Phase 2: find -printf 批量获取元数据（异步，单条命令） ──
+            val metadataJob = launch(Dispatchers.IO) {
+                val hiddenFilter = if (showHiddenFiles()) "" else " -not -name '.*'"
+                val findCmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
+                val findOut = try {
+                    ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
+                } catch (_: Exception) {
+                    return@launch
+                }
+                if (myVersion != panel.loadVersion) return@launch
+
+                // 按文件名索引当前条目
+                val nameToIndex = sorted.withIndex().associate { (i, e) -> e.name to i }
+                val enriched = sorted.toMutableList()
+
+                for (line in findOut.lines()) {
+                    if (line.isBlank()) continue
+                    val parts = line.split("|")
+                    if (parts.size < 7) continue
+                    val name = parts[0]
+                    if (name == "." || name == "..") continue
+                    val pos = nameToIndex[name] ?: continue
+                    val old = enriched[pos]
+                    val size = parts[1].toLongOrNull() ?: 0L
+                    val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
+                    val perms = parts[6]
+                    enriched[pos] = old.copy(
+                        permission = perms,
+                        size = if (old.isDirectory) 0L else size,
+                        lastModified = (mtimeSec * 1000).toLong()
+                    )
+                }
+
+                val finalEntries = sortEntries(enriched)
+                withContext(Dispatchers.Main) {
+                    if (myVersion != panel.loadVersion) return@withContext
+                    panel.entries = finalEntries
+                }
+            }
+            panel.loadMetadataJob = metadataJob
+        }
+        panel.loadJob = job
+    }
+
+    /**
+     * 对 FileEntry 列表执行排序（directories first + 当前排序字段）。
+     * 复用 listDirectory() 的排序逻辑。
+     */
+    private fun sortEntries(entries: List<FileEntry>): List<FileEntry> {
+        // vault 模式过滤配置文件
+        val filtered = if (isVaultMode()) {
+            entries.filter { entry ->
+                val name = entry.name
+                name != "vault_config.json" &&
+                name != "vault_config.backup.json" &&
+                name != "name_mappings.json" &&
+                name != "folder_sizes.json"
+            }
+        } else entries
+
+        // 填充创建时间（异步阶段，不在首次渲染时执行 NIO）
+        val withCreationTime = if (sortField() == SortField.CREATED && android.os.Build.VERSION.SDK_INT >= 26) {
+            filtered.map { e ->
+                if (e.createdAt > 0) return@map e
+                val ct = try {
+                    java.nio.file.Files.readAttributes(
+                        java.io.File(e.path).toPath(),
+                        java.nio.file.attribute.BasicFileAttributes::class.java
+                    ).creationTime().toMillis()
+                } catch (_: Exception) { e.lastModified }
+                e.copy(createdAt = ct)
+            }
+        } else filtered
+
+        return when (sortField()) {
+            SortField.NAME -> if (sortOrder() == SortOrder.ASC)
+                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
+            else
+                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
+            SortField.SIZE -> {
+                fun effectiveSize(entry: FileEntry): Long {
+                    if (!entry.isDirectory) return entry.size
+                    val cached = folderSizeDb().get(entry.path)
+                    return cached?.size ?: -1L
+                }
+                if (sortOrder() == SortOrder.ASC)
+                    withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { effectiveSize(it).let { s -> if (s < 0) Long.MAX_VALUE else s } })
+                else
+                    withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { effectiveSize(it).let { s -> if (s < 0) Long.MIN_VALUE else s } })
+            }
+            SortField.MODIFIED -> if (sortOrder() == SortOrder.ASC)
+                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.lastModified })
+            else
+                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.lastModified })
+            SortField.CREATED -> if (sortOrder() == SortOrder.ASC)
+                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.createdAt })
+            else
+                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.createdAt })
+        }
+    }
+
+    /**
+     * Java File API 模式下的同步加载 + 异步赋值。
+     * 用于无 shell 引擎时的本地文件系统（通常很快）。
+     */
+    private fun loadDirectorySync(
+        targetPath: String,
+        panel: FilePaneController.VmPanelState,
+        isRefresh: Boolean = false,
+        onComplete: ((String) -> Unit)? = null
+    ) {
+        val myVersion = panel.loadVersion
+
+        // 不在此处切路径，等 entries 就绪后才切
+
+        val job = scope.launch(Dispatchers.IO) {
+            val normalized = if (targetPath == "/") "/" else targetPath.trimEnd('/').ifEmpty { "/" }
+            val dir = java.io.File(normalized)
+            val entries = try {
+                dir.listFiles()?.map { f ->
+                    FileEntry(f.absolutePath, f.name, f.isDirectory, "", if (f.isDirectory) 0L else f.length(), f.lastModified())
+                }?.filter { f -> showHiddenFiles() || !f.name.startsWith(".") }
+            } catch (_: Exception) { null }
+
+            if (entries == null) {
+                withContext(Dispatchers.Main) {
+                    if (myVersion == panel.loadVersion) {
+                        panel.loadError = RuntimeException("权限不足或目录不存在: $targetPath")
+                        panel.isLoading = false
+                    }
+                }
+                return@launch
+            }
+
+            val sorted = sortEntries(entries)
+            withContext(Dispatchers.Main) {
+                if (myVersion != panel.loadVersion) return@withContext
+                panel.isLoading = false
+                if (!isRefresh) {
+                    panel.path = targetPath
+                }
+                panel.entries = sorted
+                onComplete?.invoke(targetPath)
+            }
+        }
+        panel.loadJob = job
+    }
+
+    /**
+     * 统一的异步目录加载入口：有 shell 引擎走 streaming，否则走 Java File API。
+     */
+    private fun loadDirectory(
+        targetPath: String,
+        panel: FilePaneController.VmPanelState,
+        isRefresh: Boolean = false,
+        onComplete: ((String) -> Unit)? = null
+    ) {
+        panel.loadJob?.cancel()
+        panel.loadVersion++
+        panel.entries = emptyList()
+        panel.isLoading = true
+        panel.resetTransientState()
+
+        if (hasShellEngine()) {
+            loadDirectoryAsync(targetPath, panel, isRefresh, onComplete)
+        } else {
+            loadDirectorySync(targetPath, panel, isRefresh, onComplete)
+        }
+    }
+
+    /** 通过 shell 列出目录直接子项（含文件大小），用于受保护目录 */
+    private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? {
+        val normalized = if (dirPath == "/") "/" else dirPath.trimEnd('/').ifEmpty { "/" }
+        val lsLines = listDirNamesViaLs(normalized, showHidden = true)
+        if (lsLines.isEmpty()) return null
+
+        val entries = mutableListOf<FileEntry>()
+        for (line in lsLines) {
+            val (name, isDir) = parseLsLine(line) ?: continue
+            val childPath = "$normalized/$name"
+            entries.add(FileEntry(childPath, name, isDir))
+        }
+
+        // find -printf 批量填充元数据
+        val escaped = SevenZipCommand.escape(normalized)
+        val findCmd = "find $escaped -maxdepth 1 -mindepth 1 -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
+        val findOut = try {
+            ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
+        } catch (_: Exception) {
+            return entries
+        }
+        val nameToIndex = entries.withIndex().associate { (i, e) -> e.name to i }
+        for (line in findOut.lines()) {
+            if (line.isBlank()) continue
+            val parts = line.split("|")
+            if (parts.size < 7) continue
+            val name = parts[0]
+            val pos = nameToIndex[name] ?: continue
+            val size = parts[1].toLongOrNull() ?: 0L
+            val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
+            val perms = parts[6]
+            val isDir = perms.startsWith("d")
+            entries[pos] = entries[pos].copy(
+                permission = perms,
+                size = if (isDir) 0L else size,
+                lastModified = (mtimeSec * 1000).toLong()
+            )
+        }
+        return entries
+    }
+
+    private fun listWithFile(path: String, showHidden: Boolean, effectiveRoot: String): List<FileEntry> {
+        DiagnosticLog.log("FileEngine", "listFiles($path) showHidden=$showHidden")
+        val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
+        val dir = File(normalizedPath)
+
+        if (!dir.exists()) {
+            DiagnosticLog.log("FileEngine", "目录不存在: $normalizedPath")
+            state.loadError = RuntimeException("目录不存在: $normalizedPath")
+            return emptyList()
+        }
+        if (!dir.isDirectory) {
+            DiagnosticLog.log("FileEngine", "路径不是目录: $normalizedPath")
+            state.loadError = RuntimeException("路径不是目录: $normalizedPath")
+            return emptyList()
+        }
+
+        val children = try {
+            dir.listFiles()
+        } catch (e: SecurityException) {
+            DiagnosticLog.log("FileEngine", "listFiles SecurityException: ${e.message}")
+            state.loadError = e
+            return emptyList()
+        }
+        if (children == null) {
+            DiagnosticLog.log("FileEngine", "listFiles 返回 null（权限不足或 I/O 错误）")
+            state.loadError = RuntimeException("无法列出目录（权限不足）: $normalizedPath")
+            return emptyList()
+        }
+        DiagnosticLog.log("FileEngine", "listFiles 返回 ${children.size} 项")
+
+        val entries = mutableListOf<FileEntry>()
+        var dirCount = 0
+        var fileCount = 0
+        var skipHidden = 0
+        for (child in children) {
+            val name = child.name
+            if (!showHidden && name.startsWith(".")) { skipHidden++; continue }
+            val isDir = try {
+                child.isDirectory
+            } catch (e: Exception) {
+                DiagnosticLog.log("FileEngine", "isDirectory 异常 $name: ${e.message}")
+                false
+            }
+            if (isDir) dirCount++ else fileCount++
+            val perm = try { formatPermission(Os.stat(child.absolutePath).st_mode) } catch (_: Exception) { "" }
+            val sz = if (isDir) 0L else try { child.length() } catch (_: Exception) { 0L }
+            val modified = try { child.lastModified() } catch (_: Exception) { 0L }
+            entries.add(FileEntry(child.absolutePath, name, isDir, perm, sz, modified))
+        }
+        DiagnosticLog.log("FileEngine", "统计: dirs=$dirCount, files=$fileCount, hidden 过滤=$skipHidden")
+
+        val sorted = entries.sortedWith(
+            compareByDescending<FileEntry> { it.isDirectory }
+                .thenBy { it.name.lowercase() }
+        )
+        entries.clear()
+        entries.addAll(sorted)
+        return entries
+    }
+
+    private fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean, effectiveRoot: String): List<FileEntry> {
+        val entries = mutableListOf<FileEntry>()
+        val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
+
+        val lsLines = try {
+            listDirNamesViaLs(normalizedPath, showHidden)
+        } catch (e: Throwable) {
+            val isApkAssetsNoise = e is java.io.IOException && (
+                e.stackTrace.any { it.className == "android.content.res.ApkAssets" } ||
+                        (e.message?.contains("Failed to load asset path") == true) ||
+                        (e.message?.contains(".apk from fd") == true)
+            )
+            if (isApkAssetsNoise) {
+                DiagnosticLog.log("LsShell", "忽略 hook 注入的 ApkAssets 噪声: ${e.message}")
+                return emptyList()
+            }
+            DiagnosticLog.log("LsShell", "execute 抛错: ${e.javaClass.simpleName}: ${e.message}")
+            state.loadError = if (e is Exception) e else RuntimeException(e)
+            return emptyList()
+        }
+
+        DiagnosticLog.log("LsShell", "ls 输出 ${lsLines.size} 行")
+
+        if (lsLines.isEmpty()) {
+            val file = File(normalizedPath)
+            if (!file.exists()) {
+                state.loadError = SecurityException("目录不存在: $normalizedPath")
+            } else if (!file.isDirectory) {
+                state.loadError = SecurityException("不是目录: $normalizedPath")
+            }
+            return emptyList()
+        }
+
+        // Phase 1: 名称 + isDir
+        for (line in lsLines) {
+            val (name, isDir) = parseLsLine(line) ?: continue
+            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
+            entries.add(FileEntry(childPath, name, isDir))
+        }
+
+        // Phase 2: find -printf 批量填充元数据
+        val escaped = SevenZipCommand.escape(normalizedPath)
+        val hiddenFilter = if (showHidden) "" else " -not -name '.*'"
+        val findCmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
+        val findOut = try {
+            ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
+        } catch (_: Exception) {
+            ""
+        }
+        if (findOut.isNotBlank()) {
+            val nameToIndex = entries.withIndex().associate { (i, e) -> e.name to i }
+            for (line in findOut.lines()) {
+                if (line.isBlank()) continue
+                val parts = line.split("|")
+                if (parts.size < 7) continue
+                val name = parts[0]
+                val pos = nameToIndex[name] ?: continue
+                val size = parts[1].toLongOrNull() ?: 0L
+                val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
+                val perms = parts[6]
+                val isDir = perms.startsWith("d")
+                entries[pos] = entries[pos].copy(
+                    permission = perms,
+                    size = if (isDir) 0L else size,
+                    lastModified = (mtimeSec * 1000).toLong()
+                )
+            }
+        }
+
+        var dirCount = 0
+        var fileCount = 0
+        for (entry in entries) {
+            if (entry.isDirectory) dirCount++ else fileCount++
+        }
+        DiagnosticLog.log("LsShell", "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
+
+        val sorted = entries.sortedWith(
+            compareByDescending<FileEntry> { it.isDirectory }
+                .thenBy { it.name.lowercase() }
+        )
+        entries.clear()
+        entries.addAll(sorted)
+        return entries
+    }
+
+    // ── 目录列表 ──
+    fun listDirectory(path: String): List<FileEntry> {
+        DiagnosticLog.log("FileMgr", ">>> listDirectory START path=$path useRoot=$isRootEngine()")
+        state.loadError = null
+        val t0 = System.currentTimeMillis()
+        val effectiveRoot = if (isRootEngine()) "/" else safeDefault
+
+        var entries = listWithLs(path, showHiddenFiles(), useRoot = isRootEngine(), effectiveRoot = effectiveRoot)
+
+        // vault 模式：过滤配置文件 + 文件名解密
+        if (isVaultMode()) {
+            val session = vaultSession()!!
+            entries = entries.filter { entry ->
+                val name = entry.name
+                name != "vault_config.json" &&
+                name != "vault_config.backup.json" &&
+                name != "name_mappings.json" &&
+                name != "folder_sizes.json"
+            }.map { entry ->
+                if (entry.isDirectory) {
+                    entry
+                } else {
+                    val displayName = decryptVaultFileName(entry.name, session)
+                    entry.copy(name = displayName)
+                }
+            }
+        }
+
+        // 填充创建时间（API 26+ 使用 NIO）
+        if (sortField() == SortField.CREATED && android.os.Build.VERSION.SDK_INT >= 26) {
+            entries = entries.map { e ->
+                if (e.createdAt > 0) return@map e
+                val ct = try {
+                    Files.readAttributes(File(e.path).toPath(), BasicFileAttributes::class.java).creationTime().toMillis()
+                } catch (_: Exception) { e.lastModified }
+                e.copy(createdAt = ct)
+            }
+        }
+
+        // 自定义排序
+        entries = when (sortField()) {
+            SortField.NAME -> if (sortOrder() == SortOrder.ASC)
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
+            else
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
+            SortField.SIZE -> {
+                // 获取条目的有效大小：文件用 entry.size，已统计目录用 folderSizeDb()，未统计目录用 -1
+                fun effectiveSize(entry: FileEntry): Long {
+                    if (!entry.isDirectory) return entry.size
+                    val cached = folderSizeDb().get(entry.path)
+                    return cached?.size ?: -1L // -1 表示未统计
+                }
+                if (sortOrder() == SortOrder.ASC)
+                    entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { effectiveSize(it).let { s -> if (s < 0) Long.MAX_VALUE else s } })
+                else
+                    entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { effectiveSize(it).let { s -> if (s < 0) Long.MIN_VALUE else s } })
+            }
+            SortField.MODIFIED -> if (sortOrder() == SortOrder.ASC)
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.lastModified })
+            else
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.lastModified })
+            SortField.CREATED -> if (sortOrder() == SortOrder.ASC)
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.createdAt })
+            else
+                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.createdAt })
+        }
+
+        val took = System.currentTimeMillis() - t0
+        DiagnosticLog.log("FileMgr", "<<< listDirectory END path=$path entries=${entries.size} took=${took}ms err=${state.loadError?.javaClass?.simpleName}")
+        return entries
+    }
+
+    private fun decryptVaultFileName(encryptedName: String, session: VaultSession): String {
+        var raw = encryptedName
+        if (raw.endsWith(".aes")) {
+            raw = raw.substring(0, raw.length - 4)
+        }
+        if (!session.record.encryptFilename) {
+            return raw
+        }
+        return try {
+            FilenameCodec.decrypt(
+                encryptedName = "${raw}.aes",
+                dek = session.dek,
+                aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null,
+                lookupMapping = { session.nameMapping.get(it) }
+            )
+        } catch (e: Exception) {
+            raw
+        }
+    }
+
+    /**
+     * 批量读取目录下所有文件的扩展属性（i/a），结果存入 panel.extFlagsMap。
+     * 仅在有 shell 引擎时执行，否则清空对应 map。
+     */
+    fun loadExtFlagsForDir(dirPath: String, panel: FilePaneController.VmPanelState) {
+        if (!hasShellEngine()) {
+            panel.extFlagsMap = emptyMap()
+            return
+        }
+        val realPath = toRealPathForAttr(dirPath)
+        val escaped = SevenZipCommand.escape(realPath.trimEnd('/'))
+        // 使用 lsattr 目录/* 展开通配符，确保列出目录内容（Android toybox 的 lsattr 可能不支持目录参数）
+        val (out, _, exit) = try {
+            executeShell("lsattr $escaped/* 2>/dev/null")
+        } catch (_: Exception) {
+            Triple("", "", -1)
+        }
+        if (exit != 0 || out.isBlank()) {
+            panel.extFlagsMap = emptyMap()
+            return
+        }
+        val map = mutableMapOf<String, String>()
+        for (raw in out.lines()) {
+            val line = raw.trimEnd('\r')
+            if (line.isBlank()) continue
+            // lsattr 输出: "----i----------  /path/to/file"
+            val parts = line.split("\\s+".toRegex(), limit = 2)
+            if (parts.size < 2) continue
+            val flags = parts[0].filter { it == 'i' || it == 'a' }
+            if (flags.isEmpty()) continue
+            val nameOrPath = parts[1].trim()
+            val name = nameOrPath.substringAfterLast('/')
+            if (name.isNotEmpty()) {
+                map[name] = flags
+            }
+        }
+        panel.extFlagsMap = map
+    }
+
+
+
+    // ═══ Phase 3: 导航 + 文件操作 + 压缩包 + 回收站 + Vault ═══
+
+    /**
+     * 统一的导航函数：跳转路径 + 设置滚动位置
+     * @param path 目标路径
+     * @param scrollToIndex 滚动到第几个卡片（默认 0，即第一行）
+     * @param scrollToOffset 滚动偏移量（默认 0）
+     */
+
+    /** 核心导航：切换路径 + 刷新列表（异步） */
+    fun navigateTo(path: String, onComplete: ((String) -> Unit)? = null, onPathChanged: (() -> Unit)? = null) {
+        val panel = state
+        if (panel.isInRecycleBin) panel.isInRecycleBin = false
+        if (panel.path == path) return
+        panel.navState = panel.navState.navigate(path)
+        loadDirectory(path, panel = panel, onComplete = onComplete)
+        onPathChanged?.invoke()
+    }
+
+    fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
+        navigateTo(path)
+        state.pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
+    }
+
+    /** 后退一步：更新 nav state index + 异步加载目录，返回目标路径 */
+    fun goBack(): String? {
+        val panel = state
+        val back = panel.navState.back() ?: return null
+        panel.navState = back
+        loadDirectory(back.current, panel = panel)
+        return back.current
+    }
+
+    /** 前进一步：更新 nav state index + 异步加载目录，返回目标路径 */
+    fun goForward(): String? {
+        val panel = state
+        val fwd = panel.navState.forward() ?: return null
+        panel.navState = fwd
+        loadDirectory(fwd.current, panel = panel)
+        return fwd.current
+    }
+
+    /** 返回上级目录，返回目标路径，null 表示已在根目录 */
+    fun goUp(): String? {
+        val effectiveRoot = (vaultSession()?.vaultDir?.absolutePath) ?: if (isRootEngine()) "/" else safeDefault
+        val path = state.path
+        if (path == effectiveRoot || !path.contains('/')) return null
+        val parent = path.substringBeforeLast('/').ifEmpty { "/" }
+        if (parent == path) return null
+        return parent
+    }
+
+    fun navigateToHistoryDir(entry: HistoryEntry) {
+        val panel = state
+        if (hasShellEngine()) {
+            loadDirectory(entry.path, panel = panel)
+        } else {
+            val testDir = File(entry.path)
+            if (testDir.exists() && testDir.canRead()) loadDirectory(entry.path, panel = panel)
+        }
+    }
+
+    fun navigateToHistoryFile(entry: HistoryEntry) {
+        val file = File(entry.path)
+        val parentDir = file.parentFile ?: return
+        val panel = state
+        if (hasShellEngine()) {
+            panel.pendingScrollToFile = file.name
+            loadDirectory(parentDir.absolutePath, panel = panel)
+        } else if (parentDir.exists() && parentDir.canRead()) {
+            panel.pendingScrollToFile = file.name
+            loadDirectory(parentDir.absolutePath, panel = panel)
+        }
+    }
+
+    fun navigateToBookmark(bm: BookmarkEntry) {
+        val panel = state
+        if (hasShellEngine()) {
+            loadDirectory(bm.path, panel = panel)
+        } else {
+            val testDir = File(bm.path)
+            if (testDir.exists() && testDir.canRead()) loadDirectory(bm.path, panel = panel)
+        }
+    }
+
+    /**
+     * 进入 WebDAV 浏览模式。
+     */
+    fun navigateToWebDav(config: WebDavServerConfig) {
+        val panel = state
+        try {
+            val client = WebDavFileClient(config)
+            panel.webDavClient = client
+            panel.webDavConfig = config
+            panel.webDavCurrentPath = config.relativePath.ifEmpty { "/" }
+            loadWebDavEntries(panel)
+        } catch (e: Exception) {
+            panel.loadError = RuntimeException("连接 WebDAV 失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 在 WebDAV 模式下进入子目录。
+     */
+    fun navigateToWebDavFolder(name: String) {
+        val panel = state
+        val client = panel.webDavClient ?: return
+        val newPath = if (panel.webDavCurrentPath.endsWith("/")) {
+            "${panel.webDavCurrentPath}$name"
+        } else {
+            "${panel.webDavCurrentPath}/$name"
+        }
+        panel.webDavCurrentPath = newPath
+        loadWebDavEntries(panel)
+    }
+
+    /**
+     * 在 WebDAV 模式下返回上一级。
+     */
+    fun webDavGoBack(): Boolean {
+        val panel = state
+        if (panel.webDavCurrentPath == "/" || panel.webDavCurrentPath.isEmpty()) return false
+        val parent = panel.webDavCurrentPath.substringBeforeLast("/", "").ifEmpty { "/" }
+        panel.webDavCurrentPath = parent
+        loadWebDavEntries(panel)
+        return true
+    }
+
+    /**
+     * 加载当前 WebDAV 路径的文件列表到指定面板。
+     */
+    private fun loadWebDavEntries(panel: FilePaneController.VmPanelState = state) {
+        val client = panel.webDavClient ?: return
+        try {
+            val files = client.listChildren(panel.webDavCurrentPath)
+            if (files != null) {
+                panel.entries = files.map { info ->
+                    FileEntry(
+                        path = info.remotePath,
+                        name = info.name,
+                        isDirectory = info.isDirectory,
+                        permission = "",
+                        size = info.size,
+                        lastModified = info.lastModified,
+                        createdAt = 0
+                    )
+                }.let { entries ->
+                    when (sortField()) {
+                        SortField.NAME -> when (sortOrder()) {
+                            SortOrder.ASC -> entries.sortedBy { it.name.lowercase() }
+                            SortOrder.DESC -> entries.sortedByDescending { it.name.lowercase() }
+                        }
+                        SortField.SIZE -> when (sortOrder()) {
+                            SortOrder.ASC -> entries.sortedBy { it.size }
+                            SortOrder.DESC -> entries.sortedByDescending { it.size }
+                        }
+                        SortField.MODIFIED -> when (sortOrder()) {
+                            SortOrder.ASC -> entries.sortedBy { it.lastModified }
+                            SortOrder.DESC -> entries.sortedByDescending { it.lastModified }
+                        }
+                        SortField.CREATED -> entries
+                    }
+                }
+                panel.loadError = null
+            }
+        } catch (e: Exception) {
+            panel.loadError = RuntimeException("WebDAV 加载失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 重命名文件或文件夹。成功返回 null，失败返回错误信息。
+     */
+    fun renameEntry(entry: FileEntry, newName: String): String? {
+        val source = File(entry.path)
+        val parent = source.parentFile ?: return "无法获取父目录"
+        val dest = File(parent, newName)
+
+        if (hasShellEngine()) {
+            val escapedSrc = SevenZipCommand.escape(entry.path)
+            val escapedDst = SevenZipCommand.escape(dest.absolutePath)
+            val (_, err, exit) = try {
+                executeShell("mv $escapedSrc $escapedDst")
+            } catch (e: Exception) { return e.message ?: "重命名失败" }
+            return if (exit == 0) null else "重命名失败: $err"
+        }
+
+        if (dest.exists()) return "已存在同名文件或文件夹"
+        return try {
+            if (source.renameTo(dest)) null else "重命名失败"
+        } catch (e: Exception) { e.message ?: "重命名失败" }
+    }
+
+    /**
+     * 永久删除文件或文件夹。成功返回 null，失败返回错误信息。
+     */
+    fun deleteEntry(entry: FileEntry): String? {
+        if (hasShellEngine()) {
+            val escaped = SevenZipCommand.escape(entry.path)
+            val flag = if (entry.isDirectory) "-rf" else "-f"
+            val (_, err, exit) = try {
+                executeShell("rm $flag $escaped")
+            } catch (e: Exception) { return e.message ?: "删除失败" }
+            return if (exit == 0) null else "删除失败: $err"
+        }
+        val file = File(entry.path)
+        return try {
+            if (SpecialPermissionVerifier.safeDelete(file)) null else "删除失败"
+        } catch (e: Exception) { e.message ?: "删除失败" }
+    }
+
+    /**
+     * 创建文件或文件夹。成功返回 null，失败返回错误信息。
+     */
+    fun createEntry(parentPath: String, name: String, isFolder: Boolean): String? {
+        val target = File(parentPath, name)
+
+        if (hasShellEngine()) {
+            val escaped = SevenZipCommand.escape(target.absolutePath)
+            val cmd = if (isFolder) "mkdir $escaped" else "touch $escaped"
+            val (_, err, exit) = try {
+                executeShell(cmd)
+            } catch (e: Exception) { return e.message ?: "创建失败" }
+            return if (exit == 0) null else "创建失败: $err"
+        }
+
+        if (target.exists()) return "已存在同名文件或文件夹"
+        return try {
+            val success = if (isFolder) target.mkdir() else target.createNewFile()
+            if (success) null else "创建失败"
+        } catch (e: Exception) { e.message ?: "创建失败" }
+    }
+
+    /** 批量删除。成功返回 null，失败返回最后一条错误信息。 */
+    fun deleteEntries(entries: List<FileEntry>): String? {
+        var lastError: String? = null
+        for (entry in entries) {
+            val err = deleteEntry(entry)
+            if (err != null) lastError = err
+        }
+        return lastError
+    }
+
+    /**
+     * 批量删除（带进度，在 IO 线程执行）。
+     * 完成后回调 onDone(error)，error 为 null 表示成功。
+     */
+    fun deleteEntriesWithProgress(entries: List<FileEntry>, toRecycleBin: Boolean, onDone: (String?) -> Unit) {
+        fileOpCancelFlag.set(false)
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // 预处理：计算总大小
+                var totalSize = 0L
+                for (entry in entries) totalSize += calculateTotalSize(entry.path)
+                var processedBytes = 0L
+
+                for ((index, entry) in entries.withIndex()) {
+                    if (fileOpCancelFlag.get()) {
+                        _fileOpProgress.value = null
+                        withContext(Dispatchers.Main) { onDone("已取消") }
+                        return@launch
+                    }
+                    _fileOpProgress.value = FileOpProgress(
+                        phase = "正在删除",
+                        currentBytes = processedBytes,
+                        totalBytes = totalSize,
+                        currentFileName = entry.name,
+                        fileIndex = index,
+                        fileCount = entries.size
+                    )
+                    val error = if (toRecycleBin) moveToRecycleBin(entry) else deleteEntry(entry)
+                    if (error != null) {
+                        withContext(Dispatchers.Main) { onDone(error) }
+                        return@launch
+                    }
+                    processedBytes += calculateTotalSize(entry.path)
+                }
+                _fileOpProgress.value = null
+                withContext(Dispatchers.Main) { onDone(null) }
+            } catch (e: Exception) {
+                _fileOpProgress.value = null
+                withContext(Dispatchers.Main) { onDone(e.message ?: "删除失败") }
+            }
+        }
+    }
+
+    suspend fun getPropertyData(entry: FileEntry): FilePropertyData = withContext(Dispatchers.IO) {
+        val file = File(entry.path)
+
+        // shell 路径: stat -c 一次获取权限/用户名/组名/UID/GID
+        // 非 shell 路径: Os.stat 获取全部
+        var permission = ""
+        var owner = ""
+        var group = ""
+
+        if (hasShellEngine()) {
+            val escaped = SevenZipCommand.escape(entry.path)
+            // stat -c 一次获取权限、用户名、组名、UID、GID，无需解析 ls 列对齐
+            val (statOut, _, statExit) = try {
+                executeShell("stat -c '%a|%U|%G|%u|%g' $escaped")
+            } catch (_: Exception) { Triple("", "", -1) }
+            if (statExit == 0 && statOut.isNotBlank()) {
+                val parts = statOut.trim().split("|")
+                if (parts.size >= 5) {
+                    val modeOct = parts[0]
+                    val userName = parts[1]
+                    val groupName = parts[2]
+                    val uid = parts[3].toIntOrNull()
+                    val gid = parts[4].toIntOrNull()
+                    permission = "($modeOct)"
+                    owner = if (uid != null) "$userName ($uid)" else userName
+                    group = if (gid != null) "$groupName ($gid)" else groupName
+                }
+            }
+        } else {
+            val stat = try { Os.stat(entry.path) } catch (_: Exception) { null }
+            if (stat != null) {
+                val mode = stat.st_mode
+                permission = "${formatPermission(mode)}(${String.format("%03o", mode and 0x1FF)})"
+                owner = resolveUserName(stat.st_uid).let { if (it.isNotBlank()) "$it (${stat.st_uid})" else "${stat.st_uid}" }
+                group = resolveGroupName(stat.st_gid).let { if (it.isNotBlank()) "$it (${stat.st_gid})" else "${stat.st_gid}" }
+            }
+        }
+
+        val modifiedTime = if (entry.lastModified > 0) {
+            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(entry.lastModified))
+        } else ""
+
+        val sizeDisplay = if (entry.isDirectory) {
+            val cached = folderSizeDb().get(entry.path)
+            val bytes = cached?.size ?: 0L
+            if (bytes > 0) "${formatSize(bytes)} ($bytes)" else "0 B (0)"
+        } else {
+            "${formatSize(entry.size)} (${entry.size})"
+        }
+
+        val parentPath = file.parent ?: ""
+
+        // 类型描述
+        val type = if (entry.isDirectory) {
+            "文件夹"
+        } else {
+            val ext = entry.name.substringAfterLast('.', "").lowercase()
+            when (ext) {
+                "png" -> "PNG 图片"
+                "jpg", "jpeg" -> "JPEG 图片"
+                "gif" -> "GIF 图片"
+                "webp" -> "WebP 图片"
+                "bmp" -> "BMP 图片"
+                "mp4" -> "MP4 视频"
+                "mkv" -> "MKV 视频"
+                "avi" -> "AVI 视频"
+                "mp3" -> "MP3 音频"
+                "flac" -> "FLAC 音频"
+                "wav" -> "WAV 音频"
+                "zip" -> "ZIP 压缩包"
+                "rar" -> "RAR 压缩包"
+                "7z" -> "7Z 压缩包"
+                "tar" -> "TAR 归档"
+                "gz" -> "GZ 压缩"
+                "apk" -> "APK 安装包"
+                "txt" -> "文本文件"
+                "pdf" -> "PDF 文档"
+                "doc", "docx" -> "Word 文档"
+                "xls", "xlsx" -> "Excel 表格"
+                "json" -> "JSON 文件"
+                "xml" -> "XML 文件"
+                "html", "htm" -> "HTML 文件"
+                "js" -> "JavaScript 文件"
+                "kt" -> "Kotlin 文件"
+                "java" -> "Java 文件"
+                "py" -> "Python 文件"
+                "sh" -> "Shell 脚本"
+                else -> if (ext.isNotEmpty()) "${ext.uppercase()} 文件" else "文件"
+            }
+        }
+
+        FilePropertyData(
+            name = entry.name,
+            directory = parentPath,
+            type = type,
+            sizeBytes = entry.size,
+            sizeDisplay = sizeDisplay,
+            modifiedTime = modifiedTime,
+            permission = permission,
+            owner = owner,
+            group = group,
+            isDirectory = entry.isDirectory
+        )
+    }
+
+    /** 异步统计目录内文件和文件夹数量 */
+    suspend fun countFilesInFolder(path: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val file = File(path)
+        var fileCount = 0
+        var folderCount = 0
+        if (hasShellEngine()) {
+            val escaped = SevenZipCommand.escape(path)
+            val cmd = "d=\$(find $escaped -mindepth 1 -type d | wc -l); f=\$(find $escaped -type f | wc -l); echo \"\$d \$f\""
+            val (out, _, exit) = try { executeShell(cmd) } catch (_: Exception) { Triple("", "", -1) }
+            if (exit == 0 && out.isNotBlank()) {
+                val parts = out.trim().split("\\s+".toRegex())
+                if (parts.size >= 2) {
+                    folderCount = parts[0].toIntOrNull() ?: 0
+                    fileCount = parts[1].toIntOrNull() ?: 0
+                }
+            }
+        } else {
+            fun countRecursive(dir: File) {
+                val children = try { dir.listFiles() } catch (_: Exception) { null } ?: return
+                for (child in children) {
+                    if (child.isDirectory) { folderCount++; countRecursive(child) }
+                    else fileCount++
+                }
+            }
+            countRecursive(file)
+        }
+        Pair(folderCount, fileCount)
+    }
+
+    /** 读取扩展属性标志字符串（如 "----i----------" 或 "-a-----------"）。无 shell 引擎时返回空字符串。 */
+    fun readExtFlags(path: String): String {
+        if (!hasShellEngine()) return ""
+        val realPath = toRealPathForAttr(path)
+        val escaped = SevenZipCommand.escape(realPath)
+        val (out, _, exit) = try { executeShell("lsattr $escaped") } catch (_: Exception) { Triple("", "", -1) }
+        if (exit != 0 || out.isBlank()) return ""
+        val line = out.lines().firstOrNull { it.isNotBlank() } ?: return ""
+        // lsattr 输出格式: "----i----------  /path/to/file" 或 "----i----------" (部分实现)
+        val flags = line.split("\\s+".toRegex()).firstOrNull() ?: return ""
+        // 只提取我们关心的标志（i/a），忽略 e/c/s 等文件系统默认标志
+        return flags.filter { it == 'i' || it == 'a' }
+    }
+
+    /** 应用扩展属性修改。传入目标标志字符集（如 "ia" 表示要设置 immutable + append-only）。成功返回 null。 */
+    fun applyExtFlags(path: String, desiredFlags: Set<Char>, originalFlags: String): String? {
+        if (!isRootEngine()) return "需要 Root 权限"
+        val realPath = toRealPathForAttr(path)
+        val escaped = SevenZipCommand.escape(realPath)
+        val originalSet = originalFlags.filter { it == 'i' || it == 'a' }.toSet()
+        // 需要添加的标志
+        val toAdd = desiredFlags - originalSet
+        // 需要移除的标志
+        val toRemove = originalSet - desiredFlags
+        if (toAdd.isNotEmpty()) {
+            try {
+                ShellExecutor.execute(Permission.ROOT, "chattr +${toAdd.joinToString("")} $escaped")
+            } catch (e: Exception) { return "chattr +${toAdd.joinToString("")} 执行异常: ${e.message}\n\n${e.stackTraceToString()}" }
+        }
+        if (toRemove.isNotEmpty()) {
+            try {
+                ShellExecutor.execute(Permission.ROOT, "chattr -${toRemove.joinToString("")} $escaped")
+            } catch (e: Exception) { return "chattr -${toRemove.joinToString("")} 执行异常: ${e.message}\n\n${e.stackTraceToString()}" }
+        }
+        return null
+    }
+
+    /**
+     * 应用权限修改。成功返回 null，失败返回错误信息。
+     * 返回 Pair(errorMessage, fuseRealPath)：
+     * - (null, null) = 成功
+     * - (errorMsg, null) = 失败
+     * - (null, realPath) = 检测到 FUSE，需要用户确认后通过 shell 执行
+     */
+    fun applyPermissions(path: String, mode: Int, uid: Int, gid: Int, originalMode: Int, originalUid: Int, originalGid: Int): Pair<String?, String?> {
+        // 先检测 FUSE
+        val fuseRealPath = resolveFuseRealPath(path)
+        if (fuseRealPath != null) {
+            return null to fuseRealPath
+        }
+
+        // 非 FUSE：直接 Os.chmod + shell chown
+        try {
+            Os.chmod(path, mode and 0x1FF)
+        } catch (e: ErrnoException) { return "chmod 失败: ${e.message}\n路径: $path\n\n${e.stackTraceToString()}" to null }
+        catch (e: Exception) { return "chmod 异常: ${e.message}\n\n${e.stackTraceToString()}" to null }
+
+        val escapedPath = SevenZipCommand.escape(path)
+        try {
+            ShellExecutor.execute(Permission.ROOT, "chown $uid:$gid $escapedPath")
+        } catch (e: Exception) {
+            try { Os.chmod(path, originalMode and 0x1FF) } catch (_: Exception) {}
+            return "chown 执行异常: ${e.message}\n\n${e.stackTraceToString()}" to null
+        }
+        try {
+            val stat = Os.stat(path)
+            if (stat.st_uid != uid || stat.st_gid != gid) {
+                return "chown 未生效: 期望 $uid:$gid, 实际 ${stat.st_uid}:${stat.st_gid}\n路径: $path" to null
+            }
+        } catch (e: Exception) { return "chown 验证失败: ${e.message}\n\n${e.stackTraceToString()}" to null }
+
+        return null to null
+    }
+
+    /**
+     * 后台验证权限修改是否生效。
+     * 文件夹：随机抽取最多 5 个子项验证。文件：直接验证。
+     * 返回未生效的路径列表（空 = 全部成功）。
+     */
+    fun verifyPermissions(path: String, expectedMode: Int, expectedUid: Int, expectedGid: Int): List<String> {
+        if (!hasShellEngine()) return emptyList()
+        val targets = mutableListOf(path)
+        try {
+            if (File(path).isDirectory) {
+                val escaped = SevenZipCommand.escape(path)
+                val (out, _, exit) = try { executeShell("ls -1A $escaped") } catch (_: Exception) { Triple("", "", -1) }
+                if (exit == 0 && out.isNotBlank()) {
+                    val children = out.lines().filter { it.isNotBlank() }
+                    val picked = children.shuffled().take(5)
+                    targets.clear()
+                    targets.addAll(picked.map { "$path/$it" })
+                }
+            }
+        } catch (_: Exception) {}
+
+        val failed = mutableListOf<String>()
+        val expectedOctal = String.format("%03o", expectedMode and 0x1FF)
+        for (t in targets) {
+            val escaped = SevenZipCommand.escape(t)
+            val (out, _, exit) = try { executeShell("stat -c '%a|%u|%g' $escaped") } catch (_: Exception) { Triple("", "", -1) }
+            if (exit != 0) { failed.add(t); continue }
+            val parts = out.trim().split("|")
+            if (parts.size < 3) { failed.add(t); continue }
+            val (actualMode, actualUid, actualGid) = parts
+            if (actualMode != expectedOctal || actualUid != expectedUid.toString() || actualGid != expectedGid.toString()) {
+                failed.add(t)
+            }
+        }
+        return failed
+    }
+
+    /**
+     * 启动压缩任务。
+     * @param entries 待压缩的文件列表
+     * @param outputPath 输出压缩包完整路径
+     * @param format 格式: zip/7z/tar/tar.gz/tar.bz2/tar.xz
+     * @param level 压缩级别 0-9
+     * @param password 密码（空=不加密）
+     * @param useAes ZIP 是否使用 AES-256
+     * @param onProgress 进度回调（主线程）
+     * @param onComplete 完成回调（主线程）
+     */
+    fun compress(
+        entries: List<FileEntry>,
+        outputPath: String,
+        format: String,
+        level: Int,
+        password: String,
+        useAes: Boolean,
+        encryptNames: Boolean = false,
+        onProgress: (CompressService.ProgressInfo) -> Unit,
+        onComplete: (Boolean, String?, String?) -> Unit
+    ) {
+        compressCancelFlag.set(false)
+        compressJob?.cancel()
+        compressJob = scope.launch(Dispatchers.IO) {
+            val options = CompressService.CompressOptions(
+                sourcePaths = entries.map { it.path },
+                outputPath = outputPath,
+                format = format,
+                compressionLevel = level,
+                password = password,
+                useAes = useAes,
+                encryptNames = encryptNames
+            )
+            CompressService.compress(
+                context = context,
+                options = options,
+                permissionLevel = permissionLevel,
+                cancelFlag = compressCancelFlag,
+                callback = object : CompressService.ProgressCallback {
+                    override fun onProgress(info: CompressService.ProgressInfo) {
+                        onProgress(info)
+                    }
+                    override fun onComplete(success: Boolean, path: String?, error: String?) {
+                        launch(Dispatchers.Main) { onComplete(success, path, error) }
+                    }
+                }
+            )
+        }
+    }
+
+    /** 取消正在进行的压缩任务 */
+    fun cancelCompress() {
+        compressCancelFlag.set(true)
+        compressJob?.cancel()
+        compressJob = null
+    }
+
+    /** 取消正在进行的解压任务 */
+    fun cancelExtract() {
+        extractCancelFlag.set(true)
+        extractJob?.cancel()
+        extractJob = null
+    }
+
+    /** 打开压缩包（首次，无密码）。若需要密码则设置 archivePasswordRequest 触发弹窗 */
+    fun openArchive(entry: FileEntry) {
+        val panel = state
+        scope.launch(Dispatchers.IO) {
+            try {
+                val permLevel = permissionLevel
+                val currentPathVal = panel.path
+                val currentEntriesVal = panel.entries
+
+                val passwordCheck = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
+
+                if (passwordCheck == null) {
+                    // exitCode≠0 且未检测到加密标志 → 档案本身有问题
+                    withContext(Dispatchers.Main) {
+                        panel.archiveOpenError = Pair(entry.name, "该压缩包无法读取，可能已损坏或格式不受支持。")
+                    }
+                    return@launch
+                }
+
+                if (passwordCheck == true) {
+                    // Encrypted = + → 需要密码
+                    withContext(Dispatchers.Main) { panel.archivePasswordRequest = entry }
+                    return@launch
+                }
+
+                // 不需要密码，直接打开
+                val result = ArchiveBrowser.openArchive(
+                    context = context,
+                    archivePath = entry.path,
+                    archiveName = entry.name,
+                    permissionLevel = permLevel,
+                    password = "",
+                    originalPath = currentPathVal,
+                    originalEntries = currentEntriesVal
+                )
+
+                withContext(Dispatchers.Main) {
+                    result.fold(
+                        onSuccess = { session ->
+                            enterArchiveMode(session)
+                        },
+                        onFailure = { error ->
+                            panel.archiveOpenError = Pair(entry.name, "打开压缩包失败: ${error.message}")
+                        }
+                    )
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    panel.archiveOpenError = Pair(entry.name, "打开压缩包异常: ${e.message}")
+                }
+            }
+        }
+    }
+
+    /** Debug 模式：解析压缩包信息，弹出预览弹窗 */
+    fun debugOpenArchive(entry: FileEntry) {
+        val panel = state
+        scope.launch(Dispatchers.IO) {
+            val permLevel = permissionLevel
+            val currentPathVal = panel.path
+            val currentEntriesVal = panel.entries
+
+            val info = ArchiveBrowser.parseArchiveDebug(
+                context = context,
+                archivePath = entry.path,
+                archiveName = entry.name,
+                permissionLevel = permLevel,
+                originalPath = currentPathVal,
+                originalEntries = currentEntriesVal
+            )
+
+            withContext(Dispatchers.Main) {
+                panel.archiveDebugInfo = info.copy(sourceEntry = entry)
+            }
+        }
+    }
+
+    /** Debug 弹窗确认打开：需要密码时弹密码框，否则直接进入浏览模式 */
+    fun confirmOpenArchive() {
+        val panel = state
+        val info = panel.archiveDebugInfo ?: return
+        if (info.passwordRequired) {
+            val entry = info.sourceEntry ?: return
+            panel.archiveDebugInfo = null
+            panel.archivePasswordRequest = entry
+            return
+        }
+        val session = info.session ?: return
+        enterArchiveMode(session)
+        panel.archiveDebugInfo = null
+    }
+
+    /** 进入压缩包浏览模式（状态更新 + 通知回调） */
+    fun enterArchiveMode(session: ArchiveBrowser.ArchiveSession) {
+        val panel = state
+        panel.entries = session.currentEntries
+        panel.path = session.currentPath
+        panel.archiveSession = session
+        panel.isInArchiveMode = true
+        onArchiveSessionEntered?.invoke(session)
+    }
+
+    /** 在压缩包内导航到子目录（状态更新，缓存由 Coordinator 处理） */
+    fun navigateInArchive(entry: FileEntry) {
+        val panel = state
+        val session = panel.archiveSession ?: return
+        val newSession = ArchiveBrowser.navigateTo(session, entry.name)
+        if (newSession == null) {
+            panel.loadError = RuntimeException("无法进入压缩包子目录: ${entry.name}")
+            return
+        }
+        panel.archiveSession = newSession
+        panel.entries = newSession.currentEntries
+        panel.path = newSession.currentPath
+    }
+
+    /** 压缩包内返回上一级，返回 false 表示已在根目录（状态更新，缓存由 Coordinator 处理） */
+    fun archiveGoUp(): Boolean {
+        val panel = state
+        val session = panel.archiveSession ?: return false
+        val newSession = ArchiveBrowser.navigateUp(session)
+        if (newSession == null) {
+            // 已在根目录，退出压缩包
+            exitArchive()
+            return true
+        }
+        panel.archiveSession = newSession
+        panel.entries = newSession.currentEntries
+        panel.path = newSession.currentPath
+        return true
+    }
+
+    /** 退出压缩包浏览模式，恢复原始状态（状态更新，缓存由 Coordinator 处理） */
+    fun exitArchive() {
+        val panel = state
+        val session = panel.archiveSession ?: return
+        panel.path = session.originalPath
+        panel.entries = session.originalEntries.ifEmpty { listDirectory(session.originalPath) }
+        panel.archiveSession = null
+        panel.isInArchiveMode = false
+    }
+
+    /** 当前是否在压缩包根目录 */
+    fun isAtArchiveRoot(): Boolean {
+        val session = state.archiveSession ?: return true
+        return ArchiveBrowser.isAtRoot(session)
+    }
+
+    /** 在回收站内进入子文件夹 */
+    fun navigateInRecycleBin(entry: FileEntry) {
+        if (!entry.isDirectory) return
+        val dir = java.io.File(entry.path)
+        if (!dir.exists() || !dir.canRead()) {
+            Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val panel = state
+        panel.recycleBinPath = entry.path
+        panel.entries = listRecycleBinDir(dir)
+    }
+
+    /** 在回收站内返回上一级 */
+    fun goUpInRecycleBin(): Boolean {
+        val panel = state
+        val binRoot = AppDataPaths.recycleBin(context).absolutePath
+        if (panel.recycleBinPath == binRoot) return false
+        val parent = java.io.File(panel.recycleBinPath).parentFile ?: return false
+        panel.recycleBinPath = parent.absolutePath
+        panel.entries = listRecycleBinDir(parent)
+        return true
+    }
+
+    /**
+     * 强行用外部 Intent 打开文件（忽略 resolveActivity 检查）。
+     * 返回 null 表示成功，返回错误信息表示失败。
+     */
+    fun forceOpenExternalFile(context: Context, entry: FileEntry): String? {
+        return try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", File(entry.path)
+            )
+            val extension = entry.name.substringAfterLast('.', "").lowercase()
+            val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            DiagnosticLog.log("OpenFile", "强行打开: uri=$uri mime=$mimeType")
+            val chooser = android.content.Intent.createChooser(intent, "选择应用打开")
+            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(chooser)
+            DiagnosticLog.log("OpenFile", "强行打开 startActivity 已调用")
+            null
+        } catch (e: Exception) {
+            DiagnosticLog.log("OpenFile", "强行打开异常: ${e.javaClass.simpleName}: ${e.message}")
+            DiagnosticLog.exportCrashReport(context, e, "强行打开失败: ${entry.path}")
+            "错误类型: ${e.javaClass.simpleName}\n文件: ${entry.path}\n\n${e.stackTraceToString()}"
+        }
+    }
+
+    private fun getMimeType(fileName: String): String {
+        val ext = fileName.substringAfterLast('.').lowercase()
+        return when (ext) {
+            "pdf" -> "application/pdf"
+            "doc", "docx" -> "application/msword"
+            "xls", "xlsx" -> "application/vnd.ms-excel"
+            "ppt", "pptx" -> "application/vnd.ms-powerpoint"
+            "zip" -> "application/zip"
+            "mp3" -> "audio/mpeg"
+            "mp4" -> "video/mp4"
+            "avi" -> "video/x-msvideo"
+            "mkv" -> "video/x-matroska"
+            else -> "*/*"
+        }
+    }
+
+    /** 规范化路径：去除连续斜杠和尾部斜杠。 */
+    private fun normalizePath(path: String): String {
+        var result = path.replace(Regex("/+"), "/")
+        if (result.length > 1) result = result.trimEnd('/')
+        return result
+    }
+
+    /**
+     * 检测路径是否在 FUSE 虚拟挂载层上。
+     * 解析 /proc/self/mountinfo，找到包含该路径的 FUSE 挂载条目。
+     * 对 /storage/emulated（用户内部存储），直接映射到 /data/media/{userId}/。
+     * 非 FUSE 路径返回 null。
+     */
+    fun resolveFuseRealPath(path: String): String? {
+        try {
+            val mountInfo = File("/proc/self/mountinfo").readText()
+            var fuseMountPoint: String? = null
+            var fuseSource = ""
+
+            for (line in mountInfo.lines()) {
+                val sepIndex = line.indexOf(" - ")
+                if (sepIndex < 0) continue
+                val leftPart = line.substring(0, sepIndex)
+                val rightPart = line.substring(sepIndex + 3)
+
+                val leftFields = leftPart.split(" ")
+                if (leftFields.size < 5) continue
+                val rightFields = rightPart.split(" ")
+                if (rightFields.isEmpty()) continue
+
+                val mountPoint = leftFields[4]
+                val fsType = rightFields[0]
+                val source = if (rightFields.size >= 2) rightFields[1] else ""
+
+                if (fsType != "fuse" && fsType != "fuseblk") continue
+                if (mountPoint == "/") continue
+
+                val normalized = mountPoint.trimEnd('/')
+                if (!path.startsWith(normalized)) continue
+                if (path.length != normalized.length && path[normalized.length] != '/') continue
+
+                // 最长前缀匹配
+                if (fuseMountPoint == null || mountPoint.length > fuseMountPoint.length) {
+                    fuseMountPoint = mountPoint
+                    fuseSource = source
+                }
+            }
+
+            if (fuseMountPoint == null) return null
+
+            // 非 /dev/fuse 源（真实块设备），直接用 source 拼接
+            if (fuseSource.isNotEmpty() && !fuseSource.startsWith("/dev/")) {
+                val remaining = path.removePrefix(fuseMountPoint.trimEnd('/'))
+                return normalizePath(fuseSource.trimEnd('/') + remaining)
+            }
+
+            // /storage/emulated → /data/media/{userId}
+            val emulatedRegex = Regex("^/storage/emulated/(\\d+)(.*)")
+            val match = emulatedRegex.find(path)
+            if (match != null) {
+                val userId = match.groupValues[1]
+                val subPath = match.groupValues[2]
+                return "/data/media/$userId$subPath"
+            }
+
+        } catch (_: Exception) {}
+        return null
+    }
+
+    /** 将 FUSE 路径转换为底层真实路径，使 chattr/lsattr 能操作 inode 标志。 */
+    private fun toRealPathForAttr(path: String): String {
+        // /storage/emulated/0/xxx → /data/media/0/xxx
+        val regex = Regex("^/storage/emulated/(\\d+)/")
+        val match = regex.find(path)
+        return if (match != null) {
+            path.replaceFirst("/storage/emulated/${match.groupValues[1]}/", "/data/media/${match.groupValues[1]}/")
+        } else {
+            path
+        }
+    }
+
+    /** 读取 /etc/passwd 解析 UID→用户名（无需 root） */
+    private fun resolveUserName(uid: Int): String {
+        val name = try {
+            File("/etc/passwd").readLines().firstNotNullOfOrNull { line ->
+                val parts = line.split(":")
+                if (parts.size >= 3 && parts[2].toIntOrNull() == uid) parts[0] else null
+            }
+        } catch (_: Exception) { null }
+        return if (name != null) "$name ($uid)" else uid.toString()
+    }
+
+    /** 读取 /etc/group 解析 GID→组名（无需 root） */
+    private fun resolveGroupName(gid: Int): String {
+        val name = try {
+            File("/etc/group").readLines().firstNotNullOfOrNull { line ->
+                val parts = line.split(":")
+                if (parts.size >= 3 && parts[2].toIntOrNull() == gid) parts[0] else null
+            }
+        } catch (_: Exception) { null }
+        return if (name != null) "$name ($gid)" else gid.toString()
+    }
+
+    /** 通过 UID 解析应用桌面名称（如 "艨艟战舰"） */
+    private fun resolveAppLabel(uid: Int): String {
+        if (uid < 10000) return ""
+        return try {
+            val pm = context.packageManager
+            val packages = pm.getPackagesForUid(uid)
+            val pkg = packages?.firstOrNull() ?: return ""
+            val appInfo = pm.getApplicationInfo(pkg, 0)
+            pm.getApplicationLabel(appInfo).toString()
+        } catch (_: Exception) { "" }
+    }
+
+    /** 读取全部系统用户：系统 UID 映射 + pm list packages -U（应用 UID） */
+    fun getSystemUsers(): List<SystemUser> {
+        val result = mutableMapOf<Int, String>()
+
+        // 1. 系统 UID（android_filesystem_config.h）
+        result.putAll(SYSTEM_UID_MAP)
+
+        // 2. 应用 UID（≥10000）：通过 pm list packages -U 获取包名+UID
+        if (isRootEngine()) {
+            val stdout = try {
+                ShellExecutor.execute(Permission.ROOT, "pm list packages -U", debug = true)
+            } catch (_: Exception) { "" }
+            if (stdout.isNotBlank()) {
+                stdout.lines().forEach { line ->
+                    // 格式: "package:com.example.app uid:10123"
+                    val pkg = line.removePrefix("package:").substringBefore(" ").trim()
+                    val uidStr = line.substringAfter("uid:", "").trim()
+                    val uid = uidStr.toIntOrNull()
+                    if (uid != null && uid >= 10000 && uid !in result) {
+                        result[uid] = pkg
+                    }
+                }
+            }
+        }
+
+        return result.map { (uid, name) ->
+            val label = resolveAppLabel(uid)
+            SystemUser(uid, name, label)
+        }.sortedBy { it.uid }
+    }
+
+    /** 读取全部系统用户组：系统 GID 映射 + pm list packages -G（应用 GID） */
+    fun getSystemGroups(): List<SystemGroup> {
+        val result = mutableMapOf<Int, String>()
+
+        // 系统 GID（与 UID 共享同一套映射）
+        SYSTEM_UID_MAP.forEach { (id, name) -> result[id] = name }
+
+        // 应用 GID：pm list packages -G
+        if (isRootEngine()) {
+            val stdout = try {
+                ShellExecutor.execute(Permission.ROOT, "pm list packages -G", debug = true)
+            } catch (_: Exception) { "" }
+            if (stdout.isNotBlank()) {
+                stdout.lines().forEach { line ->
+                    val pkg = line.removePrefix("package:").substringBefore(" ").trim()
+                    val gidStr = line.substringAfter("gid:", "").trim()
+                    val gid = gidStr.toIntOrNull()
+                    if (gid != null && gid >= 10000 && gid !in result) {
+                        result[gid] = pkg
+                    }
+                }
+            }
+        }
+
+        return result.map { (gid, name) ->
+            val label = resolveAppLabel(gid)
+            SystemGroup(gid, name, label)
+        }.sortedBy { it.gid }
+    }
+
+    private fun openWithExternalApp(file: File, displayName: String) {
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                file
+            )
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, getMimeType(displayName))
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            scope.launch(Dispatchers.Main) {
+                loadError = RuntimeException("无法打开文件: $displayName\n${e.message}")
+            }
+        }
+    }
+
+    fun refreshCurrent() {
+        val panel = state
+        val idx = panel.currentScrollIndex
+        val off = panel.currentScrollOffset
+        if (idx != 0 || off != 0) {
+            panel.pendingScrollTo = Triple(panel.path, idx, off)
+        }
+        if (panel.isWebDavMode) {
+            loadWebDavEntries(panel)
+        } else {
+            loadDirectory(panel.path, panel = panel, isRefresh = true)
+        }
+    }
+
+
+
+    companion object {
+        private const val LOAD_DIRECTORY_BATCH_SIZE = 20
+        private val RESTRICTED_ANDROID_PREFIXES = listOf(
+            "/storage/emulated/0/Android/data/",
+            "/storage/emulated/0/Android/obb/",
+            "/sdcard/Android/data/",
+            "/sdcard/Android/obb/"
+        )
+        private const val OWN_PACKAGE_NAME = "com.whmdg.mczj.tools"
+
+        fun formatPermission(mode: Int): String {
+            val type = when (mode and 0xF000) {
+                0x4000 -> 'd'
+                0x8000 -> '-'
+                0xA000 -> 'l'
+                0x6000 -> 'b'
+                0x2000 -> 'c'
+                0x1000 -> 'p'
+                0xC000 -> 's'
+                else -> '?'
+            }
+            val rwx = charArrayOf('r', 'w', 'x')
+            val sb = StringBuilder(10)
+            sb.append(type)
+            for (shift in 8 downTo 0) {
+                sb.append(if ((mode shr shift) and 1 != 0) rwx[2 - shift % 3] else '-')
+            }
+            return sb.toString()
+        }
+
+        fun formatSize(bytes: Long): String {
+            if (bytes < 0) return ""
+            if (bytes == 0L) return "0 B"
+            val v = bytes.toDouble()
+            return when {
+                v < 1024 -> "%.0f B".format(v)
+                v < 1024 * 1024 -> "%.1f K".format(v / 1024)
+                v < 1024 * 1024 * 1024 -> "%.1f M".format(v / (1024 * 1024))
+                else -> "%.1f G".format(v / (1024 * 1024 * 1024))
+            }
+        }
+    }
+}
+
+/**
+ * 面板协调者 — 唯一知道两个面板存在的角色。
+ *
+ * 持有两个控制器引用 + 跨面板路由。
+ * 身份标签（左/右）只存在于这里，不暴露给 Controller。
+ */
+class PanelCoordinator(
+    val left: FilePaneController,
+    val right: FilePaneController,
+    private val context: Context,
+    private val getFocusedPanel: () -> FocusedPanel
+) {
+    init {
+        // 注入回调：Controller 内部进入压缩包模式时，由 Coordinator 保存会话缓存
+        left.onArchiveSessionEntered = { session ->
+            ArchiveBrowser.saveSessionCache(context, session, PanelId.LEFT.name)
+        }
+        right.onArchiveSessionEntered = { session ->
+            ArchiveBrowser.saveSessionCache(context, session, PanelId.RIGHT.name)
+        }
+    }
+
+    // ── 焦点管理（通过 lambda 读取 VM 的 Compose 状态） ──
+    val focusedPanel: FocusedPanel
+        get() = getFocusedPanel()
+
+    val focused: FilePaneController
+        get() = if (focusedPanel == FocusedPanel.LEFT) left else right
+
+    val other: FilePaneController
+        get() = if (focusedPanel == FocusedPanel.LEFT) right else left
+
+    // ── 按标签寻址 ──
+    operator fun get(id: PanelId): FilePaneController =
+        if (id == PanelId.LEFT) left else right
+
+    fun sideOf(controller: FilePaneController): PanelId =
+        if (controller === left) PanelId.LEFT else PanelId.RIGHT
+
+    fun sideOfState(state: FilePaneController.VmPanelState): PanelId =
+        if (state === left.state) PanelId.LEFT else PanelId.RIGHT
+
+    fun both(): List<FilePaneController> = listOf(left, right)
+
+    // ── 跨面板操作 ──
+
+    /** 将聚焦面板的路径同步到非聚焦面板 */
+    fun syncPaths() {
+        val src = focused.state
+        val dst = other.state
+        dst.navState = dst.navState.navigate(src.path)
+        other.loadDirectory(src.path, panel = dst)
+    }
+
+    /** 刷新两个面板 */
+    fun refreshBoth() {
+        for (ctrl in both()) {
+            val panel = ctrl.state
+            if (panel.isWebDavMode) {
+                ctrl.loadWebDavEntries(panel)
+            } else {
+                ctrl.loadDirectory(panel.path, panel = panel, isRefresh = true)
+            }
+        }
+    }
+
+    // ── 压缩包会话缓存（Coordinator 包裹，附加身份信息） ──
+
+    /** 进入压缩包浏览模式（缓存通过 Controller 回调自动保存） */
+    fun enterArchiveMode(session: ArchiveBrowser.ArchiveSession) {
+        focused.enterArchiveMode(session)
+    }
+
+    /** 在压缩包内导航 + 保存会话缓存 */
+    fun navigateInArchive(entry: FileEntry) {
+        focused.navigateInArchive(entry)
+        focused.state.archiveSession?.let {
+            ArchiveBrowser.saveSessionCache(context, it, sideOf(focused).name)
+        }
+    }
+
+    /** 压缩包内返回上一级 + 保存会话缓存 */
+    fun archiveGoUp(): Boolean {
+        val result = focused.archiveGoUp()
+        if (result) {
+            val session = focused.state.archiveSession
+            if (session != null) {
+                ArchiveBrowser.saveSessionCache(context, session, sideOf(focused).name)
+            }
+        }
+        return result
+    }
+
+    /** 退出压缩包浏览模式 + 清除会话缓存 */
+    fun exitArchive() {
+        focused.exitArchive()
+        ArchiveBrowser.clearSessionCache(context)
+    }
+
+    /** 压缩包是否在根目录 */
+    fun isAtArchiveRoot(): Boolean {
+        val session = focused.state.archiveSession ?: return true
+        return ArchiveBrowser.isAtRoot(session)
+    }
+
+    // ── 初始化 ──
+
+    /**
+     * 初始化双面板：读取偏好、设置初始路径、加载目录。
+     * 在 VM init 块中调用。
+     */
+    fun initialize(
+        lHome: String,
+        rHome: String,
+        listDirectory: (String) -> List<FileEntry>
+    ) {
+        left.state.path = lHome
+        right.state.path = rHome
+        left.state.navState = PanelNavState(paths = listOf(lHome), index = 0)
+        right.state.navState = PanelNavState(paths = listOf(rHome), index = 0)
+
+        // 初始加载（优先尝试恢复压缩包会话）
+        val cachedArchive = ArchiveBrowser.loadSessionCache(context)
+        if (cachedArchive != null) {
+            val (cache, sourcePanel) = cachedArchive
+            try {
+                val session = ArchiveBrowser.restoreSession(cache)
+                val targetCtrl = if (sourcePanel == "LEFT") left else right
+                val otherCtrl = if (sourcePanel == "LEFT") right else left
+                val otherHome = if (sourcePanel == "LEFT") rHome else lHome
+                targetCtrl.state.isInArchiveMode = true
+                targetCtrl.state.archiveSession = session
+                targetCtrl.state.path = session.currentPath
+                targetCtrl.state.entries = session.currentEntries
+                otherCtrl.state.path = otherHome
+                otherCtrl.state.entries = listDirectory(otherHome)
+                ArchiveBrowser.clearSessionCache(context)
+            } catch (e: Exception) {
+                DiagnosticLog.log("FileMgr", "恢复压缩包会话失败: ${e.message}")
+                ArchiveBrowser.clearSessionCache(context)
+                left.state.entries = listDirectory(lHome)
+                right.state.entries = listDirectory(rHome)
+            }
+        } else {
+            left.state.entries = listDirectory(lHome)
+            right.state.entries = listDirectory(rHome)
+        }
+    }
+}
+
+class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val context: Context get() = getApplication()
+
+    // ── 引擎 & 权限 ──
+    private val legacySp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
+    val isRootEngine: Boolean
+    private val permissionLevel: String
+    /** 当前是否有可用的 shell 引擎（Root/libsu 或 Shizuku/ADB） */
+    private val hasShellEngine: Boolean
+        get() = isRootEngine || SpecialPermissionVerifier.isShizukuAuthorized(getApplication())
+
+    // ── 文件管理器偏好 ──
+    private val fmPrefs = context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, Context.MODE_PRIVATE)
+    private val safeDefault = "/storage/emulated/0"
+
+    // ── 面板控制器实例（沙箱，各自独立） ──
+    // lazy：等 init 块完成后再构造，确保 permissionLevel 等已赋值
+    private val controllerLeft by lazy {
+        FilePaneController(
+            context = getApplication(),
+            scope = viewModelScope,
+            hasShellEngine = { hasShellEngine },
+            isRootEngine = { isRootEngine },
+            permissionLevel = permissionLevel,
+            safeDefault = safeDefault,
+            showHiddenFiles = { showHiddenFiles },
+            sortField = { sortField },
+            sortOrder = { sortOrder },
+            folderSizeDb = { folderSizeDb },
+            isVaultMode = { vaultSession != null },
+            vaultSession = { vaultSession }
+        )
+    }
+    private val controllerRight by lazy {
+        FilePaneController(
+            context = getApplication(),
+            scope = viewModelScope,
+            hasShellEngine = { hasShellEngine },
+            isRootEngine = { isRootEngine },
+            permissionLevel = permissionLevel,
+            safeDefault = safeDefault,
+            showHiddenFiles = { showHiddenFiles },
+            sortField = { sortField },
+            sortOrder = { sortOrder },
+            folderSizeDb = { folderSizeDb },
+            isVaultMode = { vaultSession != null },
+            vaultSession = { vaultSession }
+        )
+    }
+
+    // ── 面板协调者（唯一知道两个面板存在的角色） ──
+    val panels: PanelCoordinator by lazy {
+        PanelCoordinator(controllerLeft, controllerRight, getApplication()) { focusedPanel }
+    }
+
+    // ── 面板状态引用（向后兼容：UI 通过 vm.左/vm.右 访问） ──
+    val 左: FilePaneController.VmPanelState get() = controllerLeft.state
+    val 右: FilePaneController.VmPanelState get() = controllerRight.state
+
+    /** 当前聚焦面板对应的 Controller 实例 */
+    private val focusedController: FilePaneController
+        get() = if (focusedPanel == FocusedPanel.LEFT) controllerLeft else controllerRight
 
     /** 当前聚焦面板的状态实例 */
-    val currentPanel: VmPanelState
+    val currentPanel: FilePaneController.VmPanelState
         get() = if (focusedPanel == FocusedPanel.LEFT) 左 else 右
 
     /** 非聚焦面板的状态实例 */
-    val otherPanel: VmPanelState
+    val otherPanel: FilePaneController.VmPanelState
         get() = if (focusedPanel == FocusedPanel.LEFT) 右 else 左
 
     /** 判断 panel 是左面板还是右面板 */
-    private fun panelSide(panel: VmPanelState): String =
+    private fun panelSide(panel: FilePaneController.VmPanelState): String =
         if (panel === 左) "LEFT" else "RIGHT"
 
     // ── 全局状态（非面板专属） ──
@@ -210,15 +2337,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var loadError: Throwable?
         get() = currentPanel.loadError
         internal set(value) { currentPanel.loadError = value }
-
-    // ── 压缩任务 ──
-    private val compressCancelFlag = AtomicBoolean(false)
-    private var compressJob: Job? = null
-
-    // ── 解压任务 ──
-    private val extractCancelFlag = AtomicBoolean(false)
-    private var extractJob: Job? = null
-
 
     // ── 压缩包浏览（面板级状态已移入 VmPanelState） ──
     /** 向后兼容：当前聚焦面板的压缩包状态 */
@@ -339,11 +2457,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 ?: legacySp.getString("right_home_directory", safeDefault)
                 ?: safeDefault
         )
-        左.path = lHome
-        右.path = rHome
-        左.navState = PanelNavState(paths = listOf(lHome), index = 0)
-        右.navState = PanelNavState(paths = listOf(rHome), index = 0)
-
         // 读取设置
         showHiddenFiles = fmPrefs.getBoolean("show_hidden_files", false)
         sortField = when (fmPrefs.getString("sort_field", "NAME")) {
@@ -359,237 +2472,91 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 加载文件夹大小数据库
         folderSizeDb = FolderSizeDb.load(AppDataPaths.fileManager(context))
 
-        // 初始加载（优先尝试恢复压缩包会话）
-        val cachedArchive = ArchiveBrowser.loadSessionCache(context)
-        if (cachedArchive != null) {
-            val (cache, sourcePanel) = cachedArchive
-            try {
-                val session = ArchiveBrowser.restoreSession(cache)
-                val targetPanel = if (sourcePanel == "LEFT") 左 else 右
-                targetPanel.isInArchiveMode = true
-                targetPanel.archiveSession = session
-                if (sourcePanel == "LEFT") {
-                    左.path = session.currentPath
-                    左.entries = session.currentEntries
-                    右.path = rHome
-                    右.entries = listDirectory(rHome)
-                } else {
-                    右.path = session.currentPath
-                    右.entries = session.currentEntries
-                    左.path = lHome
-                    左.entries = listDirectory(lHome)
-                }
-                ArchiveBrowser.clearSessionCache(context)
-            } catch (e: Exception) {
-                DiagnosticLog.log("FileMgr", "恢复压缩包会话失败: ${e.message}")
-                ArchiveBrowser.clearSessionCache(context)
-                左.entries = listDirectory(lHome)
-                右.entries = listDirectory(rHome)
-            }
-        } else {
-            左.entries = listDirectory(lHome)
-            右.entries = listDirectory(rHome)
-        }
+        // 初始化双面板（委托给 Coordinator）
+        panels.initialize(lHome, rHome) { listDirectory(it) }
         loadExtFlagsForDir(左.path, panel = 左)
         loadExtFlagsForDir(右.path, panel = 右)
     }
 
-    /**
-     * 判断路径是否位于受 Scoped Storage 保护的目录下。
-     */
-    private fun isProtectedPath(path: String): Boolean =
-        path.contains("/Android/data") || path.contains("/Android/obb")
+    // ═══ Phase 2: 委托方法（转发到 Controller） ═══
 
-    /**
-     * 通过 shell 检查路径是否存在（对 Android/data 等受保护路径使用 Shizuku/Root）。
-     * 普通路径直接用 Java File API。
-     */
-    private fun shellPathExists(path: String): Boolean {
-        if (!hasShellEngine) return File(path).exists()
-        val escaped = SevenZipCommand.escape(path)
-        return try {
-            ShellExecutor.execute(Permission.MAX, "test -e $escaped")
-            true
-        } catch (_: Exception) { false }
-    }
+    // ═══ Phase 3: 委托方法（转发到 Controller） ═══
+    fun navigateToWithScroll(path: String, scrollToIndex: Int, scrollToOffset: Int) = focusedController.navigateToWithScroll(path, scrollToIndex, scrollToOffset)
+    fun goBack(): String? = focusedController.goBack()
+    fun goForward(): String? = focusedController.goForward()
+    fun goUp(): String? = focusedController.goUp()
+    fun navigateToHistoryDir(entry: HistoryEntry) = focusedController.navigateToHistoryDir(entry)
+    fun navigateToHistoryFile(entry: HistoryEntry) = focusedController.navigateToHistoryFile(entry)
+    fun navigateToBookmark(bm: BookmarkEntry) = focusedController.navigateToBookmark(bm)
+    fun navigateToWebDav(config: WebDavServerConfig) = focusedController.navigateToWebDav(config)
+    fun navigateToWebDavFolder(name: String) = focusedController.navigateToWebDavFolder(name)
+    fun webDavGoBack(): Boolean = focusedController.webDavGoBack()
+    private fun loadWebDavEntries(panel: FilePaneController.VmPanelState) = focusedController.loadWebDavEntries(panel)
+    fun renameEntry(entry: FileEntry, newName: String): String? = focusedController.renameEntry(entry, newName)
+    fun deleteEntry(entry: FileEntry): String? = focusedController.deleteEntry(entry)
+    fun createEntry(parentPath: String, name: String, isFolder: Boolean): String? = focusedController.createEntry(parentPath, name, isFolder)
+    fun deleteEntries(entries: List<FileEntry>): String? = focusedController.deleteEntries(entries)
+    fun deleteEntriesWithProgress(entries: List<FileEntry>, toRecycleBin: Boolean, onDone: (String?) -> Unit) = focusedController.deleteEntriesWithProgress(entries, toRecycleBin, onDone)
+    suspend fun getPropertyData(entry: FileEntry): FilePropertyData = focusedController.getPropertyData(entry)
+    suspend fun countFilesInFolder(path: String): Pair<Int, Int> = focusedController.countFilesInFolder(path)
+    fun readExtFlags(path: String): String = focusedController.readExtFlags(path)
+    fun applyExtFlags(path: String, desiredFlags: Set<Char>, originalFlags: String): String? = focusedController.applyExtFlags(path, desiredFlags, originalFlags)
+    fun applyPermissions(path: String, mode: Int, uid: Int, gid: Int, originalMode: Int, originalUid: Int, originalGid: Int): Pair<String?, String?> = focusedController.applyPermissions(path, mode, uid, gid, originalMode, originalUid, originalGid)
+    fun verifyPermissions(path: String, expectedMode: Int, expectedUid: Int, expectedGid: Int): List<String> = focusedController.verifyPermissions(path, expectedMode, expectedUid, expectedGid)
+    fun compress(entries: List<FileEntry>, outputPath: String, format: String, level: Int, password: String, useAes: Boolean, encryptNames: Boolean, onProgress: (CompressService.ProgressInfo) -> Unit, onComplete: (Boolean, String?, String?) -> Unit) = focusedController.compress(entries, outputPath, format, level, password, useAes, encryptNames, onProgress, onComplete)
+    fun cancelCompress() = focusedController.cancelCompress()
+    fun cancelExtract() = focusedController.cancelExtract()
+    fun openArchive(entry: FileEntry) = focusedController.openArchive(entry)
+    fun debugOpenArchive(entry: FileEntry) = focusedController.debugOpenArchive(entry)
+    fun confirmOpenArchive() = focusedController.confirmOpenArchive()
+    private fun enterArchiveMode(session: ArchiveBrowser.ArchiveSession) = panels.enterArchiveMode(session)
+    fun navigateInArchive(entry: FileEntry) = panels.navigateInArchive(entry)
+    fun archiveGoUp(): Boolean = panels.archiveGoUp()
+    fun exitArchive() = panels.exitArchive()
+    fun isAtArchiveRoot(): Boolean = panels.isAtArchiveRoot()
+    fun navigateInRecycleBin(entry: FileEntry) = focusedController.navigateInRecycleBin(entry)
+    fun goUpInRecycleBin(): Boolean = focusedController.goUpInRecycleBin()
+    fun forceOpenExternalFile(context: Context, entry: FileEntry): String? = focusedController.forceOpenExternalFile(context, entry)
+    private fun getMimeType(fileName: String): String = focusedController.getMimeType(fileName)
+    private fun normalizePath(path: String): String = focusedController.normalizePath(path)
+    fun resolveFuseRealPath(path: String): String? = focusedController.resolveFuseRealPath(path)
+    private fun toRealPathForAttr(path: String): String = focusedController.toRealPathForAttr(path)
+    private fun resolveUserName(uid: Int): String = focusedController.resolveUserName(uid)
+    private fun resolveGroupName(gid: Int): String = focusedController.resolveGroupName(gid)
+    private fun resolveAppLabel(uid: Int): String = focusedController.resolveAppLabel(uid)
+    fun getSystemUsers(): List<SystemUser> = focusedController.getSystemUsers()
+    fun getSystemGroups(): List<SystemGroup> = focusedController.getSystemGroups()
+    private fun openWithExternalApp(file: File, displayName: String) = focusedController.openWithExternalApp(file, displayName)
+    fun refreshCurrent() = focusedController.refreshCurrent()
+    fun syncPaths() = panels.syncPaths()
+    fun refreshBoth() = panels.refreshBoth()
 
-    /**
-     * 通过 shell 检查路径是否为目录。
-     */
-    private fun shellIsDirectory(path: String): Boolean {
-        if (!hasShellEngine) return File(path).isDirectory
-        val escaped = SevenZipCommand.escape(path)
-        return try {
-            ShellExecutor.execute(Permission.MAX, "test -d $escaped")
-            true
-        } catch (_: Exception) { false }
-    }
-
-    /**
-     * 检查文件是否可通过 Java API 读取。
-     * Android/data 和 Android/obb 是受限目录，除自己包名外均不可读。
-     */
-    private fun shellCanRead(path: String): Boolean {
-        if (!hasShellEngine) return File(path).canRead()
-        if (isRestrictedAndroidDir(path)) return false
-        return File(path).canRead()
-    }
-
-    /** 判断路径是否在受限的 Android/data 或 Android/obb 下（排除自身包名） */
-    private fun isRestrictedAndroidDir(path: String): Boolean {
-        val p = path.replace("//", "/")
-        for (prefix in RESTRICTED_ANDROID_PREFIXES) {
-            if (p.startsWith(prefix)) {
-                val rest = p.removePrefix(prefix)
-                if (rest.startsWith(OWN_PACKAGE_NAME)) return false
-                return true
-            }
-        }
-        return false
-    }
-
-    /**
-     * 检查路径是否可读（受保护路径走 shell，普通路径走 Java API）。
-     */
-    fun canAccessPath(path: String): Boolean = shellPathExists(path)
-
-    /**
-     * 检查路径是否为目录（受保护路径走 shell，普通路径走 Java API）。
-     */
-    fun isDirectoryShell(path: String): Boolean = shellIsDirectory(path)
-
-    /**
-     * 通过 shell 列出目录直接子项，返回列表（空目录返回空列表，失败返回 null）。
-     * 用于替代 Java File.listFiles()，受保护路径走 shell。
-     */
-    fun listChildrenOrNull(path: String): List<FileEntry>? {
-        if (hasShellEngine) return listDirChildrenViaShell(path)
-        return try { File(path).listFiles()?.map { f ->
-            FileEntry(f.absolutePath, f.name, f.isDirectory, "", if (f.isDirectory) 0L else f.length(), f.lastModified())
-        } } catch (_: Exception) { null }
-    }
-
-    /**
-     * 根据当前引擎执行 shell 命令（Root 优先，回退 Shizuku）。
-     * 委托给 ShellExecutor.execute(Permission.MAX)。
-     * 保留 Triple 返回类型供调用方解构使用。
-     */
-    private fun executeShell(cmd: String): Triple<String, String, Int> {
-        return try {
-            val stdout = ShellExecutor.execute(Permission.MAX, cmd, debug = true)
-            Triple(stdout, "", 0)
-        } catch (e: ShellException) {
-            Triple("", "${e.message}\n${e.stderr}", e.exitCode)
-        } catch (e: Exception) {
-            Triple("", e.message ?: "Shell 执行异常", -1)
-        }
-    }
-
-    /**
-     * 格式化 shell 错误信息，输出中文提示 + 原始英文报错。
-     */
-    private fun formatShellError(name: String, stderr: String): String {
-        val detail = stderr.trim().ifBlank { "未知错误" }
-        return when {
-            detail.contains("Permission denied", ignoreCase = true) -> "$name 权限不足: $detail"
-            detail.contains("No such file or directory", ignoreCase = true) -> "$name 不存在: $detail"
-            else -> "$name 错误: $detail"
-        }
-    }
-
-    /**
-     * 通过 find -printf 列出目录内容（保留前导空格等特殊字符）。
-     * 输出格式: %f|%s|%T@|%m|%u|%g|%M\n
-     * @return 原始行列表，调用方自行解析
-     */
-    /**
-     * ls -1aF 获取目录条目名称（快速，只读目录，不 stat 每个条目）。
-     * 返回格式：目录带 "/" 后缀，如 "Documents/"。
-     */
-    private fun listDirNamesViaLs(
-        dirPath: String,
-        showHidden: Boolean
-    ): List<String> {
-        val normalized = if (dirPath == "/") "/" else dirPath.trimEnd('/').ifEmpty { "/" }
-        val escaped = SevenZipCommand.escape(normalized)
-        val cmd = "ls -1aF $escaped"
-        return try {
-            val stdout = ShellExecutor.execute(Permission.MAX, cmd, debug = true)
-            stdout.lines().filter { line ->
-                val name = line.trimEnd('\r')
-                if (name.isBlank()) return@filter false
-                val cleanName = if (name.endsWith("/")) name.dropLast(1) else name
-                if (cleanName == "." || cleanName == "..") return@filter false
-                if (!showHidden && cleanName.startsWith(".")) return@filter false
-                true
-            }
-        } catch (_: Exception) {
-            emptyList()
-        }
-    }
-
-    /** 从 ls -1aF 行解析文件名和 isDir。剥离 -F 后缀：/=目录 *=可执行 @=符号链接 |=FIFO ==Socket */
-    private fun parseLsLine(line: String): Pair<String, Boolean>? {
-        val trimmed = line.trimEnd('\r')
-        if (trimmed.isBlank()) return null
-        val isDir = trimmed.endsWith("/")
-        val name = if (isDir) trimmed.dropLast(1) else trimmed.trimEnd('*', '@', '|', '=')
-        if (name == "." || name == "..") return null
-        return name to isDir
-    }
-
-
-    /**
-     * 通过 shell 命令列出目录内容（Shizuku / Root / 普通 shell）。
-     * 用于访问 Android/data 等受 Scoped Storage 保护的目录。
-     * @return 条目列表，失败返回空列表并设置 lastShellStderr
-     */
-    private fun listDirEntriesViaShell(path: String, showHidden: Boolean, longFormat: Boolean = false): List<FileEntry> {
-        val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-
-        val lsLines = listDirNamesViaLs(normalizedPath, showHidden)
-        if (lsLines.isEmpty()) {
-            lastShellStderr = ""
-            return emptyList()
-        }
-        lastShellStderr = ""
-
-        val entries = mutableListOf<FileEntry>()
-        for (line in lsLines) {
-            val (name, isDir) = parseLsLine(line) ?: continue
-            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-            entries.add(FileEntry(childPath, name, isDir))
-        }
-
-        // find -printf 批量填充元数据
-        val escaped = SevenZipCommand.escape(normalizedPath)
-        val hiddenFilter = if (showHidden) "" else " -not -name '.*'"
-        val findCmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
-        val findOut = try {
-            ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
-        } catch (_: Exception) {
-            return entries
-        }
-        val nameToIndex = entries.withIndex().associate { (i, e) -> e.name to i }
-        for (line in findOut.lines()) {
-            if (line.isBlank()) continue
-            val parts = line.split("|")
-            if (parts.size < 7) continue
-            val name = parts[0]
-            val pos = nameToIndex[name] ?: continue
-            val size = parts[1].toLongOrNull() ?: 0L
-            val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
-            val perms = parts[6]
-            val isDir = perms.startsWith("d")
-            entries[pos] = entries[pos].copy(
-                permission = perms,
-                size = if (isDir) 0L else size,
-                lastModified = (mtimeSec * 1000).toLong()
-            )
-        }
-        return entries
-    }
-
+    // Shell 工具
+    private fun executeShell(cmd: String): Triple<String, String, Int> = focusedController.executeShell(cmd)
+    private fun shellPathExists(path: String): Boolean = focusedController.shellPathExists(path)
+    private fun shellIsDirectory(path: String): Boolean = focusedController.shellIsDirectory(path)
+    private fun shellCanRead(path: String): Boolean = focusedController.shellCanRead(path)
+    private fun isRestrictedAndroidDir(path: String): Boolean = focusedController.isRestrictedAndroidDir(path)
+    private fun isProtectedPath(path: String): Boolean = focusedController.isProtectedPath(path)
+    fun canAccessPath(path: String): Boolean = focusedController.canAccessPath(path)
+    fun isDirectoryShell(path: String): Boolean = focusedController.isDirectoryShell(path)
+    fun listChildrenOrNull(path: String): List<FileEntry>? = focusedController.listChildrenOrNull(path)
+    private fun formatShellError(name: String, stderr: String): String = focusedController.formatShellError(name, stderr)
+    
+    // 目录加载
+    private fun loadDirectory(targetPath: String, panel: FilePaneController.VmPanelState = currentPanel, isRefresh: Boolean = false, onComplete: ((String) -> Unit)? = null) = focusedController.loadDirectory(targetPath, panel, isRefresh, onComplete)
+    private fun loadDirectoryAsync(targetPath: String, panel: FilePaneController.VmPanelState, isRefresh: Boolean = false, onComplete: ((String) -> Unit)? = null) = focusedController.loadDirectoryAsync(targetPath, panel, isRefresh, onComplete)
+    private fun loadDirectorySync(targetPath: String, panel: FilePaneController.VmPanelState, isRefresh: Boolean = false, onComplete: ((String) -> Unit)? = null) = focusedController.loadDirectorySync(targetPath, panel, isRefresh, onComplete)
+    fun listDirectory(path: String): List<FileEntry> = focusedController.listDirectory(path)
+    private fun sortEntries(entries: List<FileEntry>): List<FileEntry> = focusedController.sortEntries(entries)
+    private fun listDirNamesViaLs(dirPath: String, showHidden: Boolean): List<String> = focusedController.listDirNamesViaLs(dirPath, showHidden)
+    private fun parseLsLine(line: String): Pair<String, Boolean>? = focusedController.parseLsLine(line)
+    private fun listDirEntriesViaShell(path: String, showHidden: Boolean, longFormat: Boolean = false): List<FileEntry> = focusedController.listDirEntriesViaShell(path, showHidden, longFormat)
+    private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? = focusedController.listDirChildrenViaShell(dirPath)
+    private fun listWithFile(path: String, showHidden: Boolean, effectiveRoot: String): List<FileEntry> = focusedController.listWithFile(path, showHidden, effectiveRoot)
+    private fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean, effectiveRoot: String): List<FileEntry> = focusedController.listWithLs(path, showHidden, useRoot, effectiveRoot)
+    private fun decryptVaultFileName(encryptedName: String, session: VaultSession): String = focusedController.decryptVaultFileName(encryptedName, session)
+    fun loadExtFlagsForDir(dirPath: String, panel: FilePaneController.VmPanelState = currentPanel) = focusedController.loadExtFlagsForDir(dirPath, panel)
     // ── 便捷属性（getter，跟随 focusedPanel 自动切换） ──
     val currentPath: String get() {
         val panel = currentPanel
@@ -608,7 +2575,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private val scrollPositions = HashMap<String, Pair<Int, Int>>()
 
     /** 生成面板感知的 key: "L:/path" 或 "R:/path" */
-    private fun scrollKey(panel: VmPanelState, path: String): String {
+    private fun scrollKey(panel: FilePaneController.VmPanelState, path: String): String {
         val side = if (panel === 左) "L" else "R"
         return "$side:$path"
     }
@@ -620,294 +2587,28 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 读取指定路径的滚动位置 */
-    fun getScrollPosition(path: String, panel: VmPanelState = currentPanel): Pair<Int, Int>? =
+    fun getScrollPosition(path: String, panel: FilePaneController.VmPanelState = currentPanel): Pair<Int, Int>? =
         scrollPositions[scrollKey(panel, path)]
 
     /** 清空指定路径的滚动位置（前进导航时使用，确保目标从第一行开始） */
-    fun clearScrollPosition(path: String, panel: VmPanelState = currentPanel) {
+    fun clearScrollPosition(path: String, panel: FilePaneController.VmPanelState = currentPanel) {
         scrollPositions.remove(scrollKey(panel, path))
     }
 
     // ── 异步目录加载核心 ──
 
-    /**
-     * 异步加载目录内容，替代同步 listDirectory() + loadExtFlagsForDir()。
-     * 逐行解析 find 输出，每 BATCH_SIZE 个切 Main 更新 entries，全部完成后最终排序。
-     * 路径切换在第一个条目解析成功后才执行，避免空白闪现。
-     *
-     * @param targetPath 目标目录路径
-     * @param panel 目标面板实例
-     * @param isRefresh 是否为刷新操作（刷新时先清空再重新加载当前路径）
-     * @param onComplete 加载完成后回调（参数为最终路径）
-     */
-    private fun loadDirectoryAsync(
-        targetPath: String,
-        panel: VmPanelState,
-        isRefresh: Boolean = false,
-        onComplete: ((String) -> Unit)? = null
-    ) {
-        panel.loadMetadataJob?.cancel()
-        val myVersion = panel.loadVersion
 
-        // 不在此处切 panel.path，等第一个条目解析成功后才切，避免空白闪现
 
-        val job = viewModelScope.launch(Dispatchers.IO) {
-            val normalized = if (targetPath == "/") "/" else targetPath.trimEnd('/').ifEmpty { "/" }
-            val escaped = SevenZipCommand.escape(normalized)
 
-            // vault 配置文件名，用于过滤
-            val vaultConfigNames = if (isVaultMode) setOf(
-                "vault_config.json", "vault_config.backup.json",
-                "name_mappings.json", "folder_sizes.json"
-            ) else emptySet()
-
-            // ── Phase 1: ls -1aF 获取文件名（阻塞，快速） ──
-            val lsCmd = "ls -1aF $escaped"
-            val lsOutput = try {
-                ShellExecutor.execute(Permission.MAX, lsCmd, debug = true)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) return@launch
-                withContext(Dispatchers.Main) {
-                    if (myVersion == panel.loadVersion) {
-                        panel.loadError = e
-                        panel.isLoading = false
-                    }
-                }
-                return@launch
-            }
-
-            // 检查版本号
-            if (myVersion != panel.loadVersion) return@launch
-
-            val snapshot = mutableListOf<FileEntry>()
-            for (raw in lsOutput.lines()) {
-                val line = raw.trimEnd('\r')
-                if (line.isBlank()) continue
-                val isDir = line.endsWith("/")
-                val name = if (isDir) line.dropLast(1) else line.trimEnd('*', '@', '|', '=')
-                if (name == "." || name == "..") continue
-                if (!showHiddenFiles && name.startsWith(".")) continue
-                if (name in vaultConfigNames) continue
-                val childPath = if (normalized == "/") "/$name" else "$normalized/$name"
-                var entry = FileEntry(childPath, name, isDir)
-                if (isVaultMode) {
-                    val session = vaultSession
-                    if (session != null && !isDir) {
-                        entry = entry.copy(name = decryptVaultFileName(name, session))
-                    }
-                }
-                snapshot.add(entry)
-            }
-
-            val sorted = sortEntries(snapshot)
-
-            // 首批渲染：名称列表
-            withContext(Dispatchers.Main) {
-                if (myVersion != panel.loadVersion) return@withContext
-                panel.isLoading = false
-                if (!isRefresh) {
-                    panel.path = targetPath
-                }
-                panel.entries = sorted
-                onComplete?.invoke(targetPath)
-            }
-
-            // 异步加载 ext flags（不阻塞 entries 渲染）
-            loadExtFlagsForDir(targetPath, panel = panel)
-
-            // ── Phase 2: find -printf 批量获取元数据（异步，单条命令） ──
-            val metadataJob = launch(Dispatchers.IO) {
-                val hiddenFilter = if (showHiddenFiles) "" else " -not -name '.*'"
-                val findCmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
-                val findOut = try {
-                    ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
-                } catch (_: Exception) {
-                    return@launch
-                }
-                if (myVersion != panel.loadVersion) return@launch
-
-                // 按文件名索引当前条目
-                val nameToIndex = sorted.withIndex().associate { (i, e) -> e.name to i }
-                val enriched = sorted.toMutableList()
-
-                for (line in findOut.lines()) {
-                    if (line.isBlank()) continue
-                    val parts = line.split("|")
-                    if (parts.size < 7) continue
-                    val name = parts[0]
-                    if (name == "." || name == "..") continue
-                    val pos = nameToIndex[name] ?: continue
-                    val old = enriched[pos]
-                    val size = parts[1].toLongOrNull() ?: 0L
-                    val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
-                    val perms = parts[6]
-                    enriched[pos] = old.copy(
-                        permission = perms,
-                        size = if (old.isDirectory) 0L else size,
-                        lastModified = (mtimeSec * 1000).toLong()
-                    )
-                }
-
-                val finalEntries = sortEntries(enriched)
-                withContext(Dispatchers.Main) {
-                    if (myVersion != panel.loadVersion) return@withContext
-                    panel.entries = finalEntries
-                }
-            }
-            panel.loadMetadataJob = metadataJob
-        }
-        panel.loadJob = job
-    }
-
-    /**
-     * 对 FileEntry 列表执行排序（directories first + 当前排序字段）。
-     * 复用 listDirectory() 的排序逻辑。
-     */
-    private fun sortEntries(entries: List<FileEntry>): List<FileEntry> {
-        // vault 模式过滤配置文件
-        val filtered = if (isVaultMode) {
-            entries.filter { entry ->
-                val name = entry.name
-                name != "vault_config.json" &&
-                name != "vault_config.backup.json" &&
-                name != "name_mappings.json" &&
-                name != "folder_sizes.json"
-            }
-        } else entries
-
-        // 填充创建时间（异步阶段，不在首次渲染时执行 NIO）
-        val withCreationTime = if (sortField == SortField.CREATED && android.os.Build.VERSION.SDK_INT >= 26) {
-            filtered.map { e ->
-                if (e.createdAt > 0) return@map e
-                val ct = try {
-                    java.nio.file.Files.readAttributes(
-                        java.io.File(e.path).toPath(),
-                        java.nio.file.attribute.BasicFileAttributes::class.java
-                    ).creationTime().toMillis()
-                } catch (_: Exception) { e.lastModified }
-                e.copy(createdAt = ct)
-            }
-        } else filtered
-
-        return when (sortField) {
-            SortField.NAME -> if (sortOrder == SortOrder.ASC)
-                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
-            else
-                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
-            SortField.SIZE -> {
-                fun effectiveSize(entry: FileEntry): Long {
-                    if (!entry.isDirectory) return entry.size
-                    val cached = folderSizeDb.get(entry.path)
-                    return cached?.size ?: -1L
-                }
-                if (sortOrder == SortOrder.ASC)
-                    withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { effectiveSize(it).let { s -> if (s < 0) Long.MAX_VALUE else s } })
-                else
-                    withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { effectiveSize(it).let { s -> if (s < 0) Long.MIN_VALUE else s } })
-            }
-            SortField.MODIFIED -> if (sortOrder == SortOrder.ASC)
-                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.lastModified })
-            else
-                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.lastModified })
-            SortField.CREATED -> if (sortOrder == SortOrder.ASC)
-                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.createdAt })
-            else
-                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.createdAt })
-        }
-    }
-
-    /**
-     * Java File API 模式下的同步加载 + 异步赋值。
-     * 用于无 shell 引擎时的本地文件系统（通常很快）。
-     */
-    private fun loadDirectorySync(
-        targetPath: String,
-        panel: VmPanelState,
-        isRefresh: Boolean = false,
-        onComplete: ((String) -> Unit)? = null
-    ) {
-        val myVersion = panel.loadVersion
-
-        // 不在此处切路径，等 entries 就绪后才切
-
-        val job = viewModelScope.launch(Dispatchers.IO) {
-            val normalized = if (targetPath == "/") "/" else targetPath.trimEnd('/').ifEmpty { "/" }
-            val dir = java.io.File(normalized)
-            val entries = try {
-                dir.listFiles()?.map { f ->
-                    FileEntry(f.absolutePath, f.name, f.isDirectory, "", if (f.isDirectory) 0L else f.length(), f.lastModified())
-                }?.filter { f -> showHiddenFiles || !f.name.startsWith(".") }
-            } catch (_: Exception) { null }
-
-            if (entries == null) {
-                withContext(Dispatchers.Main) {
-                    if (myVersion == panel.loadVersion) {
-                        panel.loadError = RuntimeException("权限不足或目录不存在: $targetPath")
-                        panel.isLoading = false
-                    }
-                }
-                return@launch
-            }
-
-            val sorted = sortEntries(entries)
-            withContext(Dispatchers.Main) {
-                if (myVersion != panel.loadVersion) return@withContext
-                panel.isLoading = false
-                if (!isRefresh) {
-                    panel.path = targetPath
-                }
-                panel.entries = sorted
-                onComplete?.invoke(targetPath)
-            }
-        }
-        panel.loadJob = job
-    }
-
-    /**
-     * 统一的异步目录加载入口：有 shell 引擎走 streaming，否则走 Java File API。
-     */
-    private fun loadDirectory(
-        targetPath: String,
-        panel: VmPanelState = currentPanel,
-        isRefresh: Boolean = false,
-        onComplete: ((String) -> Unit)? = null
-    ) {
-        panel.loadJob?.cancel()
-        panel.loadVersion++
-        panel.entries = emptyList()
-        panel.isLoading = true
-        panel.resetTransientState()
-
-        if (hasShellEngine) {
-            loadDirectoryAsync(targetPath, panel, isRefresh, onComplete)
-        } else {
-            loadDirectorySync(targetPath, panel, isRefresh, onComplete)
-        }
-    }
 
     // ── 待滚动状态（面板级状态已移入 VmPanelState） ──
     /** 向后兼容：当前聚焦面板的待滚动状态 */
     val pendingScrollTo: Triple<String, Int, Int>? get() = currentPanel.pendingScrollTo
 
-    /**
-     * 统一的导航函数：跳转路径 + 设置滚动位置
-     * @param path 目标路径
-     * @param scrollToIndex 滚动到第几个卡片（默认 0，即第一行）
-     * @param scrollToOffset 滚动偏移量（默认 0）
-     */
-    fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
-        navigateTo(path)
-        currentPanel.pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
-    }
 
     // ── 核心导航：切换路径 + 刷新列表（异步） ──
     fun navigateTo(path: String, onComplete: ((String) -> Unit)? = null) {
-        val panel = currentPanel
-        if (panel.isInRecycleBin) panel.isInRecycleBin = false
-        if (panel.path == path) return
-        panel.navState = panel.navState.navigate(path)
-        loadDirectory(path, panel = panel, onComplete = onComplete)
-        checkVaultPanelExit()
+        focusedController.navigateTo(path, onComplete, onPathChanged = { checkVaultPanelExit() })
     }
 
     /** 软链接弹窗状态：null=不显示，FileEntry=被点击的软链接 */
@@ -947,15 +2648,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun navigateToHistoryDir(entry: HistoryEntry) {
-        val panel = currentPanel
-        if (hasShellEngine) {
-            loadDirectory(entry.path, panel = panel)
-        } else {
-            val testDir = File(entry.path)
-            if (testDir.exists() && testDir.canRead()) loadDirectory(entry.path, panel = panel)
-        }
-    }
 
     /**
      * 从历史记录点击文件：导航到文件所在父目录，并记录待滚动目标文件名。
@@ -963,73 +2655,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 向后兼容：当前聚焦面板的待滚动文件名 */
     val pendingScrollToFile: String? get() = currentPanel.pendingScrollToFile
 
-    fun navigateToHistoryFile(entry: HistoryEntry) {
-        val file = File(entry.path)
-        val parentDir = file.parentFile ?: return
-        val panel = currentPanel
-        if (hasShellEngine) {
-            panel.pendingScrollToFile = file.name
-            loadDirectory(parentDir.absolutePath, panel = panel)
-        } else if (parentDir.exists() && parentDir.canRead()) {
-            panel.pendingScrollToFile = file.name
-            loadDirectory(parentDir.absolutePath, panel = panel)
-        }
-    }
 
-    fun navigateToBookmark(bm: BookmarkEntry) {
-        val panel = currentPanel
-        if (hasShellEngine) {
-            loadDirectory(bm.path, panel = panel)
-        } else {
-            val testDir = File(bm.path)
-            if (testDir.exists() && testDir.canRead()) loadDirectory(bm.path, panel = panel)
-        }
-    }
 
     // ── WebDAV 浏览操作 ──
 
-    /**
-     * 进入 WebDAV 浏览模式。
-     */
-    fun navigateToWebDav(config: WebDavServerConfig) {
-        val panel = currentPanel
-        try {
-            val client = WebDavFileClient(config)
-            panel.webDavClient = client
-            panel.webDavConfig = config
-            panel.webDavCurrentPath = config.relativePath.ifEmpty { "/" }
-            loadWebDavEntries(panel)
-        } catch (e: Exception) {
-            panel.loadError = RuntimeException("连接 WebDAV 失败: ${e.message}")
-        }
-    }
 
-    /**
-     * 在 WebDAV 模式下进入子目录。
-     */
-    fun navigateToWebDavFolder(name: String) {
-        val panel = currentPanel
-        val client = panel.webDavClient ?: return
-        val newPath = if (panel.webDavCurrentPath.endsWith("/")) {
-            "${panel.webDavCurrentPath}$name"
-        } else {
-            "${panel.webDavCurrentPath}/$name"
-        }
-        panel.webDavCurrentPath = newPath
-        loadWebDavEntries(panel)
-    }
 
-    /**
-     * 在 WebDAV 模式下返回上一级。
-     */
-    fun webDavGoBack(): Boolean {
-        val panel = currentPanel
-        if (panel.webDavCurrentPath == "/" || panel.webDavCurrentPath.isEmpty()) return false
-        val parent = panel.webDavCurrentPath.substringBeforeLast("/", "").ifEmpty { "/" }
-        panel.webDavCurrentPath = parent
-        loadWebDavEntries(panel)
-        return true
-    }
 
     /**
      * 退出 WebDAV 模式，恢复本地文件列表。
@@ -1042,109 +2673,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         refreshCurrent()
     }
 
-    /**
-     * 加载当前 WebDAV 路径的文件列表到指定面板。
-     */
-    private fun loadWebDavEntries(panel: VmPanelState = currentPanel) {
-        val client = panel.webDavClient ?: return
-        try {
-            val files = client.listChildren(panel.webDavCurrentPath)
-            if (files != null) {
-                panel.entries = files.map { info ->
-                    FileEntry(
-                        path = info.remotePath,
-                        name = info.name,
-                        isDirectory = info.isDirectory,
-                        permission = "",
-                        size = info.size,
-                        lastModified = info.lastModified,
-                        createdAt = 0
-                    )
-                }.let { entries ->
-                    when (sortField) {
-                        SortField.NAME -> when (sortOrder) {
-                            SortOrder.ASC -> entries.sortedBy { it.name.lowercase() }
-                            SortOrder.DESC -> entries.sortedByDescending { it.name.lowercase() }
-                        }
-                        SortField.SIZE -> when (sortOrder) {
-                            SortOrder.ASC -> entries.sortedBy { it.size }
-                            SortOrder.DESC -> entries.sortedByDescending { it.size }
-                        }
-                        SortField.MODIFIED -> when (sortOrder) {
-                            SortOrder.ASC -> entries.sortedBy { it.lastModified }
-                            SortOrder.DESC -> entries.sortedByDescending { it.lastModified }
-                        }
-                        SortField.CREATED -> entries
-                    }
-                }
-                panel.loadError = null
-            }
-        } catch (e: Exception) {
-            panel.loadError = RuntimeException("WebDAV 加载失败: ${e.message}")
-        }
-    }
 
-    /** 后退一步：更新 nav state index + 异步加载目录，返回目标路径 */
-    fun goBack(): String? {
-        val panel = currentPanel
-        val back = panel.navState.back() ?: return null
-        panel.navState = back
-        loadDirectory(back.current, panel = panel)
-        return back.current
-    }
 
-    /** 前进一步：更新 nav state index + 异步加载目录，返回目标路径 */
-    fun goForward(): String? {
-        val panel = currentPanel
-        val fwd = panel.navState.forward() ?: return null
-        panel.navState = fwd
-        loadDirectory(fwd.current, panel = panel)
-        return fwd.current
-    }
 
-    /** 返回上级目录，返回目标路径，null 表示已在根目录 */
-    fun goUp(): String? {
-        val effectiveRoot = vaultRoot ?: if (isRootEngine) "/" else safeDefault
-        val path = currentPanel.path
-        if (path == effectiveRoot || !path.contains('/')) return null
-        val parent = path.substringBeforeLast('/').ifEmpty { "/" }
-        if (parent == path) return null
-        return parent
-    }
 
-    fun syncPaths() {
-        val src = currentPanel
-        val dst = otherPanel
-        dst.navState = dst.navState.navigate(src.path)
-        loadDirectory(src.path, panel = dst)
-    }
 
-    fun refreshCurrent() {
-        val panel = currentPanel
-        val idx = panel.currentScrollIndex
-        val off = panel.currentScrollOffset
-        if (idx != 0 || off != 0) {
-            panel.pendingScrollTo = Triple(panel.path, idx, off)
-        }
-        if (panel.isWebDavMode) {
-            loadWebDavEntries(panel)
-        } else {
-            loadDirectory(panel.path, panel = panel, isRefresh = true)
-        }
-    }
 
-    fun refreshBoth() {
-        if (左.isWebDavMode) {
-            loadWebDavEntries(左)
-        } else {
-            loadDirectory(左.path, panel = 左, isRefresh = true)
-        }
-        if (右.isWebDavMode) {
-            loadWebDavEntries(右)
-        } else {
-            loadDirectory(右.path, panel = 右, isRefresh = true)
-        }
-    }
 
     // ── Vault 模式 ──
 
@@ -1182,25 +2716,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         } catch (_: Exception) {}
     }
 
-    private fun decryptVaultFileName(encryptedName: String, session: VaultSession): String {
-        var raw = encryptedName
-        if (raw.endsWith(".aes")) {
-            raw = raw.substring(0, raw.length - 4)
-        }
-        if (!session.record.encryptFilename) {
-            return raw
-        }
-        return try {
-            FilenameCodec.decrypt(
-                encryptedName = "${raw}.aes",
-                dek = session.dek,
-                aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null,
-                lookupMapping = { session.nameMapping.get(it) }
-            )
-        } catch (e: Exception) {
-            raw
-        }
-    }
 
     /** vault 模式下打开文件：解密到临时文件后分发 */
     fun openVaultFile(entry: FileEntry): Screen? {
@@ -1301,41 +2816,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun openWithExternalApp(file: File, displayName: String) {
-        try {
-            val uri = androidx.core.content.FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                file
-            )
-            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, getMimeType(displayName))
-                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
-        } catch (e: Exception) {
-            viewModelScope.launch(Dispatchers.Main) {
-                loadError = RuntimeException("无法打开文件: $displayName\n${e.message}")
-            }
-        }
-    }
 
-    private fun getMimeType(fileName: String): String {
-        val ext = fileName.substringAfterLast('.').lowercase()
-        return when (ext) {
-            "pdf" -> "application/pdf"
-            "doc", "docx" -> "application/msword"
-            "xls", "xlsx" -> "application/vnd.ms-excel"
-            "ppt", "pptx" -> "application/vnd.ms-powerpoint"
-            "zip" -> "application/zip"
-            "mp3" -> "audio/mpeg"
-            "mp4" -> "video/mp4"
-            "avi" -> "video/x-msvideo"
-            "mkv" -> "video/x-matroska"
-            else -> "*/*"
-        }
-    }
 
     // ── 文件夹大小统计 ──
 
@@ -1503,121 +2984,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return null
     }
 
-    /**
-     * 重命名文件或文件夹。成功返回 null，失败返回错误信息。
-     */
-    fun renameEntry(entry: FileEntry, newName: String): String? {
-        val source = File(entry.path)
-        val parent = source.parentFile ?: return "无法获取父目录"
-        val dest = File(parent, newName)
 
-        if (hasShellEngine) {
-            val escapedSrc = SevenZipCommand.escape(entry.path)
-            val escapedDst = SevenZipCommand.escape(dest.absolutePath)
-            val (_, err, exit) = try {
-                executeShell("mv $escapedSrc $escapedDst")
-            } catch (e: Exception) { return e.message ?: "重命名失败" }
-            return if (exit == 0) null else "重命名失败: $err"
-        }
 
-        if (dest.exists()) return "已存在同名文件或文件夹"
-        return try {
-            if (source.renameTo(dest)) null else "重命名失败"
-        } catch (e: Exception) { e.message ?: "重命名失败" }
-    }
 
-    /**
-     * 永久删除文件或文件夹。成功返回 null，失败返回错误信息。
-     */
-    fun deleteEntry(entry: FileEntry): String? {
-        if (hasShellEngine) {
-            val escaped = SevenZipCommand.escape(entry.path)
-            val flag = if (entry.isDirectory) "-rf" else "-f"
-            val (_, err, exit) = try {
-                executeShell("rm $flag $escaped")
-            } catch (e: Exception) { return e.message ?: "删除失败" }
-            return if (exit == 0) null else "删除失败: $err"
-        }
-        val file = File(entry.path)
-        return try {
-            if (SpecialPermissionVerifier.safeDelete(file)) null else "删除失败"
-        } catch (e: Exception) { e.message ?: "删除失败" }
-    }
 
-    /**
-     * 创建文件或文件夹。成功返回 null，失败返回错误信息。
-     */
-    fun createEntry(parentPath: String, name: String, isFolder: Boolean): String? {
-        val target = File(parentPath, name)
-
-        if (hasShellEngine) {
-            val escaped = SevenZipCommand.escape(target.absolutePath)
-            val cmd = if (isFolder) "mkdir $escaped" else "touch $escaped"
-            val (_, err, exit) = try {
-                executeShell(cmd)
-            } catch (e: Exception) { return e.message ?: "创建失败" }
-            return if (exit == 0) null else "创建失败: $err"
-        }
-
-        if (target.exists()) return "已存在同名文件或文件夹"
-        return try {
-            val success = if (isFolder) target.mkdir() else target.createNewFile()
-            if (success) null else "创建失败"
-        } catch (e: Exception) { e.message ?: "创建失败" }
-    }
-
-    /** 批量删除。成功返回 null，失败返回最后一条错误信息。 */
-    fun deleteEntries(entries: List<FileEntry>): String? {
-        var lastError: String? = null
-        for (entry in entries) {
-            val err = deleteEntry(entry)
-            if (err != null) lastError = err
-        }
-        return lastError
-    }
-
-    /**
-     * 批量删除（带进度，在 IO 线程执行）。
-     * 完成后回调 onDone(error)，error 为 null 表示成功。
-     */
-    fun deleteEntriesWithProgress(entries: List<FileEntry>, toRecycleBin: Boolean, onDone: (String?) -> Unit) {
-        fileOpCancelFlag.set(false)
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                // 预处理：计算总大小
-                var totalSize = 0L
-                for (entry in entries) totalSize += calculateTotalSize(entry.path)
-                var processedBytes = 0L
-
-                for ((index, entry) in entries.withIndex()) {
-                    if (fileOpCancelFlag.get()) {
-                        _fileOpProgress.value = null
-                        withContext(Dispatchers.Main) { onDone("已取消") }
-                        return@launch
-                    }
-                    _fileOpProgress.value = FileOpProgress(
-                        phase = "正在删除",
-                        currentBytes = processedBytes,
-                        totalBytes = totalSize,
-                        currentFileName = entry.name,
-                        fileIndex = index,
-                        fileCount = entries.size
-                    )
-                    val error = if (toRecycleBin) moveToRecycleBin(entry) else deleteEntry(entry)
-                    if (error != null) {
-                        withContext(Dispatchers.Main) { onDone(error) }
-                        return@launch
-                    }
-                    processedBytes += calculateTotalSize(entry.path)
-                }
-                _fileOpProgress.value = null
-                withContext(Dispatchers.Main) { onDone(null) }
-            } catch (e: Exception) {
-                _fileOpProgress.value = null
-                withContext(Dispatchers.Main) { onDone(e.message ?: "删除失败") }
-            }
-        }
-    }
 
     /**
      * 永久删除回收站中的文件。成功返回 null，失败返回错误信息。
@@ -1696,29 +3066,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         panel.entries = listRecycleBinDir(binDir)
     }
 
-    /** 在回收站内进入子文件夹 */
-    fun navigateInRecycleBin(entry: FileEntry) {
-        if (!entry.isDirectory) return
-        val dir = java.io.File(entry.path)
-        if (!dir.exists() || !dir.canRead()) {
-            Toast.makeText(context, "权限不足: ${entry.name}", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val panel = currentPanel
-        panel.recycleBinPath = entry.path
-        panel.entries = listRecycleBinDir(dir)
-    }
 
-    /** 在回收站内返回上一级 */
-    fun goUpInRecycleBin(): Boolean {
-        val panel = currentPanel
-        val binRoot = AppDataPaths.recycleBin(context).absolutePath
-        if (panel.recycleBinPath == binRoot) return false
-        val parent = java.io.File(panel.recycleBinPath).parentFile ?: return false
-        panel.recycleBinPath = parent.absolutePath
-        panel.entries = listRecycleBinDir(parent)
-        return true
-    }
 
     private fun listRecycleBinDir(dir: java.io.File): List<FileEntry> {
         return (dir.listFiles() ?: emptyArray())
@@ -1756,8 +3104,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateShowHiddenFiles(value: Boolean) {
         showHiddenFiles = value
         fmPrefs.edit().putBoolean("show_hidden_files", value).apply()
-        loadDirectory(左.path, panel = 左, isRefresh = true)
-        loadDirectory(右.path, panel = 右, isRefresh = true)
+        panels.refreshBoth()
     }
 
     fun updateJxlPackZip(value: Boolean) {
@@ -1815,77 +3162,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         try { bookmarkFile.writeText(historyJson.encodeToString(bookmarkList)) } catch (_: Exception) {}
     }
 
-    // ── 目录列表 ──
-    fun listDirectory(path: String): List<FileEntry> {
-        DiagnosticLog.log("FileMgr", ">>> listDirectory START path=$path useRoot=$isRootEngine")
-        loadError = null
-        val t0 = System.currentTimeMillis()
-        val effectiveRoot = if (isRootEngine) "/" else safeDefault
-
-        var entries = listWithLs(path, showHiddenFiles, useRoot = isRootEngine, effectiveRoot = effectiveRoot)
-
-        // vault 模式：过滤配置文件 + 文件名解密
-        if (isVaultMode) {
-            val session = vaultSession!!
-            entries = entries.filter { entry ->
-                val name = entry.name
-                name != "vault_config.json" &&
-                name != "vault_config.backup.json" &&
-                name != "name_mappings.json" &&
-                name != "folder_sizes.json"
-            }.map { entry ->
-                if (entry.isDirectory) {
-                    entry
-                } else {
-                    val displayName = decryptVaultFileName(entry.name, session)
-                    entry.copy(name = displayName)
-                }
-            }
-        }
-
-        // 填充创建时间（API 26+ 使用 NIO）
-        if (sortField == SortField.CREATED && android.os.Build.VERSION.SDK_INT >= 26) {
-            entries = entries.map { e ->
-                if (e.createdAt > 0) return@map e
-                val ct = try {
-                    Files.readAttributes(File(e.path).toPath(), BasicFileAttributes::class.java).creationTime().toMillis()
-                } catch (_: Exception) { e.lastModified }
-                e.copy(createdAt = ct)
-            }
-        }
-
-        // 自定义排序
-        entries = when (sortField) {
-            SortField.NAME -> if (sortOrder == SortOrder.ASC)
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
-            else
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
-            SortField.SIZE -> {
-                // 获取条目的有效大小：文件用 entry.size，已统计目录用 folderSizeDb，未统计目录用 -1
-                fun effectiveSize(entry: FileEntry): Long {
-                    if (!entry.isDirectory) return entry.size
-                    val cached = folderSizeDb.get(entry.path)
-                    return cached?.size ?: -1L // -1 表示未统计
-                }
-                if (sortOrder == SortOrder.ASC)
-                    entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { effectiveSize(it).let { s -> if (s < 0) Long.MAX_VALUE else s } })
-                else
-                    entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { effectiveSize(it).let { s -> if (s < 0) Long.MIN_VALUE else s } })
-            }
-            SortField.MODIFIED -> if (sortOrder == SortOrder.ASC)
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.lastModified })
-            else
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.lastModified })
-            SortField.CREATED -> if (sortOrder == SortOrder.ASC)
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.createdAt })
-            else
-                entries.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.createdAt })
-        }
-
-        val took = System.currentTimeMillis() - t0
-        DiagnosticLog.log("FileMgr", "<<< listDirectory END path=$path entries=${entries.size} took=${took}ms err=${loadError?.javaClass?.simpleName}")
-        return entries
-    }
 
     // ── 文件操作 ──
     fun openFile(context: Context, entry: FileEntry, isDebug: Boolean = false): Screen? {
@@ -1992,356 +3268,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return null
     }
 
-    /**
-     * 强行用外部 Intent 打开文件（忽略 resolveActivity 检查）。
-     * 返回 null 表示成功，返回错误信息表示失败。
-     */
-    fun forceOpenExternalFile(context: Context, entry: FileEntry): String? {
-        return try {
-            val uri = androidx.core.content.FileProvider.getUriForFile(
-                context, "${context.packageName}.fileprovider", File(entry.path)
-            )
-            val extension = entry.name.substringAfterLast('.', "").lowercase()
-            val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
-            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, mimeType)
-                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            DiagnosticLog.log("OpenFile", "强行打开: uri=$uri mime=$mimeType")
-            val chooser = android.content.Intent.createChooser(intent, "选择应用打开")
-            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(chooser)
-            DiagnosticLog.log("OpenFile", "强行打开 startActivity 已调用")
-            null
-        } catch (e: Exception) {
-            DiagnosticLog.log("OpenFile", "强行打开异常: ${e.javaClass.simpleName}: ${e.message}")
-            DiagnosticLog.exportCrashReport(context, e, "强行打开失败: ${entry.path}")
-            "错误类型: ${e.javaClass.simpleName}\n文件: ${entry.path}\n\n${e.stackTraceToString()}"
-        }
-    }
 
     // ── 文件夹大小（待重构） ──
 
-    /** 通过 shell 列出目录直接子项（含文件大小），用于受保护目录 */
-    private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? {
-        val normalized = if (dirPath == "/") "/" else dirPath.trimEnd('/').ifEmpty { "/" }
-        val lsLines = listDirNamesViaLs(normalized, showHidden = true)
-        if (lsLines.isEmpty()) return null
 
-        val entries = mutableListOf<FileEntry>()
-        for (line in lsLines) {
-            val (name, isDir) = parseLsLine(line) ?: continue
-            val childPath = "$normalized/$name"
-            entries.add(FileEntry(childPath, name, isDir))
-        }
 
-        // find -printf 批量填充元数据
-        val escaped = SevenZipCommand.escape(normalized)
-        val findCmd = "find $escaped -maxdepth 1 -mindepth 1 -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
-        val findOut = try {
-            ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
-        } catch (_: Exception) {
-            return entries
-        }
-        val nameToIndex = entries.withIndex().associate { (i, e) -> e.name to i }
-        for (line in findOut.lines()) {
-            if (line.isBlank()) continue
-            val parts = line.split("|")
-            if (parts.size < 7) continue
-            val name = parts[0]
-            val pos = nameToIndex[name] ?: continue
-            val size = parts[1].toLongOrNull() ?: 0L
-            val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
-            val perms = parts[6]
-            val isDir = perms.startsWith("d")
-            entries[pos] = entries[pos].copy(
-                permission = perms,
-                size = if (isDir) 0L else size,
-                lastModified = (mtimeSec * 1000).toLong()
-            )
-        }
-        return entries
-    }
 
-    private fun listWithFile(path: String, showHidden: Boolean, effectiveRoot: String): List<FileEntry> {
-        DiagnosticLog.log("FileEngine", "listFiles($path) showHidden=$showHidden")
-        val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-        val dir = File(normalizedPath)
 
-        if (!dir.exists()) {
-            DiagnosticLog.log("FileEngine", "目录不存在: $normalizedPath")
-            loadError = RuntimeException("目录不存在: $normalizedPath")
-            return emptyList()
-        }
-        if (!dir.isDirectory) {
-            DiagnosticLog.log("FileEngine", "路径不是目录: $normalizedPath")
-            loadError = RuntimeException("路径不是目录: $normalizedPath")
-            return emptyList()
-        }
-
-        val children = try {
-            dir.listFiles()
-        } catch (e: SecurityException) {
-            DiagnosticLog.log("FileEngine", "listFiles SecurityException: ${e.message}")
-            loadError = e
-            return emptyList()
-        }
-        if (children == null) {
-            DiagnosticLog.log("FileEngine", "listFiles 返回 null（权限不足或 I/O 错误）")
-            loadError = RuntimeException("无法列出目录（权限不足）: $normalizedPath")
-            return emptyList()
-        }
-        DiagnosticLog.log("FileEngine", "listFiles 返回 ${children.size} 项")
-
-        val entries = mutableListOf<FileEntry>()
-        var dirCount = 0
-        var fileCount = 0
-        var skipHidden = 0
-        for (child in children) {
-            val name = child.name
-            if (!showHidden && name.startsWith(".")) { skipHidden++; continue }
-            val isDir = try {
-                child.isDirectory
-            } catch (e: Exception) {
-                DiagnosticLog.log("FileEngine", "isDirectory 异常 $name: ${e.message}")
-                false
-            }
-            if (isDir) dirCount++ else fileCount++
-            val perm = try { formatPermission(Os.stat(child.absolutePath).st_mode) } catch (_: Exception) { "" }
-            val sz = if (isDir) 0L else try { child.length() } catch (_: Exception) { 0L }
-            val modified = try { child.lastModified() } catch (_: Exception) { 0L }
-            entries.add(FileEntry(child.absolutePath, name, isDir, perm, sz, modified))
-        }
-        DiagnosticLog.log("FileEngine", "统计: dirs=$dirCount, files=$fileCount, hidden 过滤=$skipHidden")
-
-        val sorted = entries.sortedWith(
-            compareByDescending<FileEntry> { it.isDirectory }
-                .thenBy { it.name.lowercase() }
-        )
-        entries.clear()
-        entries.addAll(sorted)
-        return entries
-    }
-
-    private fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean, effectiveRoot: String): List<FileEntry> {
-        val entries = mutableListOf<FileEntry>()
-        val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-
-        val lsLines = try {
-            listDirNamesViaLs(normalizedPath, showHidden)
-        } catch (e: Throwable) {
-            val isApkAssetsNoise = e is java.io.IOException && (
-                e.stackTrace.any { it.className == "android.content.res.ApkAssets" } ||
-                        (e.message?.contains("Failed to load asset path") == true) ||
-                        (e.message?.contains(".apk from fd") == true)
-            )
-            if (isApkAssetsNoise) {
-                DiagnosticLog.log("LsShell", "忽略 hook 注入的 ApkAssets 噪声: ${e.message}")
-                return emptyList()
-            }
-            DiagnosticLog.log("LsShell", "execute 抛错: ${e.javaClass.simpleName}: ${e.message}")
-            loadError = if (e is Exception) e else RuntimeException(e)
-            return emptyList()
-        }
-
-        DiagnosticLog.log("LsShell", "ls 输出 ${lsLines.size} 行")
-
-        if (lsLines.isEmpty()) {
-            val file = File(normalizedPath)
-            if (!file.exists()) {
-                loadError = SecurityException("目录不存在: $normalizedPath")
-            } else if (!file.isDirectory) {
-                loadError = SecurityException("不是目录: $normalizedPath")
-            }
-            return emptyList()
-        }
-
-        // Phase 1: 名称 + isDir
-        for (line in lsLines) {
-            val (name, isDir) = parseLsLine(line) ?: continue
-            val childPath = if (normalizedPath == "/") "/$name" else "$normalizedPath/$name"
-            entries.add(FileEntry(childPath, name, isDir))
-        }
-
-        // Phase 2: find -printf 批量填充元数据
-        val escaped = SevenZipCommand.escape(normalizedPath)
-        val hiddenFilter = if (showHidden) "" else " -not -name '.*'"
-        val findCmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
-        val findOut = try {
-            ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
-        } catch (_: Exception) {
-            ""
-        }
-        if (findOut.isNotBlank()) {
-            val nameToIndex = entries.withIndex().associate { (i, e) -> e.name to i }
-            for (line in findOut.lines()) {
-                if (line.isBlank()) continue
-                val parts = line.split("|")
-                if (parts.size < 7) continue
-                val name = parts[0]
-                val pos = nameToIndex[name] ?: continue
-                val size = parts[1].toLongOrNull() ?: 0L
-                val mtimeSec = parts[2].toDoubleOrNull() ?: 0.0
-                val perms = parts[6]
-                val isDir = perms.startsWith("d")
-                entries[pos] = entries[pos].copy(
-                    permission = perms,
-                    size = if (isDir) 0L else size,
-                    lastModified = (mtimeSec * 1000).toLong()
-                )
-            }
-        }
-
-        var dirCount = 0
-        var fileCount = 0
-        for (entry in entries) {
-            if (entry.isDirectory) dirCount++ else fileCount++
-        }
-        DiagnosticLog.log("LsShell", "解析结果: dirs=$dirCount, files=$fileCount, 总 ${entries.size}")
-
-        val sorted = entries.sortedWith(
-            compareByDescending<FileEntry> { it.isDirectory }
-                .thenBy { it.name.lowercase() }
-        )
-        entries.clear()
-        entries.addAll(sorted)
-        return entries
-    }
-
-    suspend fun getPropertyData(entry: FileEntry): FilePropertyData = withContext(Dispatchers.IO) {
-        val file = File(entry.path)
-
-        // shell 路径: stat -c 一次获取权限/用户名/组名/UID/GID
-        // 非 shell 路径: Os.stat 获取全部
-        var permission = ""
-        var owner = ""
-        var group = ""
-
-        if (hasShellEngine) {
-            val escaped = SevenZipCommand.escape(entry.path)
-            // stat -c 一次获取权限、用户名、组名、UID、GID，无需解析 ls 列对齐
-            val (statOut, _, statExit) = try {
-                executeShell("stat -c '%a|%U|%G|%u|%g' $escaped")
-            } catch (_: Exception) { Triple("", "", -1) }
-            if (statExit == 0 && statOut.isNotBlank()) {
-                val parts = statOut.trim().split("|")
-                if (parts.size >= 5) {
-                    val modeOct = parts[0]
-                    val userName = parts[1]
-                    val groupName = parts[2]
-                    val uid = parts[3].toIntOrNull()
-                    val gid = parts[4].toIntOrNull()
-                    permission = "($modeOct)"
-                    owner = if (uid != null) "$userName ($uid)" else userName
-                    group = if (gid != null) "$groupName ($gid)" else groupName
-                }
-            }
-        } else {
-            val stat = try { Os.stat(entry.path) } catch (_: Exception) { null }
-            if (stat != null) {
-                val mode = stat.st_mode
-                permission = "${formatPermission(mode)}(${String.format("%03o", mode and 0x1FF)})"
-                owner = resolveUserName(stat.st_uid).let { if (it.isNotBlank()) "$it (${stat.st_uid})" else "${stat.st_uid}" }
-                group = resolveGroupName(stat.st_gid).let { if (it.isNotBlank()) "$it (${stat.st_gid})" else "${stat.st_gid}" }
-            }
-        }
-
-        val modifiedTime = if (entry.lastModified > 0) {
-            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(entry.lastModified))
-        } else ""
-
-        val sizeDisplay = if (entry.isDirectory) {
-            val cached = folderSizeDb.get(entry.path)
-            val bytes = cached?.size ?: 0L
-            if (bytes > 0) "${formatSize(bytes)} ($bytes)" else "0 B (0)"
-        } else {
-            "${formatSize(entry.size)} (${entry.size})"
-        }
-
-        val parentPath = file.parent ?: ""
-
-        // 类型描述
-        val type = if (entry.isDirectory) {
-            "文件夹"
-        } else {
-            val ext = entry.name.substringAfterLast('.', "").lowercase()
-            when (ext) {
-                "png" -> "PNG 图片"
-                "jpg", "jpeg" -> "JPEG 图片"
-                "gif" -> "GIF 图片"
-                "webp" -> "WebP 图片"
-                "bmp" -> "BMP 图片"
-                "mp4" -> "MP4 视频"
-                "mkv" -> "MKV 视频"
-                "avi" -> "AVI 视频"
-                "mp3" -> "MP3 音频"
-                "flac" -> "FLAC 音频"
-                "wav" -> "WAV 音频"
-                "zip" -> "ZIP 压缩包"
-                "rar" -> "RAR 压缩包"
-                "7z" -> "7Z 压缩包"
-                "tar" -> "TAR 归档"
-                "gz" -> "GZ 压缩"
-                "apk" -> "APK 安装包"
-                "txt" -> "文本文件"
-                "pdf" -> "PDF 文档"
-                "doc", "docx" -> "Word 文档"
-                "xls", "xlsx" -> "Excel 表格"
-                "json" -> "JSON 文件"
-                "xml" -> "XML 文件"
-                "html", "htm" -> "HTML 文件"
-                "js" -> "JavaScript 文件"
-                "kt" -> "Kotlin 文件"
-                "java" -> "Java 文件"
-                "py" -> "Python 文件"
-                "sh" -> "Shell 脚本"
-                else -> if (ext.isNotEmpty()) "${ext.uppercase()} 文件" else "文件"
-            }
-        }
-
-        FilePropertyData(
-            name = entry.name,
-            directory = parentPath,
-            type = type,
-            sizeBytes = entry.size,
-            sizeDisplay = sizeDisplay,
-            modifiedTime = modifiedTime,
-            permission = permission,
-            owner = owner,
-            group = group,
-            isDirectory = entry.isDirectory
-        )
-    }
-
-    /** 异步统计目录内文件和文件夹数量 */
-    suspend fun countFilesInFolder(path: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
-        val file = File(path)
-        var fileCount = 0
-        var folderCount = 0
-        if (hasShellEngine) {
-            val escaped = SevenZipCommand.escape(path)
-            val cmd = "d=\$(find $escaped -mindepth 1 -type d | wc -l); f=\$(find $escaped -type f | wc -l); echo \"\$d \$f\""
-            val (out, _, exit) = try { executeShell(cmd) } catch (_: Exception) { Triple("", "", -1) }
-            if (exit == 0 && out.isNotBlank()) {
-                val parts = out.trim().split("\\s+".toRegex())
-                if (parts.size >= 2) {
-                    folderCount = parts[0].toIntOrNull() ?: 0
-                    fileCount = parts[1].toIntOrNull() ?: 0
-                }
-            }
-        } else {
-            fun countRecursive(dir: File) {
-                val children = try { dir.listFiles() } catch (_: Exception) { null } ?: return
-                for (child in children) {
-                    if (child.isDirectory) { folderCount++; countRecursive(child) }
-                    else fileCount++
-                }
-            }
-            countRecursive(file)
-        }
-        Pair(folderCount, fileCount)
-    }
 
     // ── 权限编辑 ──
 
@@ -2471,439 +3404,21 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         9999 to "nobody",
     )
 
-    /** 通过 UID 解析应用桌面名称（如 "艨艟战舰"） */
-    private fun resolveAppLabel(uid: Int): String {
-        if (uid < 10000) return ""
-        return try {
-            val pm = getApplication<Application>().packageManager
-            val packages = pm.getPackagesForUid(uid)
-            val pkg = packages?.firstOrNull() ?: return ""
-            val appInfo = pm.getApplicationInfo(pkg, 0)
-            pm.getApplicationLabel(appInfo).toString()
-        } catch (_: Exception) { "" }
-    }
 
-    /** 读取全部系统用户：系统 UID 映射 + pm list packages -U（应用 UID） */
-    fun getSystemUsers(): List<SystemUser> {
-        val result = mutableMapOf<Int, String>()
 
-        // 1. 系统 UID（android_filesystem_config.h）
-        result.putAll(SYSTEM_UID_MAP)
-
-        // 2. 应用 UID（≥10000）：通过 pm list packages -U 获取包名+UID
-        if (isRootEngine) {
-            val stdout = try {
-                ShellExecutor.execute(Permission.ROOT, "pm list packages -U", debug = true)
-            } catch (_: Exception) { "" }
-            if (stdout.isNotBlank()) {
-                stdout.lines().forEach { line ->
-                    // 格式: "package:com.example.app uid:10123"
-                    val pkg = line.removePrefix("package:").substringBefore(" ").trim()
-                    val uidStr = line.substringAfter("uid:", "").trim()
-                    val uid = uidStr.toIntOrNull()
-                    if (uid != null && uid >= 10000 && uid !in result) {
-                        result[uid] = pkg
-                    }
-                }
-            }
-        }
-
-        return result.map { (uid, name) ->
-            val label = resolveAppLabel(uid)
-            SystemUser(uid, name, label)
-        }.sortedBy { it.uid }
-    }
-
-    /** 读取全部系统用户组：系统 GID 映射 + pm list packages -G（应用 GID） */
-    fun getSystemGroups(): List<SystemGroup> {
-        val result = mutableMapOf<Int, String>()
-
-        // 系统 GID（与 UID 共享同一套映射）
-        SYSTEM_UID_MAP.forEach { (id, name) -> result[id] = name }
-
-        // 应用 GID：pm list packages -G
-        if (isRootEngine) {
-            val stdout = try {
-                ShellExecutor.execute(Permission.ROOT, "pm list packages -G", debug = true)
-            } catch (_: Exception) { "" }
-            if (stdout.isNotBlank()) {
-                stdout.lines().forEach { line ->
-                    val pkg = line.removePrefix("package:").substringBefore(" ").trim()
-                    val gidStr = line.substringAfter("gid:", "").trim()
-                    val gid = gidStr.toIntOrNull()
-                    if (gid != null && gid >= 10000 && gid !in result) {
-                        result[gid] = pkg
-                    }
-                }
-            }
-        }
-
-        return result.map { (gid, name) ->
-            val label = resolveAppLabel(gid)
-            SystemGroup(gid, name, label)
-        }.sortedBy { it.gid }
-    }
-
-    /** 读取 /etc/passwd 解析 UID→用户名（无需 root） */
-    private fun resolveUserName(uid: Int): String {
-        val name = try {
-            File("/etc/passwd").readLines().firstNotNullOfOrNull { line ->
-                val parts = line.split(":")
-                if (parts.size >= 3 && parts[2].toIntOrNull() == uid) parts[0] else null
-            }
-        } catch (_: Exception) { null }
-        return if (name != null) "$name ($uid)" else uid.toString()
-    }
-
-    /** 读取 /etc/group 解析 GID→组名（无需 root） */
-    private fun resolveGroupName(gid: Int): String {
-        val name = try {
-            File("/etc/group").readLines().firstNotNullOfOrNull { line ->
-                val parts = line.split(":")
-                if (parts.size >= 3 && parts[2].toIntOrNull() == gid) parts[0] else null
-            }
-        } catch (_: Exception) { null }
-        return if (name != null) "$name ($gid)" else gid.toString()
-    }
-
-    /**
-     * 检测路径是否在 FUSE 虚拟挂载层上。
-     * 解析 /proc/self/mountinfo，找到包含该路径的 FUSE 挂载条目。
-     * 对 /storage/emulated（用户内部存储），直接映射到 /data/media/{userId}/。
-     * 非 FUSE 路径返回 null。
-     */
-    fun resolveFuseRealPath(path: String): String? {
-        try {
-            val mountInfo = File("/proc/self/mountinfo").readText()
-            var fuseMountPoint: String? = null
-            var fuseSource = ""
-
-            for (line in mountInfo.lines()) {
-                val sepIndex = line.indexOf(" - ")
-                if (sepIndex < 0) continue
-                val leftPart = line.substring(0, sepIndex)
-                val rightPart = line.substring(sepIndex + 3)
-
-                val leftFields = leftPart.split(" ")
-                if (leftFields.size < 5) continue
-                val rightFields = rightPart.split(" ")
-                if (rightFields.isEmpty()) continue
-
-                val mountPoint = leftFields[4]
-                val fsType = rightFields[0]
-                val source = if (rightFields.size >= 2) rightFields[1] else ""
-
-                if (fsType != "fuse" && fsType != "fuseblk") continue
-                if (mountPoint == "/") continue
-
-                val normalized = mountPoint.trimEnd('/')
-                if (!path.startsWith(normalized)) continue
-                if (path.length != normalized.length && path[normalized.length] != '/') continue
-
-                // 最长前缀匹配
-                if (fuseMountPoint == null || mountPoint.length > fuseMountPoint.length) {
-                    fuseMountPoint = mountPoint
-                    fuseSource = source
-                }
-            }
-
-            if (fuseMountPoint == null) return null
-
-            // 非 /dev/fuse 源（真实块设备），直接用 source 拼接
-            if (fuseSource.isNotEmpty() && !fuseSource.startsWith("/dev/")) {
-                val remaining = path.removePrefix(fuseMountPoint.trimEnd('/'))
-                return normalizePath(fuseSource.trimEnd('/') + remaining)
-            }
-
-            // /storage/emulated → /data/media/{userId}
-            // 正则匹配 /storage/emulated/{id}/... 或 /storage/emulated/{id}
-            val emulatedRegex = Regex("^/storage/emulated/(\\d+)(.*)")
-            val match = emulatedRegex.find(path)
-            if (match != null) {
-                val userId = match.groupValues[1]
-                val subPath = match.groupValues[2]
-                return "/data/media/$userId$subPath"
-            }
-
-        } catch (_: Exception) {}
-        return null
-    }
-
-    /** 规范化路径：去除连续斜杠和尾部斜杠。 */
-    private fun normalizePath(path: String): String {
-        var result = path.replace(Regex("/+"), "/")
-        if (result.length > 1) result = result.trimEnd('/')
-        return result
-    }
-
-    /**
-     * 应用权限修改。成功返回 null，失败返回错误信息。
-     * 返回 Pair(errorMessage, fuseRealPath)：
-     * - (null, null) = 成功
-     * - (errorMsg, null) = 失败
-     * - (null, realPath) = 检测到 FUSE，需要用户确认后通过 shell 执行
-     */
-    fun applyPermissions(path: String, mode: Int, uid: Int, gid: Int, originalMode: Int, originalUid: Int, originalGid: Int): Pair<String?, String?> {
-        // 先检测 FUSE
-        val fuseRealPath = resolveFuseRealPath(path)
-        if (fuseRealPath != null) {
-            return null to fuseRealPath
-        }
-
-        // 非 FUSE：直接 Os.chmod + shell chown
-        try {
-            Os.chmod(path, mode and 0x1FF)
-        } catch (e: ErrnoException) { return "chmod 失败: ${e.message}\n路径: $path\n\n${e.stackTraceToString()}" to null }
-        catch (e: Exception) { return "chmod 异常: ${e.message}\n\n${e.stackTraceToString()}" to null }
-
-        val escapedPath = SevenZipCommand.escape(path)
-        try {
-            ShellExecutor.execute(Permission.ROOT, "chown $uid:$gid $escapedPath")
-        } catch (e: Exception) {
-            try { Os.chmod(path, originalMode and 0x1FF) } catch (_: Exception) {}
-            return "chown 执行异常: ${e.message}\n\n${e.stackTraceToString()}" to null
-        }
-        try {
-            val stat = Os.stat(path)
-            if (stat.st_uid != uid || stat.st_gid != gid) {
-                return "chown 未生效: 期望 $uid:$gid, 实际 ${stat.st_uid}:${stat.st_gid}\n路径: $path" to null
-            }
-        } catch (e: Exception) { return "chown 验证失败: ${e.message}\n\n${e.stackTraceToString()}" to null }
-
-        return null to null
-    }
-
-    /**
-     * 后台验证权限修改是否生效。
-     * 文件夹：随机抽取最多 5 个子项验证。文件：直接验证。
-     * 返回未生效的路径列表（空 = 全部成功）。
-     */
-    fun verifyPermissions(path: String, expectedMode: Int, expectedUid: Int, expectedGid: Int): List<String> {
-        if (!hasShellEngine) return emptyList()
-        val targets = mutableListOf(path)
-        try {
-            if (File(path).isDirectory) {
-                val escaped = SevenZipCommand.escape(path)
-                val (out, _, exit) = try { executeShell("ls -1A $escaped") } catch (_: Exception) { Triple("", "", -1) }
-                if (exit == 0 && out.isNotBlank()) {
-                    val children = out.lines().filter { it.isNotBlank() }
-                    val picked = children.shuffled().take(5)
-                    targets.clear()
-                    targets.addAll(picked.map { "$path/$it" })
-                }
-            }
-        } catch (_: Exception) {}
-
-        val failed = mutableListOf<String>()
-        val expectedOctal = String.format("%03o", expectedMode and 0x1FF)
-        for (t in targets) {
-            val escaped = SevenZipCommand.escape(t)
-            val (out, _, exit) = try { executeShell("stat -c '%a|%u|%g' $escaped") } catch (_: Exception) { Triple("", "", -1) }
-            if (exit != 0) { failed.add(t); continue }
-            val parts = out.trim().split("|")
-            if (parts.size < 3) { failed.add(t); continue }
-            val (actualMode, actualUid, actualGid) = parts
-            if (actualMode != expectedOctal || actualUid != expectedUid.toString() || actualGid != expectedGid.toString()) {
-                failed.add(t)
-            }
-        }
-        return failed
-    }
 
     // ── 扩展文件属性（chattr/lsattr） ──
 
-    /** 将 FUSE 路径转换为底层真实路径，使 chattr/lsattr 能操作 inode 标志。 */
-    private fun toRealPathForAttr(path: String): String {
-        // /storage/emulated/0/xxx → /data/media/0/xxx
-        val regex = Regex("^/storage/emulated/(\\d+)/")
-        val match = regex.find(path)
-        return if (match != null) {
-            path.replaceFirst("/storage/emulated/${match.groupValues[1]}/", "/data/media/${match.groupValues[1]}/")
-        } else {
-            path
-        }
-    }
 
-    /** 读取扩展属性标志字符串（如 "----i----------" 或 "-a-----------"）。无 shell 引擎时返回空字符串。 */
-    fun readExtFlags(path: String): String {
-        if (!hasShellEngine) return ""
-        val realPath = toRealPathForAttr(path)
-        val escaped = SevenZipCommand.escape(realPath)
-        val (out, _, exit) = try { executeShell("lsattr $escaped") } catch (_: Exception) { Triple("", "", -1) }
-        if (exit != 0 || out.isBlank()) return ""
-        val line = out.lines().firstOrNull { it.isNotBlank() } ?: return ""
-        // lsattr 输出格式: "----i----------  /path/to/file" 或 "----i----------" (部分实现)
-        val flags = line.split("\\s+".toRegex()).firstOrNull() ?: return ""
-        // 只提取我们关心的标志（i/a），忽略 e/c/s 等文件系统默认标志
-        return flags.filter { it == 'i' || it == 'a' }
-    }
 
-    /**
-     * 批量读取目录下所有文件的扩展属性（i/a），结果存入 panel.extFlagsMap。
-     * 仅在有 shell 引擎时执行，否则清空对应 map。
-     */
-    fun loadExtFlagsForDir(dirPath: String, panel: VmPanelState = currentPanel) {
-        if (!hasShellEngine) {
-            panel.extFlagsMap = emptyMap()
-            return
-        }
-        val realPath = toRealPathForAttr(dirPath)
-        val escaped = SevenZipCommand.escape(realPath.trimEnd('/'))
-        // 使用 lsattr 目录/* 展开通配符，确保列出目录内容（Android toybox 的 lsattr 可能不支持目录参数）
-        val (out, _, exit) = try {
-            executeShell("lsattr $escaped/* 2>/dev/null")
-        } catch (_: Exception) {
-            Triple("", "", -1)
-        }
-        if (exit != 0 || out.isBlank()) {
-            panel.extFlagsMap = emptyMap()
-            return
-        }
-        val map = mutableMapOf<String, String>()
-        for (raw in out.lines()) {
-            val line = raw.trimEnd('\r')
-            if (line.isBlank()) continue
-            // lsattr 输出: "----i----------  /path/to/file"
-            val parts = line.split("\\s+".toRegex(), limit = 2)
-            if (parts.size < 2) continue
-            val flags = parts[0].filter { it == 'i' || it == 'a' }
-            if (flags.isEmpty()) continue
-            val nameOrPath = parts[1].trim()
-            val name = nameOrPath.substringAfterLast('/')
-            if (name.isNotEmpty()) {
-                map[name] = flags
-            }
-        }
-        panel.extFlagsMap = map
-    }
 
-    /** 应用扩展属性修改。传入目标标志字符集（如 "ia" 表示要设置 immutable + append-only）。成功返回 null。 */
-    fun applyExtFlags(path: String, desiredFlags: Set<Char>, originalFlags: String): String? {
-        if (!isRootEngine) return "需要 Root 权限"
-        val realPath = toRealPathForAttr(path)
-        val escaped = SevenZipCommand.escape(realPath)
-        val originalSet = originalFlags.filter { it == 'i' || it == 'a' }.toSet()
-        // 需要添加的标志
-        val toAdd = desiredFlags - originalSet
-        // 需要移除的标志
-        val toRemove = originalSet - desiredFlags
-        if (toAdd.isNotEmpty()) {
-            try {
-                ShellExecutor.execute(Permission.ROOT, "chattr +${toAdd.joinToString("")} $escaped")
-            } catch (e: Exception) { return "chattr +${toAdd.joinToString("")} 执行异常: ${e.message}\n\n${e.stackTraceToString()}" }
-        }
-        if (toRemove.isNotEmpty()) {
-            try {
-                ShellExecutor.execute(Permission.ROOT, "chattr -${toRemove.joinToString("")} $escaped")
-            } catch (e: Exception) { return "chattr -${toRemove.joinToString("")} 执行异常: ${e.message}\n\n${e.stackTraceToString()}" }
-        }
-        return null
-    }
 
-    // ── 文件操作进度系统 ──
+    // ── 文件操作进度（委托到 Controller） ──
+    val fileOpProgress: StateFlow<FilePaneController.FileOpProgress?> get() = focusedController.fileOpProgress
+    val fileOpCancelFlag: AtomicBoolean get() = focusedController.fileOpCancelFlag
+    private fun calculateTotalSize(path: String): Long = focusedController.calculateTotalSize(path)
 
-    data class FileOpProgress(
-        val phase: String,           // "正在复制" / "正在移动" / "正在删除" / "正在压缩" / "正在解压"
-        val currentBytes: Long,      // 已处理字节
-        val totalBytes: Long,        // 总字节
-        val currentFileName: String = "", // 当前处理的文件名
-        val isRunning: Boolean = true,
-        val fileIndex: Int = 0,      // 当前处理到第几个文件（从 0 开始）
-        val fileCount: Int = 0       // 总文件数（0 表示不使用文件计数模式）
-    ) {
-        val fraction: Float get() {
-            // 文件计数模式：按文件数计算进度
-            if (fileCount > 0) return fileIndex.toFloat() / fileCount
-            // 字节模式
-            return if (totalBytes > 0) currentBytes.toFloat() / totalBytes else 0f
-        }
-    }
 
-    private val _fileOpProgress = MutableStateFlow<FileOpProgress?>(null)
-    val fileOpProgress: StateFlow<FileOpProgress?> = _fileOpProgress
-
-    /** 文件操作取消标志 */
-    val fileOpCancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
-
-    /** 递归计算文件/文件夹总大小（字节） */
-    private fun calculateTotalSize(path: String): Long {
-        val file = File(path)
-        if (!file.exists()) return 0L
-        if (file.isFile) return file.length()
-        var total = 0L
-        val stack = ArrayDeque<File>()
-        stack.add(file)
-        while (stack.isNotEmpty()) {
-            val f = stack.removeLast()
-            if (f.isDirectory) {
-                val children = f.listFiles()
-                if (children != null) {
-                    for (child in children) stack.add(child)
-                }
-            } else {
-                total += f.length()
-            }
-        }
-        return total
-    }
-
-    /**
-     * 启动压缩任务。
-     * @param entries 待压缩的文件列表
-     * @param outputPath 输出压缩包完整路径
-     * @param format 格式: zip/7z/tar/tar.gz/tar.bz2/tar.xz
-     * @param level 压缩级别 0-9
-     * @param password 密码（空=不加密）
-     * @param useAes ZIP 是否使用 AES-256
-     * @param onProgress 进度回调（主线程）
-     * @param onComplete 完成回调（主线程）
-     */
-    fun compress(
-        entries: List<FileEntry>,
-        outputPath: String,
-        format: String,
-        level: Int,
-        password: String,
-        useAes: Boolean,
-        encryptNames: Boolean = false,
-        onProgress: (CompressService.ProgressInfo) -> Unit,
-        onComplete: (Boolean, String?, String?) -> Unit
-    ) {
-        compressCancelFlag.set(false)
-        compressJob?.cancel()
-        compressJob = viewModelScope.launch(Dispatchers.IO) {
-            val options = CompressService.CompressOptions(
-                sourcePaths = entries.map { it.path },
-                outputPath = outputPath,
-                format = format,
-                compressionLevel = level,
-                password = password,
-                useAes = useAes,
-                encryptNames = encryptNames
-            )
-            CompressService.compress(
-                context = getApplication(),
-                options = options,
-                permissionLevel = permissionLevel,
-                cancelFlag = compressCancelFlag,
-                callback = object : CompressService.ProgressCallback {
-                    override fun onProgress(info: CompressService.ProgressInfo) {
-                        onProgress(info)
-                    }
-                    override fun onComplete(success: Boolean, path: String?, error: String?) {
-                        launch(Dispatchers.Main) { onComplete(success, path, error) }
-                    }
-                }
-            )
-        }
-    }
-
-    /** 取消正在进行的压缩任务 */
-    fun cancelCompress() {
-        compressCancelFlag.set(true)
-        compressJob?.cancel()
-        compressJob = null
-    }
 
 
     // ── 解压 ──
@@ -2921,14 +3436,15 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         onProgress: (CompressService.ProgressInfo) -> Unit,
         onComplete: (Boolean, String?, String?) -> Unit
     ) {
-        extractCancelFlag.set(false)
-        extractJob?.cancel()
-        extractJob = viewModelScope.launch(Dispatchers.IO) {
+        val ctrl = focusedController
+        ctrl.extractCancelFlag.set(false)
+        ctrl.extractJob?.cancel()
+        ctrl.extractJob = viewModelScope.launch(Dispatchers.IO) {
             val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
             val context = getApplication<Application>()
 
             for (entry in entries) {
-                if (extractCancelFlag.get()) break
+                if (ctrl.extractCancelFlag.get()) break
 
                 // 优先使用调用方传入的密码，其次使用缓存密码
                 val effectivePassword = password.ifEmpty { archivePasswordCache[entry.path] ?: "" }
@@ -2984,7 +3500,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     context = context,
                     options = options,
                     permissionLevel = permLevel,
-                    cancelFlag = extractCancelFlag,
+                    cancelFlag = ctrl.extractCancelFlag,
                     callback = object : CompressService.ProgressCallback {
                         override fun onProgress(info: CompressService.ProgressInfo) {
                             onProgress(info)
@@ -3001,12 +3517,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 取消正在进行的解压任务 */
-    fun cancelExtract() {
-        extractCancelFlag.set(true)
-        extractJob?.cancel()
-        extractJob = null
-    }
 
     /** 解压完成后刷新文件列表：聚焦面板必刷，非聚焦面板仅在压缩包所在目录或解压目录时刷新 */
     fun refreshAfterExtract(outputDir: String) {
@@ -3022,7 +3532,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun refreshPanel(panel: VmPanelState) {
+    private fun refreshPanel(panel: FilePaneController.VmPanelState) {
         panel.entries = listDirectory(panel.path)
         loadExtFlagsForDir(panel.path, panel = panel)
     }
@@ -3045,97 +3555,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 压缩包浏览 ──
 
-    /** 打开压缩包（首次，无密码）。若需要密码则设置 archivePasswordRequest 触发弹窗 */
-    fun openArchive(entry: FileEntry) {
-        val panel = currentPanel
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
-                val currentPathVal = panel.path
-                val currentEntriesVal = panel.entries
 
-                val passwordCheck = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
 
-                if (passwordCheck == null) {
-                    // exitCode≠0 且未检测到加密标志 → 档案本身有问题
-                    withContext(Dispatchers.Main) {
-                        panel.archiveOpenError = Pair(entry.name, "该压缩包无法读取，可能已损坏或格式不受支持。")
-                    }
-                    return@launch
-                }
-
-                if (passwordCheck == true) {
-                    // Encrypted = + → 需要密码
-                    withContext(Dispatchers.Main) { panel.archivePasswordRequest = entry }
-                    return@launch
-                }
-
-                // 不需要密码，直接打开
-                val result = ArchiveBrowser.openArchive(
-                    context = context,
-                    archivePath = entry.path,
-                    archiveName = entry.name,
-                    permissionLevel = permLevel,
-                    password = "",
-                    originalPath = currentPathVal,
-                    originalEntries = currentEntriesVal
-                )
-
-                withContext(Dispatchers.Main) {
-                    result.fold(
-                        onSuccess = { session ->
-                            enterArchiveMode(session)
-                        },
-                        onFailure = { error ->
-                            panel.archiveOpenError = Pair(entry.name, "打开压缩包失败: ${error.message}")
-                        }
-                    )
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    panel.archiveOpenError = Pair(entry.name, "打开压缩包异常: ${e.message}")
-                }
-            }
-        }
-    }
-
-    /** Debug 模式：解析压缩包信息，弹出预览弹窗 */
-    fun debugOpenArchive(entry: FileEntry) {
-        val panel = currentPanel
-        viewModelScope.launch(Dispatchers.IO) {
-            val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
-            val currentPathVal = panel.path
-            val currentEntriesVal = panel.entries
-
-            val info = ArchiveBrowser.parseArchiveDebug(
-                context = context,
-                archivePath = entry.path,
-                archiveName = entry.name,
-                permissionLevel = permLevel,
-                originalPath = currentPathVal,
-                originalEntries = currentEntriesVal
-            )
-
-            withContext(Dispatchers.Main) {
-                panel.archiveDebugInfo = info.copy(sourceEntry = entry)
-            }
-        }
-    }
-
-    /** Debug 弹窗确认打开：需要密码时弹密码框，否则直接进入浏览模式 */
-    fun confirmOpenArchive() {
-        val panel = currentPanel
-        val info = panel.archiveDebugInfo ?: return
-        if (info.passwordRequired) {
-            val entry = info.sourceEntry ?: return
-            panel.archiveDebugInfo = null
-            panel.archivePasswordRequest = entry
-            return
-        }
-        val session = info.session ?: return
-        enterArchiveMode(session)
-        panel.archiveDebugInfo = null
-    }
 
     /** 密码弹窗验证回调：带密码重试打开压缩包 */
     /** 带密码重试打开压缩包（挂起函数，供密码弹窗 onVerify 使用）。返回 true=成功 */
@@ -3180,63 +3601,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 进入压缩包浏览模式 */
-    private fun enterArchiveMode(session: ArchiveBrowser.ArchiveSession) {
-        val panel = currentPanel
-        panel.entries = session.currentEntries
-        panel.path = session.currentPath
-        panel.archiveSession = session
-        panel.isInArchiveMode = true
-        ArchiveBrowser.saveSessionCache(context, session, panelSide(panel))
-    }
 
     /** 从 Screen 层调用进入压缩包浏览模式（密码验证成功后） */
     fun enterArchiveModeFromScreen(session: ArchiveBrowser.ArchiveSession) {
         enterArchiveMode(session)
     }
 
-    /** 在压缩包内导航到子目录 */
-    fun navigateInArchive(entry: FileEntry) {
-        val panel = currentPanel
-        val session = panel.archiveSession ?: return
-        val newSession = ArchiveBrowser.navigateTo(session, entry.name)
-        if (newSession == null) {
-            panel.loadError = RuntimeException("无法进入压缩包子目录: ${entry.name}")
-            return
-        }
-        panel.archiveSession = newSession
-        panel.entries = newSession.currentEntries
-        panel.path = newSession.currentPath
-        ArchiveBrowser.saveSessionCache(context, newSession, panelSide(panel))
-    }
 
-    /** 压缩包内返回上一级，返回 false 表示已在根目录 */
-    fun archiveGoUp(): Boolean {
-        val panel = currentPanel
-        val session = panel.archiveSession ?: return false
-        val newSession = ArchiveBrowser.navigateUp(session)
-        if (newSession == null) {
-            // 已在根目录，退出压缩包
-            exitArchive()
-            return true
-        }
-        panel.archiveSession = newSession
-        panel.entries = newSession.currentEntries
-        panel.path = newSession.currentPath
-        ArchiveBrowser.saveSessionCache(context, newSession, panelSide(panel))
-        return true
-    }
 
-    /** 退出压缩包浏览模式，恢复原始状态 */
-    fun exitArchive() {
-        val panel = currentPanel
-        val session = panel.archiveSession ?: return
-        panel.path = session.originalPath
-        panel.entries = session.originalEntries.ifEmpty { listDirectory(session.originalPath) }
-        panel.archiveSession = null
-        panel.isInArchiveMode = false
-        ArchiveBrowser.clearSessionCache(context)
-    }
 
     /**
      * 从压缩包中提取单个文件并返回对应的 Screen。
@@ -3266,53 +3638,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return openFile(context, tempEntry)
     }
 
-    /** 当前是否在压缩包根目录 */
-    fun isAtArchiveRoot(): Boolean {
-        val session = archiveSession ?: return true
-        return ArchiveBrowser.isAtRoot(session)
-    }
+
 
     companion object {
-        const val LOAD_DIRECTORY_BATCH_SIZE = 20
         var MAX_HISTORY_SIZE = 100
-        private val RESTRICTED_ANDROID_PREFIXES = listOf(
-            "/storage/emulated/0/Android/data/",
-            "/storage/emulated/0/Android/obb/",
-            "/sdcard/Android/data/",
-            "/sdcard/Android/obb/"
-        )
-        private const val OWN_PACKAGE_NAME = "com.whmdg.mczj.tools"
-
-        fun formatPermission(mode: Int): String {
-            val type = when (mode and 0xF000) {
-                0x4000 -> 'd'
-                0x8000 -> '-'
-                0xA000 -> 'l'
-                0x6000 -> 'b'
-                0x2000 -> 'c'
-                0x1000 -> 'p'
-                0xC000 -> 's'
-                else -> '?'
-            }
-            val rwx = charArrayOf('r', 'w', 'x')
-            val sb = StringBuilder(10)
-            sb.append(type)
-            for (shift in 8 downTo 0) {
-                sb.append(if ((mode shr shift) and 1 != 0) rwx[2 - shift % 3] else '-')
-            }
-            return sb.toString()
-        }
-
-        fun formatSize(bytes: Long): String {
-            if (bytes < 0) return ""
-            if (bytes == 0L) return "0 B"
-            val v = bytes.toDouble()
-            return when {
-                v < 1024 -> "%.0f B".format(v)
-                v < 1024 * 1024 -> "%.1f K".format(v / 1024)
-                v < 1024 * 1024 * 1024 -> "%.1f M".format(v / (1024 * 1024))
-                else -> "%.1f G".format(v / (1024 * 1024 * 1024))
-            }
-        }
     }
 }
