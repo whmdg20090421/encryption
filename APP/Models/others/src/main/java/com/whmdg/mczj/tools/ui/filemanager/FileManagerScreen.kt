@@ -1239,7 +1239,8 @@ fun FileManagerScreen(
                                         leftSwipe.lastIndex = -1
                                     }
                                 },
-                                extFlagsMap = vm.leftExtFlagsMap
+                                extFlagsMap = vm.leftExtFlagsMap,
+                                fileNameFontSize = vm.fileNameFontSize
                             )
                             FileBrowserPanel(
                                 entries = vm.rightEntries,
@@ -4736,7 +4737,8 @@ private fun FileBrowserPanel(
     onToggleSelect: (FileEntry) -> Unit = {},
     extFlagsMap: Map<String, String> = emptyMap(),
     onVisibleRangeChanged: ((firstVisible: Int, lastVisible: Int) -> Unit)? = null,
-    thumbnailLoader: ((FileEntry) -> ImageBitmap?)? = null
+    thumbnailLoader: ((FileEntry) -> ImageBitmap?)? = null,
+    fileNameFontSize: Float = 12f
 ) {
     val isMultiSelectMode = selectedPaths.isNotEmpty()
     Surface(
@@ -4793,7 +4795,8 @@ private fun FileBrowserPanel(
                             isFocused = isFocused,
                             onClick = onNavigateUp,
                             onLongClick = {},
-                            folderSize = ""
+                            folderSize = "",
+                            fileNameFontSize = fileNameFontSize
                         )
                     }
                 }
@@ -4836,7 +4839,8 @@ private fun FileBrowserPanel(
                         onSwipe = { onSwipeSelect(entry, entryIndex) },
                         folderSize = dirSize,
                         extFlags = extFlagsMap[entry.name] ?: "",
-                        thumbnail = thumb
+                        thumbnail = thumb,
+                        fileNameFontSize = fileNameFontSize
                     )
                 }
             }
@@ -4855,7 +4859,8 @@ private fun FileEntryRow(
     onSwipe: (Float) -> Unit = {},
     folderSize: String = "",
     extFlags: String = "",
-    thumbnail: ImageBitmap? = null
+    thumbnail: ImageBitmap? = null,
+    fileNameFontSize: Float = 12f
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -5035,7 +5040,7 @@ private fun FileEntryRow(
                         modifier = Modifier.fillMaxWidth(),
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
-                        fontSize = vm.fileNameFontSize.sp,
+                        fontSize = fileNameFontSize.sp,
                         textAlign = TextAlign.Center,
                     )
                 }
