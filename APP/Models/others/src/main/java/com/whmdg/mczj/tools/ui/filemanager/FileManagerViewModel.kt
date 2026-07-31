@@ -254,14 +254,14 @@ class FilePaneController(
     /**
      * 判断路径是否位于受 Scoped Storage 保护的目录下。
      */
-    private fun isProtectedPath(path: String): Boolean =
+    internal fun isProtectedPath(path: String): Boolean =
         path.contains("/Android/data") || path.contains("/Android/obb")
 
     /**
      * 通过 shell 检查路径是否存在（对 Android/data 等受保护路径使用 Shizuku/Root）。
      * 普通路径直接用 Java File API。
      */
-    private fun shellPathExists(path: String): Boolean {
+    internal fun shellPathExists(path: String): Boolean {
         if (!hasShellEngine()) return File(path).exists()
         val escaped = SevenZipCommand.escape(path)
         return try {
@@ -273,7 +273,7 @@ class FilePaneController(
     /**
      * 通过 shell 检查路径是否为目录。
      */
-    private fun shellIsDirectory(path: String): Boolean {
+    internal fun shellIsDirectory(path: String): Boolean {
         if (!hasShellEngine()) return File(path).isDirectory
         val escaped = SevenZipCommand.escape(path)
         return try {
@@ -286,14 +286,14 @@ class FilePaneController(
      * 检查文件是否可通过 Java API 读取。
      * Android/data 和 Android/obb 是受限目录，除自己包名外均不可读。
      */
-    private fun shellCanRead(path: String): Boolean {
+    internal fun shellCanRead(path: String): Boolean {
         if (!hasShellEngine()) return File(path).canRead()
         if (isRestrictedAndroidDir(path)) return false
         return File(path).canRead()
     }
 
     /** 判断路径是否在受限的 Android/data 或 Android/obb 下（排除自身包名） */
-    private fun isRestrictedAndroidDir(path: String): Boolean {
+    internal fun isRestrictedAndroidDir(path: String): Boolean {
         val p = path.replace("//", "/")
         for (prefix in RESTRICTED_ANDROID_PREFIXES) {
             if (p.startsWith(prefix)) {
@@ -331,7 +331,7 @@ class FilePaneController(
      * 委托给 ShellExecutor.execute(Permission.MAX)。
      * 保留 Triple 返回类型供调用方解构使用。
      */
-    private fun executeShell(cmd: String): Triple<String, String, Int> {
+    internal fun executeShell(cmd: String): Triple<String, String, Int> {
         return try {
             val stdout = ShellExecutor.execute(Permission.MAX, cmd, debug = true)
             Triple(stdout, "", 0)
@@ -345,7 +345,7 @@ class FilePaneController(
     /**
      * 格式化 shell 错误信息，输出中文提示 + 原始英文报错。
      */
-    private fun formatShellError(name: String, stderr: String): String {
+    internal fun formatShellError(name: String, stderr: String): String {
         val detail = stderr.trim().ifBlank { "未知错误" }
         return when {
             detail.contains("Permission denied", ignoreCase = true) -> "$name 权限不足: $detail"
@@ -358,7 +358,7 @@ class FilePaneController(
      * ls -1aF 获取目录条目名称（快速，只读目录，不 stat 每个条目）。
      * 返回格式：目录带 "/" 后缀，如 "Documents/"。
      */
-    private fun listDirNamesViaLs(
+    internal fun listDirNamesViaLs(
         dirPath: String,
         showHidden: Boolean
     ): List<String> {
@@ -381,7 +381,7 @@ class FilePaneController(
     }
 
     /** 从 ls -1aF 行解析文件名和 isDir。剥离 -F 后缀：/=目录 *=可执行 @=符号链接 |=FIFO ==Socket */
-    private fun parseLsLine(line: String): Pair<String, Boolean>? {
+    internal fun parseLsLine(line: String): Pair<String, Boolean>? {
         val trimmed = line.trimEnd('\r')
         if (trimmed.isBlank()) return null
         val isDir = trimmed.endsWith("/")
@@ -395,7 +395,7 @@ class FilePaneController(
      * 用于访问 Android/data 等受 Scoped Storage 保护的目录。
      * @return 条目列表，失败返回空列表并设置 lastShellStderr
      */
-    private fun listDirEntriesViaShell(path: String, showHidden: Boolean, longFormat: Boolean = false): List<FileEntry> {
+    internal fun listDirEntriesViaShell(path: String, showHidden: Boolean, longFormat: Boolean = false): List<FileEntry> {
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
 
         val lsLines = listDirNamesViaLs(normalizedPath, showHidden)
@@ -451,7 +451,7 @@ class FilePaneController(
      * @param isRefresh 是否为刷新操作（刷新时先清空再重新加载当前路径）
      * @param onComplete 加载完成后回调（参数为最终路径）
      */
-    private fun loadDirectoryAsync(
+    internal fun loadDirectoryAsync(
         targetPath: String,
         panel: FilePaneController.VmPanelState,
         isRefresh: Boolean = false,
@@ -574,7 +574,7 @@ class FilePaneController(
      * 对 FileEntry 列表执行排序（directories first + 当前排序字段）。
      * 复用 listDirectory() 的排序逻辑。
      */
-    private fun sortEntries(entries: List<FileEntry>): List<FileEntry> {
+    internal fun sortEntries(entries: List<FileEntry>): List<FileEntry> {
         // vault 模式过滤配置文件
         val filtered = if (isVaultMode()) {
             entries.filter { entry ->
@@ -631,7 +631,7 @@ class FilePaneController(
      * Java File API 模式下的同步加载 + 异步赋值。
      * 用于无 shell 引擎时的本地文件系统（通常很快）。
      */
-    private fun loadDirectorySync(
+    internal fun loadDirectorySync(
         targetPath: String,
         panel: FilePaneController.VmPanelState,
         isRefresh: Boolean = false,
@@ -677,7 +677,7 @@ class FilePaneController(
     /**
      * 统一的异步目录加载入口：有 shell 引擎走 streaming，否则走 Java File API。
      */
-    private fun loadDirectory(
+    internal fun loadDirectory(
         targetPath: String,
         panel: FilePaneController.VmPanelState,
         isRefresh: Boolean = false,
@@ -697,7 +697,7 @@ class FilePaneController(
     }
 
     /** 通过 shell 列出目录直接子项（含文件大小），用于受保护目录 */
-    private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? {
+    internal fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? {
         val normalized = if (dirPath == "/") "/" else dirPath.trimEnd('/').ifEmpty { "/" }
         val lsLines = listDirNamesViaLs(normalized, showHidden = true)
         if (lsLines.isEmpty()) return null
@@ -737,7 +737,7 @@ class FilePaneController(
         return entries
     }
 
-    private fun listWithFile(path: String, showHidden: Boolean, effectiveRoot: String): List<FileEntry> {
+    internal fun listWithFile(path: String, showHidden: Boolean, effectiveRoot: String): List<FileEntry> {
         DiagnosticLog.log("FileEngine", "listFiles($path) showHidden=$showHidden")
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
         val dir = File(normalizedPath)
@@ -797,7 +797,7 @@ class FilePaneController(
         return entries
     }
 
-    private fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean, effectiveRoot: String): List<FileEntry> {
+    internal fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean, effectiveRoot: String): List<FileEntry> {
         val entries = mutableListOf<FileEntry>()
         val normalizedPath = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
 
@@ -954,7 +954,7 @@ class FilePaneController(
         return entries
     }
 
-    private fun decryptVaultFileName(encryptedName: String, session: VaultSession): String {
+    internal fun decryptVaultFileName(encryptedName: String, session: VaultSession): String {
         var raw = encryptedName
         if (raw.endsWith(".aes")) {
             raw = raw.substring(0, raw.length - 4)
@@ -1146,7 +1146,7 @@ class FilePaneController(
     /**
      * 加载当前 WebDAV 路径的文件列表到指定面板。
      */
-    private fun loadWebDavEntries(panel: FilePaneController.VmPanelState = state) {
+    internal fun loadWebDavEntries(panel: FilePaneController.VmPanelState = state) {
         val client = panel.webDavClient ?: return
         try {
             val files = client.listChildren(panel.webDavCurrentPath)
@@ -1877,7 +1877,7 @@ class FilePaneController(
         }
     }
 
-    private fun getMimeType(fileName: String): String {
+    internal fun getMimeType(fileName: String): String {
         val ext = fileName.substringAfterLast('.').lowercase()
         return when (ext) {
             "pdf" -> "application/pdf"
@@ -1894,7 +1894,7 @@ class FilePaneController(
     }
 
     /** 规范化路径：去除连续斜杠和尾部斜杠。 */
-    private fun normalizePath(path: String): String {
+    internal fun normalizePath(path: String): String {
         var result = path.replace(Regex("/+"), "/")
         if (result.length > 1) result = result.trimEnd('/')
         return result
@@ -1963,7 +1963,7 @@ class FilePaneController(
     }
 
     /** 将 FUSE 路径转换为底层真实路径，使 chattr/lsattr 能操作 inode 标志。 */
-    private fun toRealPathForAttr(path: String): String {
+    internal fun toRealPathForAttr(path: String): String {
         // /storage/emulated/0/xxx → /data/media/0/xxx
         val regex = Regex("^/storage/emulated/(\\d+)/")
         val match = regex.find(path)
@@ -1975,7 +1975,7 @@ class FilePaneController(
     }
 
     /** 读取 /etc/passwd 解析 UID→用户名（无需 root） */
-    private fun resolveUserName(uid: Int): String {
+    internal fun resolveUserName(uid: Int): String {
         val name = try {
             File("/etc/passwd").readLines().firstNotNullOfOrNull { line ->
                 val parts = line.split(":")
@@ -1986,7 +1986,7 @@ class FilePaneController(
     }
 
     /** 读取 /etc/group 解析 GID→组名（无需 root） */
-    private fun resolveGroupName(gid: Int): String {
+    internal fun resolveGroupName(gid: Int): String {
         val name = try {
             File("/etc/group").readLines().firstNotNullOfOrNull { line ->
                 val parts = line.split(":")
@@ -1997,7 +1997,7 @@ class FilePaneController(
     }
 
     /** 通过 UID 解析应用桌面名称（如 "艨艟战舰"） */
-    private fun resolveAppLabel(uid: Int): String {
+    internal fun resolveAppLabel(uid: Int): String {
         if (uid < 10000) return ""
         return try {
             val pm = context.packageManager
@@ -2129,7 +2129,7 @@ class FilePaneController(
             context.startActivity(intent)
         } catch (e: Exception) {
             scope.launch(Dispatchers.Main) {
-                loadError = RuntimeException("无法打开文件: $displayName\n${e.message}")
+                state.loadError = RuntimeException("无法打开文件: $displayName\n${e.message}")
             }
         }
     }
