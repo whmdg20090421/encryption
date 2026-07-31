@@ -188,6 +188,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var sortOrder by mutableStateOf(SortOrder.ASC)
         private set
+    var fileNameFontSize by mutableStateOf(12f)
+        private set
     // 最近一次 listDirEntriesViaShell 的 stderr，用于调用方判断失败原因
     private var lastShellStderr = ""
     var folderSizeDb by mutableStateOf(FolderSizeDb())
@@ -359,6 +361,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
         sortOrder = if (fmPrefs.getString("sort_order", "ASC") == "DESC") SortOrder.DESC else SortOrder.ASC
         jxlPackZip = fmPrefs.getBoolean("jxl_pack_zip", false)
+        fileNameFontSize = fmPrefs.getFloat("file_name_font_size", 12f)
 
         // 加载文件夹大小数据库
         folderSizeDb = FolderSizeDb.load(AppDataPaths.fileManager(context))
@@ -1758,6 +1761,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateJxlPackZip(value: Boolean) {
         jxlPackZip = value
         fmPrefs.edit().putBoolean("jxl_pack_zip", value).apply()
+    }
+
+    fun updateFileNameFontSize(sizeSp: Float) {
+        fileNameFontSize = sizeSp
+        fmPrefs.edit().putFloat("file_name_font_size", sizeSp).apply()
     }
 
     fun updateSortField(field: SortField) {

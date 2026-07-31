@@ -90,7 +90,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -234,6 +233,7 @@ fun FileManagerScreen(
     // ── UI 本地状态 ──
     var showDrawer by remember { mutableStateOf(false) }
     var showSettingsMenu by remember { mutableStateOf(false) }
+    var showFontSizeDialog by remember { mutableStateOf(false) }
     var showSortDialog by remember { mutableStateOf(false) }
     var tempSortField by remember { mutableStateOf(vm.sortField) }
     var tempSortOrder by remember { mutableStateOf(vm.sortOrder) }
@@ -688,6 +688,18 @@ fun FileManagerScreen(
                                         val parentPath = if (vm.focusedPanel == FocusedPanel.LEFT) vm.leftPath else vm.rightPath
                                         vm.calculateFolderSizeAsync(parentPath)
                                     }
+                                }
+                            )
+                            HorizontalDivider()
+                            // 调整字体大小
+                            DropdownMenuItem(
+                                text = { Text("调整字体大小") },
+                                trailingIcon = {
+                                    Icon(Icons.Default.TextFields, contentDescription = null, modifier = Modifier.size(18.dp))
+                                },
+                                onClick = {
+                                    showFontSizeDialog = true
+                                    showSettingsMenu = false
                                 }
                             )
                         }
@@ -3673,6 +3685,47 @@ fun FileManagerScreen(
             }
         }
     }
+    if (showFontSizeDialog) {
+        var fontSizeText by remember { mutableStateOf(vm.fileNameFontSize.toInt().toString()) }
+        AlertDialog(
+            onDismissRequest = { showFontSizeDialog = false },
+            title = { Text("调整字体大小") },
+            text = {
+                OutlinedTextField(
+                    value = fontSizeText,
+                    onValueChange = { newValue ->
+                        if (newValue.isEmpty() || newValue.all { it.isDigit() }) {
+                            fontSizeText = newValue
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(textAlign = TextAlign.Center),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedBorderColor = Color.Transparent
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val size = fontSizeText.toFloatOrNull()
+                    if (size != null && size in 8f..32f) {
+                        vm.updateFileNameFontSize(size)
+                        showFontSizeDialog = false
+                    }
+                }) {
+                    Text("确认")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showFontSizeDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
     if (showSortDialog) {
         val fieldLabels = mapOf(
             SortField.NAME to "名称",
@@ -4976,8 +5029,15 @@ private fun FileEntryRow(
                         }
                     }
                 }
-                Box(modifier = Modifier.weight(4f).fillMaxHeight()) {
-                    SmartWrapText(text = entry.name)
+                Box(modifier = Modifier.weight(4f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = entry.name,
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = vm.fileNameFontSize.sp,
+                        textAlign = TextAlign.Center,
+                    )
                 }
             }
             // Bottom 3/10: date/permission (left, aligned to icon left) + size (right, aligned to filename right)
@@ -5057,134 +5117,6 @@ private fun compactDate(millis: Long): String {
     if (millis <= 0) return ""
     val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
     return sdf.format(java.util.Date(millis))
-}
-
-/**
- * 智能换行文本：一行显示不下时自动分两行，第二行溢出则保留扩展名截断。
- * 利用 onTextLayout 由 Compose 排版引擎精确计算行断点，自适应中英文混排和不同屏幕。
- */
-@Composable
-private fun SmartWrapText(text: String) {
-    var phase by remember(text) { mutableIntStateOf(0) } // 0=探测, 1=单行, 2=双行
-    var line1 by remember(text) { mutableStateOf("") }
-    var remaining by remember(text) { mutableStateOf("") }
-    var line2Done by remember(text) { mutableIntStateOf(0) }
-    var line2Display by remember(text) { mutableStateOf("") }
-
-    if (phase == 0) {
-        // 阶段0：softWrap=false + maxLines=1 探测是否溢出，获取精确行断点
-        Text(
-            text = text,
-            modifier = Modifier.fillMaxWidth().alpha(0f),
-            maxLines = 1,
-            overflow = TextOverflow.Clip,
-            softWrap = false,
-            fontSize = 12.sp,
-            onTextLayout = { result ->
-                if (!result.hasVisualOverflow) {
-                    phase = 1
-                    line1 = text
-                } else {
-                    val end = result.getLineEnd(0, visibleEnd = true)
-                    if (end > 0 && end < text.length) {
-                        line1 = text.substring(0, end)
-                        remaining = text.substring(end)
-                    } else {
-                        line1 = text
-                        remaining = ""
-                    }
-                    phase = if (remaining.isNotEmpty()) 2 else 1
-                }
-            }
-        )
-    } else if (phase == 1) {
-        // 单行：垂直居中
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = line1,
-                modifier = Modifier.fillMaxWidth(),
-                maxLines = 1,
-                overflow = TextOverflow.Clip,
-                softWrap = false,
-                textAlign = TextAlign.Center,
-                fontSize = 12.sp,
-            )
-        }
-    } else {
-        // 双行：上下各 50%，每行在各自区域内居中
-        Column(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = line1,
-                    modifier = Modifier.fillMaxWidth(),
-                    maxLines = 1,
-                    overflow = TextOverflow.Clip,
-                    softWrap = false,
-                    textAlign = TextAlign.Center,
-                    fontSize = 12.sp,
-                )
-            }
-            Box(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                if (line2Done == 0) {
-                    Text(
-                        text = remaining,
-                        modifier = Modifier.fillMaxWidth().alpha(0f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Clip,
-                        softWrap = false,
-                        fontSize = 12.sp,
-                        onTextLayout = { result ->
-                            line2Display = if (result.hasVisualOverflow) {
-                                truncateWithExtension(remaining, result)
-                            } else {
-                                remaining
-                            }
-                            line2Done = 1
-                        }
-                    )
-                }
-                if (line2Done == 1) {
-                    Text(
-                        text = line2Display,
-                        modifier = Modifier.fillMaxWidth(),
-                        maxLines = 1,
-                        overflow = TextOverflow.Clip,
-                        softWrap = false,
-                        textAlign = TextAlign.Center,
-                        fontSize = 12.sp,
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** 第二行溢出时截断：保留文件扩展名，格式为 "前部...扩展名" */
-private fun truncateWithExtension(text: String, layout: TextLayoutResult): String {
-    val visibleEnd = layout.getLineEnd(0, visibleEnd = true)
-    if (visibleEnd <= 0) return text.take(10) + "..."
-    val visible = text.substring(0, visibleEnd)
-
-    val lastDot = text.lastIndexOf('.')
-    val hasExt = lastDot > 0 && lastDot < text.length - 1 && (text.length - lastDot) <= 10
-    if (!hasExt) {
-        return visible.dropLast(3) + "..."
-    }
-
-    val ext = text.substring(lastDot) // ".txt"
-    val ellipsis = "..."
-    val available = visibleEnd - ext.length - ellipsis.length
-    val frontKeep = available.coerceAtLeast(3)
-    return text.take(frontKeep) + ellipsis + ext
 }
 
 @Composable
