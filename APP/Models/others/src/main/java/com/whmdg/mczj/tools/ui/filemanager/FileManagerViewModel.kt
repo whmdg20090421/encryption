@@ -1285,7 +1285,7 @@ class FilePaneController(
                         fileIndex = index,
                         fileCount = entries.size
                     )
-                    val error = if (toRecycleBin) moveToRecycleBin(entry) else deleteEntry(entry)
+                    val error = if (toRecycleBin) moveToRecycleBin(entry) { _, _, _ -> } else deleteEntry(entry)
                     if (error != null) {
                         withContext(Dispatchers.Main) { onDone(error) }
                         return@launch
@@ -1759,6 +1759,71 @@ class FilePaneController(
         return ArchiveBrowser.isAtRoot(session)
     }
 
+    // ── 回收站工具 ──
+
+    /** 列出回收站目录内容（排除 .meta.json） */
+    fun listRecycleBinDir(dir: java.io.File): List<FileEntry> {
+        return (dir.listFiles() ?: emptyArray())
+            .filter { it.name != ".meta.json" }
+            .map { f ->
+                FileEntry(
+                    path = f.absolutePath,
+                    name = f.name,
+                    isDirectory = f.isDirectory,
+                    size = if (f.isFile) f.length() else 0,
+                    lastModified = f.lastModified()
+                )
+            }
+            .sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
+    }
+
+    /**
+     * 移动文件到回收站。成功返回 null，失败返回错误信息。
+     * @param onMetaUpdate 元数据更新回调（targetName, entry.path, entry.isDirectory）
+     */
+    fun moveToRecycleBin(entry: FileEntry, onMetaUpdate: (String, String, Boolean) -> Unit): String? {
+        val binDir = AppDataPaths.recycleBin(context)
+        if (!shellPathExists(entry.path)) return "文件不存在"
+
+        var targetName = entry.name
+        var target = java.io.File(binDir, targetName)
+        if (target.exists()) {
+            val ts = System.currentTimeMillis() / 1000
+            val dotIdx = entry.name.lastIndexOf('.')
+            targetName = if (dotIdx > 0) {
+                "${entry.name.substring(0, dotIdx)}_${ts}${entry.name.substring(dotIdx)}"
+            } else {
+                "${entry.name}_${ts}"
+            }
+            target = java.io.File(binDir, targetName)
+        }
+
+        if (hasShellEngine()) {
+            val escapedSrc = SevenZipCommand.escape(entry.path)
+            val escapedDst = SevenZipCommand.escape(target.absolutePath)
+            val cpFlag = if (entry.isDirectory) "-rf" else "-f"
+            val (_, cpErr, cpExit) = try {
+                executeShell("cp $cpFlag $escapedSrc $escapedDst")
+            } catch (e: Exception) { return e.message ?: "复制失败" }
+            if (cpExit != 0) return "复制失败: $cpErr"
+            val rmFlag = if (entry.isDirectory) "-rf" else "-f"
+            executeShell("rm $rmFlag $escapedSrc")
+        } else {
+            val source = java.io.File(entry.path)
+            try {
+                val moved = source.renameTo(target)
+                if (!moved) {
+                    if (entry.isDirectory) source.copyRecursively(target, overwrite = false)
+                    else source.copyTo(target, overwrite = false)
+                    SpecialPermissionVerifier.safeDelete(source)
+                }
+            } catch (e: Exception) { return e.message ?: "移动失败" }
+        }
+
+        onMetaUpdate(targetName, entry.path, entry.isDirectory)
+        return null
+    }
+
     /** 在回收站内进入子文件夹 */
     fun navigateInRecycleBin(entry: FileEntry) {
         if (!entry.isDirectory) return
@@ -1942,6 +2007,51 @@ class FilePaneController(
             pm.getApplicationLabel(appInfo).toString()
         } catch (_: Exception) { "" }
     }
+
+    // ── 系统 UID/GID 映射 ──
+
+    data class SystemUser(val uid: Int, val username: String, val appLabel: String = "")
+    data class SystemGroup(val gid: Int, val groupname: String, val appLabel: String = "")
+
+    /** android_filesystem_config.h 完整 AID 映射（AOSP 源码） */
+    private val SYSTEM_UID_MAP = mapOf(
+        0 to "root", 1 to "daemon", 2 to "bin", 3 to "sys",
+        1000 to "system", 1001 to "radio", 1002 to "bluetooth", 1003 to "graphics",
+        1004 to "input", 1005 to "audio", 1006 to "camera", 1007 to "log",
+        1008 to "compass", 1009 to "mount", 1010 to "wifi", 1011 to "adb",
+        1012 to "install", 1013 to "media", 1014 to "dhcp", 1015 to "sdcard_rw",
+        1016 to "vpn", 1017 to "keystore", 1018 to "usb", 1019 to "drm",
+        1020 to "mdnsr", 1021 to "gps", 1023 to "media_rw", 1024 to "mtp",
+        1026 to "drmrpc", 1027 to "nfc", 1028 to "sdcard_r", 1029 to "clat",
+        1030 to "loop_radio", 1031 to "media_drm", 1032 to "package_info",
+        1033 to "sdcard_pics", 1034 to "sdcard_av", 1035 to "sdcard_all",
+        1036 to "logd", 1037 to "shared_relro", 1038 to "dbus", 1039 to "tlsdate",
+        1040 to "media_ex", 1041 to "audioserver", 1042 to "metrics_coll",
+        1043 to "metricsd", 1044 to "webserv", 1045 to "debuggerd",
+        1046 to "media_codec", 1047 to "cameraserver", 1048 to "firewall",
+        1049 to "trunks", 1050 to "nvram", 1051 to "dns", 1052 to "dns_tether",
+        1053 to "webview_zygote", 1054 to "vehicle_network", 1055 to "media_audio",
+        1056 to "media_video", 1057 to "media_image", 1058 to "tombstoned",
+        1059 to "media_obb", 1060 to "ese", 1061 to "ota_update",
+        1062 to "automotive_evs", 1063 to "lowpan", 1064 to "hsm",
+        1065 to "reserved_disk", 1066 to "statd", 1067 to "incidentd",
+        1068 to "secure_element", 1069 to "lmkd", 1070 to "llkd",
+        1071 to "iorapd", 1072 to "gpu_service", 1073 to "network_stack",
+        1074 to "gsid", 1075 to "fsverity_cert", 1076 to "credstore",
+        1077 to "external_storage", 1078 to "ext_data_rw", 1079 to "ext_obb_rw",
+        1080 to "context_hub", 1081 to "virtualizationservice", 1082 to "artd",
+        1083 to "uwb", 1084 to "thread_network", 1085 to "diced",
+        1086 to "dmesgd", 1087 to "jc_weaver", 1088 to "jc_strongbox",
+        1089 to "jc_identitycred", 1090 to "sdk_sandbox",
+        1091 to "security_log_writer", 1092 to "prng_seeder",
+        1093 to "uprobestats", 1094 to "cros_ec", 1095 to "mmd",
+        2000 to "shell", 2001 to "cache", 2002 to "diag",
+        3001 to "net_bt_admin", 3002 to "net_bt", 3003 to "inet",
+        3004 to "net_raw", 3005 to "net_admin", 3006 to "net_bw_stats",
+        3007 to "net_bw_acct", 3009 to "readproc", 3010 to "wakelock",
+        3011 to "uhid", 3012 to "readtracefs", 3013 to "virtualmachine",
+        9997 to "everybody", 9998 to "misc", 9999 to "nobody"
+    )
 
     /** 读取全部系统用户：系统 UID 映射 + pm list packages -U（应用 UID） */
     fun getSystemUsers(): List<SystemUser> {
@@ -2481,7 +2591,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     // ═══ Phase 2: 委托方法（转发到 Controller） ═══
 
     // ═══ Phase 3: 委托方法（转发到 Controller） ═══
-    fun navigateToWithScroll(path: String, scrollToIndex: Int, scrollToOffset: Int) = focusedController.navigateToWithScroll(path, scrollToIndex, scrollToOffset)
+    fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0) = focusedController.navigateToWithScroll(path, scrollToIndex, scrollToOffset)
     fun goBack(): String? = focusedController.goBack()
     fun goForward(): String? = focusedController.goForward()
     fun goUp(): String? = focusedController.goUp()
@@ -2521,11 +2631,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun normalizePath(path: String): String = focusedController.normalizePath(path)
     fun resolveFuseRealPath(path: String): String? = focusedController.resolveFuseRealPath(path)
     private fun toRealPathForAttr(path: String): String = focusedController.toRealPathForAttr(path)
-    private fun resolveUserName(uid: Int): String = focusedController.resolveUserName(uid)
-    private fun resolveGroupName(gid: Int): String = focusedController.resolveGroupName(gid)
     private fun resolveAppLabel(uid: Int): String = focusedController.resolveAppLabel(uid)
-    fun getSystemUsers(): List<SystemUser> = focusedController.getSystemUsers()
-    fun getSystemGroups(): List<SystemGroup> = focusedController.getSystemGroups()
     private fun openWithExternalApp(file: File, displayName: String) = focusedController.openWithExternalApp(file, displayName)
     fun refreshCurrent() = focusedController.refreshCurrent()
     fun syncPaths() = panels.syncPaths()
@@ -2929,59 +3035,15 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 移动文件到回收站。成功返回 null，失败返回错误信息。
      */
     fun moveToRecycleBin(entry: FileEntry): String? {
-        val binDir = AppDataPaths.recycleBin(context)
-        if (!shellPathExists(entry.path)) return "文件不存在"
-
-        // 同名冲突时追加时间戳后缀
-        var targetName = entry.name
-        var target = File(binDir, targetName)
-        if (target.exists()) {
-            val ts = System.currentTimeMillis() / 1000
-            val dotIdx = entry.name.lastIndexOf('.')
-            targetName = if (dotIdx > 0) {
-                "${entry.name.substring(0, dotIdx)}_${ts}${entry.name.substring(dotIdx)}"
-            } else {
-                "${entry.name}_${ts}"
-            }
-            target = File(binDir, targetName)
+        return focusedController.moveToRecycleBin(entry) { targetName, originalPath, isDirectory ->
+            recycleBinMetaList = recycleBinMetaList + RecycleBinEntry(
+                binName = targetName,
+                originalPath = originalPath,
+                deletedAt = System.currentTimeMillis(),
+                isDirectory = isDirectory
+            )
+            saveRecycleBinMeta()
         }
-
-        if (hasShellEngine) {
-            val escapedSrc = SevenZipCommand.escape(entry.path)
-            val escapedDst = SevenZipCommand.escape(target.absolutePath)
-            val cpFlag = if (entry.isDirectory) "-rf" else "-f"
-            val (_, cpErr, cpExit) = try {
-                executeShell("cp $cpFlag $escapedSrc $escapedDst")
-            } catch (e: Exception) { return e.message ?: "复制失败" }
-            if (cpExit != 0) return "复制失败: $cpErr"
-            val rmFlag = if (entry.isDirectory) "-rf" else "-f"
-            executeShell("rm $rmFlag $escapedSrc")
-        } else {
-            val source = File(entry.path)
-            try {
-                val moved = source.renameTo(target)
-                if (!moved) {
-                    if (entry.isDirectory) {
-                        source.copyRecursively(target, overwrite = false)
-                    } else {
-                        source.copyTo(target, overwrite = false)
-                    }
-                    SpecialPermissionVerifier.safeDelete(source)
-                }
-            } catch (e: Exception) {
-                return e.message ?: "移动失败"
-            }
-        }
-
-        // 写入元数据
-        recycleBinMetaList = recycleBinMetaList + RecycleBinEntry(
-            binName = targetName,
-            originalPath = entry.path,
-            deletedAt = System.currentTimeMillis(),
-            isDirectory = entry.isDirectory
-        )
-        saveRecycleBinMeta()
-        return null
     }
 
 
@@ -3063,25 +3125,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val panel = currentPanel
         panel.recycleBinPath = binDir.absolutePath
         panel.isInRecycleBin = true
-        panel.entries = listRecycleBinDir(binDir)
+        panel.entries = focusedController.listRecycleBinDir(binDir)
     }
 
 
-
-    private fun listRecycleBinDir(dir: java.io.File): List<FileEntry> {
-        return (dir.listFiles() ?: emptyArray())
-            .filter { it.name != ".meta.json" }
-            .map { f ->
-                FileEntry(
-                    path = f.absolutePath,
-                    name = f.name,
-                    isDirectory = f.isDirectory,
-                    size = if (f.isFile) f.length() else 0,
-                    lastModified = f.lastModified()
-                )
-            }
-            .sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
-    }
 
     /** 回收站是否在根目录 */
     val isAtRecycleBinRoot: Boolean get() {
@@ -3122,7 +3169,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         fmPrefs.edit().putString("sort_field", field.name).apply()
         val panel = currentPanel
         if (panel.isInRecycleBin) {
-            panel.entries = listRecycleBinDir(java.io.File(recycleBinPath))
+            panel.entries = focusedController.listRecycleBinDir(java.io.File(recycleBinPath))
         } else {
             loadDirectory(左.path, panel = 左, isRefresh = true)
             loadDirectory(右.path, panel = 右, isRefresh = true)
@@ -3134,7 +3181,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         fmPrefs.edit().putString("sort_order", order.name).apply()
         val panel = currentPanel
         if (panel.isInRecycleBin) {
-            panel.entries = listRecycleBinDir(java.io.File(recycleBinPath))
+            panel.entries = focusedController.listRecycleBinDir(java.io.File(recycleBinPath))
         } else {
             loadDirectory(左.path, panel = 左, isRefresh = true)
             loadDirectory(右.path, panel = 右, isRefresh = true)
@@ -3276,136 +3323,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
 
 
-    // ── 权限编辑 ──
+    // ── 权限编辑（委托到 Controller） ──
 
-    data class SystemUser(val uid: Int, val username: String, val appLabel: String = "")
-    data class SystemGroup(val gid: Int, val groupname: String, val appLabel: String = "")
-
-    /**
-     * android_filesystem_config.h 完整 AID 映射（AOSP 源码）。
-     * 来源: vvb2060/Magica/app/src/main/jni/android_filesystem_config.h
-     */
-    private val SYSTEM_UID_MAP = mapOf(
-        0 to "root",
-        1 to "daemon",
-        2 to "bin",
-        3 to "sys",
-        1000 to "system",
-        1001 to "radio",
-        1002 to "bluetooth",
-        1003 to "graphics",
-        1004 to "input",
-        1005 to "audio",
-        1006 to "camera",
-        1007 to "log",
-        1008 to "compass",
-        1009 to "mount",
-        1010 to "wifi",
-        1011 to "adb",
-        1012 to "install",
-        1013 to "media",
-        1014 to "dhcp",
-        1015 to "sdcard_rw",
-        1016 to "vpn",
-        1017 to "keystore",
-        1018 to "usb",
-        1019 to "drm",
-        1020 to "mdnsr",
-        1021 to "gps",
-        1023 to "media_rw",
-        1024 to "mtp",
-        1026 to "drmrpc",
-        1027 to "nfc",
-        1028 to "sdcard_r",
-        1029 to "clat",
-        1030 to "loop_radio",
-        1031 to "media_drm",
-        1032 to "package_info",
-        1033 to "sdcard_pics",
-        1034 to "sdcard_av",
-        1035 to "sdcard_all",
-        1036 to "logd",
-        1037 to "shared_relro",
-        1038 to "dbus",
-        1039 to "tlsdate",
-        1040 to "media_ex",
-        1041 to "audioserver",
-        1042 to "metrics_coll",
-        1043 to "metricsd",
-        1044 to "webserv",
-        1045 to "debuggerd",
-        1046 to "media_codec",
-        1047 to "cameraserver",
-        1048 to "firewall",
-        1049 to "trunks",
-        1050 to "nvram",
-        1051 to "dns",
-        1052 to "dns_tether",
-        1053 to "webview_zygote",
-        1054 to "vehicle_network",
-        1055 to "media_audio",
-        1056 to "media_video",
-        1057 to "media_image",
-        1058 to "tombstoned",
-        1059 to "media_obb",
-        1060 to "ese",
-        1061 to "ota_update",
-        1062 to "automotive_evs",
-        1063 to "lowpan",
-        1064 to "hsm",
-        1065 to "reserved_disk",
-        1066 to "statd",
-        1067 to "incidentd",
-        1068 to "secure_element",
-        1069 to "lmkd",
-        1070 to "llkd",
-        1071 to "iorapd",
-        1072 to "gpu_service",
-        1073 to "network_stack",
-        1074 to "gsid",
-        1075 to "fsverity_cert",
-        1076 to "credstore",
-        1077 to "external_storage",
-        1078 to "ext_data_rw",
-        1079 to "ext_obb_rw",
-        1080 to "context_hub",
-        1081 to "virtualizationservice",
-        1082 to "artd",
-        1083 to "uwb",
-        1084 to "thread_network",
-        1085 to "diced",
-        1086 to "dmesgd",
-        1087 to "jc_weaver",
-        1088 to "jc_strongbox",
-        1089 to "jc_identitycred",
-        1090 to "sdk_sandbox",
-        1091 to "security_log_writer",
-        1092 to "prng_seeder",
-        1093 to "uprobestats",
-        1094 to "cros_ec",
-        1095 to "mmd",
-        2000 to "shell",
-        2001 to "cache",
-        2002 to "diag",
-        3001 to "net_bt_admin",
-        3002 to "net_bt",
-        3003 to "inet",
-        3004 to "net_raw",
-        3005 to "net_admin",
-        3006 to "net_bw_stats",
-        3007 to "net_bw_acct",
-        3009 to "readproc",
-        3010 to "wakelock",
-        3011 to "uhid",
-        3012 to "readtracefs",
-        3013 to "virtualmachine",
-        9997 to "everybody",
-        9998 to "misc",
-        9999 to "nobody",
-    )
-
-
-
+    fun getSystemUsers(): List<FilePaneController.SystemUser> = focusedController.getSystemUsers()
+    fun getSystemGroups(): List<FilePaneController.SystemGroup> = focusedController.getSystemGroups()
+    fun resolveUserName(uid: Int): String = focusedController.resolveUserName(uid)
+    fun resolveGroupName(gid: Int): String = focusedController.resolveGroupName(gid)
 
     // ── 扩展文件属性（chattr/lsattr） ──
 
