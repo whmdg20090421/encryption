@@ -1371,7 +1371,8 @@ fun FileManagerScreen(
                                         rightSwipe.lastIndex = -1
                                     }
                                 },
-                                extFlagsMap = vm.rightExtFlagsMap
+                                extFlagsMap = vm.rightExtFlagsMap,
+                                fileNameFontSize = vm.fileNameFontSize
                             )
                         }
                     ) { measurables, constraints ->
