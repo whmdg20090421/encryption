@@ -240,6 +240,9 @@ fun FileManagerScreen(
     var showSettingsMenu by remember { mutableStateOf(false) }
     var showFontSizeDialog by remember { mutableStateOf(false) }
     var showSortDialog by remember { mutableStateOf(false) }
+    // 临时诊断：文件名换行分析（测试完后删除）
+    var showTextWrapDiag by remember { mutableStateOf(false) }
+    var lastDiagPath by remember { mutableStateOf("") }
     var tempSortField by remember { mutableStateOf(vm.sortField) }
     var tempSortOrder by remember { mutableStateOf(vm.sortOrder) }
     var showSortSizeRefreshDialog by remember { mutableStateOf(false) }
@@ -574,6 +577,15 @@ fun FileManagerScreen(
     }
 
     val currentPath = vm.currentPath
+
+    // 临时诊断：路径切换时自动弹出（测试完后删除）
+    LaunchedEffect(vm.currentPanel.path) {
+        val path = vm.currentPanel.path
+        if (isDebugMode && path.isNotEmpty() && path != lastDiagPath) {
+            lastDiagPath = path
+            showTextWrapDiag = true
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -3554,6 +3566,17 @@ fun FileManagerScreen(
             }
         )
     }
+    // 临时诊断：文件名换行分析（测试完后删除此块 + TextWrapDiagnostic.kt）
+    if (showTextWrapDiag) {
+        val activePanel = vm.currentPanel
+        TextWrapDiagnosticDialog(
+            show = true,
+            currentPath = activePanel.path,
+            entries = activePanel.entries,
+            fileNameFontSize = vm.fileNameFontSize,
+            onDismiss = { showTextWrapDiag = false }
+        )
+    }
     if (showSortDialog) {
         val fieldLabels = mapOf(
             SortField.NAME to "名称",
@@ -4706,7 +4729,7 @@ private fun FileEntryRow(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(60.dp)
+                .height(80.dp)
                 .offset { IntOffset(swipeOffset.value.roundToInt(), 0) }
                 .pointerInput(Unit) {
                     awaitEachGesture {
