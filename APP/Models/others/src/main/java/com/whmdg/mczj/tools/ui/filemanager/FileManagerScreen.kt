@@ -4706,7 +4706,7 @@ private fun FileEntryRow(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(60.dp)
+                .heightIn(min = 60.dp)
                 .offset { IntOffset(swipeOffset.value.roundToInt(), 0) }
                 .pointerInput(Unit) {
                     awaitEachGesture {
