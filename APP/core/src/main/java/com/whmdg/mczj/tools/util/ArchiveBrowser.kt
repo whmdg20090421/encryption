@@ -522,32 +522,30 @@ object ArchiveBrowser {
         return Pair(totalSize, totalCompressed)
     }
 
-    /** 递归排序目录树（目录在前，文件在后，自然排序） */
-    private fun sortTree(node: ArchiveNode) {
-        node.children.sortWith(compareBy<ArchiveNode> { !it.isDirectory }.thenComparing(NATURAL_ORDER))
-        for (child in node.children) {
-            if (child.isDirectory) sortTree(child)
+    /** 自然排序比较器：文本段按字典序，数字段按数值 */
+    private val NATURAL_ORDER = Comparator<String> { a, b ->
+        val regex = Regex("(\\d+)")
+        val aParts = regex.split(a)
+        val aNums = regex.findAll(a).map { it.value }.toList()
+        val bParts = regex.split(b)
+        val bNums = regex.findAll(b).map { it.value }.toList()
+        val len = minOf(aParts.size, bParts.size)
+        for (i in 0 until len) {
+            val cmp = aParts[i].compareTo(bParts[i], ignoreCase = true)
+            if (cmp != 0) return@Comparator cmp
+            if (i < aNums.size && i < bNums.size) {
+                val numCmp = aNums[i].toLong().compareTo(bNums[i].toLong())
+                if (numCmp != 0) return@Comparator numCmp
+            }
         }
+        aParts.size.compareTo(bParts.size)
     }
 
-    companion object {
-        /** 自然排序比较器：文本段按字典序，数字段按数值 */
-        private val NATURAL_ORDER = Comparator<String> { a, b ->
-            val regex = Regex("(\\d+)")
-            val aParts = regex.split(a)
-            val aNums = regex.findAll(a).map { it.value }.toList()
-            val bParts = regex.split(b)
-            val bNums = regex.findAll(b).map { it.value }.toList()
-            val len = minOf(aParts.size, bParts.size)
-            for (i in 0 until len) {
-                val cmp = aParts[i].compareTo(bParts[i], ignoreCase = true)
-                if (cmp != 0) return@Comparator cmp
-                if (i < aNums.size && i < bNums.size) {
-                    val numCmp = aNums[i].toLong().compareTo(bNums[i].toLong())
-                    if (numCmp != 0) return@Comparator numCmp
-                }
-            }
-            aParts.size.compareTo(bParts.size)
+    /** 递归排序目录树（目录在前，文件在后，自然排序） */
+    private fun sortTree(node: ArchiveNode) {
+        node.children.sortWith(compareBy<ArchiveNode> { !it.isDirectory }.thenBy(NATURAL_ORDER) { it.name })
+        for (child in node.children) {
+            if (child.isDirectory) sortTree(child)
         }
     }
 
