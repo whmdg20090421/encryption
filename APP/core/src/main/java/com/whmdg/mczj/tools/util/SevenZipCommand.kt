@@ -81,7 +81,7 @@ object SevenZipCommand {
      */
     fun buildListCommand(binaryPath: String, archivePath: String, password: String = ""): String {
         val cmd = StringBuilder(escape(binaryPath))
-        cmd.append(" l -ba")
+        cmd.append(" l -ba -sccUTF-8")
         if (password.isNotEmpty()) {
             cmd.append(" -p${escapePassword(password)}")
         }
@@ -97,7 +97,7 @@ object SevenZipCommand {
      */
     fun buildListDetailCommand(binaryPath: String, archivePath: String, password: String = ""): String {
         val cmd = StringBuilder(escape(binaryPath))
-        cmd.append(" l -slt")
+        cmd.append(" l -slt -sccUTF-8")
         if (password.isNotEmpty()) {
             cmd.append(" -p${escapePassword(password)}")
         }
@@ -117,7 +117,7 @@ object SevenZipCommand {
         password: String = ""
     ): String {
         val cmd = StringBuilder(escape(binaryPath))
-        cmd.append(" x")
+        cmd.append(" x -sccUTF-8")
         if (password.isNotEmpty()) {
             cmd.append(" -p${escapePassword(password)}")
         }
@@ -143,7 +143,7 @@ object SevenZipCommand {
         password: String = ""
     ): String {
         val cmd = StringBuilder(escape(binaryPath))
-        cmd.append(" x")
+        cmd.append(" x -sccUTF-8")
         if (password.isNotEmpty()) {
             cmd.append(" -p${escapePassword(password)}")
         }

@@ -522,11 +522,32 @@ object ArchiveBrowser {
         return Pair(totalSize, totalCompressed)
     }
 
-    /** 递归排序目录树（目录在前，文件在后） */
+    /** 递归排序目录树（目录在前，文件在后，自然排序） */
     private fun sortTree(node: ArchiveNode) {
-        node.children.sortWith(compareBy<ArchiveNode> { !it.isDirectory }.thenBy { it.name })
+        node.children.sortWith(compareBy<ArchiveNode> { !it.isDirectory }.thenComparing(NATURAL_ORDER))
         for (child in node.children) {
             if (child.isDirectory) sortTree(child)
+        }
+    }
+
+    companion object {
+        /** 自然排序比较器：文本段按字典序，数字段按数值 */
+        private val NATURAL_ORDER = Comparator<String> { a, b ->
+            val regex = Regex("(\\d+)")
+            val aParts = regex.split(a)
+            val aNums = regex.findAll(a).map { it.value }.toList()
+            val bParts = regex.split(b)
+            val bNums = regex.findAll(b).map { it.value }.toList()
+            val len = minOf(aParts.size, bParts.size)
+            for (i in 0 until len) {
+                val cmp = aParts[i].compareTo(bParts[i], ignoreCase = true)
+                if (cmp != 0) return@Comparator cmp
+                if (i < aNums.size && i < bNums.size) {
+                    val numCmp = aNums[i].toLong().compareTo(bNums[i].toLong())
+                    if (numCmp != 0) return@Comparator numCmp
+                }
+            }
+            aParts.size.compareTo(bParts.size)
         }
     }
 
@@ -600,7 +621,7 @@ object ArchiveBrowser {
     /** 执行 7zzs 命令，返回 (stdout+stderr, exitCode) */
     private fun run7zs(cmd: String): Pair<String, Int> {
         val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "$cmd 2>&1"))
-        val output = process.inputStream.bufferedReader().readText().trim()
+        val output = process.inputStream.bufferedReader(Charsets.UTF_8).readText().trim()
         process.waitFor()
         return Pair(output, process.exitValue())
     }
