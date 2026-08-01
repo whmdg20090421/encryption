@@ -4861,16 +4861,14 @@ private fun FileEntryRow(
                         }
                     }
                 }
-                Box(modifier = Modifier.weight(4f)) {
-                    Text(
-                        text = entry.name,
-                        modifier = Modifier.fillMaxWidth(),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        fontSize = fileNameFontSize.sp,
-                        textAlign = TextAlign.Center,
-                    )
-                }
+                Text(
+                    text = entry.name,
+                    modifier = Modifier.weight(4f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    fontSize = fileNameFontSize.sp,
+                    textAlign = TextAlign.Center,
+                )
             }
             // Bottom 3/10: date/permission (left, aligned to icon left) + size (right, aligned to filename right)
             Row(

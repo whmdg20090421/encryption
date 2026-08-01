@@ -46,11 +46,7 @@ class ShellFileOperator(
     // ── 复制 ──
 
     override fun copyFile(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob?) {
-        when (accessLevel) {
-            FileAccessLevel.NORMAL -> copyWithJavaStream(src, dst, onProgress)
-            FileAccessLevel.SHIZUKU -> copyWithPfd(src, dst, onProgress, job)
-            FileAccessLevel.ROOT -> copyWithShell(src, dst, onProgress, job)
-        }
+        copyWithPfd(src, dst, onProgress, job)
     }
 
     /**
@@ -137,98 +133,9 @@ class ShellFileOperator(
         }
     }
 
-    /**
-     * Java Stream 直接复制，8KB buffer，字节驱动进度。
-     * 用于 NORMAL 权限（应用自身 uid 可读写的文件）。
-     */
-    private fun copyWithJavaStream(src: String, dst: String, onProgress: (Long) -> Unit) {
-        val buf = ByteArray(BUFFER_SIZE)
-        var copied = 0L
-        FileInputStream(src).use { input ->
-            FileOutputStream(dst).use { output ->
-                var read: Int
-                while (input.read(buf).also { read = it } != -1) {
-                    output.write(buf, 0, read)
-                    copied += read
-                    onProgress(copied)
-                }
-            }
-        }
-    }
-
-    /**
-     * Shell 流式复制：通过持久 root shell 执行 dd 逐块复制，stdout 输出 PROGRESS 进度。
-     * 整个操作在 root shell 内完成，不跨进程传 FD。
-     */
-    private fun copyWithShell(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob?) {
-        val srcEsc = escape(src)
-        val dstEsc = escape(dst)
-        val script = """
-sz=${"$"}(stat -c %s $srcEsc 2>/dev/null) || { echo "ERROR stat失败"; exit 1; }
-i=0
-bs=131072
-while [ ${"$"}i -lt ${"$"}sz ]; do
-    dd if=$srcEsc of=$dstEsc bs=${"$"}bs count=1 skip=${"$"}((i/bs)) seek=${"$"}((i/bs)) conv=notrunc 2>/dev/null
-    i=${"$"}((i + bs))
-    echo "PROGRESS ${"$"}i" >&2
-done
-""".trimIndent()
-
-        ShellExecutor.executeWithStderr(
-            Permission.ROOT,
-            script,
-            onStderrLine = { line ->
-                when {
-                    line.startsWith("PROGRESS ") -> {
-                        val bytes = line.removePrefix("PROGRESS ").trim().toLongOrNull() ?: return@executeWithStderr
-                        onProgress(bytes)
-                    }
-                    line.startsWith("ERROR ") -> {
-                        throw IOException("复制失败: ${line.removePrefix("ERROR ")}")
-                    }
-                }
-            },
-            cancelFlag = job?.cancelFlag
-        )
-    }
-
     // ── 移动 ──
 
     override fun moveFile(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob?): Boolean {
-        when (accessLevel) {
-            FileAccessLevel.NORMAL -> moveWithJavaStream(src, dst, onProgress)
-            FileAccessLevel.SHIZUKU -> moveWithPfd(src, dst, onProgress, job)
-            FileAccessLevel.ROOT -> moveWithShell(src, dst, onProgress, job)
-        }
-        return true
-    }
-
-    private fun moveWithJavaStream(src: String, dst: String, onProgress: (Long) -> Unit) {
-        try {
-            copyWithJavaStream(src, dst, onProgress)
-        } catch (e: Exception) {
-            try { File(dst).delete() } catch (_: Exception) {}
-            throw e
-        }
-        if (!File(src).delete()) {
-            throw IOException("删除源文件失败: $src")
-        }
-    }
-
-    private fun moveWithPfd(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob?) {
-        try {
-            copyWithPfd(src, dst, onProgress, job)
-        } catch (e: Exception) {
-            try { if (exists(dst)) deleteFile(dst) } catch (_: Exception) {}
-            throw e
-        }
-        deleteFile(src)
-    }
-
-    /**
-     * Shell 移动：同分区 mv 快速路径，跨分区 shell 复制 + 删除。
-     */
-    private fun moveWithShell(src: String, dst: String, onProgress: (Long) -> Unit, job: FileOperationJob?) {
         val srcEsc = escape(src)
         val dstEsc = escape(dst)
         val srcDev = try { exec("stat -c %d $srcEsc").trim() } catch (_: Exception) { "" }
@@ -236,9 +143,15 @@ done
         if (srcDev.isNotEmpty() && srcDev == dstDev) {
             exec("mv -f $srcEsc $dstEsc")
         } else {
-            copyWithShell(src, dst, onProgress, job)
+            try {
+                copyWithPfd(src, dst, onProgress, job)
+            } catch (e: Exception) {
+                try { if (exists(dst)) deleteFile(dst) } catch (_: Exception) {}
+                throw e
+            }
             deleteFile(src)
         }
+        return true
     }
 
     // ── 其他操作 ──
