@@ -2601,6 +2601,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun goBack(): String? = focusedController.goBack()
     fun goForward(): String? = focusedController.goForward()
     fun goUp(): String? = focusedController.goUp()
+    fun isAtVaultRoot(): Boolean = focusedController.isAtVaultRoot()
     fun navigateToHistoryDir(entry: HistoryEntry) = focusedController.navigateToHistoryDir(entry)
     fun navigateToHistoryFile(entry: HistoryEntry) = focusedController.navigateToHistoryFile(entry)
     fun navigateToBookmark(bm: BookmarkEntry) = focusedController.navigateToBookmark(bm)
