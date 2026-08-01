@@ -4867,6 +4867,7 @@ private fun FileEntryRow(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     fontSize = fileNameFontSize.sp,
+                    lineHeight = fileNameFontSize.sp,
                     textAlign = TextAlign.Center,
                 )
             }
