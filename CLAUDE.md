@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 文档版本
 
-**基准哈希**：`4a1f5431bc9050c81304b7aec888d56dc009fde5`
-**更新日期**：2026-07-19
+**基准哈希**：`78c0fe9a24621ca96e8104d2479f1371f48eb972`
+**更新日期**：2026-08-01
 
 > 更新 CLAUDE.md 前，先执行 `git diff <基准哈希>..HEAD -- '*.kt' '*.kts' '*.py' '*.sh' '*.yml'` 查看自上次记录以来的所有代码变更，确保文档与代码同步。更新后替换基准哈希为新的 HEAD。
 
@@ -75,7 +75,7 @@ KEYSTORE_PASSWORD=xxx KEY_ALIAS=xxx KEY_PASSWORD=xxx ./gradlew assembleRelease
 ```
 src/main/java/com/whmdg/mczj/tools/
 ├── MainActivity.kt                    # 入口，启用 Edge-to-Edge
-├── ToolsApp.kt                        # Application 类（初始化）
+├── ToolsApp.kt                        # Application 类（初始化 + ANR 看门狗）
 ├── CrashActivity.kt                   # Native 崩溃显示界面（从 pipe 接收崩溃信息）
 ├── ErrorReportActivity.kt             # 错误报告界面
 └── ui/
@@ -109,7 +109,8 @@ src/main/java/com/whmdg/mczj/tools/
 │       ├── VaultService.kt / VaultSession.kt
 │       └── CryptoService.kt / EncryptionTaskManager.kt
 ├── security/
-│   ├── ShellExecutor.kt               # 统一 shell 执行入口
+│   ├── ShellExecutor.kt               # 统一 shell 执行入口（委托给 ShellDaemon）
+│   ├── ShellDaemon.kt                 # 持久 shell 进程池（按权限隔离，避免每次 fork）
 │   ├── TeeManager.kt                  # TEE 生物识别快速解锁
 │   ├── SpecialPermissionVerifier.kt / ShizukuAuthorizer.kt / ShellService.kt
 │   ├── AndroidPermissionLevel.kt / AccessibilityServiceBridge.kt / MyDeviceAdminReceiver.kt
@@ -153,10 +154,8 @@ src/main/java/com/whmdg/mczj/tools/
 │           ├── DavResourceCompat.kt / DavIOException.kt
 │           ├── MemoryCookieJar.kt / ResponseExtensions.kt
 ├── xposed/
-│   ├── XposedInit.kt                  # Xposed 模块入口
-│   └── hooks/                         # 微信账单 Hook（WebView.evaluateJavascript 拦截）
-│       ├── WechatBillHooker.kt        # Hook 注册 + Application 获取 + Tinker 禁用 + WebView 拦截 + 广播
-│       └── BillHookParser.kt          # 账单 JSON 解析（金额/商户/时间/类型）
+│   ├── 模块入口.kt                     # Xposed 模块入口（中文类名，继承 XposedModule）
+│   └── hook.net.defensezone3.ultra.kt # DefenseZone3 广告跳过 Hook
 ├── util/
 │   └── JxlCoilDecoder.kt             # Coil 图片加载器 JPEG XL 解码器
 └── ui/
@@ -167,8 +166,9 @@ src/main/java/com/whmdg/mczj/tools/
     ├── filemanager/                   # 文件管理器
     │   ├── FileManagerRoute.kt        # sealed class: Home / TextEditor / ImageViewer
     │   ├── FileManagerModuleScreen.kt # Compose 导航容器
-    │   ├── FileManagerScreen.kt       # 文件管理器主界面
-    │   ├── FileManagerViewModel.kt    # ViewModel（shell 路由 + 大小统计 + 独立加密/解密）
+    │   ├── FileManagerScreen.kt       # 文件管理器主界面（双面板 UI）
+    │   ├── FileManagerViewModel.kt    # 三角色架构：FilePaneController + PanelCoordinator + VM
+    │   ├── FileManagerDialogs_FileOps.kt  # 文件操作弹窗（StandardDialog 模板 + 冲突/进度/错误）
     │   ├── ImageViewerScreen.kt       # 图片查看器
     │   ├── TextEditorScreen.kt        # 代码/文本编辑器
     │   ├── FileOperationDialogs.kt    # 文件操作冲突/错误弹窗
@@ -190,9 +190,14 @@ src/main/java/com/whmdg/mczj/tools/
     ├── rphub/                         # RP Hub 模块
     │   ├── RpHubRoute.kt / RpHubModuleScreen.kt
     │   ├── RpHubScreen.kt / RpHubServer.kt / RpHubTrafficPanel.kt / RpHubDownloadPanel.kt / RpHubDebugPanel.kt
-    └── wifi/                          # WiFi 传输模块
-        ├── WifiRoute.kt / WifiModuleScreen.kt
-        └── WifiScreen.kt
+    ├── wifi/                          # WiFi 传输模块
+    │   ├── WifiRoute.kt / WifiModuleScreen.kt
+    │   └── WifiScreen.kt
+    └── hook/                          # Hook 管理模块
+        ├── HookRoute.kt / HookModuleScreen.kt
+        ├── HookScreen.kt             # Hook 目标列表（已安装应用 + 作用域状态）
+        ├── HookDetailScreen.kt       # 单个应用的 Hook 详情（开关 + 作用域管理）
+        └── HookConfig.kt             # Hook 目标注册表 + LSPosed 作用域查询
 ```
 
 ### APP/Models/accounting — 记账本模块
@@ -208,7 +213,6 @@ src/main/java/com/whmdg/mczj/tools/ui/accounting/
 ├── CloudSyncScreen.kt                              # 云同步
 ├── BillOcrEngine.kt / BillOcrModels.kt             # 账单 OCR 识别引擎
 ├── OcrFloatingWindow.kt / OcrFloatingService.kt / OcrLifecycleObserver.kt  # 悬浮窗 OCR
-├── HookFloatingWindow.kt / HookFloatingService.kt / HookResultReceiver.kt  # Hook 账单悬浮窗
 ├── MyAccessibilityService.kt                       # 无障碍服务
 ├── ColorIconRegistry.kt               # 279 个分类图标的 build_in_XXXX 编码映射
 ├── ColorIconImage.kt                  # 从 assets/color_icons/ 加载 PNG 的 Compose 组件
@@ -250,13 +254,14 @@ third_party/argon2/                    # 内嵌 Argon2 实现（供 JNI 直接�
 
 ```
 Screen.Home → HomeScreen（底部导航容器）
-  ├── Screen.EncryptionHome → EncryptionModuleScreen
+  ├── Screen.EncryptionHome → EncryptionModuleScreen(onNavigate)
   │     ├── EncryptionRoute.VaultsList → 保险箱列表
   │     │     ├── 新建保险箱 (VaultCreate)
-  │     │     ├── 打开保险箱 (VaultOpen)  ← 含 TEE 生物识别快速解锁
+  │     │     ├── 打开保险箱 (VaultOpen)  ← 含 TEE 生物识别快速解锁，Argon2id 在 IO 线程异步执行
   │     │     └── 修改密码 (VaultChangePassword)
   │     ├── EncryptionRoute.CloudTab   ← 占位，待实现
   │     └── EncryptionRoute.Settings → 加密设置
+  │     可导航到 Screen.FileManager(vaultSession) → 保险箱文件管理模式
   ├── Screen.Diary → DiaryModuleScreen
   │     └── DiaryRoute.BookDetail → 笔记本详情（日期时间线）
   ├── Screen.Accounting → AccountingModuleScreen
@@ -268,10 +273,12 @@ Screen.Home → HomeScreen（底部导航容器）
   ├── Screen.BatchDownloader → DownloaderModuleScreen
   │     ├── FA 下载 (FADownloader / FALogin)
   │     └── DeviantArt 下载 (DeviantDownloader / DeviantLogin)
-  ├── Screen.FileManager → FileManagerModuleScreen
+  ├── Screen.FileManager(vaultSession?) → FileManagerModuleScreen
   │     ├── FileManagerRoute.Home → 文件管理器主界面（含 WebDAV 快捷访问）
   │     ├── FileManagerRoute.TextEditor → 文本编辑器
   │     └── FileManagerRoute.ImageViewer → 图片查看器
+  ├── Screen.Hook → HookModuleScreen
+  │     └── HookRoute.HookDetail(packageName) → Hook 详情（作用域管理 + 开关）
   └── Screen.RpHub → RpHubModuleScreen
 
 Screen.Settings → 设置
@@ -327,7 +334,7 @@ Screen.Settings → 设置
 派生密钥 (32 字节) + keyId 索引
     │ KeyProfile.featuresFor(keyId)
     ▼
-Feature 集合（ENCRYPTION_VAULT / FILE_MANAGER / BATCH_DOWNLOADER 等）
+Feature 集合（ENCRYPTION_VAULT / FILE_MANAGER / BATCH_DOWNLOADER / HOOK 等）
     │ TokenCodec.encode() + KeystoreMaster.wrap()
     ▼
 Token 持久化（SharedPreferences 中存储 AES-GCM 加密的 Token）
@@ -356,34 +363,68 @@ UI 门控：LocalPermissionGate (CompositionLocal<Boolean>)
 2. 首次解锁成功后，用**公钥**静默加密密码，Hex 存入 `SharedPreferences("tee_passwords")`
 3. 再次打开时用**私钥**（需指纹验证）解密 → 自动开箱
 
-### ShellExecutor 统一执行入口
+### ShellExecutor + ShellDaemon 统一执行入口
 
-所有 shell 命令必须通过 `ShellExecutor.execute()` 执行，禁止直接调用 `Runtime.exec`、`ProcessBuilder`、`Shell.cmd`。
+所有 shell 命令必须通过 `ShellExecutor.execute()` 执行，禁止直接调用 `Runtime.exec`、`ProcessBuilder`、`Shell.cmd`。ShellExecutor 委托给 ShellDaemon 执行。
 
 ```
 ShellExecutor.execute(permission, command, debug)
-    ├── Permission.APPLICANT → Runtime.exec("sh", "-c", cmd)（应用自身 uid）
-    ├── Permission.ADB → 自动路由：Shizuku 可用 → Shizuku，否则 → 应用 shell
-    ├── Permission.ROOT → libsu Shell.cmd()（需 Magisk 授权）
-    ├── Permission.MAX → 读 SharedPreferences 获取最高已授权权限
-    └── Permission.MIN → = Permission.APPLICANT
+    │ resolvePermission(permission)
+    ▼
+ShellDaemon.execute(resolved, command)
+    ├── Permission.ROOT → executeWithLibsu()（libsu Shell.cmd，正确的 SELinux 上下文）
+    ├── Permission.ADB → 持久 shell 进程（stdin/stdout 管道通信）
+    └── Permission.APPLICANT → 持久 shell 进程
+
+ShellDaemon 持久进程池：
+    ├── ConcurrentHashMap<Permission, PersistentShell> 按权限隔离
+    ├── 协议：stdin 发送命令 → stdout 读取到 marker 结束 → 解析 exit code
+    └── 流式执行：executeStreaming() 逐行回调
 
 ShellException(command, permission, stderr, exitCode) → 任何失败抛出异常
 ```
 
 **权限选择原则**：必须 root 才能执行的命令（rm、chmod、chown、chattr、pm、dumpsys）→ `Permission.ROOT`；权限由上层决定的 → `Permission.MAX`；普通命令 → `Permission.MIN`。
 
-### 文件管理器 Shell 路由
+### 文件管理器三角色架构
 
-文件管理器采用**最高权限优先**策略：有 Shell 引擎（Root/Shizuku）时所有操作优先走 Shell，失败才回退 Java File API。
+文件管理器采用 **Controller / Coordinator / ViewModel** 三层分离（均在 `FileManagerViewModel.kt` 内部类）：
 
 ```
-FileManagerViewModel
+FilePaneController（沙箱面板控制器，不含任何身份标识）
+    ├── 构造参数：context, scope, hasShellEngine, isRootEngine, permissionLevel, safeDefault,
+    │             showHiddenFiles, sortField, sortOrder, folderSizeDb, isVaultMode, vaultSession
+    ├── state: VmPanelState（面板所有可变状态）
     ├── hasShellEngine = isRootEngine || isShizukuAuthorized
     ├── listChildrenOrNull() → 有 shell 时 listDirChildrenViaShell()，否则 Java File API
     ├── navigateToFolder() → shell 优先，失败回退 Java API
     ├── shellPathExists() → test -e（不用 cd，在 Shizuku shell 中 cd 对特殊字符路径失败）
-    └── getPropertyData() → stat 失败时回退 shell
+    ├── getPropertyData() → stat 失败时回退 shell
+    ├── onArchiveSessionEntered → 回调（Coordinator 注入，用于会话缓存）
+    └── fileOpProgress: StateFlow<FileOpProgress?> → 文件操作进度
+
+PanelCoordinator（唯一知道两个面板存在的协调者）
+    ├── 构造参数：left, right, context, getFocusedPanel
+    ├── focused / other → 当前/非聚焦 Controller
+    ├── operator get(PanelId) → 按标签寻址
+    ├── sideOf(controller) / sideOfState(state) → 判断面板归属
+    ├── both(): List<FilePaneController> → 两个控制器
+    ├── syncPaths() → 聚焦面板路径同步到非聚焦面板
+    └── refreshBoth() → 刷新两个面板
+
+FileManagerViewModel（瘦壳，委托到 Controller 和 Coordinator）
+    ├── panels: PanelCoordinator → 跨面板操作入口
+    ├── 左 / 右: VmPanelState → UI 通过 vm.左/vm.右 访问面板状态
+    ├── currentPanel / otherPanel → 聚焦/非聚焦面板状态
+    ├── focusedController → 当前聚焦 Controller
+    ├── initVaultMode(vaultSession) → vault 模式初始化
+    └── handleVaultTextSave(content) → vault 文本保存
+
+Composable 接口：
+    FileManagerModuleScreen(onBack, vaultSession?)
+        └── 内部路由：Home / TextEditor / ImageViewer
+    FileManagerScreen(onBack, onNavigate, vaultSession?, onVaultSaveReady?)
+        └── 双面板 UI，vaultSession 非 null 时进入保险箱文件管理模式
 
 FileAccessor（FolderSizeCalculator 使用）
     ├── NormalAccessor → Java File API
@@ -395,6 +436,8 @@ FileAccessor（FolderSizeCalculator 使用）
 - 目录列表使用 `find -printf` 直接输出字段（替代旧版 `ls -lap` 逐字符解析）
 - 文件属性使用 `stat -c '%a|%U|%G|%u|%g'` 一次获取权限/用户名/组名/UID/GID
 - 大小统计 BFS 前执行 `find -type d | wc -l` 获取总目录数，实现实时进度显示
+- FUSE 路径解析：`ls -1aF` 后缀剥离 + `Os.chmod` 替代 shell chmod 检测 FUSE 失败
+- 文件名显示：SmartWrapText 智能换行（onTextLayout 两阶段分割 + 扩展名保留截断）
 
 ### 文件操作模块（fileop）
 
@@ -418,6 +461,11 @@ CopyJob（统一处理复制和移动）
     │     └── 跨分区 → 复制 + 删除源文件
     ├── 递归遍历 → 冲突检测（resolveConflictIfNeeded）→ 执行 → 进度回调
     └── 取消/异常 → 清理残留目标文件
+
+FileOperator.moveFile(src, dst, onProgress, job)
+    ├── onProgress: (Long) -> Unit → 已移动字节数增量回调
+    ├── 同分区 mv 原子操作 → 完成后一次性回调文件大小
+    └── 跨分区 → 复制+删除，每128KB回调
 ```
 
 **WebDAV 客户端**：基于 OkHttp + dav4jvm，配置持久化在 `AppDataPaths`，通过 `WebDavEditDialog` 编辑服务器信息。
@@ -527,7 +575,7 @@ Screen.AddReimbursementAccount — 添加报销账户
 5. 分类映射（精确匹配 + 子串模糊匹配，歧义时放弃）
 6. 追加/替换模式 + 导入后重算余额和报销统计
 
-**备注预测器**（`NotePredictor`）：基于小型 MLP（输入 119 维 → 隐藏层 32/16 → 16 维 embedding），使用 Adam 优化器对比学习，持久化权重和 embedding 到 `ai_model/` 目录。输入特征：一级分类 one-hot + 二级分类 one-hot + 金额 + sin/cos(hour) + 备注字符 bag-of-words。
+**备注预测器**（`NotePredictor`）：基于小型 MLP（输入 83 维 → 隐藏层 32/16 → 16 维 embedding），使用 Adam 优化器对比学习，持久化权重和 embedding 到 `ai_model/` 目录。输入特征：一级分类 embedding(8) + 二级分类 embedding(8) + 金额 + sin/cos(hour) + 备注字符 bag-of-words(64)。分类特征使用动态 Embedding Table，类别增减不影响隐藏层权重。
 
 **首页交互**：`LazyListState` 控制背景 alpha（顶部=0，滚动=1），顶部按钮层始终可见。返回手势：非首页 Tab→回首页，首页 Tab→双击退出。
 
@@ -572,9 +620,11 @@ BillOcrEngine.recognizeNow()（无障碍节点树文字提取 + 关键词 + 正�
 
 ### Xposed 模块
 
-- `xposed/XposedInit.kt`：继承 `XposedModule`（libxposed API），`onPackageLoaded()` / `onSystemServerLoaded()` 为 hook 入口
-- `util/XposedDetector.kt`：检测模块是否激活（反射检查 `io.github.libxposed.api.XposedContext` + 读取 `mczj.xposed.active` 系统属性）
+- `xposed/模块入口.kt`：继承 `XposedModule`（libxposed API 102），中文类名，`onModuleLoaded()` / `onPackageLoaded()` / `onSystemServerStarting()` 为 hook 入口
+- 作用域查询：通过 LSPosed binder 链（`BridgeService → ILSPosedService → ILSPApplicationService → ILSPManagerService → getModuleScope`）实时查询模块作用域
+- `xposed/hook.net.defensezone3.ultra.kt`：DefenseZone3 广告跳过 Hook
 - 属性设置：`SystemProperties.set("mczj.xposed.active", timestamp)` 在模块加载时写入
+- `util/XposedDetector.kt`：通过 LSPosed binder 链查询 `getModuleScope` 检测模块是否激活（非属性检查），提供 `collectDebugInfo()` 逐步诊断
 
 ---
 
@@ -586,6 +636,7 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 - **预构建**：`python3 tools/gen_password_hashes.py` 生成 Native 认证哈希（`hashes.inc` + `obf_key.h`，均 gitignored）
 - **签名**：release 签名通过 secrets 注入（`KEYSTORE_B64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`），缺失时自动回退到 debug 签名
 - **ABI**：仅构建 `arm64-v8a`
+- **编译参数**：`-w`（仅输出 warning/error，减少日志噪音）
 - **版本号**：`versionCode` 基于 git commit count 动态生成，`versionName` 格式 `<major>.<minor>.<timestamp>`
 - **产物**：重命名为 `工具箱-v<版本>-<日期时间>-arm64-v8a-release.apk`，保留 30 天
 
@@ -646,6 +697,13 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 
 Native 层（`crash_handler.c`）注册信号处理器捕获 SIGSEGV/SIGABRT 等，通过 pipe 将崩溃信息传递给 `CrashActivity`，用户可复制崩溃详情或退出应用。退出时通过 pipe2 通知 Native 层执行 `_exit()`。
 
+### ANR 看门狗
+
+`ToolsApp.startAnrWatchdog()` 启动守护线程，每秒 ping 主线程一次，若 3 秒未响应则判定 ANR：
+1. 采集主线程栈写入 `AppDataPaths.diagnostics()/crash_tmp/latest_crash.txt`
+2. 启动 `ErrorReportActivity` 展示崩溃信息
+3. 持续采样主线程栈（每 500ms），增量追加到日志文件
+
 ### Shizuku 集成
 
 `ShizukuAuthorizer` 提供通过 Shizuku 服务执行特权 shell 命令的能力（反射调用 `IShizukuService.newProcess`）。支持 Sui 后端回退。
@@ -662,7 +720,6 @@ Native 层（`crash_handler.c`）注册信号处理器捕获 SIGSEGV/SIGABRT 等
 - **云盘 (CloudTab)**：加密文件云端存储 / 同步（占位 UI 已存在）
 - `ChaCha20-Poly1305` 算法：UI 已支持选择，但 `FileCodec` 目前仅实现 AES-GCM
 - `AES-128-GCM`：同上，UI 可选但底层固定 32 字节 DEK
-- **Xposed hook 逻辑**：`XposedInit.onPackageLoaded()` 中 TODO 待实现具体 hook
 
 ---
 

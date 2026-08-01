@@ -4861,7 +4861,7 @@ private fun FileEntryRow(
                         }
                     }
                 }
-                Box(modifier = Modifier.weight(4f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.weight(4f)) {
                     Text(
                         text = entry.name,
                         modifier = Modifier.fillMaxWidth(),

@@ -170,14 +170,14 @@ bs=131072
 while [ ${"$"}i -lt ${"$"}sz ]; do
     dd if=$srcEsc of=$dstEsc bs=${"$"}bs count=1 skip=${"$"}((i/bs)) seek=${"$"}((i/bs)) conv=notrunc 2>/dev/null
     i=${"$"}((i + bs))
-    echo "PROGRESS ${"$"}i"
+    echo "PROGRESS ${"$"}i" >&2
 done
 """.trimIndent()
 
-        ShellExecutor.executeWithStdout(
+        ShellExecutor.executeWithStderr(
             Permission.ROOT,
             script,
-            onStdoutLine = { line ->
+            onStderrLine = { line ->
                 when {
                     line.startsWith("PROGRESS ") -> {
                         val bytes = line.removePrefix("PROGRESS ").trim().toLongOrNull() ?: return@executeWithStdout
