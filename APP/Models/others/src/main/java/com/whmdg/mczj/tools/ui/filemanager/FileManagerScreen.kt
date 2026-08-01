@@ -352,6 +352,7 @@ fun FileManagerScreen(
         mutableStateOf(list)
     }
     var showAddQaDialog by remember { mutableStateOf(false) }
+    var showVaultExitDialog by remember { mutableStateOf(false) }
 
     // ── WebDAV 快捷访问 ──
     var showQaTypeSelector by remember { mutableStateOf(false) }
@@ -434,20 +435,26 @@ fun FileManagerScreen(
 
     // 保存当前滚动位置并返回上一级
     val saveScrollAndGoUp: () -> Boolean = {
-        listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
-        val targetPath = vm.goUp()
-        if (targetPath != null) {
-            // 导航时清空当前面板的多选状态
-            if (vm.focusedPanel == FocusedPanel.LEFT) {
-                vm.左.selectedPaths = emptySet(); swipeStates[0].selectFlag = 0; swipeStates[0].lastIndex = -1
-            } else {
-                vm.右.selectedPaths = emptySet(); swipeStates[1].selectFlag = 0; swipeStates[1].lastIndex = -1
-            }
-            val saved = vm.getScrollPosition(targetPath)
-            vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+        // 保险箱根目录按返回时弹出确认弹窗
+        if (vm.isAtVaultRoot()) {
+            showVaultExitDialog = true
             true
         } else {
-            false
+            listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
+            val targetPath = vm.goUp()
+            if (targetPath != null) {
+                // 导航时清空当前面板的多选状态
+                if (vm.focusedPanel == FocusedPanel.LEFT) {
+                    vm.左.selectedPaths = emptySet(); swipeStates[0].selectFlag = 0; swipeStates[0].lastIndex = -1
+                } else {
+                    vm.右.selectedPaths = emptySet(); swipeStates[1].selectFlag = 0; swipeStates[1].lastIndex = -1
+                }
+                val saved = vm.getScrollPosition(targetPath)
+                vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+                true
+            } else {
+                false
+            }
         }
     }
 
@@ -491,6 +498,11 @@ fun FileManagerScreen(
     DisposableEffect(showPermanentDeleteDialog) {
         if (showPermanentDeleteDialog) registerOverlay("permanentDelete") { showPermanentDeleteDialog = false; permanentDeleteTarget = null; permanentDeleteMultiNames = emptyList() }
         else unregisterOverlay("permanentDelete")
+        onDispose {}
+    }
+    DisposableEffect(showVaultExitDialog) {
+        if (showVaultExitDialog) registerOverlay("vaultExit") { showVaultExitDialog = false }
+        else unregisterOverlay("vaultExit")
         onDispose {}
     }
     DisposableEffect(showRenameDialog) {
@@ -2664,6 +2676,28 @@ fun FileManagerScreen(
             selectedEntry = null
         }
     )
+
+    // ── 保险箱退出确认对话框 ──
+    if (showVaultExitDialog) {
+        StandardDialog(
+            onDismissRequest = { showVaultExitDialog = false },
+            title = { Text("离开加密保险箱") },
+            text = { Text("你将离开加密保险箱，重新进入需要重新从加密入口进入，密钥将会被销毁。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showVaultExitDialog = false
+                    val parentPath = vm.goUp()
+                    vm.exitVaultMode()
+                    if (parentPath != null) {
+                        vm.navigateTo(parentPath)
+                    }
+                }) { Text("确认") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showVaultExitDialog = false }) { Text("取消") }
+            }
+        )
+    }
 
     // ── 添加快捷访问对话框 ──
     AddQuickAccessDialog(

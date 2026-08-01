@@ -1059,12 +1059,18 @@ class FilePaneController(
 
     /** 返回上级目录，返回目标路径，null 表示已在根目录 */
     fun goUp(): String? {
-        val effectiveRoot = (vaultSession()?.vaultDir?.absolutePath) ?: if (isRootEngine()) "/" else safeDefault
+        val effectiveRoot = if (isRootEngine()) "/" else safeDefault
         val path = state.path
         if (path == effectiveRoot || !path.contains('/')) return null
         val parent = path.substringBeforeLast('/').ifEmpty { "/" }
         if (parent == path) return null
         return parent
+    }
+
+    /** 当前聚焦面板是否在保险箱根目录 */
+    fun isAtVaultRoot(): Boolean {
+        val root = vaultSession()?.vaultDir?.absolutePath ?: return false
+        return state.path == root
     }
 
     fun navigateToHistoryDir(entry: HistoryEntry) {
@@ -2791,25 +2797,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun initVaultMode(session: VaultSession) {
         vaultSession = session
         session.loadNameMapping(context)
-        // 设置双面板初始路径为保险箱根目录
+        // 仅左面板跳转到保险箱根目录，右面板保持默认路径
         val vaultPath = session.vaultDir.absolutePath
         左.path = vaultPath
-        右.path = vaultPath
         左.entries = listDirectory(vaultPath)
-        右.entries = listDirectory(vaultPath)
     }
 
     fun exitVaultMode() {
         vaultSession?.dispose()
         vaultSession = null
         左.path = safeDefault
-        右.path = safeDefault
         左.entries = listOf()
-        右.entries = listOf()
         左.pendingVaultTextEntry = null
         左.pendingVaultOriginalPath = null
-        右.pendingVaultTextEntry = null
-        右.pendingVaultOriginalPath = null
         onNavigateVault = null
         cleanupVaultTempFiles()
     }
