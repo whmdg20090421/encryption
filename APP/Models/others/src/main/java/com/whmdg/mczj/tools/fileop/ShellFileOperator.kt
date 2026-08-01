@@ -180,7 +180,7 @@ done
             onStderrLine = { line ->
                 when {
                     line.startsWith("PROGRESS ") -> {
-                        val bytes = line.removePrefix("PROGRESS ").trim().toLongOrNull() ?: return@executeWithStdout
+                        val bytes = line.removePrefix("PROGRESS ").trim().toLongOrNull() ?: return@executeWithStderr
                         onProgress(bytes)
                     }
                     line.startsWith("ERROR ") -> {
