@@ -100,10 +100,12 @@ class FilePaneController(
     private val showHiddenFiles: () -> Boolean,
     private val sortField: () -> SortField,
     private val sortOrder: () -> SortOrder,
-    private val folderSizeDb: () -> FolderSizeDb,
-    private val isVaultMode: () -> Boolean,
-    private val vaultSession: () -> VaultSession?
+    private val folderSizeDb: () -> FolderSizeDb
 ) {
+    // ── Vault 会话（每个 Controller 独立持有，由 Coordinator 注入） ──
+    var vaultSession by mutableStateOf<VaultSession?>(null)
+        internal set
+    val isVaultMode: Boolean get() = vaultSession != null
     // ── 面板状态（沙箱数据，不含任何身份标识） ──
     val state = VmPanelState("/storage/emulated/0")
 
@@ -467,7 +469,7 @@ class FilePaneController(
             val escaped = SevenZipCommand.escape(normalized)
 
             // vault 配置文件名，用于过滤
-            val vaultConfigNames = if (isVaultMode()) setOf(
+            val vaultConfigNames = if (isVaultMode) setOf(
                 "vault_config.json", "vault_config.backup.json",
                 "name_mappings.json", "folder_sizes.json"
             ) else emptySet()
@@ -501,8 +503,8 @@ class FilePaneController(
                 if (name in vaultConfigNames) continue
                 val childPath = if (normalized == "/") "/$name" else "$normalized/$name"
                 var entry = FileEntry(childPath, name, isDir)
-                if (isVaultMode()) {
-                    val session = vaultSession()
+                if (isVaultMode) {
+                    val session = vaultSession
                     if (session != null && !isDir) {
                         entry = entry.copy(name = decryptVaultFileName(name, session))
                     }
@@ -576,7 +578,7 @@ class FilePaneController(
      */
     internal fun sortEntries(entries: List<FileEntry>): List<FileEntry> {
         // vault 模式过滤配置文件
-        val filtered = if (isVaultMode()) {
+        val filtered = if (isVaultMode) {
             entries.filter { entry ->
                 val name = entry.name
                 name != "vault_config.json" &&
@@ -892,8 +894,8 @@ class FilePaneController(
         var entries = listWithLs(path, showHiddenFiles(), useRoot = isRootEngine(), effectiveRoot = effectiveRoot)
 
         // vault 模式：过滤配置文件 + 文件名解密
-        if (isVaultMode()) {
-            val session = vaultSession()!!
+        if (isVaultMode) {
+            val session = vaultSession!!
             entries = entries.filter { entry ->
                 val name = entry.name
                 name != "vault_config.json" &&
@@ -956,7 +958,7 @@ class FilePaneController(
 
     internal fun decryptVaultFileName(encryptedName: String, session: VaultSession): String {
         var raw = encryptedName
-        if (raw.endsWith(".aes")) {
+        if (raw.endsWith(".whm")) {
             raw = raw.substring(0, raw.length - 4)
         }
         if (!session.record.encryptFilename) {
@@ -964,7 +966,7 @@ class FilePaneController(
         }
         return try {
             FilenameCodec.decrypt(
-                encryptedName = "${raw}.aes",
+                encryptedName = "${raw}.whm",
                 dek = session.dek,
                 aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null,
                 lookupMapping = { session.nameMapping.get(it) }
@@ -1069,7 +1071,7 @@ class FilePaneController(
 
     /** 当前聚焦面板是否在保险箱根目录 */
     fun isAtVaultRoot(): Boolean {
-        val root = vaultSession()?.vaultDir?.absolutePath ?: return false
+        val root = vaultSession?.vaultDir?.absolutePath ?: return false
         return state.path == root
     }
 
@@ -2248,10 +2250,23 @@ class PanelCoordinator(
 
     /** 将聚焦面板的路径同步到非聚焦面板 */
     fun syncPaths() {
-        val src = focused.state
-        val dst = other.state
+        val srcCtrl = focused
+        val dstCtrl = other
+        val src = srcCtrl.state
+        val dst = dstCtrl.state
+
+        // 同步 vault session：源有 session 且目标路径在 vault 内 → 注入；否则清除
+        val session = srcCtrl.vaultSession
+        val vaultDir = session?.vaultDir?.absolutePath
+        if (session != null && vaultDir != null && (src.path == vaultDir || src.path.startsWith("$vaultDir/"))) {
+            dstCtrl.vaultSession = session
+        } else {
+            dstCtrl.vaultSession?.dispose()
+            dstCtrl.vaultSession = null
+        }
+
         dst.navState = dst.navState.navigate(src.path)
-        other.loadDirectory(src.path, panel = dst)
+        dstCtrl.loadDirectory(src.path, panel = dst)
     }
 
     /** 刷新两个面板 */
@@ -2304,6 +2319,33 @@ class PanelCoordinator(
         val session = focused.state.archiveSession ?: return true
         return ArchiveBrowser.isAtRoot(session)
     }
+
+    // ── Vault 会话管理（Coordinator 持有源，注入到各 Controller） ──
+
+    /** 为指定面板初始化 vault 模式 */
+    fun initVaultMode(session: VaultSession, panel: PanelId = PanelId.LEFT) {
+        val ctrl = this[panel]
+        session.loadNameMapping(context)
+        ctrl.vaultSession = session
+        val vaultPath = session.vaultDir.absolutePath
+        ctrl.state.path = vaultPath
+        ctrl.state.entries = ctrl.listDirectory(vaultPath)
+    }
+
+    /** 退出 vault 模式：清除所有 Controller 的会话 */
+    fun exitVaultMode() {
+        for (ctrl in both()) {
+            ctrl.vaultSession?.dispose()
+            ctrl.vaultSession = null
+        }
+    }
+
+    /** 是否有任意面板处于 vault 模式 */
+    val isVaultMode: Boolean get() = left.isVaultMode || right.isVaultMode
+
+    /** 获取当前活跃的 vault session（优先左面板） */
+    val activeVaultSession: VaultSession?
+        get() = left.vaultSession ?: right.vaultSession
 
     // ── 初始化 ──
 
@@ -2379,9 +2421,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             showHiddenFiles = { showHiddenFiles },
             sortField = { sortField },
             sortOrder = { sortOrder },
-            folderSizeDb = { folderSizeDb },
-            isVaultMode = { vaultSession != null },
-            vaultSession = { vaultSession }
+            folderSizeDb = { folderSizeDb }
         )
     }
     private val controllerRight by lazy {
@@ -2395,9 +2435,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             showHiddenFiles = { showHiddenFiles },
             sortField = { sortField },
             sortOrder = { sortOrder },
-            folderSizeDb = { folderSizeDb },
-            isVaultMode = { vaultSession != null },
-            vaultSession = { vaultSession }
+            folderSizeDb = { folderSizeDb }
         )
     }
 
@@ -2512,10 +2550,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     val webDavConfig: WebDavServerConfig? get() = currentPanel.webDavConfig
     val webDavClient: WebDavFileClient? get() = currentPanel.webDavClient
 
-    // ── Vault 模式 ──
-    var vaultSession by mutableStateOf<VaultSession?>(null)
-        private set
-    val isVaultMode: Boolean get() = vaultSession != null
+    // ── Vault 模式（委托给 Coordinator） ──
+    val isVaultMode: Boolean get() = panels.isVaultMode
+    val vaultSession: VaultSession? get() = panels.activeVaultSession
     private val vaultRoot: String?
         get() = vaultSession?.vaultDir?.absolutePath
 
@@ -2793,20 +2830,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
 
 
-    // ── Vault 模式 ──
+    // ── Vault 模式（委托给 Coordinator） ──
 
     fun initVaultMode(session: VaultSession) {
-        vaultSession = session
-        session.loadNameMapping(context)
-        // 仅左面板跳转到保险箱根目录，右面板保持默认路径
-        val vaultPath = session.vaultDir.absolutePath
-        左.path = vaultPath
-        左.entries = listDirectory(vaultPath)
+        panels.initVaultMode(session, PanelId.LEFT)
     }
 
     fun exitVaultMode() {
-        vaultSession?.dispose()
-        vaultSession = null
+        panels.exitVaultMode()
         左.path = safeDefault
         左.entries = listOf()
         左.pendingVaultTextEntry = null
