@@ -23,7 +23,7 @@ object FilenameCodec {
         val hex1 = HexCodec.encode(combined1)
 
         if (hex1.length <= 251) {
-            return EncryptResult("$hex1.aes")
+            return EncryptResult("$hex1.whm")
         }
 
         // 太长 -> zlib 压缩
@@ -33,13 +33,13 @@ object FilenameCodec {
         val hex2 = HexCodec.encode(combined2)
 
         if (hex2.length <= 251) {
-            return EncryptResult("$hex2.aes")
+            return EncryptResult("$hex2.whm")
         }
 
         // 还是太长 -> SHA-256 哈希 + 映射
         val md = MessageDigest.getInstance("SHA-256")
         val hash = md.digest(hex2.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
-        return EncryptResult("$hash.aes", hash, hex2)
+        return EncryptResult("$hash.whm", hash, hex2)
     }
 
     fun decrypt(
@@ -48,7 +48,7 @@ object FilenameCodec {
         aad: ByteArray? = null,
         lookupMapping: (String) -> String? = { null }
     ): String {
-        var name = if (encryptedName.endsWith(".aes")) {
+        var name = if (encryptedName.endsWith(".whm")) {
             encryptedName.substring(0, encryptedName.length - 4)
         } else {
             encryptedName

@@ -12,7 +12,7 @@ import java.io.File
 object CryptoService {
 
     /**
-     * 把 [srcFile] 加密进 [session]，返回生成的 `.aes` 文件路径。
+     * 把 [srcFile] 加密进 [session]，返回生成的 `.whm` 文件路径。
      */
     fun encryptIntoVault(
         context: Context,
@@ -37,7 +37,7 @@ object CryptoService {
                 session.saveNameMapping(context)
             }
         } else {
-            outName = "$origName.aes"
+            outName = "$origName.whm"
         }
 
         val targetDir = if (subDir.isEmpty()) session.vaultDir else File(session.vaultDir, subDir)
@@ -84,7 +84,7 @@ object CryptoService {
                 lookupMapping = { session.nameMapping.get(it) }
             )
         } else {
-            realName = if (encName.endsWith(".aes")) {
+            realName = if (encName.endsWith(".whm")) {
                 encName.substring(0, encName.length - 4)
             } else {
                 encName
@@ -107,10 +107,10 @@ object CryptoService {
     }
 
     /**
-     * 列出 vault 内所有 `.aes` 文件（不递归子目录）。
+     * 列出 vault 内所有 `.whm` 文件（不递归子目录）。
      */
     fun listEncryptedFiles(session: VaultSession): List<File> {
-        val files = session.vaultDir.listFiles { _, name -> name.endsWith(".aes") }
+        val files = session.vaultDir.listFiles { _, name -> name.endsWith(".whm") }
         return files?.sortedBy { it.name } ?: emptyList()
     }
 }

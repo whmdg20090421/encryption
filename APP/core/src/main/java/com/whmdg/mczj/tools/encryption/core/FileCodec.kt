@@ -32,13 +32,11 @@ object FileCodec {
     ) {
         val aad = if (customEncryption) FileConstants.aadCustomObf else null
         val totalSize = src.length()
-        val hasFooter = customEncryption && totalSize > FileConstants.FOOTER_THRESHOLD
 
         FileOutputStream(dst).use { out ->
-            // ① MAGIC + footer 标志
+            // ① MAGIC 头（标识加密文件）
             if (customEncryption) {
                 out.write(FileConstants.magicHeader)
-                out.write(if (hasFooter) 1 else 0)
             }
 
             // ② metadata 块
@@ -82,11 +80,6 @@ object FileCodec {
                     if (cancelFlag?.get() == true) throw InterruptedIOException("用户取消")
                 }
             }
-
-            // ④ Legal footer
-            if (hasFooter) {
-                out.write(FileConstants.legalFooter)
-            }
         }
         onProgress(totalSize, totalSize)
     }
@@ -103,16 +96,12 @@ object FileCodec {
         var metadata = mapOf<String, Double>()
 
         FileInputStream(src).use { `in` ->
-            var hasFooter = false
             if (customEncryption) {
                 val magic = ByteArray(FileConstants.magicHeader.size)
                 `in`.read(magic)
                 if (!magic.contentEquals(FileConstants.magicHeader)) {
                     throw IllegalArgumentException("文件头损坏或未启用对应加密配置")
                 }
-                val flag = `in`.read()
-                if (flag == -1) throw IllegalArgumentException("文件格式错误：缺少 footer 标志")
-                hasFooter = flag == 1
             }
 
             // metadata
@@ -137,8 +126,8 @@ object FileCodec {
             }
 
             // 数据区
-            val dataEnd = if (hasFooter) totalSize - FileConstants.legalFooter.size else totalSize
-            var currentPos = if (customEncryption) (FileConstants.magicHeader.size + 1).toLong() else 0L
+            val dataEnd = totalSize
+            var currentPos = if (customEncryption) FileConstants.magicHeader.size.toLong() else 0L
             currentPos += 4 + metaLen // metaLenBuf(4) + iv(12) + cipher(metaLen-12)
 
             FileOutputStream(dst).use { out ->

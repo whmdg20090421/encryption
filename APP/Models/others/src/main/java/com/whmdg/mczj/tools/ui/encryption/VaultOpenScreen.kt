@@ -91,7 +91,7 @@ fun VaultOpenScreen(
                         f.name
                     } else {
                         var raw = f.name
-                        if (raw.endsWith(".aes")) {
+                        if (raw.endsWith(".whm")) {
                             raw = raw.substring(0, raw.length - 4)
                         }
                         if (!session.record.encryptFilename) {
@@ -99,7 +99,7 @@ fun VaultOpenScreen(
                         } else {
                             try {
                                 FilenameCodec.decrypt(
-                                    encryptedName = "${raw}.aes",
+                                    encryptedName = "${raw}.whm",
                                     dek = session.dek,
                                     aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null,
                                     lookupMapping = { session.nameMapping.get(it) }
