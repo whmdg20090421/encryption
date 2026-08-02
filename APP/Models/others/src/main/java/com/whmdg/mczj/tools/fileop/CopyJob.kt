@@ -1,6 +1,10 @@
 package com.whmdg.mczj.tools.fileop
 
+import android.content.Context
+import com.whmdg.mczj.tools.encryption.services.CryptoService
+import com.whmdg.mczj.tools.encryption.services.VaultSession
 import kotlinx.coroutines.runBlocking
+import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
 
@@ -10,6 +14,52 @@ import java.io.InterruptedIOException
 enum class CopyPurpose {
     COPY,
     MOVE
+}
+
+/**
+ * 复制/移动操作中涉及保险箱时的上下文信息。
+ *
+ * CopyJob 根据此类型决定走字节复制、加密引入、解密导出、还是跨箱转码。
+ */
+sealed class VaultOperationContext {
+
+    /** 不涉及保险箱，走原始字节复制/移动 */
+    data object None : VaultOperationContext()
+
+    /**
+     * 外部文件 → 保险箱（加密引入）。
+     * @param targetSession 目标保险箱的会话
+     * @param targetSubDir 目标相对于 vaultDir 的子路径（空表示根目录）
+     */
+    data class ExternalToVault(
+        val targetSession: VaultSession,
+        val targetSubDir: String
+    ) : VaultOperationContext()
+
+    /**
+     * 保险箱 → 外部（解密导出）。
+     * @param sourceSession 源保险箱的会话
+     */
+    data class VaultToExternal(
+        val sourceSession: VaultSession
+    ) : VaultOperationContext()
+
+    /**
+     * 同一保险箱内部复制/移动（已是同密钥密文，直接字节操作）。
+     */
+    data object SameVault : VaultOperationContext()
+
+    /**
+     * 跨保险箱操作（解密 → 重新加密）。
+     * @param sourceSession 源保险箱的会话
+     * @param targetSession 目标保险箱的会话
+     * @param targetSubDir 目标相对于 vaultDir 的子路径
+     */
+    data class CrossVault(
+        val sourceSession: VaultSession,
+        val targetSession: VaultSession,
+        val targetSubDir: String
+    ) : VaultOperationContext()
 }
 
 /**
@@ -27,7 +77,9 @@ class CopyJob(
     private val purpose: CopyPurpose,
     private val sources: List<String>,
     private val targetDir: String,
-    private val manager: FileOperationManager
+    private val manager: FileOperationManager,
+    private val context: Context,
+    private val vaultContext: VaultOperationContext = VaultOperationContext.None
 ) : FileOperationJob() {
 
     /** 异常时需要清理的残留目标文件路径 */
@@ -42,33 +94,24 @@ class CopyJob(
     override fun run() {
         var errorToShow: Exception? = null
         try {
-            // 移动目的：先统一扫描，再分区处理
-            if (purpose == CopyPurpose.MOVE) {
-                val scanInfo = scanWithProgress(sources) { totalSoFar ->
-                    manager.updateProgress(FileOpProgress(
-                        phase = "正在移动",
-                        currentBytes = 0,
-                        totalBytes = totalSoFar,
-                        isScanning = true
-                    ))
+            when (vaultContext) {
+                is VaultOperationContext.SameVault -> {
+                    // 同一保险箱内部：已是同密钥密文，直接字节操作
+                    runNormalCopy()
                 }
-
-                val (movable, needCopy) = partitionSourcesByDevice(sources, targetDir)
-
-                if (movable.isNotEmpty()) {
-                    moveWithMv(movable, targetDir, scanInfo)
+                is VaultOperationContext.ExternalToVault -> {
+                    copyExternalToVault(vaultContext)
                 }
-
-                if (needCopy.isEmpty()) {
-                    return
+                is VaultOperationContext.VaultToExternal -> {
+                    copyVaultToExternal(vaultContext)
                 }
-
-                processCopyAndDelete(needCopy, targetDir)
-                return
+                is VaultOperationContext.CrossVault -> {
+                    copyCrossVault(vaultContext)
+                }
+                is VaultOperationContext.None -> {
+                    runNormalCopy()
+                }
             }
-
-            // 复制目的：直接走复制链路
-            processCopyAndDelete(sources, targetDir)
         } catch (e: Exception) {
             errorToShow = e
         } finally {
@@ -128,6 +171,318 @@ class CopyJob(
             }
         }
     }
+
+    /** 原始字节复制/移动逻辑（不含 vault 或同 vault）。 */
+    private fun runNormalCopy() {
+        // 移动目的：先统一扫描，再分区处理
+        if (purpose == CopyPurpose.MOVE) {
+            val scanInfo = scanWithProgress(sources) { totalSoFar ->
+                manager.updateProgress(FileOpProgress(
+                    phase = "正在移动",
+                    currentBytes = 0,
+                    totalBytes = totalSoFar,
+                    isScanning = true
+                ))
+            }
+
+            val (movable, needCopy) = partitionSourcesByDevice(sources, targetDir)
+
+            if (movable.isNotEmpty()) {
+                moveWithMv(movable, targetDir, scanInfo)
+            }
+
+            if (needCopy.isEmpty()) {
+                return
+            }
+
+            processCopyAndDelete(needCopy, targetDir)
+            return
+        }
+
+        // 复制目的：直接走复制链路
+        processCopyAndDelete(sources, targetDir)
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  Vault 操作：外部 → 保险箱（加密引入）
+    // ═══════════════════════════════════════════════════════
+
+    private fun copyExternalToVault(ctx: VaultOperationContext.ExternalToVault) {
+        val totalSize = sources.sumOf { File(it).walkTopDown().filter { f -> f.isFile }.sumOf { f -> f.length() } }
+        var doneBytes = 0L
+        var doneFiles = 0
+
+        manager.updateProgress(FileOpProgress(
+            phase = "正在加密",
+            currentBytes = 0,
+            totalBytes = totalSize,
+            isScanning = false,
+            fileIndex = 0,
+            fileCount = sources.size
+        ))
+
+        for (src in sources) {
+            throwIfCancelled()
+            val srcFile = File(src)
+            val subDir = if (ctx.targetSubDir.isEmpty()) "" else ctx.targetSubDir
+            if (srcFile.isDirectory) {
+                encryptDirToVault(srcFile, subDir, ctx.targetSession, totalSize, doneBytes, doneFiles)
+                doneBytes += srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            } else {
+                currentStep = "加密: ${srcFile.name}"
+                CryptoService.encryptIntoVault(context, ctx.targetSession, srcFile, subDir)
+                doneBytes += srcFile.length()
+            }
+            doneFiles++
+            manager.updateProgress(FileOpProgress(
+                phase = "正在加密",
+                currentBytes = doneBytes,
+                totalBytes = totalSize,
+                currentFileName = srcFile.name,
+                fileIndex = doneFiles,
+                fileCount = sources.size
+            ))
+            if (isGracefulCancelled()) break
+        }
+
+        if (purpose == CopyPurpose.MOVE) {
+            for (src in sources) {
+                throwIfCancelled()
+                File(src).deleteRecursively()
+            }
+        }
+    }
+
+    private fun encryptDirToVault(
+        dir: File,
+        parentSubDir: String,
+        session: VaultSession,
+        totalSize: Long,
+        baseBytes: Long,
+        baseFiles: Int
+    ) {
+        val files = dir.walkTopDown().filter { it.isFile }.toList()
+        var doneBytes = 0L
+        for (file in files) {
+            throwIfCancelled()
+            val relPath = file.relativeTo(dir).parent?.replace('\\', '/') ?: ""
+            val fileSubDir = if (parentSubDir.isEmpty()) relPath else {
+                if (relPath.isEmpty()) parentSubDir else "$parentSubDir/$relPath"
+            }
+            currentStep = "加密: ${file.name}"
+            CryptoService.encryptIntoVault(context, session, file, fileSubDir)
+            doneBytes += file.length()
+            manager.updateProgress(FileOpProgress(
+                phase = "正在加密",
+                currentBytes = baseBytes + doneBytes,
+                totalBytes = totalSize,
+                currentFileName = file.name,
+                fileIndex = baseFiles,
+                fileCount = sources.size
+            ))
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  Vault 操作：保险箱 → 外部（解密导出）
+    // ═══════════════════════════════════════════════════════
+
+    private fun copyVaultToExternal(ctx: VaultOperationContext.VaultToExternal) {
+        val totalSize = sources.sumOf { File(it).walkTopDown().filter { f -> f.isFile }.sumOf { f -> f.length() } }
+        var doneBytes = 0L
+        var doneFiles = 0
+
+        manager.updateProgress(FileOpProgress(
+            phase = "正在解密",
+            currentBytes = 0,
+            totalBytes = totalSize,
+            isScanning = false,
+            fileIndex = 0,
+            fileCount = sources.size
+        ))
+
+        for (src in sources) {
+            throwIfCancelled()
+            val srcFile = File(src)
+            if (srcFile.isDirectory) {
+                decryptDirFromVault(srcFile, targetDir, ctx.sourceSession, totalSize, doneBytes, doneFiles)
+                doneBytes += srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            } else {
+                currentStep = "解密: ${srcFile.name}"
+                CryptoService.decryptOutOfVault(ctx.sourceSession, srcFile, File(targetDir))
+                doneBytes += srcFile.length()
+            }
+            doneFiles++
+            manager.updateProgress(FileOpProgress(
+                phase = "正在解密",
+                currentBytes = doneBytes,
+                totalBytes = totalSize,
+                currentFileName = srcFile.name,
+                fileIndex = doneFiles,
+                fileCount = sources.size
+            ))
+            if (isGracefulCancelled()) break
+        }
+
+        if (purpose == CopyPurpose.MOVE) {
+            for (src in sources) {
+                throwIfCancelled()
+                File(src).deleteRecursively()
+            }
+        }
+    }
+
+    private fun decryptDirFromVault(
+        dir: File,
+        outputBase: String,
+        session: VaultSession,
+        totalSize: Long,
+        baseBytes: Long,
+        baseFiles: Int
+    ) {
+        val files = dir.walkTopDown().filter { it.isFile }.toList()
+        var doneBytes = 0L
+        for (file in files) {
+            throwIfCancelled()
+            val relParent = file.parentFile?.relativeTo(dir)?.path?.replace('\\', '/') ?: ""
+            val outputDir = if (relParent.isEmpty()) {
+                File(outputBase)
+            } else {
+                File(outputBase, relParent)
+            }
+            currentStep = "解密: ${file.name}"
+            CryptoService.decryptOutOfVault(session, file, outputDir)
+            doneBytes += file.length()
+            manager.updateProgress(FileOpProgress(
+                phase = "正在解密",
+                currentBytes = baseBytes + doneBytes,
+                totalBytes = totalSize,
+                currentFileName = file.name,
+                fileIndex = baseFiles,
+                fileCount = sources.size
+            ))
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  Vault 操作：跨保险箱（解密 → 重新加密）
+    // ═══════════════════════════════════════════════════════
+
+    private fun copyCrossVault(ctx: VaultOperationContext.CrossVault) {
+        val totalSize = sources.sumOf { File(it).walkTopDown().filter { f -> f.isFile }.sumOf { f -> f.length() } }
+        var doneBytes = 0L
+        var doneFiles = 0
+
+        manager.updateProgress(FileOpProgress(
+            phase = "正在转码",
+            currentBytes = 0,
+            totalBytes = totalSize,
+            isScanning = false,
+            fileIndex = 0,
+            fileCount = sources.size
+        ))
+
+        val tempDir = File(context.cacheDir, "vault_transfer_${System.currentTimeMillis()}")
+
+        try {
+            for (src in sources) {
+                throwIfCancelled()
+                val srcFile = File(src)
+                if (srcFile.isDirectory) {
+                    copyCrossVaultDir(srcFile, ctx, tempDir, totalSize, doneBytes, doneFiles)
+                    doneBytes += srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+                } else {
+                    currentStep = "转码: ${srcFile.name}"
+                    decryptAndReEncrypt(srcFile, ctx.targetSession, ctx.targetSubDir, ctx.sourceSession, tempDir)
+                    doneBytes += srcFile.length()
+                }
+                doneFiles++
+                manager.updateProgress(FileOpProgress(
+                    phase = "正在转码",
+                    currentBytes = doneBytes,
+                    totalBytes = totalSize,
+                    currentFileName = srcFile.name,
+                    fileIndex = doneFiles,
+                    fileCount = sources.size
+                ))
+                if (isGracefulCancelled()) break
+            }
+
+            if (purpose == CopyPurpose.MOVE) {
+                for (src in sources) {
+                    throwIfCancelled()
+                    File(src).deleteRecursively()
+                }
+            }
+        } finally {
+            // 清理临时文件
+            try { tempDir.deleteRecursively() } catch (_: Exception) {}
+        }
+    }
+
+    private fun copyCrossVaultDir(
+        dir: File,
+        ctx: VaultOperationContext.CrossVault,
+        tempDir: File,
+        totalSize: Long,
+        baseBytes: Long,
+        baseFiles: Int
+    ) {
+        val files = dir.walkTopDown().filter { it.isFile }.toList()
+        var doneBytes = 0L
+        for (file in files) {
+            throwIfCancelled()
+            val relParent = file.parentFile?.relativeTo(dir)?.path?.replace('\\', '/') ?: ""
+            val subDir = if (ctx.targetSubDir.isEmpty()) relParent else {
+                if (relParent.isEmpty()) ctx.targetSubDir else "${ctx.targetSubDir}/$relParent"
+            }
+            currentStep = "转码: ${file.name}"
+            decryptAndReEncrypt(file, ctx.targetSession, subDir, ctx.sourceSession, tempDir)
+            doneBytes += file.length()
+            manager.updateProgress(FileOpProgress(
+                phase = "正在转码",
+                currentBytes = baseBytes + doneBytes,
+                totalBytes = totalSize,
+                currentFileName = file.name,
+                fileIndex = baseFiles,
+                fileCount = sources.size
+            ))
+        }
+    }
+
+    /** 用源 session 解密单个文件到临时目录，再用目标 session 加密到目标保险箱。 */
+    private fun decryptAndReEncrypt(
+        srcFile: File,
+        targetSession: VaultSession,
+        targetSubDir: String,
+        sourceSession: VaultSession,
+        tempDir: File
+    ) {
+        tempDir.mkdirs()
+        val tempFile = File(tempDir, srcFile.nameWithoutExtension + "_plain.tmp")
+        try {
+            // 1. 解密（临时文件名由 FileCodec 内部决定，我们只关心写出路径）
+            CryptoService.decryptOutOfVault(sourceSession, srcFile, tempDir, overwrite = true)
+            // 找到刚解密的文件（CryptoService 会用原始文件名）
+            val decryptedFile = tempDir.listFiles()
+                ?.filter { it.isFile && it.name != tempFile.name }
+                ?.maxByOrNull { it.lastModified() }
+                ?: throw IOException("解密临时文件未找到")
+
+            // 2. 用目标 session 重新加密
+            val subDir = if (targetSubDir.isEmpty()) "" else targetSubDir
+            CryptoService.encryptIntoVault(context, targetSession, decryptedFile, subDir, overwrite = true)
+        } finally {
+            // 清理临时解密文件
+            tempDir.listFiles()?.forEach { f ->
+                if (f.isFile) try { f.delete() } catch (_: Exception) {}
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════
+    //  原始复制/移动逻辑（无 vault 感知）
+    // ═══════════════════════════════════════════════════════
 
     /**
      * 处理复制+删除逻辑（复制目的，或移动目的中需要跨分区的节点）。

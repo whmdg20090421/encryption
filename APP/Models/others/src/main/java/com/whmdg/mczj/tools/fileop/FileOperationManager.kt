@@ -93,13 +93,14 @@ object FileOperationManager {
         targetDir: String,
         accessLevel: FileAccessLevel,
         context: Context,
-        debugMode: Boolean = false
+        debugMode: Boolean = false,
+        vaultContext: VaultOperationContext = VaultOperationContext.None
     ) {
         FileOpDiagnostics.clear()
         FileOpDiagnostics.setEnabled(debugMode)
         _progress.value = FileOpProgress(phase = "正在复制", currentBytes = 0, totalBytes = 0, isScanning = true)
         val operator = FileOperator.create(accessLevel)
-        val job = CopyJob(CopyPurpose.COPY, sources, targetDir, this).apply {
+        val job = CopyJob(CopyPurpose.COPY, sources, targetDir, this, context, vaultContext).apply {
             this.operator = operator
         }
         FileOperationService.submit(job, context)
@@ -110,13 +111,14 @@ object FileOperationManager {
         targetDir: String,
         accessLevel: FileAccessLevel,
         context: Context,
-        debugMode: Boolean = false
+        debugMode: Boolean = false,
+        vaultContext: VaultOperationContext = VaultOperationContext.None
     ) {
         FileOpDiagnostics.clear()
         FileOpDiagnostics.setEnabled(debugMode)
         _progress.value = FileOpProgress(phase = "正在移动", currentBytes = 0, totalBytes = 0, isScanning = true)
         val operator = FileOperator.create(accessLevel)
-        val job = CopyJob(CopyPurpose.MOVE, sources, targetDir, this).apply {
+        val job = CopyJob(CopyPurpose.MOVE, sources, targetDir, this, context, vaultContext).apply {
             this.operator = operator
         }
         FileOperationService.submit(job, context)

@@ -29,7 +29,11 @@ import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.encryption.services.VaultSession
+import com.whmdg.mczj.tools.encryption.services.VaultFileClassifier
+import com.whmdg.mczj.tools.encryption.services.VaultClassification
+import com.whmdg.mczj.tools.encryption.data.VaultDb
 import com.whmdg.mczj.tools.fileop.FileOperationManager
+import com.whmdg.mczj.tools.fileop.VaultOperationContext
 import com.whmdg.mczj.tools.fileop.DeleteEntry
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
 import androidx.compose.runtime.collectAsState
@@ -2561,10 +2565,23 @@ fun FileManagerScreen(
                 com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> FileAccessLevel.SHIZUKU
                 else -> FileAccessLevel.NORMAL
             }
+
+            // ── 保险箱感知前置校验 ──
+            val vaultContext = buildVaultOperationContext(
+                context = context,
+                sourcePaths = copyMoveConfirmSourcePaths,
+                targetDir = copyMoveConfirmTargetDir,
+                vm = vm
+            )
+            if (vaultContext == null) {
+                // 混合批次，已弹出 Toast，不执行操作
+                return@CopyMoveConfirmDialog
+            }
+
             if (copyMoveConfirmIsCopy) {
-                FileOperationManager.copy(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode)
+                FileOperationManager.copy(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode, vaultContext)
             } else {
-                FileOperationManager.move(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode)
+                FileOperationManager.move(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode, vaultContext)
             }
             showFileOpProgress = true
             selectedEntry = null
@@ -5123,3 +5140,98 @@ private fun DrawerMenuItem(
 }
 
 // StandardDialog 已移至 FileManagerDialogs_FileOps.kt
+
+/**
+ * 保险箱感知的前置校验：分类源路径和目标路径，构建 VaultOperationContext。
+ * 返回 null 表示混合批次（已弹出 Toast），不应执行操作。
+ */
+private fun buildVaultOperationContext(
+    context: Context,
+    sourcePaths: List<String>,
+    targetDir: String,
+    vm: FileManagerViewModel
+): VaultOperationContext? {
+    // 加载所有保险箱记录
+    val db = VaultDb.load(context)
+    if (db.vaults.isEmpty()) return VaultOperationContext.None
+
+    val classifier = VaultFileClassifier(context, db.vaults)
+
+    // 分类目标路径
+    val targetClassification = classifier.classify(targetDir)
+
+    // 目标不在保险箱内：检查源是否在保险箱内
+    if (targetClassification is VaultClassification.External) {
+        val sourceResult = classifier.classifyBatch(sourcePaths)
+        if (!sourceResult.isValid) {
+            Toast.makeText(context, sourceResult.errorMessage, Toast.LENGTH_LONG).show()
+            return null
+        }
+        // 源在保险箱内 → 解密导出
+        val sourceCls = sourceResult.classifications.first().second
+        if (sourceCls is VaultClassification.InVault) {
+            val sourceSession = findVaultSession(vm, sourceCls.record.id)
+                ?: run {
+                    Toast.makeText(context, "源保险箱「${sourceCls.record.name}」未打开，无法操作", Toast.LENGTH_LONG).show()
+                    return null
+                }
+            return VaultOperationContext.VaultToExternal(sourceSession)
+        }
+        // 源和目标都在外部
+        return VaultOperationContext.None
+    }
+
+    // 目标在保险箱内
+    val targetVault = (targetClassification as VaultClassification.InVault)
+
+    // 分类源路径
+    val sourceResult = classifier.classifyBatch(sourcePaths)
+    if (!sourceResult.isValid) {
+        Toast.makeText(context, sourceResult.errorMessage, Toast.LENGTH_LONG).show()
+        return null
+    }
+
+    val sourceCls = sourceResult.classifications.first().second
+
+    return when (sourceCls) {
+        is VaultClassification.External -> {
+            // 外部 → 保险箱（加密引入）
+            val targetSession = findVaultSession(vm, targetVault.record.id)
+                ?: run {
+                    Toast.makeText(context, "目标保险箱「${targetVault.record.name}」未打开，无法写入", Toast.LENGTH_LONG).show()
+                    return null
+                }
+            VaultOperationContext.ExternalToVault(targetSession, targetVault.subPath)
+        }
+        is VaultClassification.InVault -> {
+            if (sourceCls.record.id == targetVault.record.id) {
+                // 同一保险箱内部
+                VaultOperationContext.SameVault
+            } else {
+                // 跨保险箱
+                val sourceSession = findVaultSession(vm, sourceCls.record.id)
+                    ?: run {
+                        Toast.makeText(context, "源保险箱「${sourceCls.record.name}」未打开，无法操作", Toast.LENGTH_LONG).show()
+                        return null
+                    }
+                val targetSession = findVaultSession(vm, targetVault.record.id)
+                    ?: run {
+                        Toast.makeText(context, "目标保险箱「${targetVault.record.name}」未打开，无法写入", Toast.LENGTH_LONG).show()
+                        return null
+                    }
+                VaultOperationContext.CrossVault(sourceSession, targetSession, targetVault.subPath)
+            }
+        }
+    }
+}
+
+/**
+ * 从 ViewModel 的两个面板中查找指定保险箱的 session。
+ */
+private fun findVaultSession(vm: FileManagerViewModel, vaultId: Int): VaultSession? {
+    val leftSession = vm.panels.left.vaultSession
+    if (leftSession != null && leftSession.record.id == vaultId) return leftSession
+    val rightSession = vm.panels.right.vaultSession
+    if (rightSession != null && rightSession.record.id == vaultId) return rightSession
+    return null
+}
