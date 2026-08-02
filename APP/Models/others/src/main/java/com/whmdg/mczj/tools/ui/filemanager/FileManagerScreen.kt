@@ -433,9 +433,8 @@ fun FileManagerScreen(
             .collect { (idx, off) -> vm.右.currentScrollIndex = idx; vm.右.currentScrollOffset = off }
     }
 
-    // 保存当前滚动位置并返回上一级
+    // 保存当前滚动位置并返回上一级（统一入口：工具栏按钮、列表条目、系统返回手势共用）
     val saveScrollAndGoUp: () -> Boolean = {
-        // 保险箱根目录按返回时弹出确认弹窗
         if (vm.isAtVaultRoot()) {
             showVaultExitDialog = true
             true
@@ -564,24 +563,16 @@ fun FileManagerScreen(
             unregisterOverlay(top.id)
             return@BackHandler
         }
-        if (vm.isInArchiveMode) {
-            if (!vm.archiveGoUp()) {
+        if (!saveScrollAndGoUp()) {
+            // 在根目录按返回：压缩包/回收站退出模式，其余退出文件管理器
+            if (vm.isInArchiveMode) {
                 vm.exitArchive()
-            }
-        } else if (vm.isWebDavMode) {
-            if (!vm.webDavGoBack()) {
-                vm.exitWebDavMode()
-            }
-        } else if (vm.recycleBinPanel == vm.focusedPanel) {
-            if (!vm.goUpInRecycleBin()) {
+            } else if (vm.recycleBinPanel == vm.focusedPanel) {
                 vm.exitRecycleBin()
+            } else {
+                if (vm.isVaultMode) vm.exitVaultMode()
+                onBack()
             }
-        } else if (!saveScrollAndGoUp()) {
-            // vault 模式退出时清理 DEK
-            if (vm.isVaultMode) {
-                vm.exitVaultMode()
-            }
-            onBack()
         }
     }
 
@@ -865,8 +856,11 @@ fun FileManagerScreen(
                             } else if (vm.recycleBinPanel == vm.focusedPanel) {
                                 !vm.isAtRecycleBinRoot
                             } else if (vm.isVaultMode) {
-                                val vaultRoot = vm.vaultSession!!.vaultDir.absolutePath
-                                vm.currentPath != vaultRoot
+                                val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
+                                val parentPath = vm.currentPath.substringBeforeLast('/').ifEmpty { "/" }
+                                vm.currentPath != effectiveRoot
+                                    && vm.currentPath.contains('/')
+                                    && parentPath != vm.currentPath
                             } else {
                                 val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
                                 val parentPath = vm.currentPath.substringBeforeLast('/').ifEmpty { "/" }
@@ -876,11 +870,7 @@ fun FileManagerScreen(
                             }
 
                             IconButton(
-                                onClick = {
-                                    if (vm.isInArchiveMode) vm.archiveGoUp()
-                                    else if (vm.recycleBinPanel == vm.focusedPanel) vm.goUpInRecycleBin()
-                                    else saveScrollAndGoUp()
-                                },
+                                onClick = { saveScrollAndGoUp() },
                                 enabled = canGoUp
                             ) {
                                 Icon(Icons.Default.ArrowUpward, contentDescription = "返回上一级")
@@ -1163,19 +1153,8 @@ fun FileManagerScreen(
                                     parentPath = parentPaths[idx],
                                     lazyListState = listStates[idx],
                                     onNavigateUp = {
-                                        if (panel.isInArchiveMode) {
-                                            vm.focusedPanel = side
-                                            vm.archiveGoUp()
-                                        } else if (vm.recycleBinPanel == vm.focusedPanel) {
-                                            vm.focusedPanel = side
-                                            vm.goUpInRecycleBin()
-                                        } else if (parentPaths[idx] != null) {
-                                            vm.focusedPanel = side
-                                            listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
-                                            val saved = vm.getScrollPosition(parentPaths[idx]!!)
-                                            vm.navigateToWithScroll(parentPaths[idx]!!, saved?.first ?: 0, saved?.second ?: 0)
-                                            panel.selectedPaths = emptySet(); swipeStates[idx].selectFlag = 0; swipeStates[idx].lastIndex = -1
-                                        }
+                                        vm.focusedPanel = side
+                                        saveScrollAndGoUp()
                                     },
                                     archiveSizeProvider = if (panel.isInArchiveMode) { entry ->
                                         if (entry.compressedSize > 0 || entry.size > 0)
@@ -4565,8 +4544,9 @@ private fun computeParentPath(
         }
     }
     if (isVaultMode && vaultRootPath != null) {
-        return if (currentPath == vaultRootPath) null
-        else currentPath.substringBeforeLast('/').ifEmpty { vaultRootPath }
+        return currentPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
+            if (p != currentPath) p else null
+        }
     }
     val effectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
     if (currentPath != effectiveRoot && currentPath.contains('/')) {
