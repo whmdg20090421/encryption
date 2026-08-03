@@ -30,13 +30,14 @@ import java.io.File
 @Composable
 fun HookDetailScreen(
     packageName: String,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigateToUsageTime: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
     // System Server 专用页面
     if (packageName == "system_server") {
-        SystemServerDetailScreen(onBack = onBack)
+        SystemServerDetailScreen(onBack = onBack, onNavigateToUsageTime = onNavigateToUsageTime)
         return
     }
 
@@ -316,7 +317,7 @@ fun HookDetailScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SystemServerDetailScreen(onBack: () -> Unit) {
+private fun SystemServerDetailScreen(onBack: () -> Unit, onNavigateToUsageTime: () -> Unit) {
     val context = LocalContext.current
     val moduleActive = remember { XposedDetector.isModuleActive() }
     var showPermissionDialog by remember { mutableStateOf(false) }
@@ -373,7 +374,7 @@ private fun SystemServerDetailScreen(onBack: () -> Unit) {
                 ),
                 onClick = {
                     if (!moduleActive) return@Card
-                    handleUsageStatsClick(context) { showPermissionDialog = true }
+                    handleUsageStatsClick(context, onNavigateToUsageTime) { showPermissionDialog = true }
                 }
             ) {
                 ListItem(
@@ -407,11 +408,10 @@ private fun SystemServerDetailScreen(onBack: () -> Unit) {
     }
 }
 
-private fun handleUsageStatsClick(context: Context, onNeedPermission: () -> Unit) {
+private fun handleUsageStatsClick(context: Context, onNavigate: () -> Unit, onNeedPermission: () -> Unit) {
     // 先检查是否已有权限
     if (hasUsageStatsPermission(context)) {
-        Toast.makeText(context, "已拥有应用使用时长权限", Toast.LENGTH_SHORT).show()
-        // TODO: 进入使用时长页面
+        onNavigate()
         return
     }
 
@@ -424,7 +424,7 @@ private fun handleUsageStatsClick(context: Context, onNeedPermission: () -> Unit
             )
             if (hasUsageStatsPermission(context)) {
                 Toast.makeText(context, "已通过 Root 授予应用使用时长权限", Toast.LENGTH_SHORT).show()
-                // TODO: 进入使用时长页面
+                onNavigate()
             } else {
                 Toast.makeText(context, "Root 授权失败，请手动开启", Toast.LENGTH_SHORT).show()
             }
