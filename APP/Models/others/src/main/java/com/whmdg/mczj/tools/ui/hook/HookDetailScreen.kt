@@ -3,9 +3,12 @@ package com.whmdg.mczj.tools.ui.hook
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -21,6 +24,13 @@ fun HookDetailScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+
+    // System Server 专用页面
+    if (packageName == "system_server") {
+        SystemServerDetailScreen(onBack = onBack)
+        return
+    }
+
     val target = remember { HookConfig.TARGETS.find { it.packageName == packageName } }
     val version = remember { HookConfig.getVersionName(context, packageName) }
     val moduleActive = remember { XposedDetector.isModuleActive() }
@@ -291,6 +301,75 @@ fun HookDetailScreen(
                 },
                 colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface)
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SystemServerDetailScreen(onBack: () -> Unit) {
+    val moduleActive = remember { XposedDetector.isModuleActive() }
+
+    Scaffold(
+        topBar = {
+            Column {
+                TopAppBar(
+                    title = { Text("System Server") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        }
+                    }
+                )
+                Text(
+                    "Android 系统服务进程",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)
+                )
+            }
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                )
+            ) {
+                ListItem(
+                    headlineContent = {
+                        Text(
+                            "手机使用时长",
+                            color = if (moduleActive) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        )
+                    },
+                    supportingContent = {
+                        Text(
+                            "通过 Hook UsageStatsService 获取设备使用时长统计",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (moduleActive) MaterialTheme.colorScheme.onSurfaceVariant
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        )
+                    },
+                    leadingContent = {
+                        Icon(
+                            Icons.Default.Timer,
+                            contentDescription = null,
+                            tint = if (moduleActive) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        )
+                    },
+                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+                )
+            }
         }
     }
 }

@@ -25,15 +25,8 @@ object HookConfig {
     private const val TAG = "HookConfig"
     private const val MODULE_PKG = "com.whmdg.mczj.tools"
 
-    /** 所有已支持的 hook 目标 */
-    val TARGETS: List<HookTarget> = listOf(
-        HookTarget(
-            packageName = "net.defensezone3.ultra",
-            displayName = "Defense Zone 3 Ultra",
-            description = "塔防游戏 — 广告跳过",
-            hookFeatures = listOf(HookFeature.SKIP_AD)
-        )
-    )
+    /** 所有已支持的 hook 目标（新增 hook 目标在此添加） */
+    val TARGETS: List<HookTarget> = emptyList()
 
     // ── L1 作用域（通过 ILSPManagerService 实时查询） ──
 

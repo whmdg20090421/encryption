@@ -22,12 +22,9 @@ object XposedDetector {
 
     fun isModuleActive(): Boolean {
         return try {
-            val manager = getManagerService() ?: return false
-            val getScope = manager.javaClass.getMethod("getModuleScope", String::class.java)
-            val scope = getScope.invoke(manager, MODULE_PKG) as? List<*> ?: return false
-            scope.isNotEmpty()
-        } catch (t: Throwable) {
-            Log.w(TAG, "isModuleActive failed: ${t.message}")
+            Class.forName("com.highcapable.yukihookapi.hook.xposed.bridge.status.YukiXposedModuleStatus_Impl")
+            true
+        } catch (_: ClassNotFoundException) {
             false
         }
     }

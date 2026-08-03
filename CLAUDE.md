@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 文档版本
 
-**基准哈希**：`78c0fe9a24621ca96e8104d2479f1371f48eb972`
-**更新日期**：2026-08-01
+**基准哈希**：`06f28b872`（以实际 HEAD 为准）
+**更新日期**：2026-08-03
 
 > 更新 CLAUDE.md 前，先执行 `git diff <基准哈希>..HEAD -- '*.kt' '*.kts' '*.py' '*.sh' '*.yml'` 查看自上次记录以来的所有代码变更，确保文档与代码同步。更新后替换基准哈希为新的 HEAD。
 
@@ -301,16 +301,15 @@ Screen.Settings → 设置
    DEK (数据加密密钥, 32 字节, 存于 vault_config.json)
     │ AES-256-GCM 分块加密
     ▼
-   加密文件（.aes）
+   加密文件（.whm）
 ```
 
 ### 文件格式（与 Python 工具二进制兼容）
 
 ```
-[魔数头 "艨艟战舰" 12字节] [footer标志 1字节]  ← 仅 custom_encryption=true 时
+[魔数头 "艨艟战舰" 12字节]                    ← 仅 custom_encryption=true 时
 [4字节 meta块长度] [12字节 IV] [加密metadata]
-[4字节 chunk长度] [12字节 IV] [加密数据块] × N  ← 每块 1MiB (FileConstants.CHUNK_SIZE)
-[法律尾声字节串]                                ← 仅文件 > 4MiB 且 custom_encryption=true
+[4字节 chunk长度] [12字节 IV] [加密数据块] × N  ← 每块 1MiB
 ```
 
 ### 保险箱配置完整性（3 副本多数投票）
@@ -390,241 +389,41 @@ ShellException(command, permission, stderr, exitCode) → 任何失败抛出异�
 
 文件管理器采用 **Controller / Coordinator / ViewModel** 三层分离（均在 `FileManagerViewModel.kt` 内部类）：
 
-```
-FilePaneController（沙箱面板控制器，不含任何身份标识）
-    ├── 构造参数：context, scope, hasShellEngine, isRootEngine, permissionLevel, safeDefault,
-    │             showHiddenFiles, sortField, sortOrder, folderSizeDb, isVaultMode, vaultSession
-    ├── state: VmPanelState（面板所有可变状态）
-    ├── hasShellEngine = isRootEngine || isShizukuAuthorized
-    ├── listChildrenOrNull() → 有 shell 时 listDirChildrenViaShell()，否则 Java File API
-    ├── navigateToFolder() → shell 优先，失败回退 Java API
-    ├── shellPathExists() → test -e（不用 cd，在 Shizuku shell 中 cd 对特殊字符路径失败）
-    ├── getPropertyData() → stat 失败时回退 shell
-    ├── onArchiveSessionEntered → 回调（Coordinator 注入，用于会话缓存）
-    └── fileOpProgress: StateFlow<FileOpProgress?> → 文件操作进度
+- **FilePaneController**：沙箱面板控制器，持有 `VmPanelState`（路径/条目/选中/排序等可变状态），不含身份标识。两个实例运行同一份代码，互相不可感知。`vaultSession` 由 Coordinator 注入。
+- **PanelCoordinator**：唯一知道两个面板存在的协调者。提供 `syncPaths()`、`refreshBoth()`、`initVaultMode()` 等跨面板操作。
+- **FileManagerViewModel**：瘦壳，UI 通过 `vm.左`/`vm.右` 访问面板状态，委托到 Coordinator。
 
-PanelCoordinator（唯一知道两个面板存在的协调者）
-    ├── 构造参数：left, right, context, getFocusedPanel
-    ├── focused / other → 当前/非聚焦 Controller
-    ├── operator get(PanelId) → 按标签寻址
-    ├── sideOf(controller) / sideOfState(state) → 判断面板归属
-    ├── both(): List<FilePaneController> → 两个控制器
-    ├── syncPaths() → 聚焦面板路径同步到非聚焦面板
-    └── refreshBoth() → 刷新两个面板
-
-FileManagerViewModel（瘦壳，委托到 Controller 和 Coordinator）
-    ├── panels: PanelCoordinator → 跨面板操作入口
-    ├── 左 / 右: VmPanelState → UI 通过 vm.左/vm.右 访问面板状态
-    ├── currentPanel / otherPanel → 聚焦/非聚焦面板状态
-    ├── focusedController → 当前聚焦 Controller
-    ├── initVaultMode(vaultSession) → vault 模式初始化
-    └── handleVaultTextSave(content) → vault 文本保存
-
-Composable 接口：
-    FileManagerModuleScreen(onBack, vaultSession?)
-        └── 内部路由：Home / TextEditor / ImageViewer
-    FileManagerScreen(onBack, onNavigate, vaultSession?, onVaultSaveReady?)
-        └── 双面板 UI，vaultSession 非 null 时进入保险箱文件管理模式
-
-FileAccessor（FolderSizeCalculator 使用）
-    ├── NormalAccessor → Java File API
-    └── ShellAccessor → ShellExecutor.execute(Permission.MAX, cmd)
-```
-
-**关键实现细节**：
-- Shell 命令不用 `cd`（Shizuku 的 `cd` 对含括号/特殊字符路径失败）
-- 目录列表使用 `find -printf` 直接输出字段（替代旧版 `ls -lap` 逐字符解析）
-- 文件属性使用 `stat -c '%a|%U|%G|%u|%g'` 一次获取权限/用户名/组名/UID/GID
-- 大小统计 BFS 前执行 `find -type d | wc -l` 获取总目录数，实现实时进度显示
-- FUSE 路径解析：`ls -1aF` 后缀剥离 + `Os.chmod` 替代 shell chmod 检测 FUSE 失败
-- 文件名显示：SmartWrapText 智能换行（onTextLayout 两阶段分割 + 扩展名保留截断）
+Shell 命令不用 `cd`（Shizuku 的 `cd` 对特殊字符路径失败），目录列表用 `find -printf`，文件属性用 `stat -c`。
 
 ### 文件操作模块（fileop）
 
-参考 MaterialFiles 架构，采用 Job 模式：
+参考 MaterialFiles 架构，Job 模式。`FileOperationManager`（单例）管理进度/冲突/错误弹窗，`CopyJob` 统一处理复制/移动（同分区 `mv` 快速路径 + 跨分区复制+删除）。
 
-```
-FileOperationManager（全局单例）
-    ├── StateFlow<FileOperationState> → 进度/冲突/错误 UI
-    ├── enqueue(job) → 前台 Service 执行
-    └── suspend 等待用户决策（冲突覆盖/跳过/重命名）
+**保险箱感知**：`CopyJob` 支持 `VaultOperationContext`，根据源/目标路径自动判断：外部→保险箱（加密引入）、保险箱→外部（解密导出）、跨保险箱（解密→重加密）。前置校验由 `VaultFileClassifier` 在 UI 层完成，混合批次报错拦截。
 
-FileOperator（抽象接口）
-    ├── JavaFileOperator → 普通路径
-    ├── ShellFileOperator → Root/Shizuku 路径
-    └── WebDavFileClient → WebDAV 远程路径
-
-CopyJob（统一处理复制和移动）
-    ├── CopyPurpose.COPY → 直接走复制链路
-    ├── CopyPurpose.MOVE → partitionSourcesByDevice() 分区检测
-    │     ├── 同分区 → moveWithMv() 快速 mv
-    │     └── 跨分区 → 复制 + 删除源文件
-    ├── 递归遍历 → 冲突检测（resolveConflictIfNeeded）→ 执行 → 进度回调
-    └── 取消/异常 → 清理残留目标文件
-
-FileOperator.moveFile(src, dst, onProgress, job)
-    ├── onProgress: (Long) -> Unit → 已移动字节数增量回调
-    ├── 同分区 mv 原子操作 → 完成后一次性回调文件大小
-    └── 跨分区 → 复制+删除，每128KB回调
-```
-
-**WebDAV 客户端**：基于 OkHttp + dav4jvm，配置持久化在 `AppDataPaths`，通过 `WebDavEditDialog` 编辑服务器信息。
+**WebDAV 客户端**：基于 OkHttp + dav4jvm，配置持久化在 `AppDataPaths`。
 
 ### 日记模块
 
-- `DiaryBook` 数据模型 + `DiaryDb` JSON 持久化（存储于 `AppDataPaths`）
-- 导航：`Screen.Diary` → `DiaryModuleScreen` → `DiaryRoute.BookDetail`（笔记本详情）
-- 笔记本详情页左侧日期时间线：Canvas 绘制竖线 + 空心圆圈，LazyColumn 前后各 10 年无限滚动
-- 工具栏名称居中：`onSizeChanged` 动态测量按钮宽度，`widthIn(max)` 约束避免重叠
+`DiaryBook` 数据模型 + `DiaryDb` JSON 持久化。笔记本详情页左侧日期时间线（Canvas + LazyColumn 无限滚动）。
 
 ### 压缩包模块
 
-基于 APK 内嵌的 `7zzs` 静态二进制（7-Zip 命令行），`ArchiveBrowser` 通过 `run7zs()` 使用 `Runtime.exec` 直接执行（绕过 ShellExecutor）。
-
-```
-BinaryExtractor                         # 直接使用 nativeLibraryDir/lib7zzs.so（APK 安装时已解压）
-    └── ensureExtracted() → 校验文件存在，返回路径
-
-SevenZipCommand                         # 命令行构建器（纯字符串拼接）
-    ├── escape() / escapePassword()     # 单引号包裹 + '\'' 转义（行业标准 shell 路径转义）
-    ├── build()                         # 压缩命令：a -t<format> -mx=<level> [-p'pwd' [-mem=AES256] [-mhe=on]] -bsp1
-    ├── buildListCommand()              # 列表命令：l -ba [-p'pwd'] <archive>
-    ├── buildListDetailCommand()        # 技术详情命令：l -slt（检测加密状态）
-    ├── buildExtractCommand()           # 解压命令：x [-p'pwd'] -bsp1 <archive> -o<dir> -aoa
-    └── buildExtractSingleCommand()     # 单文件提取：x -i!'file' <archive> -o<dir> -aoa
-
-ArchiveBrowser                          # 压缩包浏览（只读）
-    ├── isArchiveFile()                 # 识别 zip/7z/rar/tar.gz/tar.bz2/tar.xz/lz4/zst 等
-    ├── checkPasswordRequired()         # 密码探测（7z 二进制头部 0x17 快速检测 + 7zzs l -slt 详细检测）
-    ├── openArchive()                   # 7zzs l -ba → parseListOutput → buildTree → ArchiveSession
-    ├── navigateTo() / navigateUp()     # 目录树导航
-    ├── extractSingleFile()             # 单文件提取（-i! 参数）
-    └── 会话缓存                         # JSON 序列化到 AppDataPaths.fileManager()/archive_session_cache.json
-
-CompressService                         # 压缩/解压服务
-    ├── CompressOptions                  # sourcePaths, outputPath, format, compressionLevel, password, useAes, encryptNames
-    ├── compress()                      # 压缩入口（ProgressCallback + cancelFlag）
-    ├── extract()                       # 解压入口（基于 fileSizes 的真实字节级进度）
-    └── 进度解析                          # 正则匹配 7zzs -bsp1 输出 "75% 1" 格式
-```
-
-**加密检测策略**（`checkPasswordRequired()`）：
-1. 7z 二进制头部快速检测：偏移 32 == `0x17` (kEncodedHeader) → 头部加密（无需启动进程）。**注意**：此方法对部分加密 7z 文件不可靠（头部被加密后偏移 32 是密文而非明文标识），仅作快速路径
-2. `7zzs l -slt` 输出含 `7zAES` → 内容加密
-3. 输出含 `Encrypted = +` → 加密
-4. exitCode=2 且为 7z 文件 → 头部加密（兜底）
-
-**压缩格式支持**：zip、7z、tar、tar.gz、tar.bz2、tar.xz
-- **zip**：支持 AES-256 加密（`-mem=AES256`），压缩对话框中有"ZIP AES-256"开关
-- **7z**：支持内容加密 + 文件名加密（`-mhe=on` 隐藏文件列表），压缩对话框中有"加密文件名"开关
-- **tar 系列**：不支持加密
-- 加密开关需先输入密码才能启用，未输入密码时弹出 AlertDialog 提示
+基于 APK 内嵌的 `7zzs` 静态二进制（7-Zip 命令行），`ArchiveBrowser` 通过 `run7zs()` 使用 `Runtime.exec` 直接执行。支持 zip/7z/tar 系列的压缩和解压，zip 支持 AES-256 加密，7z 支持内容+文件名加密。密码探测通过 7z 头部字节 + `7zzs l -slt` 输出检测。
 
 ### 记账本模块
 
-**存储架构**：SQLite（`AccountingDatabase`，`SQLiteOpenHelper`，当前 DB_VERSION=14），DB 文件存储于 `AppDataPaths.accounting()/accounting.db`。历史 JSON 文件和 SharedPreferences 数据在首次启动时自动迁移到 SQLite 后删除。
+SQLite 存储（`AccountingDatabase`，DB_VERSION=14），所有操作通过 `AccountingRepository`。五张表：`settings`（键值设置）、`categories`（分类树）、`records`（记账记录）、`accounts`（资金账户）、`attachment_trash`（附件回收站）。
 
-**数据访问层**：所有数据库操作必须通过 `AccountingRepository`（单例 Repository 模式），禁止外部代码直接使用 `AccountingDatabase`。
+支持多账本切换、报销账户管理、CSV 导入、附件系统、备注预测器（小型 MLP 对比学习）。金额使用自定义计算器键盘，日期使用 `TimeWheel` 无限循环齿轮。
 
-**五张表**：
-| 表 | 用途 | 关键字段 |
-|---|---|---|
-| `settings` | 键值设置（分类图标色、账本列表、报销统计等） | key/value |
-| `categories` | 分类（一级+二级，parent_id 树形） | id, name, icon, page, type, parent_id, sort_order |
-| `records` | 记账记录 | id, book_name, type, amount, category_id, subcategory_id, note, happened_at, account_id, discount_before/off/after, reimbursement_account_id, attachments, exclude_from_stats/budget, reimburse_status/amount/after_amount, refund_amount, address, created_at, updated_at |
-| `accounts` | 资金/估值账户 | id, name, type, category(tradable/valuation), initial_amount, note |
-| `attachment_trash` | 附件回收站（软删除） | id, attachment_json, original_record_id, original_record_status, deleted_at |
+### 悬浮窗 OCR
 
-**记录模型核心字段**（`AccountingRecord`）：
-- `amount` 保留字符串精度，`happenedAt` 为毫秒时间戳
-- `type`：支出/收入/转账/债务
-- 报销：`reimbursementAccountId` 关联报销账户，`reimburseStatus` 标记是否已报销，`reimburseAmount` 报销金额，`reimburseAfterAmount` 报销后金额（用于余额计算）
-- 优惠：`discountBefore`/`discountOff`/`discountAfter` 三值联动（BigDecimal 精确运算）
-- 附件：`attachments` JSON 数组，文件本体存储于 `AppDataPaths.accountingAttachments()`
-- 属性标志：`excludeFromStats`（不计入收支）、`excludeFromBudget`（不计入预算）
-
-**导航结构**：
-```
-Screen.Accounting（首页，含5个底部Tab）
-  ├── Tab 0: 首页 — 记录列表 + 月度统计 + 记账本切换
-  ├── Tab 1: 资产 — 账户卡片 + 报销/债务/理财汇总
-  ├── Tab 2: 统计（占位）
-  ├── Tab 3: 日历（占位）
-  └── Tab 4: 我的 — 头像/签名 + 个性化设置 + 数据管理（JSON/CSV 导入导出）
-Screen.AccountingDetail(bookName, recordId) — 账单详情 + 报销操作
-Screen.AddAccounting(bookName, recordId?) — 记一笔 / 编辑
-Screen.ReimbursementAccount — 报销账户列表（分组+汇总）
-Screen.AddReimbursementAccount — 添加报销账户
-```
-
-**分类系统**：
-- 内置默认模板（`AccountingCategoryDb.defaultCategories()`）：22 个支出一级分类 + 14 个收入一级分类，每个含二级子分类
-- 首次安装释放到 SQLite，版本号 `CURRENT_VERSION=2` 控制重新释放
-- 自定义分类：`createParentCategory()` / `createChildCategory()` 动态创建
-- CSV 导入时自动创建缺失分类
-
-**记账本管理**：记账本列表存储在 `settings` 表（JSON 数组），默认"默认记账本"，支持多账本切换。上次使用的账本名称持久化。
-
-**报销账户**：`ReimbursementAccountEntity` 序列化存储在 `settings` 表的 `reimbursement_accounts` 键中。支持分组（groupName）、记账本范围（allBooks/selectedBooks）。报销统计（可报销/已报销总额）在导入和报销操作后全量重算。
-
-**CSV 导入流程**（`CsvImportScreen`）：
-1. 解析 + 多行引号字段合并（`mergeCsvLines`）
-2. 自动检测列映射（`HEADER_ALIASES` 支持中英文别名）
-3. "收入"/"支出"分类名归一化（`normalizeCsvText`）
-4. 账户映射（匹配已有账户 or 创建新账户）
-5. 分类映射（精确匹配 + 子串模糊匹配，歧义时放弃）
-6. 追加/替换模式 + 导入后重算余额和报销统计
-
-**备注预测器**（`NotePredictor`）：基于小型 MLP（输入 83 维 → 隐藏层 32/16 → 16 维 embedding），使用 Adam 优化器对比学习，持久化权重和 embedding 到 `ai_model/` 目录。输入特征：一级分类 embedding(8) + 二级分类 embedding(8) + 金额 + sin/cos(hour) + 备注字符 bag-of-words(64)。分类特征使用动态 Embedding Table，类别增减不影响隐藏层权重。
-
-**首页交互**：`LazyListState` 控制背景 alpha（顶部=0，滚动=1），顶部按钮层始终可见。返回手势：非首页 Tab→回首页，首页 Tab→双击退出。
-
-**金额输入**：自定义计算器键盘（含运算自动求值），水平滑动查看完整金额。
-
-**日期时间选择**：`TimeWheel` 无限循环齿轮（`totalItems = size * 10000`），`snapshotFlow` 检测滚动停止自动吸中，点击直接居中。
-
-**记账天数**：增量维护（插入新日期 +1，删除最后一条 -1），存储在 `settings` 表。
-
-**附件系统**：文件存储于 `AppDataPaths.accountingAttachments()`，支持从相册选取和拍照。删除附件时进入回收站（`attachment_trash` 表），支持恢复和永久清理。账单删除时级联更新回收站状态。
-
-### 悬浮窗 OCR 架构（Overlay + Service + ProcessLifecycleOwner）
-
-采用 **Service 托管悬浮窗 + ProcessLifecycleOwner 驱动生命周期** 的标准分层架构：
-
-```
-ProcessLifecycleOwner（应用级生命周期）
-    │ ON_STOP → 延迟 300ms → startService
-    │ ON_START → 延迟 300ms → stopService
-    ▼
-OcrFloatingService（普通 Service，非前台）
-    │ onCreate → OcrFloatingWindow.show(context)
-    │ onDestroy → OcrFloatingWindow.dismiss()
-    ▼
-OcrFloatingWindow（WindowManager 视图管理）
-    │ TYPE_APPLICATION_OVERLAY
-    │ 状态机：BUBBLE → MENU → LOADING → RESULT
-    ▼
-BillOcrEngine.recognizeNow()（无障碍节点树文字提取 + 关键词 + 正则）
-```
-
-**关键设计决策**：
-
-- **防抖（Debounce）**：`ProcessLifecycleOwner` 的 `onStop`/`onStart` 在 Dialog、PopupWindow、系统权限弹窗出现时会短暂触发。使用 300ms `Handler.postDelayed` 延迟，配合 `cancelPending` 互斥取消，避免悬浮窗闪现。
-- **Service 托管**：悬浮窗 View 的生命周期绑定到 Service 而非 Activity 或 Application。`startService`/`stopService` 是显式生命周期边界，比直接在 Observer 中操作 WindowManager 更可靠（系统保证 `onDestroy` 调用，避免窗口泄漏）。
-- **普通 Service vs 前台 Service**：悬浮窗 Service 不需要常驻通知栏，使用普通 `startService` 即可。`TYPE_APPLICATION_OVERLAY` 不要求前台服务。
-- **ProcessLifecycleOwner vs AccessibilityService 事件**：`TYPE_WINDOW_STATE_CHANGED` 会因悬浮窗自身获得焦点而触发（`packageName == 本应用`），导致自消失问题。`ProcessLifecycleOwner` 基于 Activity 可见性计数，不受 Overlay 窗口焦点影响，是检测应用级前后台切换的正确 API。
-
-**权限**：
-- `SYSTEM_ALERT_WINDOW`：悬浮窗权限，`Settings.canDrawOverlays()` 检测
-- `BIND_ACCESSIBILITY_SERVICE`：无障碍权限，用于节点树文字提取
+Service 托管悬浮窗 + ProcessLifecycleOwner 驱动生命周期。`OcrFloatingWindow` 状态机（BUBBLE→MENU→LOADING→RESULT），`BillOcrEngine` 通过无障碍节点树提取文字。300ms 防抖避免弹窗闪现。权限：`SYSTEM_ALERT_WINDOW` + `BIND_ACCESSIBILITY_SERVICE`。
 
 ### Xposed 模块
 
-- `xposed/模块入口.kt`：继承 `XposedModule`（libxposed API 102），中文类名，`onModuleLoaded()` / `onPackageLoaded()` / `onSystemServerStarting()` 为 hook 入口
-- 作用域查询：通过 LSPosed binder 链（`BridgeService → ILSPosedService → ILSPApplicationService → ILSPManagerService → getModuleScope`）实时查询模块作用域
-- `xposed/hook.net.defensezone3.ultra.kt`：DefenseZone3 广告跳过 Hook
-- 属性设置：`SystemProperties.set("mczj.xposed.active", timestamp)` 在模块加载时写入
-- `util/XposedDetector.kt`：通过 LSPosed binder 链查询 `getModuleScope` 检测模块是否激活（非属性检查），提供 `collectDebugInfo()` 逐步诊断
+继承 `XposedModule`（libxposed API 102），通过 LSPosed binder 链查询模块作用域。`XposedDetector` 提供激活检测和诊断信息。
 
 ---
 
@@ -680,8 +479,8 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 - TeeManager 中 DEK **不存原文**，只存 RSA 公钥加密后的密文
 
 ### 文件命名
-- 普通模式：`原文件名.aes`
-- 加密文件名模式：`<iv+ciphertext hex>.aes`（长则 zlib 压缩，超长则 SHA-256 哈希 + 映射表）
+- 普通模式：`原文件名.whm`
+- 加密文件名模式：`<iv+ciphertext hex>.whm`（长则 zlib 压缩，超长则 SHA-256 哈希 + 映射表）
 
 ### Argon2id 默认参数
 | 档位 | timeCost | memoryCostKb | parallelism |

@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    id("com.google.devtools.ksp")
 }
 
 android {
@@ -68,4 +69,7 @@ dependencies {
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     // libxposed API 102 (本地源码模块)
     compileOnly(project(":libs:libxposed-api"))
+    // YukiHookAPI
+    implementation("com.highcapable.yukihookapi:api:${libs.versions.yukihookapi.get()}")
+    ksp("com.highcapable.yukihookapi:ksp-xposed:${libs.versions.yukihookapi.get()}")
 }
