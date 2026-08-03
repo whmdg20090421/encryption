@@ -5,6 +5,6 @@ public abstract class XC_InitPackageResources extends XCallback {
     protected abstract void handleInitPackageResources(InitPackageResourcesParam resparam) throws Throwable;
     public static class InitPackageResourcesParam extends XCallback.Param {
         public String packageName;
-        public int resDir;
+        public android.content.res.Resources res;
     }
 }

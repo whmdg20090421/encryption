@@ -7,6 +7,7 @@ public abstract class XC_LoadPackage extends XCallback {
         public String packageName;
         public String processName;
         public ClassLoader classLoader;
+        public android.content.pm.ApplicationInfo appInfo;
         public boolean isFirstApplication;
     }
 }
