@@ -7,7 +7,10 @@ import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 
-@InjectYukiHookWithXposed(isUsingXposedModuleStatus = true)
+@InjectYukiHookWithXposed(
+    isUsingXposedModuleStatus = true,
+    modulePackageName = "com.whmdg.mczj.tools"
+)
 class 模块入口 : XposedModule(), IYukiHookXposedInit {
 
     override fun onModuleLoaded(param: ModuleLoadedParam) {
