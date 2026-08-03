@@ -68,7 +68,7 @@ dependencies {
     // libxposed API 102 (本地源码模块)
     compileOnly(project(":libs:libxposed-api"))
     // 旧版 Xposed API (KSP 生成代码引用 de.robv.android.xposed.*)
-    compileOnly("de.robv.android.xposed:api:82")
+    compileOnly("de.robv.android.xposed:api:80")
     // YukiHookAPI
     implementation("com.highcapable.yukihookapi:api:${libs.versions.yukihookapi.get()}")
     ksp("com.highcapable.yukihookapi:ksp-xposed:${libs.versions.yukihookapi.get()}")
