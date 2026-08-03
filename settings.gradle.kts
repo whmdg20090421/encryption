@@ -29,4 +29,5 @@ include(":APP:core")
 include(":APP:Models:accounting")
 include(":APP:Models:others")
 include(":libs:libxposed-api")
+include(":libs:xposed-api")
  
