@@ -52,13 +52,13 @@ fun UsageStatsScreen(onBack: () -> Unit) {
                 Text(
                     formatDuration(totalMs),
                     style = MaterialTheme.typography.headlineLarge,
-                    modifier = Modifier.padding(horizontal = 16.dp, top = 16.dp)
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp)
                 )
                 Text(
                     "今日屏幕使用时长",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, top = 4.dp, bottom = 16.dp)
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp)
                 )
             }
 
