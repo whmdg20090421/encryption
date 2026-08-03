@@ -1,5 +1,11 @@
 package com.whmdg.mczj.tools.ui.hook
 
+import android.app.AppOpsManager
+import android.content.Context
+import android.content.Intent
+import android.os.Process
+import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -13,6 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.whmdg.mczj.tools.AppDataPaths
+import com.whmdg.mczj.tools.security.Permission
+import com.whmdg.mczj.tools.security.ShellExecutor
+import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.XposedDetector
 import kotlinx.coroutines.launch
 import java.io.File
@@ -308,7 +317,27 @@ fun HookDetailScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SystemServerDetailScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
     val moduleActive = remember { XposedDetector.isModuleActive() }
+    var showPermissionDialog by remember { mutableStateOf(false) }
+
+    // ── 使用时长权限不足弹窗 ──
+    if (showPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showPermissionDialog = false },
+            title = { Text("需要权限") },
+            text = { Text("查看手机使用时长需要「应用使用时长」特殊权限，请在设置中手动开启。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showPermissionDialog = false
+                    context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                }) { Text("前往设置") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermissionDialog = false }) { Text("取消") }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -341,7 +370,11 @@ private fun SystemServerDetailScreen(onBack: () -> Unit) {
                     .padding(horizontal = 16.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                )
+                ),
+                onClick = {
+                    if (!moduleActive) return@Card
+                    handleUsageStatsClick(context) { showPermissionDialog = true }
+                }
             ) {
                 ListItem(
                     headlineContent = {
@@ -372,4 +405,44 @@ private fun SystemServerDetailScreen(onBack: () -> Unit) {
             }
         }
     }
+}
+
+private fun handleUsageStatsClick(context: Context, onNeedPermission: () -> Unit) {
+    // 先检查是否已有权限
+    if (hasUsageStatsPermission(context)) {
+        Toast.makeText(context, "已拥有应用使用时长权限", Toast.LENGTH_SHORT).show()
+        // TODO: 进入使用时长页面
+        return
+    }
+
+    // 无权限，尝试 Root 授权
+    if (SpecialPermissionVerifier.isRootAvailable()) {
+        try {
+            ShellExecutor.execute(
+                Permission.ROOT,
+                "pm grant ${context.packageName} android.permission.PACKAGE_USAGE_STATS"
+            )
+            if (hasUsageStatsPermission(context)) {
+                Toast.makeText(context, "已通过 Root 授予应用使用时长权限", Toast.LENGTH_SHORT).show()
+                // TODO: 进入使用时长页面
+            } else {
+                Toast.makeText(context, "Root 授权失败，请手动开启", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(context, "Root 授权失败: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    } else {
+        // 无 Root，弹窗引导手动开启
+        onNeedPermission()
+    }
+}
+
+private fun hasUsageStatsPermission(context: Context): Boolean {
+    val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+    val mode = appOps.unsafeCheckOpNoThrow(
+        AppOpsManager.OPSTR_GET_USAGE_STATS,
+        Process.myUid(),
+        context.packageName
+    )
+    return mode == AppOpsManager.MODE_ALLOWED
 }
