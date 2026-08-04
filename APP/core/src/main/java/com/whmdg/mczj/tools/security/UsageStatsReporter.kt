@@ -43,16 +43,16 @@ object UsageStatsReporter {
             return ReportResult(false, "获取 IUsageStatsManager 失败: ${e.message}")
         }
 
-        // 3. 构造 Event
+        // 3. 构造 Event（公开构造函数无参，字段全部反射设置）
         val event: UsageEvents.Event
         val packageName = context.packageName
         val timeStamp = System.currentTimeMillis()
         try {
-            event = UsageEvents.Event(UsageEvents.Event.USER_INTERACTION, timeStamp)
-            // mPackageName 是 hidden 字段，需反射设置
-            val pkgField = UsageEvents.Event::class.java.getDeclaredField("mPackageName")
-            pkgField.isAccessible = true
-            pkgField.set(event, packageName)
+            event = UsageEvents.Event()
+            val cls = UsageEvents.Event::class.java
+            cls.getDeclaredField("mEventType").apply { isAccessible = true }.setInt(event, UsageEvents.Event.USER_INTERACTION)
+            cls.getDeclaredField("mTimeStamp").apply { isAccessible = true }.setLong(event, timeStamp)
+            cls.getDeclaredField("mPackageName").apply { isAccessible = true }.set(event, packageName)
         } catch (e: Throwable) {
             return ReportResult(false, "构造 Event 失败: ${e.message}")
         }
