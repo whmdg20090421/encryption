@@ -4,6 +4,7 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.IBinder
+import com.whmdg.mczj.tools.auth.NativeAuth
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -94,11 +95,9 @@ object UsageStatsReporter {
     }
 
     private fun bypassHiddenApi() {
-        val vmRuntimeClass = Class.forName("dalvik.system.VMRuntime")
-        val getRuntime = vmRuntimeClass.getMethod("getRuntime")
-        val vmRuntime = getRuntime.invoke(null)
-        val setExemptions = vmRuntimeClass.getMethod("setHiddenApiExemptions", Array<String>::class.java)
-        setExemptions.invoke(vmRuntime, arrayOf("L"))
+        if (!NativeAuth.bypassHiddenApi()) {
+            throw IllegalStateException("JNI setHiddenApiExemptions 调用失败")
+        }
     }
 
     private fun getUsageStatsBinder(): IBinder? {

@@ -18,4 +18,7 @@ object NativeAuth {
      * @return 未过期且 HMAC 正确 → 返回 HMAC hex 字符串；否则返回空字符串
      */
     external fun verifyDeadline(deadline: String, vaultId: String, storedProof: String): String
+
+    /** 通过 JNI native 层调用 VMRuntime.setHiddenApiExemptions({"L"})，绕过 hidden API 限制 */
+    external fun bypassHiddenApi(): Boolean
 }

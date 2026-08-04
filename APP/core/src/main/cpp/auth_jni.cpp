@@ -277,4 +277,40 @@ Java_com_whmdg_mczj_tools_auth_NativeAuth_verifyDeadline(
     return env->NewStringUTF("");
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_whmdg_mczj_tools_auth_NativeAuth_bypassHiddenApi(
+        JNIEnv *env, jclass /* clazz */) {
+    jclass vmRuntimeClass = env->FindClass("dalvik/system/VMRuntime");
+    if (!vmRuntimeClass) return JNI_FALSE;
+
+    jmethodID getRuntime = env->GetStaticMethodID(vmRuntimeClass, "getRuntime",
+        "()Ldalvik/system/VMRuntime;");
+    if (!getRuntime) return JNI_FALSE;
+
+    jobject vmRuntime = env->CallStaticObjectMethod(vmRuntimeClass, getRuntime);
+    if (!vmRuntime) return JNI_FALSE;
+
+    jmethodID setExemptions = env->GetMethodID(vmRuntimeClass, "setHiddenApiExemptions",
+        "([Ljava/lang/String;)V");
+    if (!setExemptions) {
+        env->DeleteLocalRef(vmRuntime);
+        env->DeleteLocalRef(vmRuntimeClass);
+        return JNI_FALSE;
+    }
+
+    jclass stringClass = env->FindClass("java/lang/String");
+    jstring exemption = env->NewStringUTF("L");
+    jobjectArray exemptions = env->NewObjectArray(1, stringClass, exemption);
+
+    env->CallVoidMethod(vmRuntime, setExemptions, exemptions);
+
+    env->DeleteLocalRef(exemption);
+    env->DeleteLocalRef(exemptions);
+    env->DeleteLocalRef(vmRuntime);
+    env->DeleteLocalRef(vmRuntimeClass);
+
+    LOGE("bypassHiddenApi: setHiddenApiExemptions called successfully");
+    return JNI_TRUE;
+}
+
 }
