@@ -226,7 +226,8 @@ class CopyJob(
             val srcFile = File(src)
             val subDir = if (ctx.targetSubDir.isEmpty()) "" else ctx.targetSubDir
             if (srcFile.isDirectory) {
-                encryptDirToVault(srcFile, subDir, ctx.targetSession, totalSize, doneBytes, doneFiles)
+                val dirSubDir = if (subDir.isEmpty()) srcFile.name else "$subDir/${srcFile.name}"
+                encryptDirToVault(srcFile, dirSubDir, ctx.targetSession, totalSize, doneBytes, doneFiles)
                 doneBytes += srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
             } else {
                 currentStep = "加密: ${srcFile.name}"

@@ -539,8 +539,8 @@ class FilePaneController(
                 }
                 if (myVersion != panel.loadVersion) return@launch
 
-                // 按文件名索引当前条目
-                val nameToIndex = sorted.withIndex().associate { (i, e) -> e.name to i }
+                // 按原始磁盘文件名索引（find -printf '%f' 返回加密后的文件名，不是解密后的显示名）
+                val nameToIndex = sorted.withIndex().associate { (i, e) -> e.path.substringAfterLast('/') to i }
                 val enriched = sorted.toMutableList()
 
                 for (line in findOut.lines()) {
