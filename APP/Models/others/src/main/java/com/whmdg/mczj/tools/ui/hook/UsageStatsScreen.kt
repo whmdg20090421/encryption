@@ -24,8 +24,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.whmdg.mczj.tools.security.Permission
-import com.whmdg.mczj.tools.security.ShellExecutor
+import com.highcapable.yukihookapi.hook.factory.dataChannel
 import java.util.Calendar
 
 private data class AppUsage(val packageName: String, val appName: String, val icon: Drawable?, val durationMs: Long)
@@ -38,10 +37,17 @@ fun UsageStatsScreen(onBack: () -> Unit) {
     val totalMs = remember { appList.sumOf { it.durationMs } }
     var showHookDialog by remember { mutableStateOf(false) }
 
-    // ── Hook 数据弹窗 ──
     if (showHookDialog) {
-        val hookData = remember { loadReportEventDump() }
+        var hookData by remember { mutableStateOf("") }
+        var dataReceived by remember { mutableStateOf(false) }
         val clipboard = LocalClipboardManager.current
+        LaunchedEffect(Unit) {
+            context.dataChannel(context.packageName).wait<String>("readMCZJUsageStatsHookData_response") { value ->
+                hookData = value
+                dataReceived = true
+            }
+            context.dataChannel(context.packageName).put("readMCZJUsageStatsHookData_request")
+        }
         AlertDialog(
             onDismissRequest = { showHookDialog = false },
             title = { Text("reportEvent Hook 数据") },
@@ -52,20 +58,13 @@ fun UsageStatsScreen(onBack: () -> Unit) {
                         .heightIn(max = 400.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
-                    if (hookData.first) {
+                    if (!dataReceived) {
                         Text(
-                            "无法读取，请检查 hook 代码",
+                            "等待数据...",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            hookData.second,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
-                        )
-                    } else if (hookData.second.isBlank()) {
+                    } else if (hookData.isBlank()) {
                         Text(
                             "暂无数据\n\n请确认：\n1. LSPosed 已勾选 system_server 作用域\n2. 已重启设备\n3. 今天有应用使用记录",
                             style = MaterialTheme.typography.bodyMedium,
@@ -73,7 +72,7 @@ fun UsageStatsScreen(onBack: () -> Unit) {
                         )
                     } else {
                         Text(
-                            hookData.second,
+                            hookData,
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                         )
@@ -82,7 +81,7 @@ fun UsageStatsScreen(onBack: () -> Unit) {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    clipboard.setText(AnnotatedString(hookData.second))
+                    clipboard.setText(AnnotatedString(hookData))
                 }) { Text("复制") }
             },
             dismissButton = {
@@ -284,19 +283,3 @@ private fun Drawable.toBitmapOrNull(): androidx.compose.ui.graphics.ImageBitmap?
     } catch (_: Exception) { null }
 }
 
-/** 读取 reportEvent hook 数据。返回 (是否出错, 内容) */
-private fun loadReportEventDump(): Pair<Boolean, String> {
-    return try {
-        val content = ShellExecutor.execute(
-            Permission.ROOT,
-            "cat /data/local/tmp/report_event_dump.txt 2>/dev/null"
-        )
-        if (content.isBlank()) {
-            Pair(false, "")
-        } else {
-            Pair(false, content)
-        }
-    } catch (e: Exception) {
-        Pair(true, e.message ?: "未知错误")
-    }
-}

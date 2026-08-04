@@ -2,13 +2,13 @@ package com.whmdg.mczj.tools.xposed
 
 import android.util.Log
 import com.highcapable.yukihookapi.annotation.xposed.InjectYukiHookWithXposed
+import com.highcapable.yukihookapi.hook.factory.dataChannel
 import com.highcapable.yukihookapi.hook.xposed.proxy.IYukiHookXposedInit
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -28,6 +28,7 @@ class 模块入口 : XposedModule(), IYukiHookXposedInit {
         Log.i(TAG, "艨艟: 包已加载: ${param.packageName}, first=${param.isFirstPackage}")
         if (param.packageName == "android") {
             hookReportEvent()
+            registerDataChannel()
         }
     }
 
@@ -72,27 +73,16 @@ class 模块入口 : XposedModule(), IYukiHookXposedInit {
                         if (timeStamp < todayStart) return
 
                         val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
-                        val sb = StringBuilder()
-                        sb.appendLine("eventType=$eventType")
-                        sb.appendLine("packageName=$packageName")
-                        sb.appendLine("timeStamp=$timeStamp")
-                        sb.appendLine("time=${sdf.format(Date(timeStamp))}")
-                        sb.appendLine("className=$className")
-                        sb.appendLine("---")
+                        val line = "type=$eventType pkg=$packageName ts=$timeStamp time=${sdf.format(Date(timeStamp))} cls=$className"
 
-                        val dumpFile = File(DUMP_PATH)
-                        if (dumpFile.exists()) {
-                            val firstLine = dumpFile.bufferedReader().use { it.readLine() ?: "" }
-                            if (!firstLine.startsWith("date=${sdf.format(Date(todayStart)).substring(0, 10)}")) {
-                                dumpFile.writeText("date=${sdf.format(Date(todayStart)).substring(0, 10)}\n")
+                        synchronized(eventBuffer) {
+                            if (currentDate != todayStart) {
+                                eventBuffer.clear()
+                                currentDate = todayStart
                             }
-                        } else {
-                            dumpFile.writeText("date=${sdf.format(Date(todayStart)).substring(0, 10)}\n")
+                            eventBuffer.add(line)
                         }
-                        dumpFile.appendText(sb.toString())
-                    } catch (e: Throwable) {
-                        Log.e(TAG, "艨艟 reportEvent hook error: ${e.message}")
-                    }
+                    } catch (_: Throwable) {}
                 }
             })
             Log.i(TAG, "艨艟: reportEvent hook installed")
@@ -101,12 +91,31 @@ class 模块入口 : XposedModule(), IYukiHookXposedInit {
         }
     }
 
+    private fun registerDataChannel() {
+        try {
+            val ctx = Class.forName("android.app.ActivityThread")
+                .getMethod("currentApplication")
+                .invoke(null) as android.content.Context
+            ctx.dataChannel(MODULE_PKG).wait<String>(KEY_REQUEST) {
+                val data: String
+                synchronized(eventBuffer) { data = eventBuffer.joinToString("\n") }
+                ctx.dataChannel(MODULE_PKG).put(KEY_RESPONSE, data)
+            }
+            Log.i(TAG, "艨艟: data channel registered")
+        } catch (e: Throwable) {
+            Log.e(TAG, "艨艟: data channel failed: ${e.message}")
+        }
+    }
+
     override fun onInit() {}
     override fun onHook() {}
 
     companion object {
         private const val TAG = "MCZJ_Xposed"
-        // system_server (UID=1000) 可写，root 可读
-        private const val DUMP_PATH = "/data/local/tmp/report_event_dump.txt"
+        private const val MODULE_PKG = "com.whmdg.mczj.tools"
+        private const val KEY_REQUEST = "readMCZJUsageStatsHookData_request"
+        private const val KEY_RESPONSE = "readMCZJUsageStatsHookData_response"
+        private val eventBuffer = mutableListOf<String>()
+        private var currentDate: Long = 0
     }
 }
