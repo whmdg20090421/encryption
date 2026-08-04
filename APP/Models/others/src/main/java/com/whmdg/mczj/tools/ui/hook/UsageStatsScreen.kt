@@ -8,17 +8,24 @@ import android.graphics.drawable.Drawable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.whmdg.mczj.tools.security.Permission
+import com.whmdg.mczj.tools.security.ShellExecutor
 import java.util.Calendar
 
 private data class AppUsage(val packageName: String, val appName: String, val icon: Drawable?, val durationMs: Long)
@@ -29,6 +36,60 @@ fun UsageStatsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val appList = remember { loadAppUsage(context) }
     val totalMs = remember { appList.sumOf { it.durationMs } }
+    var showHookDialog by remember { mutableStateOf(false) }
+
+    // ── Hook 数据弹窗 ──
+    if (showHookDialog) {
+        val hookData = remember { loadReportEventDump() }
+        val clipboard = LocalClipboardManager.current
+        AlertDialog(
+            onDismissRequest = { showHookDialog = false },
+            title = { Text("reportEvent Hook 数据") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 400.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    if (hookData.first) {
+                        Text(
+                            "无法读取，请检查 hook 代码",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            hookData.second,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+                        )
+                    } else if (hookData.second.isBlank()) {
+                        Text(
+                            "暂无数据\n\n请确认：\n1. LSPosed 已勾选 system_server 作用域\n2. 已重启设备\n3. 今天有应用使用记录",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text(
+                            hookData.second,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    clipboard.setText(AnnotatedString(hookData.second))
+                }) { Text("复制") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showHookDialog = false }) { Text("取消") }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -37,6 +98,11 @@ fun UsageStatsScreen(onBack: () -> Unit) {
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showHookDialog = true }) {
+                        Icon(Icons.Default.Info, contentDescription = "Hook 数据")
                     }
                 }
             )
@@ -216,4 +282,21 @@ private fun Drawable.toBitmapOrNull(): androidx.compose.ui.graphics.ImageBitmap?
         setBounds(0, 0, c.width, c.height); draw(c)
         bmp.asImageBitmap()
     } catch (_: Exception) { null }
+}
+
+/** 读取 reportEvent hook 数据。返回 (是否出错, 内容) */
+private fun loadReportEventDump(): Pair<Boolean, String> {
+    return try {
+        val content = ShellExecutor.execute(
+            Permission.ROOT,
+            "cat /data/data/com.whmdg.mczj.tools/files/report_event_dump.txt 2>/dev/null"
+        )
+        if (content.isBlank()) {
+            Pair(false, "")
+        } else {
+            Pair(false, content)
+        }
+    } catch (e: Exception) {
+        Pair(true, e.message ?: "未知错误")
+    }
 }
