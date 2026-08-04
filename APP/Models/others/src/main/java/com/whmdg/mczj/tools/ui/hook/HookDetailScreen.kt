@@ -420,7 +420,7 @@ private fun handleUsageStatsClick(context: Context, onNavigate: () -> Unit, onNe
         try {
             ShellExecutor.execute(
                 Permission.ROOT,
-                "pm grant ${context.packageName} android.permission.PACKAGE_USAGE_STATS"
+                "appops set ${context.packageName} GET_USAGE_STATS allow"
             )
             if (hasUsageStatsPermission(context)) {
                 Toast.makeText(context, "已通过 Root 授予应用使用时长权限", Toast.LENGTH_SHORT).show()
