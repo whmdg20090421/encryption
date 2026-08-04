@@ -2625,8 +2625,22 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 加载文件夹大小数据库
         folderSizeDb = FolderSizeDb.load(AppDataPaths.fileManager(context))
 
+        // 检查是否有预加载的缓存
+        val preloadCache = FileManagerPreloader.consume()
+
         // 初始化双面板（委托给 Coordinator）
-        panels.initialize(lHome, rHome) { listDirectory(it) }
+        if (preloadCache != null && preloadCache.leftPath == lHome && preloadCache.rightPath == rHome) {
+            // 使用预加载的缓存数据
+            左.path = lHome
+            右.path = rHome
+            左.navState = PanelNavState(paths = listOf(lHome), index = 0)
+            右.navState = PanelNavState(paths = listOf(rHome), index = 0)
+            左.entries = preloadCache.leftEntries
+            右.entries = preloadCache.rightEntries
+        } else {
+            // 没有缓存或路径不匹配，正常加载
+            panels.initialize(lHome, rHome) { listDirectory(it) }
+        }
         loadExtFlagsForDir(左.path, panel = 左)
         loadExtFlagsForDir(右.path, panel = 右)
     }

@@ -668,6 +668,11 @@ fun HomeTab(navigateToModule: (ModuleId) -> Unit) {
         }
     }
 
+    // 文件管理器预加载：与主界面渲染同时触发，不拖慢启动
+    LaunchedEffect(Unit) {
+        com.whmdg.mczj.tools.ui.filemanager.FileManagerPreloader.preload(context)
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
