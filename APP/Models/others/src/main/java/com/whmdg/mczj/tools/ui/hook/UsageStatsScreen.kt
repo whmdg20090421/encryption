@@ -24,7 +24,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.highcapable.yukihookapi.hook.factory.dataChannel
+import com.whmdg.mczj.tools.security.UsageStatsReporter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.Calendar
 
 private data class AppUsage(val packageName: String, val appName: String, val icon: Drawable?, val durationMs: Long)
@@ -35,37 +37,21 @@ fun UsageStatsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val appList = remember { loadAppUsage(context) }
     val totalMs = remember { appList.sumOf { it.durationMs } }
-    var showHookDialog by remember { mutableStateOf(false) }
+    var showReportDialog by remember { mutableStateOf(false) }
 
-    if (showHookDialog) {
-        var hookData by remember { mutableStateOf("") }
-        var dataReceived by remember { mutableStateOf(false) }
-        var hookError by remember { mutableStateOf("") }
+    if (showReportDialog) {
+        var result by remember { mutableStateOf<UsageStatsReporter.ReportResult?>(null) }
+        var loading by remember { mutableStateOf(true) }
         val clipboard = LocalClipboardManager.current
         LaunchedEffect(Unit) {
-            context.dataChannel(context.packageName).wait<String>("readMCZJUsageStatsHookData_response") { value ->
-                if (value.startsWith("ERROR:")) {
-                    hookError = value.removePrefix("ERROR:")
-                } else {
-                    hookData = value
-                }
-                dataReceived = true
+            result = withContext(Dispatchers.IO) {
+                UsageStatsReporter.reportTestEvent(context)
             }
-            context.dataChannel(context.packageName).put("readMCZJUsageStatsHookData_request")
-            // 超时检测：hook 端如果注册失败，不会有响应
-            kotlinx.coroutines.delay(10_000)
-            if (!dataReceived) {
-                hookError = "10 秒无响应，hook 端 data channel 可能未注册。\n\n" +
-                    "请确认：\n" +
-                    "1. LSPosed 已勾选 system_server（系统框架）作用域\n" +
-                    "2. 勾选后已重启设备\n" +
-                    "3. 模块已在 LSPosed 中启用"
-                dataReceived = true
-            }
+            loading = false
         }
         AlertDialog(
-            onDismissRequest = { showHookDialog = false },
-            title = { Text("reportEvent Hook 数据") },
+            onDismissRequest = { showReportDialog = false },
+            title = { Text("reportEvent 反射测试") },
             text = {
                 Column(
                     modifier = Modifier
@@ -73,47 +59,62 @@ fun UsageStatsScreen(onBack: () -> Unit) {
                         .heightIn(max = 400.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
-                    if (!dataReceived) {
+                    if (loading) {
                         Text(
-                            "等待数据...",
+                            "正在调用 reportEvent...",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    } else if (hookError.isNotEmpty()) {
-                        Text(
-                            "Hook 错误：\n$hookError",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                    } else if (hookData.isBlank()) {
-                        Text(
-                            "Hook 返回为空（原始值：\"${hookData}\"）\n\n" +
-                                "可能原因：\n" +
-                                "1. 今天尚无应用使用记录\n" +
-                                "2. reportEvent hook 未捕获到事件（确认 LSPosed 作用域含系统框架）\n" +
-                                "3. system_server 刚重启，事件缓冲区尚未积累数据",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
+                    } else if (result == null) {
+                        Text("未知错误", color = MaterialTheme.colorScheme.error)
                     } else {
-                        Text(
-                            hookData,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
+                        val r = result!!
+                        if (!r.success) {
+                            Text(
+                                "失败：${r.message}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            )
+                        } else {
+                            Text(
+                                "✓ ${r.message}\n\n注入事件：\n${r.eventDetail}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                if (r.queryVerified) "✓ 查询验证：${r.queryDetail}"
+                                else "⚠ 查询验证：${r.queryDetail}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (r.queryVerified) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "说明：事件写入内存缓冲，需等待系统 flush（约 20 分钟）或设备重启后才会持久化到文件。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val text = if (hookError.isNotEmpty()) hookError else hookData
+                    val r = result ?: return@TextButton
+                    val text = buildString {
+                        appendLine(if (r.success) "成功: ${r.message}" else "失败: ${r.message}")
+                        if (r.eventDetail.isNotEmpty()) appendLine("事件: ${r.eventDetail}")
+                        if (r.queryDetail.isNotEmpty()) appendLine("验证: ${r.queryDetail}")
+                    }
                     clipboard.setText(AnnotatedString(text))
                 }) { Text("复制") }
             },
             dismissButton = {
-                TextButton(onClick = { showHookDialog = false }) { Text("取消") }
+                TextButton(onClick = { showReportDialog = false }) { Text("取消") }
             }
         )
     }
@@ -128,8 +129,8 @@ fun UsageStatsScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showHookDialog = true }) {
-                        Icon(Icons.Default.Info, contentDescription = "Hook 数据")
+                    IconButton(onClick = { showReportDialog = true }) {
+                        Icon(Icons.Default.Info, contentDescription = "reportEvent 测试")
                     }
                 }
             )

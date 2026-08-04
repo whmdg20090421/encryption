@@ -319,7 +319,6 @@ fun HookDetailScreen(
 @Composable
 private fun SystemServerDetailScreen(onBack: () -> Unit, onNavigateToUsageTime: () -> Unit) {
     val context = LocalContext.current
-    val moduleActive = remember { XposedDetector.isModuleActive() }
     var showPermissionDialog by remember { mutableStateOf(false) }
 
     // ── 使用时长权限不足弹窗 ──
@@ -373,32 +372,25 @@ private fun SystemServerDetailScreen(onBack: () -> Unit, onNavigateToUsageTime: 
                     containerColor = MaterialTheme.colorScheme.surfaceContainerLow
                 ),
                 onClick = {
-                    if (!moduleActive) return@Card
                     handleUsageStatsClick(context, onNavigateToUsageTime) { showPermissionDialog = true }
                 }
             ) {
                 ListItem(
                     headlineContent = {
-                        Text(
-                            "手机使用时长",
-                            color = if (moduleActive) MaterialTheme.colorScheme.onSurface
-                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                        )
+                        Text("手机使用时长")
                     },
                     supportingContent = {
                         Text(
-                            "通过 Hook UsageStatsService 获取设备使用时长统计",
+                            "通过反射 API 获取设备使用时长统计",
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (moduleActive) MaterialTheme.colorScheme.onSurfaceVariant
-                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     },
                     leadingContent = {
                         Icon(
                             Icons.Default.Timer,
                             contentDescription = null,
-                            tint = if (moduleActive) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     },
                     colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
