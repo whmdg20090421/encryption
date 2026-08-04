@@ -277,30 +277,44 @@ Java_com_whmdg_mczj_tools_auth_NativeAuth_verifyDeadline(
     return env->NewStringUTF("");
 }
 
+static int try_call_exemptions(JNIEnv *env, jclass cls, jobject inst,
+                               const char *name, int is_static) {
+    const char *sig = "([Ljava/lang/String;)V";
+    jmethodID m = is_static ? env->GetStaticMethodID(cls, name, sig)
+                            : env->GetMethodID(cls, name, sig);
+    if (!m) { env->ExceptionClear(); return 0; }
+
+    jclass stringClass = env->FindClass("java/lang/String");
+    jstring s = env->NewStringUTF("L");
+    jobjectArray a = env->NewObjectArray(1, stringClass, s);
+    if (is_static)
+        env->CallStaticVoidMethod(cls, m, a);
+    else
+        env->CallVoidMethod(inst, m, a);
+    env->DeleteLocalRef(s); env->DeleteLocalRef(a);
+    return 1;
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_whmdg_mczj_tools_auth_NativeAuth_bypassHiddenApi(
         JNIEnv *env, jclass /* clazz */) {
-    jclass vmRuntimeClass = env->FindClass("dalvik/system/VMRuntime");
-    if (!vmRuntimeClass) return JNI_FALSE;
+    jclass vmCls = env->FindClass("dalvik/system/VMRuntime");
+    if (!vmCls) return JNI_FALSE;
 
-    jmethodID setExemptions = env->GetStaticMethodID(vmRuntimeClass, "setHiddenApiExemptions",
-        "([Ljava/lang/String;)V");
-    if (!setExemptions) {
-        env->DeleteLocalRef(vmRuntimeClass);
-        return JNI_FALSE;
-    }
+    jmethodID getRT = env->GetStaticMethodID(vmCls, "getRuntime",
+        "()Ldalvik/system/VMRuntime;");
+    if (!getRT) { env->DeleteLocalRef(vmCls); return JNI_FALSE; }
 
-    jclass stringClass = env->FindClass("java/lang/String");
-    jstring exemption = env->NewStringUTF("L");
-    jobjectArray exemptions = env->NewObjectArray(1, stringClass, exemption);
+    jobject rt = env->CallStaticObjectMethod(vmCls, getRT);
+    if (!rt) { env->DeleteLocalRef(vmCls); return JNI_FALSE; }
 
-    env->CallStaticVoidMethod(vmRuntimeClass, setExemptions, exemptions);
+    /* 实例方法优先（AOSP 标准），static 兜底（部分 ROM） */
+    int ok = try_call_exemptions(env, vmCls, rt, "setHiddenApiExemptions", 0)
+          || try_call_exemptions(env, vmCls, rt, "setHiddenApiExemptions", 1);
 
-    env->DeleteLocalRef(exemption);
-    env->DeleteLocalRef(exemptions);
-    env->DeleteLocalRef(vmRuntimeClass);
-
-    return JNI_TRUE;
+    env->DeleteLocalRef(rt);
+    env->DeleteLocalRef(vmCls);
+    return ok ? JNI_TRUE : JNI_FALSE;
 }
 
 }
