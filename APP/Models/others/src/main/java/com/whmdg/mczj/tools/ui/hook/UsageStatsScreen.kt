@@ -40,13 +40,28 @@ fun UsageStatsScreen(onBack: () -> Unit) {
     if (showHookDialog) {
         var hookData by remember { mutableStateOf("") }
         var dataReceived by remember { mutableStateOf(false) }
+        var hookError by remember { mutableStateOf("") }
         val clipboard = LocalClipboardManager.current
         LaunchedEffect(Unit) {
             context.dataChannel(context.packageName).wait<String>("readMCZJUsageStatsHookData_response") { value ->
-                hookData = value
+                if (value.startsWith("ERROR:")) {
+                    hookError = value.removePrefix("ERROR:")
+                } else {
+                    hookData = value
+                }
                 dataReceived = true
             }
             context.dataChannel(context.packageName).put("readMCZJUsageStatsHookData_request")
+            // 超时检测：hook 端如果注册失败，不会有响应
+            kotlinx.coroutines.delay(10_000)
+            if (!dataReceived) {
+                hookError = "10 秒无响应，hook 端 data channel 可能未注册。\n\n" +
+                    "请确认：\n" +
+                    "1. LSPosed 已勾选 system_server（系统框架）作用域\n" +
+                    "2. 勾选后已重启设备\n" +
+                    "3. 模块已在 LSPosed 中启用"
+                dataReceived = true
+            }
         }
         AlertDialog(
             onDismissRequest = { showHookDialog = false },
@@ -64,11 +79,23 @@ fun UsageStatsScreen(onBack: () -> Unit) {
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    } else if (hookError.isNotEmpty()) {
+                        Text(
+                            "Hook 错误：\n$hookError",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
                     } else if (hookData.isBlank()) {
                         Text(
-                            "暂无数据\n\n请确认：\n1. LSPosed 已勾选 system_server 作用域\n2. 已重启设备\n3. 今天有应用使用记录",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            "Hook 返回为空（原始值：\"${hookData}\"）\n\n" +
+                                "可能原因：\n" +
+                                "1. 今天尚无应用使用记录\n" +
+                                "2. reportEvent hook 未捕获到事件（确认 LSPosed 作用域含系统框架）\n" +
+                                "3. system_server 刚重启，事件缓冲区尚未积累数据",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                         )
                     } else {
                         Text(
@@ -81,7 +108,8 @@ fun UsageStatsScreen(onBack: () -> Unit) {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    clipboard.setText(AnnotatedString(hookData))
+                    val text = if (hookError.isNotEmpty()) hookError else hookData
+                    clipboard.setText(AnnotatedString(text))
                 }) { Text("复制") }
             },
             dismissButton = {

@@ -91,19 +91,46 @@ class 模块入口 : XposedModule(), IYukiHookXposedInit {
         }
     }
 
+    private fun getSystemContext(): android.content.Context {
+        // system_server 中 currentApplication() 返回 null，需多级 fallback
+        val at = Class.forName("android.app.ActivityThread")
+            .getMethod("currentActivityThread")
+            .invoke(null) ?: throw IllegalStateException("ActivityThread 为 null")
+
+        // 优先 getApplication()，再 getSystemContext()
+        val app = try {
+            at.javaClass.getMethod("getApplication").invoke(at) as? android.content.Context
+        } catch (_: Throwable) { null }
+        if (app != null) return app
+
+        val sysCtx = try {
+            at.javaClass.getMethod("getSystemContext").invoke(at) as? android.content.Context
+        } catch (_: Throwable) { null }
+        if (sysCtx != null) return sysCtx
+
+        // 最后尝试 currentApplication()
+        return (Class.forName("android.app.ActivityThread")
+            .getMethod("currentApplication")
+            .invoke(null) as? android.content.Context)
+            ?: throw IllegalStateException("无法获取 Context: getApplication=null, getSystemContext=null, currentApplication=null")
+    }
+
     private fun registerDataChannel() {
         try {
-            val ctx = Class.forName("android.app.ActivityThread")
-                .getMethod("currentApplication")
-                .invoke(null) as android.content.Context
+            val ctx = getSystemContext()
             ctx.dataChannel(MODULE_PKG).wait<String>(KEY_REQUEST) {
-                val data: String
-                synchronized(eventBuffer) { data = eventBuffer.joinToString("\n") }
-                ctx.dataChannel(MODULE_PKG).put(KEY_RESPONSE, data)
+                val response = if (hookError.isNotEmpty()) {
+                    "$ERROR_PREFIX$hookError"
+                } else {
+                    synchronized(eventBuffer) { eventBuffer.joinToString("\n") }
+                }
+                ctx.dataChannel(MODULE_PKG).put(KEY_RESPONSE, response)
             }
-            Log.i(TAG, "艨艟: data channel registered")
+            Log.i(TAG, "艨艟: data channel registered, ctx=${ctx.javaClass.name}")
         } catch (e: Throwable) {
-            Log.e(TAG, "艨艟: data channel failed: ${e.message}")
+            val msg = "data channel 注册失败: ${e.javaClass.simpleName}: ${e.message}"
+            Log.e(TAG, "艨艟: $msg")
+            hookError = msg
         }
     }
 
@@ -115,7 +142,9 @@ class 模块入口 : XposedModule(), IYukiHookXposedInit {
         private const val MODULE_PKG = "com.whmdg.mczj.tools"
         private const val KEY_REQUEST = "readMCZJUsageStatsHookData_request"
         private const val KEY_RESPONSE = "readMCZJUsageStatsHookData_response"
+        private const val ERROR_PREFIX = "ERROR:"
         private val eventBuffer = mutableListOf<String>()
         private var currentDate: Long = 0
+        private var hookError: String = ""
     }
 }
