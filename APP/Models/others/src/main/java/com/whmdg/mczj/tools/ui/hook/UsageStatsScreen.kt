@@ -69,21 +69,16 @@ fun UsageStatsScreen(onBack: () -> Unit) {
                         Text("未知错误", color = MaterialTheme.colorScheme.error)
                     } else {
                         val r = result!!
-                        r.attempts.forEach { a ->
-                            val icon = if (a.success) "✓" else "✗"
+                        if (!r.success) {
                             Text(
-                                "$icon ${a.label}：${a.detail}",
+                                "失败：${r.message}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (a.success) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.error,
+                                color = MaterialTheme.colorScheme.error,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                             )
-                            Spacer(Modifier.height(4.dp))
-                        }
-                        if (r.success) {
-                            Spacer(Modifier.height(8.dp))
+                        } else {
                             Text(
-                                "注入事件：\n${r.eventDetail}",
+                                "✓ ${r.message}\n\n注入事件：\n${r.eventDetail}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
@@ -111,14 +106,9 @@ fun UsageStatsScreen(onBack: () -> Unit) {
                 TextButton(onClick = {
                     val r = result ?: return@TextButton
                     val text = buildString {
-                        r.attempts.forEach { a ->
-                            val icon = if (a.success) "✓" else "✗"
-                            appendLine("$icon ${a.label}：${a.detail}")
-                        }
-                        if (r.success) {
-                            if (r.eventDetail.isNotEmpty()) appendLine("事件: ${r.eventDetail}")
-                            if (r.queryDetail.isNotEmpty()) appendLine("验证: ${r.queryDetail}")
-                        }
+                        appendLine(if (r.success) "成功: ${r.message}" else "失败: ${r.message}")
+                        if (r.eventDetail.isNotEmpty()) appendLine("事件: ${r.eventDetail}")
+                        if (r.queryDetail.isNotEmpty()) appendLine("验证: ${r.queryDetail}")
                     }
                     clipboard.setText(AnnotatedString(text))
                 }) { Text("复制") }

@@ -5,92 +5,93 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.os.IBinder
 import com.whmdg.mczj.tools.auth.NativeAuth
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 object UsageStatsReporter {
 
-    data class AttemptResult(val label: String, val success: Boolean, val detail: String)
-
     data class ReportResult(
         val success: Boolean,
-        val attempts: List<AttemptResult>,
+        val message: String,
         val eventDetail: String = "",
         val queryVerified: Boolean = false,
         val queryDetail: String = ""
     )
 
-    private const val HOOK_STATUS_FILE = "hook_report_event_result"
-    private const val HOOK_BYPASS_FILE = "hook_hidden_api_status"
-
     fun reportTestEvent(context: Context): ReportResult {
-        val packageName = context.packageName
-        val timeStamp = System.currentTimeMillis()
-        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
-        val attempts = mutableListOf<AttemptResult>()
-
-        // 第1次：Hook 已解除限制，JNI 直接访问
-        val r1 = tryReportEvent(context)
-        attempts.add(AttemptResult("第1次（JNI 直接访问）", r1.success, r1.detail))
-        if (r1.success) {
-            val eventDetail = "type=USER_INTERACTION(7) pkg=$packageName ts=$timeStamp time=${sdf.format(Date(timeStamp))}"
-            return buildResult(true, attempts, eventDetail, context, packageName, timeStamp)
-        }
-
-        // 第2次：JNI 先设置解除限制，再访问
-        val setOk = try { NativeAuth.bypassHiddenApi() } catch (_: Throwable) { false }
-        if (setOk) {
-            val r2 = tryReportEvent(context)
-            attempts.add(AttemptResult("第2次（JNI 设置后访问）", r2.success, r2.detail))
-            if (r2.success) {
-                val eventDetail = "type=USER_INTERACTION(7) pkg=$packageName ts=$timeStamp time=${sdf.format(Date(timeStamp))}"
-                return buildResult(true, attempts, eventDetail, context, packageName, timeStamp)
+        // 绕过 hidden API 限制
+        try {
+            if (!NativeAuth.bypassHiddenApi()) {
+                return ReportResult(false, "JNI setHiddenApiExemptions 调用失败")
             }
-        } else {
-            attempts.add(AttemptResult("第2次（JNI 设置后访问）", false, "JNI setHiddenApiExemptions 失败"))
+        } catch (e: Throwable) {
+            return ReportResult(false, "绕过 hidden API 失败: ${e.message}")
         }
 
-        // 第3次：读取 Hook 已执行的结果
-        val hookResult = readHookResult(context)
-        attempts.add(AttemptResult("第3次（Hook 代为执行）", hookResult.first, hookResult.second))
-
-        if (hookResult.first) {
-            val eventDetail = "type=USER_INTERACTION(7) pkg=$packageName ts=$timeStamp time=${sdf.format(Date(timeStamp))}"
-            return buildResult(true, attempts, eventDetail, context, packageName, timeStamp)
-        }
-
-        return ReportResult(false, attempts)
-    }
-
-    private data class TryResult(val success: Boolean, val detail: String)
-
-    private fun tryReportEvent(context: Context): TryResult {
+        // 获取 IUsageStatsManager binder
+        val proxy: Any
         try {
             val binder = getUsageStatsBinder()
-                ?: return TryResult(false, "无法获取 usagestats 服务 binder")
-            val proxy = asInterface(binder)
+                ?: return ReportResult(false, "无法获取 usagestats 服务 binder")
+            proxy = asInterface(binder)
+        } catch (e: Throwable) {
+            return ReportResult(false, "获取 IUsageStatsManager 失败: ${e.message}")
+        }
 
-            val event = UsageEvents.Event()
-            setEventFields(event, context.packageName)
+        // 构造 Event（动态查找字段，兼容不同设备）
+        val event: UsageEvents.Event
+        val packageName = context.packageName
+        val timeStamp = System.currentTimeMillis()
+        try {
+            event = UsageEvents.Event()
+            setEventFields(event, packageName)
+        } catch (e: Throwable) {
+            return ReportResult(false, "构造 Event 失败: ${e.message}")
+        }
 
-            val method = proxy.javaClass.getMethod("reportEvent", UsageEvents.Event::class.java, Int::class.java)
+        // 调用 reportEvent
+        try {
+            val method = proxy.javaClass.getMethod(
+                "reportEvent",
+                UsageEvents.Event::class.java,
+                Int::class.java
+            )
             method.invoke(proxy, event, 0)
-            return TryResult(true, "reportEvent 调用成功")
         } catch (e: Throwable) {
             val cause = e.cause ?: e
-            return TryResult(false, "${cause.javaClass.simpleName}: ${cause.message}")
+            return ReportResult(false, "reportEvent 调用失败: ${cause.javaClass.simpleName}: ${cause.message}")
+        }
+
+        // 等待后查询验证
+        Thread.sleep(500)
+        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
+        val eventDetail = "type=USER_INTERACTION(7) pkg=$packageName ts=$timeStamp time=${sdf.format(Date(timeStamp))}"
+
+        return try {
+            val verified = verifyEvent(context, packageName, timeStamp)
+            ReportResult(
+                success = true,
+                message = "reportEvent 调用成功",
+                eventDetail = eventDetail,
+                queryVerified = verified,
+                queryDetail = if (verified) "查询验证通过：事件已写入" else "查询未找到该事件（可能需要等待 flush）"
+            )
+        } catch (e: Throwable) {
+            ReportResult(
+                success = true,
+                message = "reportEvent 调用成功，但查询验证失败: ${e.message}",
+                eventDetail = eventDetail
+            )
         }
     }
 
     /**
      * 动态查找 Event 字段并设置值（字段名因设备/Android 版本而异）。
      */
-    fun setEventFields(event: UsageEvents.Event, packageName: String) {
+    private fun setEventFields(event: UsageEvents.Event, packageName: String) {
         val cls = UsageEvents.Event::class.java
-        val fields = cls.declaredFields
-        for (f in fields) {
+        for (f in cls.declaredFields) {
             f.isAccessible = true
             when {
                 f.type == Int::class.javaPrimitiveType && f.getInt(event) == 0 ->
@@ -101,48 +102,6 @@ object UsageStatsReporter {
                     f.set(event, packageName)
             }
         }
-    }
-
-    private fun readHookResult(context: Context): Pair<Boolean, String> {
-        return try {
-            val file = File(context.filesDir, HOOK_STATUS_FILE)
-            if (!file.exists()) return Pair(false, "Hook 未执行（文件不存在）")
-            val content = file.readText()
-            when {
-                content.startsWith("ok\n") -> Pair(true, content.removePrefix("ok\n"))
-                content.startsWith("fail\n") -> Pair(false, content.removePrefix("fail\n"))
-                else -> Pair(false, "未知状态: $content")
-            }
-        } catch (e: Throwable) {
-            Pair(false, "读取失败: ${e.message}")
-        }
-    }
-
-    fun readHookBypassStatus(context: Context): String {
-        return try {
-            val file = File(context.filesDir, HOOK_BYPASS_FILE)
-            if (!file.exists()) return "未执行"
-            val content = file.readText()
-            when (content) {
-                "ok" -> "成功"
-                else -> content
-            }
-        } catch (e: Throwable) {
-            "读取失败: ${e.message}"
-        }
-    }
-
-    private fun buildResult(
-        success: Boolean,
-        attempts: List<AttemptResult>,
-        eventDetail: String,
-        context: Context,
-        packageName: String,
-        timeStamp: Long
-    ): ReportResult {
-        val verified = try { verifyEvent(context, packageName, timeStamp) } catch (_: Throwable) { false }
-        val queryDetail = if (verified) "查询验证通过：事件已写入" else "查询未找到该事件（可能需要等待 flush）"
-        return ReportResult(success, attempts, eventDetail, verified, queryDetail)
     }
 
     private fun getUsageStatsBinder(): IBinder? {
