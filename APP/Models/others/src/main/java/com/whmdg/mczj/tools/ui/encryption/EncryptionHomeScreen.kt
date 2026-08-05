@@ -211,8 +211,8 @@ fun EncryptionHomeScreen(
 
             // ── 云盘：添加保险箱底部弹窗 ──
             if (showCloudVaultSheet) {
-                val vaults = remember { mutableStateOf(vaultService.listVaults()) }
-                var selectedVaultId by remember { mutableStateOf<String?>(null) }
+                val vaults = vaultService.vaults
+                var selectedVaultId by remember { mutableStateOf<Int?>(null) }
                 val isDarkMode = LocalIsDarkMode.current
 
                 ModalBottomSheet(
@@ -244,8 +244,8 @@ fun EncryptionHomeScreen(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        vaults.value.forEach { vault ->
-                            val isSelected = selectedVaultId == vault.id.toString()
+                        vaults.forEach { vault ->
+                            val isSelected = selectedVaultId == vault.id
                             Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -255,7 +255,7 @@ fun EncryptionHomeScreen(
                                             showCloudVaultSheet = false
                                             selectedVaultId = null
                                         } else {
-                                            selectedVaultId = vault.id.toString()
+                                            selectedVaultId = vault.id
                                         }
                                     },
                                 shape = RoundedCornerShape(12.dp),
