@@ -58,6 +58,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.rememberScrollState
@@ -226,6 +227,7 @@ fun EncryptionHomeScreen(
                             .padding(horizontal = 20.dp)
                             .padding(bottom = 32.dp)
                     ) {
+                        // 标题行：标题 + 确认按钮（选中后才显示）
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -237,8 +239,18 @@ fun EncryptionHomeScreen(
                                 fontWeight = FontWeight.SemiBold,
                                 color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
                             )
-                            IconButton(onClick = { showCloudVaultSheet = false; selectedVaultId = null }) {
-                                Icon(Icons.Default.Close, contentDescription = "关闭", modifier = Modifier.size(20.dp))
+                            if (selectedVaultId != null) {
+                                IconButton(onClick = {
+                                    showCloudVaultSheet = false
+                                    selectedVaultId = null
+                                }) {
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = "确认",
+                                        modifier = Modifier.size(22.dp),
+                                        tint = Color(0xFF00C8FF)
+                                    )
+                                }
                             }
                         }
 
@@ -250,14 +262,7 @@ fun EncryptionHomeScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 2.dp)
-                                    .clickable {
-                                        if (isSelected) {
-                                            showCloudVaultSheet = false
-                                            selectedVaultId = null
-                                        } else {
-                                            selectedVaultId = vault.id
-                                        }
-                                    },
+                                    .clickable { selectedVaultId = vault.id },
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (isSelected) {
                                     if (isDarkMode) Color(0xFF1E3A5F) else Color(0xFFE0F2FE)
@@ -294,15 +299,6 @@ fun EncryptionHomeScreen(
                                         fontFamily = FontFamily.Monospace,
                                         color = if (isDarkMode) Color(0xFFA8D4F0) else Color(0xFF0EA5E9)
                                     )
-                                    if (isSelected) {
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Icon(
-                                            Icons.Default.Check,
-                                            contentDescription = "已选中",
-                                            modifier = Modifier.size(16.dp),
-                                            tint = Color(0xFF00C8FF)
-                                        )
-                                    }
                                 }
                             }
                         }
@@ -1203,100 +1199,102 @@ fun CloudTab(
         }
 
         // ── 右下角可展开 FAB ──
+        // 整体从右下角向左上角缩放展开，FAB 变形为菜单
+        val fabScale by animateFloatAsState(
+            targetValue = if (fabExpanded) 1f else 0f,
+            animationSpec = tween(220),
+            label = "fab_scale"
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .graphicsLayer {
+                    transformOrigin = TransformOrigin(1f, 1f)
+                    scaleX = fabScale
+                    scaleY = fabScale
+                    alpha = fabScale
+                }
+                .padding(end = 16.dp, bottom = 16.dp)
+        ) {
+            Column(horizontalAlignment = Alignment.End) {
+                // 添加保险箱
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (isDarkMode) Color(0xFF1E293B) else Color(0xFFE2E8F0),
+                    shadowElevation = 4.dp,
+                    modifier = Modifier.clickable(enabled = fabExpanded) {
+                        fabExpanded = false
+                        onShowVaultSheet()
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Lock, contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF00838F))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text("添加保险箱", fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                            color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 添加文件夹
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (isDarkMode) Color(0xFF1E293B) else Color(0xFFE2E8F0),
+                    shadowElevation = 4.dp,
+                    modifier = Modifier.clickable(enabled = fabExpanded) { fabExpanded = false }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Folder, contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF00838F))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text("添加文件夹", fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                            color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 关闭按钮（原 FAB 位置）
+                FloatingActionButton(
+                    onClick = { fabExpanded = false },
+                    containerColor = if (isDarkMode) Color(0xFF00C8FF) else Color(0xFF00838F),
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = "关闭")
+                }
+            }
+        }
+
+        // 收起态的加号 FAB（展开时隐藏）
         Box(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = 16.dp)
-        ) {
-            // 展开菜单（从 FAB 位置向左上展开）
-            AnimatedVisibility(
-                visible = fabExpanded,
-                enter = scaleIn(
-                    animationSpec = tween(200),
+                .graphicsLayer {
                     transformOrigin = TransformOrigin(1f, 1f)
-                ) + fadeIn(tween(150)),
-                exit = scaleOut(
-                    animationSpec = tween(150),
-                    transformOrigin = TransformOrigin(1f, 1f)
-                ) + fadeOut(tween(100))
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    modifier = Modifier.padding(bottom = 56.dp)
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = if (isDarkMode) Color(0xFF1E293B) else Color(0xFFE2E8F0),
-                        shadowElevation = 4.dp,
-                        modifier = Modifier.clickable {
-                            fabExpanded = false
-                            onShowVaultSheet()
-                        }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.Lock,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF00838F)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                "添加保险箱",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Surface(
-                        shape = RoundedCornerShape(16.dp),
-                        color = if (isDarkMode) Color(0xFF1E293B) else Color(0xFFE2E8F0),
-                        shadowElevation = 4.dp,
-                        modifier = Modifier.clickable { fabExpanded = false }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.Folder,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF00838F)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                "添加文件夹",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
-                            )
-                        }
-                    }
+                    scaleX = 1f - fabScale
+                    scaleY = 1f - fabScale
+                    alpha = 1f - fabScale
                 }
-            }
-
-            // FAB 主按钮
+        ) {
             FloatingActionButton(
-                onClick = { fabExpanded = !fabExpanded },
+                onClick = { fabExpanded = true },
                 containerColor = if (isDarkMode) Color(0xFF00C8FF) else Color(0xFF00838F),
                 contentColor = Color.White,
                 shape = RoundedCornerShape(16.dp)
             ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = "添加",
-                    modifier = Modifier.graphicsLayer {
-                        rotationZ = if (fabExpanded) 45f else 0f
-                    }
-                )
+                Icon(Icons.Default.Add, contentDescription = "添加")
             }
         }
     }
