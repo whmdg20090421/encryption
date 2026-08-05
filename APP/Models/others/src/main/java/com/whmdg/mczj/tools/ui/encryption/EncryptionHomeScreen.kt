@@ -91,6 +91,21 @@ import com.whmdg.mczj.tools.ui.components.GlowToggleItem
 import com.whmdg.mczj.tools.ui.components.glowEffect
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.Screen
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontFamily
+
+/** 云盘同步项（UI 数据模型） */
+data class CloudSyncItem(
+    val id: String,
+    val vaultName: String,
+    val vaultSize: Long,
+    val lastSyncTime: String,
+    val cloudSize: Long,
+    val diffFileCount: Int
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -109,6 +124,7 @@ fun EncryptionHomeScreen(
     var importFolderName by remember { mutableStateOf("") }
     var importPassword by remember { mutableStateOf("") }
     var importUseSaf by remember { mutableStateOf(false) }
+    var showCloudVaultSheet by remember { mutableStateOf(false) }
     var encryptionError by remember { mutableStateOf<Throwable?>(null) }
     var fatalError by remember { mutableStateOf<Throwable?>(null) }
     var showImportPermissionDialog by remember { mutableStateOf(false) }
@@ -176,6 +192,7 @@ fun EncryptionHomeScreen(
                         Icon(Icons.Default.Add, contentDescription = "添加")
                     }
                 }
+                // subTab == 1 (云盘) 的 FAB 由 CloudTab 内部管理
             }
         ) { innerPadding ->
             Box(
@@ -185,8 +202,112 @@ fun EncryptionHomeScreen(
             ) {
                 when (subTab) {
                     0 -> VaultsListTab(vaultService = vaultService, settings = settings, onNavigate = onNavigate)
-                    1 -> CloudTab()
+                    1 -> CloudTab(
+                        vaultService = vaultService,
+                        onShowVaultSheet = { showCloudVaultSheet = true }
+                    )
                     2 -> EncryptionSettingsTab(settings = settings)
+            }
+
+            // ── 云盘：添加保险箱底部弹窗 ──
+            if (showCloudVaultSheet) {
+                val vaults = remember { mutableStateOf(vaultService.listVaults()) }
+                var selectedVaultId by remember { mutableStateOf<String?>(null) }
+                val isDarkMode = LocalIsDarkMode.current
+
+                ModalBottomSheet(
+                    onDismissRequest = { showCloudVaultSheet = false; selectedVaultId = null },
+                    containerColor = if (isDarkMode) Color(0xFF111827) else Color(0xFFF5F5F5),
+                    shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                            .padding(bottom = 32.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "选择保险箱",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
+                            )
+                            IconButton(onClick = { showCloudVaultSheet = false; selectedVaultId = null }) {
+                                Icon(Icons.Default.Close, contentDescription = "关闭", modifier = Modifier.size(20.dp))
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        vaults.value.forEach { vault ->
+                            val isSelected = selectedVaultId == vault.id.toString()
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp)
+                                    .clickable {
+                                        if (isSelected) {
+                                            showCloudVaultSheet = false
+                                            selectedVaultId = null
+                                        } else {
+                                            selectedVaultId = vault.id.toString()
+                                        }
+                                    },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isSelected) {
+                                    if (isDarkMode) Color(0xFF1E3A5F) else Color(0xFFE0F2FE)
+                                } else Color.Transparent,
+                                border = if (isSelected) {
+                                    androidx.compose.foundation.BorderStroke(1.dp, Color(0x8C00D2FF))
+                                } else null
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Lock,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = if (isSelected) {
+                                            if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF00838F)
+                                        } else {
+                                            if (isDarkMode) Color(0xFF64748B) else Color(0xFF94A3B8)
+                                        }
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        vault.name,
+                                        fontSize = 14.sp,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                        color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        if (vault.storageSize > 0) FormatUtils.formatBytes(vault.storageSize) else "未统计",
+                                        fontSize = 12.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = if (isDarkMode) Color(0xFFA8D4F0) else Color(0xFF0EA5E9)
+                                    )
+                                    if (isSelected) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Icon(
+                                            Icons.Default.Check,
+                                            contentDescription = "已选中",
+                                            modifier = Modifier.size(16.dp),
+                                            tint = Color(0xFF00C8FF)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             if (showMenu) {
@@ -1022,15 +1143,352 @@ fun VaultsListTab(
 }
 
 @Composable
-fun CloudTab() {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Default.Cloud, contentDescription = null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.outline)
-            Spacer(modifier = Modifier.height(16.dp))
-            Text("云盘", style = MaterialTheme.typography.titleLarge)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text("（加密文件存储 / 云端同步功能待添加）", color = MaterialTheme.colorScheme.onSurfaceVariant)
+fun CloudTab(
+    vaultService: VaultService,
+    onShowVaultSheet: () -> Unit
+) {
+    val isDarkMode = LocalIsDarkMode.current
+    var fabExpanded by remember { mutableStateOf(false) }
+    // ponytail: UI 占位数据，逻辑接入时替换为真实数据源
+    val syncItems = remember { mutableStateListOf<CloudSyncItem>() }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        // 点击空白区域关闭菜单（放在 FAB 之前，FAB 在上层接收点击）
+        if (fabExpanded) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                    ) { fabExpanded = false }
+            )
         }
+
+        if (syncItems.isEmpty()) {
+            // ── 空状态 ──
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Cloud,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = if (isDarkMode) Color(0xFF334155) else Color(0xFFCBD5E1)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        "暂无同步项目",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (isDarkMode) Color(0xFF64748B) else Color(0xFF94A3B8)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "点击右下角 + 添加保险箱或文件夹",
+                        fontSize = 12.sp,
+                        color = if (isDarkMode) Color(0xFF475569) else Color(0xFFB0BEC5)
+                    )
+                }
+            }
+        } else {
+            // ── 同步列表 ──
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(vertical = 8.dp)
+            ) {
+                items(syncItems, key = { it.id }) { item ->
+                    CloudSyncCard(item)
+                }
+            }
+        }
+
+        // ── 右下角可展开 FAB ──
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 16.dp, bottom = 16.dp)
+        ) {
+            // 展开菜单（从 FAB 位置向左上展开）
+            AnimatedVisibility(
+                visible = fabExpanded,
+                enter = scaleIn(
+                    animationSpec = tween(200),
+                    transformOrigin = TransformOrigin(1f, 1f)
+                ) + fadeIn(tween(150)),
+                exit = scaleOut(
+                    animationSpec = tween(150),
+                    transformOrigin = TransformOrigin(1f, 1f)
+                ) + fadeOut(tween(100))
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    modifier = Modifier.padding(bottom = 56.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (isDarkMode) Color(0xFF1E293B) else Color(0xFFE2E8F0),
+                        shadowElevation = 4.dp,
+                        modifier = Modifier.clickable {
+                            fabExpanded = false
+                            onShowVaultSheet()
+                        }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Lock,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF00838F)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                "添加保险箱",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (isDarkMode) Color(0xFF1E293B) else Color(0xFFE2E8F0),
+                        shadowElevation = 4.dp,
+                        modifier = Modifier.clickable { fabExpanded = false }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Folder,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF00838F)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                "添加文件夹",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // FAB 主按钮
+            FloatingActionButton(
+                onClick = { fabExpanded = !fabExpanded },
+                containerColor = if (isDarkMode) Color(0xFF00C8FF) else Color(0xFF00838F),
+                contentColor = Color.White,
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Icon(
+                    Icons.Default.Add,
+                    contentDescription = "添加",
+                    modifier = Modifier.graphicsLayer {
+                        rotationZ = if (fabExpanded) 45f else 0f
+                    }
+                )
+            }
+        }
+    }
+}
+
+// ── 云盘同步卡片 ──
+@Composable
+private fun CloudSyncCard(item: CloudSyncItem) {
+    val isDarkMode = LocalIsDarkMode.current
+    val glowEnabled = true // ponytail: 跟随全局光晕设置，后续可接入设置项
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = 16.dp,
+                vertical = if (glowEnabled) 8.dp else 4.dp
+            )
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(
+                    if (glowEnabled) {
+                        Modifier.glowEffect(
+                            glowColor = Color(0xFF00C8FF),
+                            glowRadius = 16.dp,
+                            cornerRadius = 20.dp
+                        )
+                    } else Modifier
+                )
+                .drawBehind {
+                    drawRoundRect(
+                        color = Color(0x8C00D2FF),
+                        cornerRadius = CornerRadius(20.dp.toPx()),
+                        style = Stroke(width = 1.5.dp.toPx())
+                    )
+                    if (glowEnabled) {
+                        drawRoundRect(
+                            color = Color(0x1F008CC8),
+                            cornerRadius = CornerRadius(21.5.dp.toPx()),
+                            style = Stroke(width = 3.dp.toPx())
+                        )
+                    }
+                },
+            shape = RoundedCornerShape(20.dp),
+            color = Color.Transparent,
+            shadowElevation = 4.dp
+        ) {
+            Box(
+                modifier = Modifier.background(
+                    Brush.linearGradient(
+                        colors = if (isDarkMode) {
+                            listOf(Color(0xFF111827), Color(0xFF0D1525), Color(0xFF0A1020))
+                        } else {
+                            listOf(Color(0xFFE0F7FA), Color(0xFFE8F5E9), Color(0xFFF5F5F5))
+                        }
+                    )
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // 头部：图标 + 标题 + 类型
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .drawBehind {
+                                    drawRoundRect(
+                                        brush = Brush.linearGradient(
+                                            colors = if (isDarkMode) {
+                                                listOf(Color(0xFF0E2A40), Color(0xFF091825))
+                                            } else {
+                                                listOf(Color(0xFFB2EBF2), Color(0xFF80DEEA))
+                                            }
+                                        ),
+                                        cornerRadius = CornerRadius(10.dp.toPx())
+                                    )
+                                    drawRoundRect(
+                                        color = if (isDarkMode) Color(0x4000C8FF) else Color(0x4000BCD4),
+                                        cornerRadius = CornerRadius(10.dp.toPx()),
+                                        style = Stroke(width = 1.dp.toPx())
+                                    )
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Cloud,
+                                contentDescription = null,
+                                tint = if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF00838F),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "云盘同步列表",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
+                            )
+                            Text(
+                                "保险箱",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                letterSpacing = 0.12.em,
+                                color = if (isDarkMode) Color(0x8C00C8FF) else Color(0x8C00838F)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // 分隔线
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(Color(0x3300B4E6), Color(0x0D00B4E6), Color.Transparent)
+                                )
+                            )
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // 信息行
+                    CloudInfoRow("名称", item.vaultName, isDarkMode)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    CloudInfoRow("最后同步", item.lastSyncTime, isDarkMode)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    CloudInfoRow("本地大小", FormatUtils.formatBytes(item.vaultSize), isDarkMode)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    CloudInfoRow("云端大小", FormatUtils.formatBytes(item.cloudSize), isDarkMode)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "差异文件",
+                            fontSize = 11.sp,
+                            color = if (isDarkMode) Color(0x9964B4D2) else Color(0x9964748B),
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 0.03.em
+                        )
+                        Text(
+                            "${item.diffFileCount} 个",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (item.diffFileCount > 0) Color(0xFFFF9800) else {
+                                if (isDarkMode) Color(0xFFA8D4F0) else Color(0xFF0EA5E9)
+                            },
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CloudInfoRow(label: String, value: String, isDarkMode: Boolean) {
+    val labelColor = if (isDarkMode) Color(0x9964B4D2) else Color(0x9964748B)
+    val valueColor = if (isDarkMode) Color(0xFFA8D4F0) else Color(0xFF0EA5E9)
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            color = labelColor,
+            fontFamily = FontFamily.Monospace,
+            letterSpacing = 0.03.em
+        )
+        Text(
+            text = value,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = valueColor,
+            fontFamily = FontFamily.Monospace,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
