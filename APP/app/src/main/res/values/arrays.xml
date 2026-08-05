@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- LSPosed 推荐作用域：系统框架 + 微信 -->
+    <!-- LSPosed 自动勾选作用域 -->
     <string-array name="xposed_scope">
+        <item>com.whmdg.mczj.tools</item>
         <item>android</item>
         <item>system_server</item>
-        <item>com.tencent.mm</item>
     </string-array>
 </resources>
