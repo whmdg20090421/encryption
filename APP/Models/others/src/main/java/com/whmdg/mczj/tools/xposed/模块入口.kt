@@ -62,10 +62,18 @@ class 模块入口 : XposedModule(), IYukiHookXposedInit {
             val proxy = stubClass.getMethod("asInterface", IBinder::class.java).invoke(null, binder)
 
             val event = UsageEvents.Event()
-            val cls = UsageEvents.Event::class.java
-            cls.getDeclaredField("mEventType").apply { isAccessible = true }.setInt(event, UsageEvents.Event.USER_INTERACTION)
-            cls.getDeclaredField("mTimeStamp").apply { isAccessible = true }.setLong(event, System.currentTimeMillis())
-            cls.getDeclaredField("mPackageName").apply { isAccessible = true }.set(event, MODULE_PKG)
+            // 动态查找字段（字段名因设备/Android 版本而异）
+            for (f in UsageEvents.Event::class.java.declaredFields) {
+                f.isAccessible = true
+                when {
+                    f.type == Int::class.javaPrimitiveType && f.getInt(event) == 0 ->
+                        f.setInt(event, UsageEvents.Event.USER_INTERACTION)
+                    f.type == Long::class.javaPrimitiveType && f.getLong(event) == 0L ->
+                        f.setLong(event, System.currentTimeMillis())
+                    f.type == String::class.java && f.get(event) == null ->
+                        f.set(event, MODULE_PKG)
+                }
+            }
 
             val method = proxy.javaClass.getMethod("reportEvent", UsageEvents.Event::class.java, Int::class.java)
             method.invoke(proxy, event, 0)

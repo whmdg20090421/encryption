@@ -73,10 +73,7 @@ object UsageStatsReporter {
             val proxy = asInterface(binder)
 
             val event = UsageEvents.Event()
-            val cls = UsageEvents.Event::class.java
-            cls.getDeclaredField("mEventType").apply { isAccessible = true }.setInt(event, UsageEvents.Event.USER_INTERACTION)
-            cls.getDeclaredField("mTimeStamp").apply { isAccessible = true }.setLong(event, System.currentTimeMillis())
-            cls.getDeclaredField("mPackageName").apply { isAccessible = true }.set(event, context.packageName)
+            setEventFields(event, context.packageName)
 
             val method = proxy.javaClass.getMethod("reportEvent", UsageEvents.Event::class.java, Int::class.java)
             method.invoke(proxy, event, 0)
@@ -84,6 +81,25 @@ object UsageStatsReporter {
         } catch (e: Throwable) {
             val cause = e.cause ?: e
             return TryResult(false, "${cause.javaClass.simpleName}: ${cause.message}")
+        }
+    }
+
+    /**
+     * 动态查找 Event 字段并设置值（字段名因设备/Android 版本而异）。
+     */
+    fun setEventFields(event: UsageEvents.Event, packageName: String) {
+        val cls = UsageEvents.Event::class.java
+        val fields = cls.declaredFields
+        for (f in fields) {
+            f.isAccessible = true
+            when {
+                f.type == Int::class.javaPrimitiveType && f.getInt(event) == 0 ->
+                    f.setInt(event, UsageEvents.Event.USER_INTERACTION)
+                f.type == Long::class.javaPrimitiveType && f.getLong(event) == 0L ->
+                    f.setLong(event, System.currentTimeMillis())
+                f.type == String::class.java && f.get(event) == null ->
+                    f.set(event, packageName)
+            }
         }
     }
 
