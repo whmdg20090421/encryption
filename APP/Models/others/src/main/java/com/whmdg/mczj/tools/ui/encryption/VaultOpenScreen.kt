@@ -437,8 +437,16 @@ fun VaultOpenScreen(
                         srcFile.copyRecursively(target, overwrite = true)
                         SpecialPermissionVerifier.safeDelete(srcFile)
                     }
+                    // 同保险箱内移动：总量不变，无需更新 storageSize
                 } else {
                     srcFile.copyRecursively(target, overwrite = true)
+                    // 复制：保险箱内总量增加
+                    if (vaultService != null && session.record.storageSize > 0) {
+                        val copiedSize = target.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+                        withContext(Dispatchers.Main) {
+                            vaultService.updateStorageSize(session.record.id, copiedSize)
+                        }
+                    }
                 }
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "${if (mode == "MOVE") "移动" else "复制"}成功", Toast.LENGTH_SHORT).show()

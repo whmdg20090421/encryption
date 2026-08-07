@@ -44,6 +44,18 @@ object FileOperationManager {
         _onRefreshNeeded?.invoke()
     }
 
+    // ── 保险箱存储用量变更回调 ──
+    private var _onVaultSizeChange: ((vaultId: Int, delta: Long) -> Unit)? = null
+
+    /** 设置保险箱存储用量变更回调（由 VaultOpenScreen / FileManagerScreen 注册） */
+    fun setVaultSizeChangeCallback(callback: ((vaultId: Int, delta: Long) -> Unit)?) {
+        _onVaultSizeChange = callback
+    }
+
+    fun notifyVaultSizeChange(vaultId: Int, delta: Long) {
+        if (delta != 0L) _onVaultSizeChange?.invoke(vaultId, delta)
+    }
+
     // ── 进度更新（由 Job 调用） ──
     fun updateProgress(progress: FileOpProgress?) {
         _progress.value = progress
@@ -128,11 +140,13 @@ object FileOperationManager {
         entries: List<DeleteEntry>,
         toRecycleBin: Boolean,
         accessLevel: FileAccessLevel,
-        context: Context
+        context: Context,
+        vaultId: Int? = null,
+        vaultSizeDelta: Long = 0L
     ) {
         _progress.value = FileOpProgress(phase = "正在删除", currentBytes = 0, totalBytes = 0, isScanning = true)
         val operator = FileOperator.create(accessLevel)
-        val job = DeleteJob(entries, toRecycleBin, this, context).apply {
+        val job = DeleteJob(entries, toRecycleBin, this, context, vaultId, vaultSizeDelta).apply {
             this.operator = operator
         }
         FileOperationService.submit(job, context)

@@ -7,6 +7,7 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 复制/移动目的枚举。
@@ -86,9 +87,32 @@ class CopyJob(
     @Volatile
     private var pendingCleanupTarget: String? = null
 
+    // ── 保险箱存储用量 delta 追踪 ──
+    private val vaultBytesAdded = AtomicLong(0)
+    private val vaultBytesRemoved = AtomicLong(0)
+
     /** 根据目的获取阶段文字 */
     private val phaseName: String
         get() = if (purpose == CopyPurpose.MOVE) "正在移动" else "正在复制"
+
+    /** 报告保险箱存储用量变更 */
+    private fun reportVaultSizeChange() {
+        val added = vaultBytesAdded.get()
+        val removed = vaultBytesRemoved.get()
+        when (vaultContext) {
+            is VaultOperationContext.ExternalToVault -> {
+                if (added > 0) manager.notifyVaultSizeChange(vaultContext.targetSession.record.id, added)
+            }
+            is VaultOperationContext.VaultToExternal -> {
+                if (removed > 0) manager.notifyVaultSizeChange(vaultContext.sourceSession.record.id, -removed)
+            }
+            is VaultOperationContext.CrossVault -> {
+                if (added > 0) manager.notifyVaultSizeChange(vaultContext.targetSession.record.id, added)
+                if (removed > 0) manager.notifyVaultSizeChange(vaultContext.sourceSession.record.id, -removed)
+            }
+            else -> return
+        }
+    }
 
     @Throws(Exception::class)
     override fun run() {
@@ -137,6 +161,7 @@ class CopyJob(
                 // 3. 清理完毕，关闭窗口
                 manager.updateProgress(null)
                 manager.notifyRefreshNeeded()
+                reportVaultSizeChange()
             } else {
                 // 步骤二：其他错误
                 // 1. 清理残留文件
@@ -149,6 +174,7 @@ class CopyJob(
                 // 2. 关闭进度条
                 manager.updateProgress(null)
                 manager.notifyRefreshNeeded()
+                reportVaultSizeChange()
                 // 3. 打开报错弹窗
                 if (errorToShow != null) {
                     val errorMsg = if (purpose == CopyPurpose.MOVE) "移动失败" else "复制失败"
@@ -231,7 +257,8 @@ class CopyJob(
                 doneBytes += srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
             } else {
                 currentStep = "加密: ${srcFile.name}"
-                CryptoService.encryptIntoVault(context, ctx.targetSession, srcFile, subDir)
+                val encrypted = CryptoService.encryptIntoVault(context, ctx.targetSession, srcFile, subDir)
+                vaultBytesAdded.addAndGet(encrypted.length())
                 doneBytes += srcFile.length()
             }
             doneFiles++
@@ -271,7 +298,8 @@ class CopyJob(
                 if (relPath.isEmpty()) parentSubDir else "$parentSubDir/$relPath"
             }
             currentStep = "加密: ${file.name}"
-            CryptoService.encryptIntoVault(context, session, file, fileSubDir)
+            val encrypted = CryptoService.encryptIntoVault(context, session, file, fileSubDir)
+            vaultBytesAdded.addAndGet(encrypted.length())
             doneBytes += file.length()
             manager.updateProgress(FileOpProgress(
                 phase = "正在加密",
@@ -328,7 +356,12 @@ class CopyJob(
         if (purpose == CopyPurpose.MOVE) {
             for (src in sources) {
                 throwIfCancelled()
-                File(src).deleteRecursively()
+                val srcFile = File(src)
+                vaultBytesRemoved.addAndGet(
+                    if (srcFile.isDirectory) srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+                    else srcFile.length()
+                )
+                srcFile.deleteRecursively()
             }
         }
     }
@@ -412,7 +445,12 @@ class CopyJob(
             if (purpose == CopyPurpose.MOVE) {
                 for (src in sources) {
                     throwIfCancelled()
-                    File(src).deleteRecursively()
+                    val srcFile = File(src)
+                    vaultBytesRemoved.addAndGet(
+                        if (srcFile.isDirectory) srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+                        else srcFile.length()
+                    )
+                    srcFile.deleteRecursively()
                 }
             }
         } finally {
@@ -472,7 +510,8 @@ class CopyJob(
 
             // 2. 用目标 session 重新加密
             val subDir = if (targetSubDir.isEmpty()) "" else targetSubDir
-            CryptoService.encryptIntoVault(context, targetSession, decryptedFile, subDir, overwrite = true)
+            val encrypted = CryptoService.encryptIntoVault(context, targetSession, decryptedFile, subDir, overwrite = true)
+            vaultBytesAdded.addAndGet(encrypted.length())
         } finally {
             // 清理临时解密文件
             tempDir.listFiles()?.forEach { f ->

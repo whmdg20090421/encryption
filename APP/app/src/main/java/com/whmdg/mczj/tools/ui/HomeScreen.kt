@@ -98,6 +98,7 @@ import com.whmdg.mczj.tools.ui.components.glowEffect
 import com.whmdg.mczj.tools.ui.security.SecurityModuleScreen
 import com.whmdg.mczj.tools.ui.security.AuthManagementScreen
 import com.whmdg.mczj.tools.ui.security.PermissionGuideViewModel
+import com.whmdg.mczj.tools.fileop.FileOperationManager
 import com.whmdg.mczj.tools.ui.encryption.EncryptionModuleScreen
 import com.whmdg.mczj.tools.ui.filemanager.FileManagerModuleScreen
 import com.whmdg.mczj.tools.ui.download.DownloaderModuleScreen
@@ -114,6 +115,14 @@ fun MainAppContainer() {
     var accountingSelectedTab by remember { mutableIntStateOf(0) }
 
     val vaultService = remember { VaultService(context).apply { load() } }
+
+    // 注册保险箱存储用量变更回调（FileOperationManager 完成 vault 操作后通知）
+    DisposableEffect(vaultService) {
+        FileOperationManager.setVaultSizeChangeCallback { vaultId, delta ->
+            vaultService.updateStorageSize(vaultId, delta)
+        }
+        onDispose { FileOperationManager.setVaultSizeChangeCallback(null) }
+    }
 
     // ── 诊断状态（Debug 模式） ──
     val isDebugMode = remember { isDebugAuth(context) }

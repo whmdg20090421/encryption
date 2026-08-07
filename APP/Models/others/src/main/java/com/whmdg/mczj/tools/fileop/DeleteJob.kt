@@ -24,7 +24,9 @@ class DeleteJob(
     private val entries: List<DeleteEntry>,
     private val toRecycleBin: Boolean,
     private val manager: FileOperationManager,
-    private val context: Context
+    private val context: Context,
+    private val vaultId: Int? = null,
+    private val vaultSizeDelta: Long = 0L
 ) : FileOperationJob() {
 
     private var skipAllErrors = false
@@ -114,6 +116,10 @@ class DeleteJob(
                 // 步骤二：其他错误或正常完成
                 manager.updateProgress(null)
                 manager.notifyRefreshNeeded()
+            }
+            // 报告保险箱存储用量变更
+            if (vaultId != null && vaultSizeDelta != 0L) {
+                manager.notifyVaultSizeChange(vaultId, vaultSizeDelta)
             }
         }
     }

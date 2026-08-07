@@ -2529,7 +2529,17 @@ fun FileManagerScreen(
                 com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> FileAccessLevel.SHIZUKU
                 else -> FileAccessLevel.NORMAL
             }
-            FileOperationManager.delete(deleteEntries, recycleBinEnabled, accessLevel, context)
+            // 计算保险箱存储用量 delta（永久删除和移入回收站都会减少保险箱占用）
+            val vaultSession = vm.activeVaultSession
+            val vaultId = vaultSession?.record?.id
+            val vaultDelta = if (vaultId != null) {
+                val vaultRoot = vaultSession.vaultDir.absolutePath
+                deleteEntries
+                    .filter { it.path == vaultRoot || it.path.startsWith("$vaultRoot/") }
+                    .sumOf { it.size }
+                    .let { if (it > 0) -it else 0L }
+            } else 0L
+            FileOperationManager.delete(deleteEntries, recycleBinEnabled, accessLevel, context, vaultId, vaultDelta)
             if (vm.focusedPanel == FocusedPanel.LEFT) {
                 vm.左.selectedPaths = emptySet(); swipeStates[0].selectFlag = 0; swipeStates[0].lastIndex = -1
             } else {
