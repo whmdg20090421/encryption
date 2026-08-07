@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 文档版本
 
-**基准哈希**：`06f28b872`（以实际 HEAD 为准）
-**更新日期**：2026-08-03
+**基准哈希**：`cddf77135`（以实际 HEAD 为准）
+**更新日期**：2026-08-06
 
 > 更新 CLAUDE.md 前，先执行 `git diff <基准哈希>..HEAD -- '*.kt' '*.kts' '*.py' '*.sh' '*.yml'` 查看自上次记录以来的所有代码变更，确保文档与代码同步。更新后替换基准哈希为新的 HEAD。
 
@@ -33,11 +33,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概览
 
-**应用名称**：艨艟战舰 / 工具箱  
-**包名**：`com.whmdg.mczj.tools`  
-**语言**：Kotlin  
-**UI 框架**：Jetpack Compose + Material 3  
-**Min SDK**：24 | **Target SDK**：36 | **Compile SDK**：36 (minorApiLevel=1)
+**应用名称**：艨艟战舰 / 工具箱
+**包名**：`com.whmdg.mczj.tools`
+**语言**：Kotlin
+**UI 框架**：Jetpack Compose + Material 3
+**Min SDK**：24 | **Target SDK**：36 | **Compile SDK**：37（release）
 **AGP**：9.2.1 | **Kotlin**：2.2.10 | **Compose BOM**：2026.02.01 | **NDK**：27.0.12077973
 
 ---
@@ -75,7 +75,7 @@ KEYSTORE_PASSWORD=xxx KEY_ALIAS=xxx KEY_PASSWORD=xxx ./gradlew assembleRelease
 ```
 src/main/java/com/whmdg/mczj/tools/
 ├── MainActivity.kt                    # 入口，启用 Edge-to-Edge
-├── ToolsApp.kt                        # Application 类（初始化 + ANR 看门狗）
+├── ToolsApp.kt                        # Application 类（初始化 + ANR 看门狗 + 全局崩溃处理）
 ├── CrashActivity.kt                   # Native 崩溃显示界面（从 pipe 接收崩溃信息）
 ├── ErrorReportActivity.kt             # 错误报告界面
 └── ui/
@@ -88,7 +88,7 @@ src/main/java/com/whmdg/mczj/tools/
 ├── AppDataPaths.kt                    # 应用数据路径解析
 ├── auth/                              # 认证/授权模块（密钥→功能特性门控）
 │   ├── Feature.kt                     # 功能枚举
-│   ├── NativeAuth.kt                  # JNI 接口，调用 authcore 验证密码
+│   ├── NativeAuth.kt                  # JNI 接口，调用 authcore 验证密码 + bypassHiddenApi 绕过限制
 │   ├── KeyProfile.kt                  # 密钥 ID → Feature 集合映射
 │   ├── PermissionManager.kt           # 全局认证状态管理（StateFlow<AuthState>）
 │   ├── TokenCodec.kt / TokenStorage.kt / KeystoreMaster.kt
@@ -107,14 +107,17 @@ src/main/java/com/whmdg/mczj/tools/
 │   │   └── EncryptionNode.kt
 │   └── services/
 │       ├── VaultService.kt / VaultSession.kt
-│       └── CryptoService.kt / EncryptionTaskManager.kt
+│       ├── CryptoService.kt / EncryptionTaskManager.kt
+│       └── VaultFileClassifier.kt     # 文件路径分类（判断是否在保险箱内 + 批量分类）
 ├── security/
 │   ├── ShellExecutor.kt               # 统一 shell 执行入口（委托给 ShellDaemon）
 │   ├── ShellDaemon.kt                 # 持久 shell 进程池（按权限隔离，避免每次 fork）
+│   ├── ShellService.kt                # AIDL Shell 服务
 │   ├── TeeManager.kt                  # TEE 生物识别快速解锁
-│   ├── SpecialPermissionVerifier.kt / ShizukuAuthorizer.kt / ShellService.kt
+│   ├── SpecialPermissionVerifier.kt / ShizukuAuthorizer.kt
 │   ├── AndroidPermissionLevel.kt / AccessibilityServiceBridge.kt / MyDeviceAdminReceiver.kt
-│   └── FdProvider.kt                   # 文件描述符提供（跨进程 fd 传递）
+│   ├── FdProvider.kt                   # 文件描述符提供（跨进程 fd 传递）
+│   └── UsageStatsReporter.kt          # 使用统计事件上报（通过 JNI bypass hidden API 调用 IUsageStatsManager）
 ├── util/                              # 基础工具类
 │   ├── DiagnosticLog.kt / FormatUtils.kt
 │   ├── FileAccessLevel.kt / FileAccessor.kt / FolderSizeCalculator.kt
@@ -168,6 +171,7 @@ src/main/java/com/whmdg/mczj/tools/
     │   ├── FileManagerModuleScreen.kt # Compose 导航容器
     │   ├── FileManagerScreen.kt       # 文件管理器主界面（双面板 UI）
     │   ├── FileManagerViewModel.kt    # 三角色架构：FilePaneController + PanelCoordinator + VM
+    │   ├── FileManagerPreloader.kt    # 后台预加载器，主界面渲染时触发，用户点击时可直接使用缓存
     │   ├── FileManagerDialogs_FileOps.kt  # 文件操作弹窗（StandardDialog 模板 + 冲突/进度/错误）
     │   ├── ImageViewerScreen.kt       # 图片查看器
     │   ├── TextEditorScreen.kt        # 代码/文本编辑器
@@ -175,7 +179,8 @@ src/main/java/com/whmdg/mczj/tools/
     │   └── WebDavEditDialog.kt        # WebDAV 服务器编辑对话框
     ├── encryption/                    # 加密 UI
     │   ├── EncryptionRoute.kt / EncryptionModuleScreen.kt
-    │   ├── EncryptionHomeScreen.kt     # 保险箱卡片 UI（渐变+光晕）+ 保持打开计时器（JNI HMAC 防篡改）/ VaultCreateScreen.kt / VaultOpenScreen.kt
+    │   ├── EncryptionHomeScreen.kt     # 保险箱卡片 UI（渐变+光晕）+ 保持打开计时器（JNI HMAC 防篡改）
+    │   ├── VaultCreateScreen.kt / VaultOpenScreen.kt
     │   ├── VaultChangePasswordScreen.kt / EncryptionSettings.kt
     │   └── EncryptionProgressIcon.kt / EncryptionProgressPanel.kt
     ├── diary/                         # 日记模块
@@ -191,12 +196,14 @@ src/main/java/com/whmdg/mczj/tools/
     │   ├── RpHubRoute.kt / RpHubModuleScreen.kt
     │   ├── RpHubScreen.kt / RpHubServer.kt / RpHubTrafficPanel.kt / RpHubDownloadPanel.kt / RpHubDebugPanel.kt
     ├── wifi/                          # WiFi 传输模块
-    │   ├── WifiRoute.kt / WifiModuleScreen.kt
-    │   └── WifiScreen.kt
+    │   ├── WifiModuleScreen.kt        # Compose 导航容器
+    │   └── WifiScreen.kt             # WiFi 扫描与分析主界面
     └── hook/                          # Hook 管理模块
-        ├── HookRoute.kt / HookModuleScreen.kt
+        ├── HookRoute.kt              # sealed class: Home / Detail(packageName) / UsageTime
+        ├── HookModuleScreen.kt       # Compose 导航容器
         ├── HookScreen.kt             # Hook 目标列表（已安装应用 + 作用域状态）
-        ├── HookDetailScreen.kt       # 单个应用的 Hook 详情（开关 + 作用域管理）
+        ├── HookDetailScreen.kt       # 单个应用的 Hook 详情（开关 + 作用域管理），含 SystemServer 专用页面
+        ├── UsageStatsScreen.kt       # 使用统计页面（应用使用时长列表 + 测试事件上报）
         └── HookConfig.kt             # Hook 目标注册表 + LSPosed 作用域查询
 ```
 
@@ -278,7 +285,8 @@ Screen.Home → HomeScreen（底部导航容器）
   │     ├── FileManagerRoute.TextEditor → 文本编辑器
   │     └── FileManagerRoute.ImageViewer → 图片查看器
   ├── Screen.Hook → HookModuleScreen
-  │     └── HookRoute.HookDetail(packageName) → Hook 详情（作用域管理 + 开关）
+  │     ├── HookRoute.HookDetail(packageName) → Hook 详情（作用域管理 + 开关）
+  │     └── HookRoute.UsageTime → 使用统计页面（应用使用时长 + 测试事件上报）
   └── Screen.RpHub → RpHubModuleScreen
 
 Screen.Settings → 设置
@@ -451,7 +459,13 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 | Compose BOM | 2026.02.01 | UI 全套（含 Material 3 + Icons Extended） |
 | `activity-compose` | 1.13.0 | ComponentActivity 集成 |
 | `lifecycle-runtime-ktx` | 2.10.0 | 生命周期 |
-| Shizuku `api` + `provider` | — | 特权 shell 命令执行 |
+| Shizuku `api` + `provider` | 13.1.5 | 特权 shell 命令执行 |
+| `libsu` | 6.0.0 | Root shell 执行 |
+| Coil 3 | 3.2.0 | 图片加载（含 JXL/SVG 解码） |
+| YukiHookAPI | 1.3.2 | Xposed Hook 框架 |
+| OkHttp | 4.12.0 | HTTP 客户端（WebDAV） |
+| dav4jvm | — | WebDAV 协议支持 |
+| Sora Editor | 0.24.5 | 代码/文本编辑器 |
 
 ---
 
