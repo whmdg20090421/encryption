@@ -2530,10 +2530,10 @@ fun FileManagerScreen(
                 else -> FileAccessLevel.NORMAL
             }
             // 计算保险箱存储用量 delta（永久删除和移入回收站都会减少保险箱占用）
-            val vaultSession = vm.activeVaultSession
+            val vaultSession = vm.vaultSession
             val vaultId = vaultSession?.record?.id
             val vaultDelta = if (vaultId != null) {
-                val vaultRoot = vaultSession.vaultDir.absolutePath
+                val vaultRoot = vaultSession!!.vaultDir.absolutePath
                 deleteEntries
                     .filter { it.path == vaultRoot || it.path.startsWith("$vaultRoot/") }
                     .sumOf { it.size }
