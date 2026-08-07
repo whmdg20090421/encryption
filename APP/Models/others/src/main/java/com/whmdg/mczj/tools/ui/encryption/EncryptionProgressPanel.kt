@@ -34,7 +34,7 @@ import com.whmdg.mczj.tools.util.FormatUtils
  */
 fun showEncryptionProgressPanel(context: android.content.Context) {
     // 这个函数需要在 Composable 上下文中调用
-    // 实际实现会在 VaultOpenScreen 中
+    // 实际实现会在 FileManagerScreen 中
 }
 
 /**

@@ -197,12 +197,13 @@ class SwipeUiState {
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-// 系统文件管理器（FileManagerScreen）—— 不要与 VaultOpenScreen（保险箱文件浏览器）混淆
+// 双面板文件管理器（同时承担系统文件浏览和保险箱文件管理）
 @Composable
 fun FileManagerScreen(
     onBack: () -> Unit,
     onNavigate: (Screen) -> Unit = {},
     vaultSession: VaultSession? = null,
+    vaultService: com.whmdg.mczj.tools.encryption.services.VaultService? = null,
     onVaultSaveReady: (((String) -> Unit) -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -214,6 +215,19 @@ fun FileManagerScreen(
         if (vaultSession != null) {
             vm.initVaultMode(vaultSession)
             vm.onNavigateVault = { screen -> onNavigate(screen) }
+            // 异步计算保险箱大小（仅首次未统计时）
+            if (vaultService != null && vaultSession.record.storageSize == 0L) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    withContext(Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "正在初始化保险箱大小...", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    val size = vaultService.calculateDirSize(vaultSession.vaultDir)
+                    vaultService.setStorageSize(vaultSession.record.id, size)
+                    withContext(Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "保险箱大小：${com.whmdg.mczj.tools.util.FormatUtils.formatBytes(size)}", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         }
     }
 

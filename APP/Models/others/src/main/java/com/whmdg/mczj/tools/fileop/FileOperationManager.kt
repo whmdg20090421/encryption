@@ -20,6 +20,15 @@ object FileOperationManager {
     private val _progress = MutableStateFlow<FileOpProgress?>(null)
     val progress: StateFlow<FileOpProgress?> = _progress
 
+    // ── 操作摘要 ──
+    data class OperationSummary(
+        val phase: String,
+        val fileCount: Int,
+        val totalBytes: Long
+    )
+    private val _lastSummary = MutableStateFlow<OperationSummary?>(null)
+    val lastSummary: StateFlow<OperationSummary?> = _lastSummary
+
     // ── 冲突请求 ──
     private val _conflictRequest = MutableStateFlow<ConflictRequest?>(null)
     val conflictRequest: StateFlow<ConflictRequest?> = _conflictRequest
@@ -47,7 +56,7 @@ object FileOperationManager {
     // ── 保险箱存储用量变更回调 ──
     private var _onVaultSizeChange: ((vaultId: Int, delta: Long) -> Unit)? = null
 
-    /** 设置保险箱存储用量变更回调（由 VaultOpenScreen / FileManagerScreen 注册） */
+    /** 设置保险箱存储用量变更回调（由 FileManagerScreen 注册） */
     fun setVaultSizeChangeCallback(callback: ((vaultId: Int, delta: Long) -> Unit)?) {
         _onVaultSizeChange = callback
     }
@@ -58,6 +67,15 @@ object FileOperationManager {
 
     // ── 进度更新（由 Job 调用） ──
     fun updateProgress(progress: FileOpProgress?) {
+        // 操作完成时保存摘要
+        val prev = _progress.value
+        if (prev != null && progress == null) {
+            _lastSummary.value = OperationSummary(
+                phase = prev.phase,
+                fileCount = prev.fileCount,
+                totalBytes = prev.totalBytes
+            )
+        }
         _progress.value = progress
     }
 

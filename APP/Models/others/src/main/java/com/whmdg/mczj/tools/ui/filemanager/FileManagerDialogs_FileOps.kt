@@ -286,7 +286,40 @@ internal fun CopyMoveProgressDialog(
 ) {
     if (!show) return
     val progress by FileOperationManager.progress.collectAsState()
+    val lastSummary by FileOperationManager.lastSummary.collectAsState()
     var isCancelling by remember { mutableStateOf(false) }
+    var showSummary by remember { mutableStateOf(false) }
+
+    // 操作完成时显示摘要
+    LaunchedEffect(progress) {
+        if (progress == null && lastSummary != null) {
+            showSummary = true
+        }
+    }
+
+    if (showSummary && lastSummary != null) {
+        val summary = lastSummary!!
+        val sign = if (summary.phase.contains("删除")) "-" else "+"
+        StandardDialog(
+            onDismissRequest = { showSummary = false; onDismiss() },
+            title = { Text("操作完成") },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text("${summary.phase.replace("正在", "")}完成")
+                    Spacer(Modifier.height(8.dp))
+                    Text("文件数：${summary.fileCount}")
+                    Text("大小变化：$sign${FormatUtils.formatBytes(summary.totalBytes)}")
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showSummary = false; onDismiss() }) {
+                    Text("确定")
+                }
+            }
+        )
+        return
+    }
+
     StandardDialog(
         onDismissRequest = { /* 不可手动关闭 */ },
         title = { Text(if (isCancelling) "正在取消" else progress?.phase ?: "处理中") },
@@ -349,7 +382,7 @@ internal fun CopyMoveProgressDialog(
         }
     )
     LaunchedEffect(progress) {
-        if (progress == null) onDismiss()
+        if (progress == null && lastSummary == null) onDismiss()
     }
 }
 

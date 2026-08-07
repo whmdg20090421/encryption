@@ -65,7 +65,6 @@ open class Screen {
     // 加密模块子页面
     object EncryptionHome : Screen()
     object VaultCreate : Screen()
-    data class VaultOpen(val session: VaultSession) : Screen()
     data class VaultChangePassword(val vault: VaultRecord) : Screen()
 
     // 文件管理器子页面

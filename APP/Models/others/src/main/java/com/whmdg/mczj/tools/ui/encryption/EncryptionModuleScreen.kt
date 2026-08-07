@@ -37,7 +37,6 @@ fun EncryptionModuleScreen(
     // Screen → EncryptionRoute 转换（用于接收现有 Screen 函数的 onNavigate 回调）
     fun screenToRoute(screen: Screen): EncryptionRoute? = when (screen) {
         is Screen.VaultCreate -> EncryptionRoute.VaultCreate
-        is Screen.VaultOpen -> EncryptionRoute.VaultOpen(screen.session.vaultDir.absolutePath)
         is Screen.VaultChangePassword -> EncryptionRoute.VaultChangePassword(screen.vault.relativePath)
         else -> null
     }
@@ -66,16 +65,6 @@ fun EncryptionModuleScreen(
             VaultCreateScreen(
                 vaultService = vaultService,
                 onBack = { navigateBack() }
-            )
-        }
-        is EncryptionRoute.VaultOpen -> {
-            // VaultOpenScreen needs a VaultSession - this will be handled through EncryptionHomeScreen
-            // For now, go back to home
-            EncryptionHomeScreen(
-                vaultService = vaultService,
-                settings = settings,
-                onBack = { navigateBack() },
-                onNavigate = navigateFromScreen
             )
         }
         is EncryptionRoute.VaultChangePassword -> {

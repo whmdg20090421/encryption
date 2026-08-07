@@ -273,7 +273,8 @@ fun MainAppContainer() {
         is Screen.FileManager -> {
             FileManagerModuleScreen(
                 onBack = { navigateBack() },
-                vaultSession = currentScreen.vaultSession
+                vaultSession = currentScreen.vaultSession,
+                vaultService = vaultService
             )
         }
         is Screen.BatchDownloader -> {
