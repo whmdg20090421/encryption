@@ -30,7 +30,8 @@ fun HookModuleScreen(
         is HookRoute.Home -> {
             HookScreen(
                 onBack = { navigateBack() },
-                onAppClick = { packageName -> navigateTo(HookRoute.Detail(packageName)) }
+                onAppClick = { packageName -> navigateTo(HookRoute.Detail(packageName)) },
+                onUsageTimeClick = { navigateTo(HookRoute.UsageTime) }
             )
         }
         is HookRoute.Detail -> {
@@ -38,6 +39,9 @@ fun HookModuleScreen(
                 packageName = currentRoute.packageName,
                 onBack = { navigateBack() }
             )
+        }
+        is HookRoute.UsageTime -> {
+            UsageTimeScreen(onBack = { navigateBack() })
         }
     }
 }

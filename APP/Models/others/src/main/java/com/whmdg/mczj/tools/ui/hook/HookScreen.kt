@@ -10,6 +10,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -29,7 +30,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun HookScreen(
     onBack: () -> Unit,
-    onAppClick: (String) -> Unit
+    onAppClick: (String) -> Unit,
+    onUsageTimeClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val moduleActive = remember { XposedDetector.isModuleActive() }
@@ -239,6 +241,32 @@ fun HookScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // ── 手机使用时长 ──
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    onClick = onUsageTimeClick
+                ) {
+                    ListItem(
+                        headlineContent = { Text("手机使用时长") },
+                        supportingContent = { Text("查看各应用使用时长统计") },
+                        leadingContent = {
+                            Icon(
+                                Icons.Default.Timer,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+                    )
                 }
             }
 
