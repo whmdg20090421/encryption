@@ -749,7 +749,7 @@ private fun PermissionRequiredState() {
         )
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "请前往 设置 → 安全 → 有使用权限的应用，授予本应用"使用情况访问权限"后返回此页面。",
+            text = "请前往 设置 → 安全 → 有使用权限的应用，授予本应用[使用情况访问权限]后返回此页面。",
             style = MaterialTheme.typography.bodyLarge,
             color = TextSecondary,
             textAlign = TextAlign.Center
