@@ -53,7 +53,7 @@ dependencies {
     implementation(libs.telephoto.zoomable)
     implementation(libs.jxl.coder)
     // XLSX 生成（使用时长数据导出）
-    implementation("org.apache.poi:poi-ooxml:5.3.0")
+    // XLSX 生成：纯 XML+ZIP 实现，零额外依赖
     implementation(platform(libs.sora.editor.bom))
     implementation(libs.sora.editor)
     implementation(libs.sora.language.java)
