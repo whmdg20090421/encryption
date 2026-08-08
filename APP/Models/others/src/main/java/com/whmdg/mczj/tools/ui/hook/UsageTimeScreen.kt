@@ -18,34 +18,45 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -54,16 +65,16 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.whmdg.mczj.tools.ui.hook.usage.AppUsageInfo
+import com.whmdg.mczj.tools.ui.hook.usage.MergeStrategy
+import com.whmdg.mczj.tools.ui.hook.usage.PathResult
 import com.whmdg.mczj.tools.ui.hook.usage.UsageTimeViewModel
+import kotlinx.coroutines.launch
 
 // ==================== 自定义颜色 ====================
 
 private val AccentPrimary = Color(0xFF7C3AED)
 private val GradientPurple = Color(0xFF8B5CF6)
 private val GradientPink = Color(0xFFEC4899)
-private val DarkCardElevated = Color(0xFF22222E)
-private val GlassBorder = Color(0x33FFFFFF)
-private val TextSecondary = Color(0xFF94A3B8)
 private val UsageHigh = Color(0xFFEF4444)
 
 // ==================== 主界面 ====================
@@ -76,6 +87,12 @@ fun UsageTimeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
+    val coroutineScope = rememberCoroutineScope()
+
+    // 设置弹窗状态
+    var showMenu by remember { mutableStateOf(false) }
+    var showDataSourceDialog by remember { mutableStateOf(false) }
+    var pathResult by remember { mutableStateOf<PathResult?>(null) }
 
     // onResume 时自动刷新
     DisposableEffect(lifecycleOwner) {
@@ -100,6 +117,44 @@ fun UsageTimeScreen(
                     }
                 }
             )
+        },
+        bottomBar = {
+            // 底部导航栏：右侧设置按钮
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                // 设置按钮（右对齐）
+                Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = "设置",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    // 弹出菜单：从按钮右上角向左下角展开
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("数据来源") },
+                            onClick = {
+                                showMenu = false
+                                // 异步获取各路径时间
+                                coroutineScope.launch {
+                                    pathResult = viewModel.getPathTimes()
+                                    showDataSourceDialog = true
+                                }
+                            }
+                        )
+                    }
+                }
+            }
         }
     ) { innerPadding ->
         Box(
@@ -149,6 +204,132 @@ fun UsageTimeScreen(
             }
         }
     }
+
+    // 数据来源弹窗
+    if (showDataSourceDialog) {
+        DataSourceDialog(
+            pathResult = pathResult,
+            currentStrategy = uiState.mergeStrategy,
+            onStrategyChange = { viewModel.setMergeStrategy(it) },
+            onDismiss = { showDataSourceDialog = false }
+        )
+    }
+}
+
+// ==================== 数据来源弹窗 ====================
+
+@Composable
+private fun DataSourceDialog(
+    pathResult: PathResult?,
+    currentStrategy: MergeStrategy,
+    onStrategyChange: (MergeStrategy) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedStrategy by remember { mutableStateOf(currentStrategy) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("数据来源") },
+        text = {
+            Column {
+                // 各路径时间
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "路径 A（系统聚合）",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatPathTime(pathResult?.pathATimeMillis ?: 0L),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Text(
+                            text = "路径 B（实时事件）",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatPathTime(pathResult?.pathBTimeMillis ?: 0L),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // 合并策略选择
+                Text(
+                    text = "合并策略",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                listOf(
+                    MergeStrategy.MAX to "取最大值",
+                    MergeStrategy.MIN to "取最小值"
+                ).forEach { (strategy, label) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = selectedStrategy == strategy,
+                                onClick = { selectedStrategy = strategy },
+                                role = Role.RadioButton
+                            )
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = selectedStrategy == strategy,
+                            onClick = null
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onStrategyChange(selectedStrategy)
+                onDismiss()
+            }) {
+                Text("确定")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+private fun formatPathTime(millis: Long): String {
+    if (millis <= 0) return "无数据"
+    val hours = millis / (1000 * 60 * 60)
+    val minutes = (millis / (1000 * 60)) % 60
+    val seconds = (millis / 1000) % 60
+    return when {
+        hours > 0 -> "${hours}h ${minutes}m ${seconds}s"
+        minutes > 0 -> "${minutes}m ${seconds}s"
+        else -> "${seconds}s"
+    }
 }
 
 // ==================== 应用使用列表（单卡片） ====================
@@ -165,7 +346,7 @@ private fun AppUsageList(appUsageList: List<AppUsageInfo>) {
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
-                containerColor = DarkCardElevated
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
             )
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
@@ -174,14 +355,14 @@ private fun AppUsageList(appUsageList: List<AppUsageInfo>) {
                     if (index < appUsageList.lastIndex) {
                         HorizontalDivider(
                             modifier = Modifier.padding(horizontal = 16.dp),
-                            color = Color.White.copy(alpha = 0.06f)
+                            color = MaterialTheme.colorScheme.outlineVariant
                         )
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(100.dp))
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
@@ -195,24 +376,20 @@ private fun AppUsageRow(appUsageInfo: AppUsageInfo) {
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 应用图标
         AppIconBox(appUsageInfo)
-
         Spacer(modifier = Modifier.width(14.dp))
-
-        // 应用名 + 使用时长
         Column {
             Text(
                 text = appUsageInfo.appName,
                 style = MaterialTheme.typography.titleMedium,
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.SemiBold
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = appUsageInfo.formattedTime,
                 style = MaterialTheme.typography.bodySmall,
-                color = TextSecondary
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -226,7 +403,7 @@ private fun AppIconBox(appUsageInfo: AppUsageInfo) {
         modifier = Modifier
             .size(48.dp)
             .background(
-                color = GlassBorder,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
                 shape = RoundedCornerShape(12.dp)
             )
             .padding(4.dp),
@@ -314,13 +491,13 @@ private fun EmptyState() {
             text = "暂无使用数据",
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground
+            color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(modifier = Modifier.height(12.dp))
         Text(
             text = "开始使用你的应用，稍后再来查看使用统计。",
             style = MaterialTheme.typography.bodyLarge,
-            color = TextSecondary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
     }
@@ -363,13 +540,13 @@ private fun PermissionRequiredState() {
             text = "需要使用情况访问权限",
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground
+            color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(modifier = Modifier.height(12.dp))
         Text(
             text = "请前往 设置 → 安全 → 有使用权限的应用，授予本应用[使用情况访问权限]后返回此页面。",
             style = MaterialTheme.typography.bodyLarge,
-            color = TextSecondary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
     }

@@ -13,6 +13,22 @@ import java.util.Calendar
 import java.util.Locale
 
 /**
+ * 数据合并策略
+ */
+enum class MergeStrategy {
+    MAX,  // 取较大值（默认）
+    MIN   // 取较小值
+}
+
+/**
+ * 单条路径的查询结果（用于设置弹窗显示各路径时间）
+ */
+data class PathResult(
+    val pathATimeMillis: Long,  // 路径 A：queryUsageStats
+    val pathBTimeMillis: Long   // 路径 B：queryEvents
+)
+
+/**
  * 使用时长数据查询助手
  *
  * 通过 UsageStatsManager 查询应用使用时长，
@@ -70,9 +86,10 @@ class UsageStatsHelper(private val context: Context) {
     /**
      * 获取今日应用使用时长列表
      *
+     * @param strategy 数据合并策略，默认取较大值
      * @return 按使用时长降序排列的应用列表，无权限时返回空列表
      */
-    fun getTodayUsage(): List<AppUsageInfo> {
+    fun getTodayUsage(strategy: MergeStrategy = MergeStrategy.MAX): List<AppUsageInfo> {
         if (!hasUsagePermission()) return emptyList()
 
         val calendar = Calendar.getInstance().apply {
@@ -85,7 +102,44 @@ class UsageStatsHelper(private val context: Context) {
         val startTime = calendar.timeInMillis
         val endTime = System.currentTimeMillis()
 
-        return getUsageForTimeRange(startTime, endTime, isToday = true)
+        return getUsageForTimeRange(startTime, endTime, isToday = true, strategy = strategy)
+    }
+
+    /**
+     * 获取今日各路径的原始时间（用于设置弹窗显示）
+     *
+     * @return 包含路径 A 和路径 B 的总时长
+     */
+    fun getTodayPathTimes(): PathResult {
+        if (!hasUsagePermission()) return PathResult(0L, 0L)
+
+        val calendar = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val startTime = calendar.timeInMillis
+        val endTime = System.currentTimeMillis()
+
+        val statsManager = usageStatsManager ?: return PathResult(0L, 0L)
+
+        // 路径 A：queryUsageStats
+        var pathATotal = 0L
+        try {
+            val dailyStats = statsManager.queryUsageStats(
+                UsageStatsManager.INTERVAL_DAILY, startTime, endTime
+            )
+            if (!dailyStats.isNullOrEmpty()) {
+                pathATotal = dailyStats.sumOf { it.totalTimeInForeground }
+            }
+        } catch (_: Exception) {}
+
+        // 路径 B：queryEvents
+        val eventsMap = getUsageFromEvents(startTime, endTime)
+        val pathBTotal = eventsMap.values.sum()
+
+        return PathResult(pathATotal, pathBTotal)
     }
 
     /**
@@ -124,12 +178,13 @@ class UsageStatsHelper(private val context: Context) {
      * 策略：
      * 1. 先用 INTERVAL_DAILY 获取聚合数据（跨设备最可靠）
      * 2. 若为今日，再用 UsageEvents 获取实时前台数据（更准确）
-     * 3. 取两者中较大值
+     * 3. 根据 strategy 取较大值或较小值
      */
     private fun getUsageForTimeRange(
         startTime: Long,
         endTime: Long,
-        isToday: Boolean
+        isToday: Boolean,
+        strategy: MergeStrategy = MergeStrategy.MAX
     ): List<AppUsageInfo> {
         val statsManager = usageStatsManager ?: return emptyList()
 
@@ -162,7 +217,10 @@ class UsageStatsHelper(private val context: Context) {
                 for ((packageName, time) in eventsStats) {
                     if (time > 0) {
                         val current = aggregatedStats[packageName] ?: 0L
-                        aggregatedStats[packageName] = maxOf(current, time)
+                        aggregatedStats[packageName] = when (strategy) {
+                            MergeStrategy.MAX -> maxOf(current, time)
+                            MergeStrategy.MIN -> if (current > 0) minOf(current, time) else time
+                        }
                     }
                 }
             } catch (_: Exception) {
