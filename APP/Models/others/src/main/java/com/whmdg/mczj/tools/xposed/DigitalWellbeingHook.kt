@@ -4,6 +4,8 @@ import android.app.usage.UsageStats
 import android.app.usage.UsageStatsManager
 import android.util.Log
 import com.highcapable.yukihookapi.hook.entity.YukiBaseHooker
+import com.highcapable.yukihookapi.hook.type.java.IntType
+import com.highcapable.yukihookapi.hook.type.java.LongType
 
 /**
  * Hook 数字健康应用（com.coloros.digitalwellbeing）
