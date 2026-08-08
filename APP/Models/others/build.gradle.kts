@@ -52,6 +52,8 @@ dependencies {
     implementation(libs.coil.svg)
     implementation(libs.telephoto.zoomable)
     implementation(libs.jxl.coder)
+    // XLSX 生成（使用时长数据导出）
+    implementation("org.apache.poi:poi-ooxml:5.3.0")
     implementation(platform(libs.sora.editor.bom))
     implementation(libs.sora.editor)
     implementation(libs.sora.language.java)

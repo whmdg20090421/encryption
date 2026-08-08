@@ -1,5 +1,6 @@
 package com.whmdg.mczj.tools.ui.hook
 
+import android.content.Intent
 import android.graphics.drawable.BitmapDrawable
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -93,6 +95,8 @@ fun UsageTimeScreen(
     var showMenu by remember { mutableStateOf(false) }
     var showDataSourceDialog by remember { mutableStateOf(false) }
     var pathResult by remember { mutableStateOf<PathResult?>(null) }
+    var showExportLoading by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     // onResume 时自动刷新
     DisposableEffect(lifecycleOwner) {
@@ -145,10 +149,25 @@ fun UsageTimeScreen(
                             text = { Text("数据来源") },
                             onClick = {
                                 showMenu = false
-                                // 异步获取各路径时间
                                 coroutineScope.launch {
                                     pathResult = viewModel.getPathTimes()
                                     showDataSourceDialog = true
+                                }
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("查看数据") },
+                            onClick = {
+                                showMenu = false
+                                showExportLoading = true
+                                coroutineScope.launch {
+                                    val intent = viewModel.buildAndShareXlsx()
+                                    showExportLoading = false
+                                    if (intent != null) {
+                                        context.startActivity(
+                                            Intent.createChooser(intent, "分享使用时长数据")
+                                        )
+                                    }
                                 }
                             }
                         )
@@ -212,6 +231,26 @@ fun UsageTimeScreen(
             currentStrategy = uiState.mergeStrategy,
             onStrategyChange = { viewModel.setMergeStrategy(it) },
             onDismiss = { showDataSourceDialog = false }
+        )
+    }
+
+    // 数据导出加载弹窗
+    if (showExportLoading) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("数据正在更新") },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 3.dp,
+                        color = AccentPrimary
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text("正在生成使用时长数据...")
+                }
+            },
+            confirmButton = {}
         )
     }
 }

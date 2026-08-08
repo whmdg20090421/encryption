@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.ui.hook.usage
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.whmdg.mczj.tools.AppDataPaths
@@ -122,6 +123,23 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
      */
     suspend fun getPathTimes(): PathResult = withContext(Dispatchers.IO) {
         usageStatsHelper.getTodayPathTimes()
+    }
+
+    /**
+     * 构建每小时使用时长表格并生成 XLSX 分享 Intent
+     *
+     * @return 分享 Intent，无权限或无数据时返回 null
+     */
+    suspend fun buildAndShareXlsx(): Intent? {
+        val table = withContext(Dispatchers.IO) {
+            usageStatsHelper.buildHourlyTable()
+        } ?: return null
+
+        val file = withContext(Dispatchers.IO) {
+            HourlyUsageXlsxGenerator.generate(getApplication(), table)
+        }
+
+        return HourlyUsageXlsxGenerator.createShareIntent(getApplication(), file)
     }
 
     /**

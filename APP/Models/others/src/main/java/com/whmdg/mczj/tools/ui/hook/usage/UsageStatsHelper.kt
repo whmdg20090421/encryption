@@ -393,4 +393,161 @@ class UsageStatsHelper(private val context: Context) {
             else -> "0m"
         }
     }
+
+    /**
+     * 格式化毫秒为 "Xm Ys" 格式（用于表格单元格）
+     */
+    fun formatMillisShort(millis: Long): String {
+        if (millis <= 0) return ""
+        val minutes = millis / (1000 * 60)
+        val seconds = (millis / 1000) % 60
+        return when {
+            minutes > 0 -> "${minutes}m${seconds}s"
+            else -> "${seconds}s"
+        }
+    }
+
+    /**
+     * 构建今日每小时使用时长表格（实时获取）
+     *
+     * 通过 UsageEvents 逐条遍历，将每个 RESUMED→PAUSED 事件对
+     * 按小时分桶，支持跨小时拆分。
+     *
+     * @return 表格数据，无权限时返回 null
+     */
+    fun buildHourlyTable(): HourlyUsageTable? {
+        if (!hasUsagePermission()) return null
+
+        val calendar = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val startTime = calendar.timeInMillis
+        val endTime = System.currentTimeMillis()
+
+        val statsManager = usageStatsManager ?: return null
+
+        // 包名 → 24 小时桶（毫秒）
+        val tableData = mutableMapOf<String, LongArray>()
+
+        try {
+            val usageEvents = statsManager.queryEvents(startTime, endTime) ?: return null
+            val event = UsageEvents.Event()
+            val lastResumeTime = mutableMapOf<String, Long>()
+            val startOfDay = startTime
+
+            while (usageEvents.hasNextEvent()) {
+                usageEvents.getNextEvent(event)
+                val packageName = event.packageName ?: continue
+
+                when (event.eventType) {
+                    UsageEvents.Event.ACTIVITY_RESUMED -> {
+                        lastResumeTime[packageName] = event.timeStamp
+                    }
+                    @Suppress("DEPRECATION")
+                    UsageEvents.Event.MOVE_TO_FOREGROUND -> {
+                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                            lastResumeTime[packageName] = event.timeStamp
+                        }
+                    }
+                    UsageEvents.Event.ACTIVITY_PAUSED -> {
+                        val resumeTime = lastResumeTime.remove(packageName) ?: continue
+                        val pauseTime = event.timeStamp
+                        if (pauseTime > resumeTime) {
+                            addUsageToHourlyBuckets(
+                                tableData, packageName, resumeTime, pauseTime, startOfDay
+                            )
+                        }
+                    }
+                    @Suppress("DEPRECATION")
+                    UsageEvents.Event.MOVE_TO_BACKGROUND -> {
+                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                            val resumeTime = lastResumeTime.remove(packageName) ?: continue
+                            val pauseTime = event.timeStamp
+                            if (pauseTime > resumeTime) {
+                                addUsageToHourlyBuckets(
+                                    tableData, packageName, resumeTime, pauseTime, startOfDay
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 处理仍在前台的应用
+            val currentTime = System.currentTimeMillis().coerceAtMost(endTime)
+            for ((packageName, resumeTime) in lastResumeTime) {
+                if (resumeTime > 0 && currentTime > resumeTime) {
+                    addUsageToHourlyBuckets(
+                        tableData, packageName, resumeTime, currentTime, startOfDay
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            return null
+        }
+
+        // 过滤系统应用，按总时长降序排列
+        val rows = tableData
+            .filter { !isSystemApp(it.key) }
+            .filter { it.value.sum() >= MIN_USAGE_MS }
+            .map { (packageName, hourly) ->
+                HourlyUsageTable.HourlyRow(
+                    packageName = packageName,
+                    hourlyMillis = hourly
+                )
+            }
+            .sortedByDescending { it.totalMillis }
+
+        if (rows.isEmpty()) return null
+
+        // 汇总行：每列求和
+        val summaryHourly = LongArray(24)
+        for (row in rows) {
+            for (i in 0 until 24) {
+                summaryHourly[i] += row.hourlyMillis[i]
+            }
+        }
+
+        return HourlyUsageTable(
+            rows = rows,
+            summaryRow = HourlyUsageTable.HourlySummaryRow(summaryHourly)
+        )
+    }
+
+    /**
+     * 将一段使用时长按小时拆分，填入对应的桶中
+     *
+     * 例如 09:50 开始，10:05 结束：
+     * - 09-10 桶：10 分钟（09:50→10:00）
+     * - 10-10 桶：5 分钟（10:00→10:05）
+     */
+    private fun addUsageToHourlyBuckets(
+        tableData: MutableMap<String, LongArray>,
+        packageName: String,
+        startTime: Long,
+        endTime: Long,
+        startOfDay: Long
+    ) {
+        val hourly = tableData.getOrPut(packageName) { LongArray(24) }
+
+        var current = startTime
+        while (current < endTime) {
+            // 当前小时的结束时间
+            val hoursSinceMidnight = ((current - startOfDay) / (1000 * 60 * 60)).toInt()
+            if (hoursSinceMidnight < 0 || hoursSinceMidnight >= 24) break
+
+            val hourEnd = startOfDay + (hoursSinceMidnight.toLong() + 1) * 1000 * 60 * 60
+            val segmentEnd = minOf(endTime, hourEnd)
+            val duration = segmentEnd - current
+
+            if (duration > 0) {
+                hourly[hoursSinceMidnight] += duration
+            }
+
+            current = segmentEnd
+        }
+    }
 }
