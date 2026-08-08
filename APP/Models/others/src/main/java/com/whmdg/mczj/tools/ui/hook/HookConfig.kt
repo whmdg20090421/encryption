@@ -17,7 +17,8 @@ data class HookTarget(
 )
 
 enum class HookFeature(val label: String, val description: String) {
-    SKIP_AD("跳过广告", "点击观看广告时自动跳过并触发奖励回调")
+    SKIP_AD("跳过广告", "点击观看广告时自动跳过并触发奖励回调"),
+    FILTER_USAGE("隐藏使用记录", "在数字健康中隐藏指定应用的使用时长记录")
 }
 
 object HookConfig {
@@ -26,7 +27,14 @@ object HookConfig {
     private const val MODULE_PKG = "com.whmdg.mczj.tools"
 
     /** 所有已支持的 hook 目标（新增 hook 目标在此添加） */
-    val TARGETS: List<HookTarget> = emptyList()
+    val TARGETS: List<HookTarget> = listOf(
+        HookTarget(
+            packageName = "com.coloros.digitalwellbeing",
+            displayName = "数字健康",
+            description = "隐藏指定应用的使用时长记录（内置 com.termux）",
+            hookFeatures = listOf(HookFeature.FILTER_USAGE)
+        )
+    )
 
     // ── L1 作用域（通过 ILSPManagerService 实时查询） ──
 
