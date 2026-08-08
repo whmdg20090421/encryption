@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "com.whmdg.mczj.tools"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 36
         val gitCommitCount = try {
             val proc = ProcessBuilder("git", "rev-list", "--count", "HEAD")

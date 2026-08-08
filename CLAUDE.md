@@ -37,7 +37,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **包名**：`com.whmdg.mczj.tools`
 **语言**：Kotlin
 **UI 框架**：Jetpack Compose + Material 3
-**Min SDK**：24 | **Target SDK**：36 | **Compile SDK**：37（release）
+**Min SDK**：26 | **Target SDK**：36 | **Compile SDK**：37（release）
 **AGP**：9.2.1 | **Kotlin**：2.2.10 | **Compose BOM**：2026.02.01 | **NDK**：27.0.12077973
 
 ---
