@@ -40,7 +40,7 @@ object HourlyUsageXlsxGenerator {
             setFont(font)
         }
 
-        val cellStyle = workbook.createCellStyle().apply {
+        val dataCellStyle = workbook.createCellStyle().apply {
             alignment = HorizontalAlignment.CENTER
             verticalAlignment = VerticalAlignment.CENTER
         }
@@ -77,17 +77,17 @@ object HourlyUsageXlsxGenerator {
         val headerRow = sheet.createRow(0)
         headerRow.createCell(0).apply {
             setCellValue("包名")
-            cellStyle = headerStyle
+            setCellStyle(headerStyle)
         }
         for (i in 0 until 24) {
             headerRow.createCell(i + 1).apply {
                 setCellValue(String.format("%02d:00-%02d:00", i, i + 1))
-                cellStyle = headerStyle
+                setCellStyle(headerStyle)
             }
         }
         headerRow.createCell(25).apply {
             setCellValue("总时长")
-            cellStyle = headerStyle
+            setCellStyle(headerStyle)
         }
 
         // ── 数据行 ──
@@ -95,17 +95,17 @@ object HourlyUsageXlsxGenerator {
             val excelRow = sheet.createRow(rowIndex + 1)
             excelRow.createCell(0).apply {
                 setCellValue(row.packageName)
-                cellStyle = packageNameStyle
+                setCellStyle(packageNameStyle)
             }
             for (hour in 0 until 24) {
                 excelRow.createCell(hour + 1).apply {
                     setCellValue(formatMillisForCell(row.hourlyMillis[hour]))
-                    cellStyle = cellStyle
+                    setCellStyle(dataCellStyle)
                 }
             }
             excelRow.createCell(25).apply {
                 setCellValue(formatMillisForCell(row.totalMillis))
-                cellStyle = cellStyle
+                setCellStyle(dataCellStyle)
             }
         }
 
@@ -114,17 +114,17 @@ object HourlyUsageXlsxGenerator {
         val summaryRow = sheet.createRow(summaryRowIndex)
         summaryRow.createCell(0).apply {
             setCellValue("单小时总时长")
-            cellStyle = summaryNameStyle
+            setCellStyle(summaryNameStyle)
         }
         for (hour in 0 until 24) {
             summaryRow.createCell(hour + 1).apply {
                 setCellValue(formatMillisForCell(table.summaryRow.hourlyMillis[hour]))
-                cellStyle = summaryStyle
+                setCellStyle(summaryStyle)
             }
         }
         summaryRow.createCell(25).apply {
             setCellValue(formatMillisForCell(table.summaryRow.totalMillis))
-            cellStyle = summaryStyle
+            setCellStyle(summaryStyle)
         }
 
         // ── 列宽自适应 ──
