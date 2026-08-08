@@ -307,17 +307,19 @@ private fun DataSourceDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // 合并策略选择
+                // 数据来源选择
                 Text(
-                    text = "合并策略",
+                    text = "数据来源",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(8.dp))
 
                 listOf(
-                    MergeStrategy.MAX to "取最大值",
-                    MergeStrategy.MIN to "取最小值"
+                    MergeStrategy.PATH_A_ONLY to "仅路径 A（系统聚合）",
+                    MergeStrategy.PATH_B_ONLY to "仅路径 B（实时事件）",
+                    MergeStrategy.MERGED_MAX to "合并取最大值",
+                    MergeStrategy.MERGED_MIN to "合并取最小值"
                 ).forEach { (strategy, label) ->
                     Row(
                         modifier = Modifier

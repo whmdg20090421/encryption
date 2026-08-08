@@ -13,11 +13,13 @@ import java.util.Calendar
 import java.util.Locale
 
 /**
- * 数据合并策略
+ * 数据来源策略
  */
 enum class MergeStrategy {
-    MAX,  // 取较大值（默认）
-    MIN   // 取较小值
+    PATH_A_ONLY,      // 仅路径 A（queryUsageStats）
+    PATH_B_ONLY,      // 仅路径 B（queryEvents）
+    MERGED_MAX,       // 两路合并取最大值（默认）
+    MERGED_MIN        // 两路合并取最小值
 }
 
 /**
@@ -89,7 +91,7 @@ class UsageStatsHelper(private val context: Context) {
      * @param strategy 数据合并策略，默认取较大值
      * @return 按使用时长降序排列的应用列表，无权限时返回空列表
      */
-    fun getTodayUsage(strategy: MergeStrategy = MergeStrategy.MAX): List<AppUsageInfo> {
+    fun getTodayUsage(strategy: MergeStrategy = MergeStrategy.MERGED_MAX): List<AppUsageInfo> {
         if (!hasUsagePermission()) return emptyList()
 
         val calendar = Calendar.getInstance().apply {
@@ -184,47 +186,57 @@ class UsageStatsHelper(private val context: Context) {
         startTime: Long,
         endTime: Long,
         isToday: Boolean,
-        strategy: MergeStrategy = MergeStrategy.MAX
+        strategy: MergeStrategy = MergeStrategy.MERGED_MAX
     ): List<AppUsageInfo> {
         val statsManager = usageStatsManager ?: return emptyList()
 
-        val aggregatedStats = mutableMapOf<String, Long>()
-
-        // 主方法：INTERVAL_DAILY 聚合查询
+        // 路径 A：INTERVAL_DAILY 聚合查询
+        val pathAStats = mutableMapOf<String, Long>()
         try {
             val dailyStats = statsManager.queryUsageStats(
-                UsageStatsManager.INTERVAL_DAILY,
-                startTime,
-                endTime
+                UsageStatsManager.INTERVAL_DAILY, startTime, endTime
             )
             if (!dailyStats.isNullOrEmpty()) {
                 for (stats in dailyStats) {
                     val totalTime = stats.totalTimeInForeground
                     if (totalTime > 0) {
-                        val current = aggregatedStats[stats.packageName] ?: 0L
-                        aggregatedStats[stats.packageName] = current + totalTime
+                        val current = pathAStats[stats.packageName] ?: 0L
+                        pathAStats[stats.packageName] = current + totalTime
                     }
                 }
             }
-        } catch (_: Exception) {
-            // 忽略查询异常
+        } catch (_: Exception) {}
+
+        // 路径 B：UsageEvents 实时数据（仅今日）
+        val pathBStats = if (isToday) {
+            try { getUsageFromEvents(startTime, endTime) } catch (_: Exception) { emptyMap() }
+        } else {
+            emptyMap()
         }
 
-        // 辅助方法（仅今日）：UsageEvents 实时数据
-        if (isToday) {
-            try {
-                val eventsStats = getUsageFromEvents(startTime, endTime)
-                for ((packageName, time) in eventsStats) {
-                    if (time > 0) {
-                        val current = aggregatedStats[packageName] ?: 0L
-                        aggregatedStats[packageName] = when (strategy) {
-                            MergeStrategy.MAX -> maxOf(current, time)
-                            MergeStrategy.MIN -> if (current > 0) minOf(current, time) else time
-                        }
+        // 根据策略选择数据源
+        val aggregatedStats = when (strategy) {
+            MergeStrategy.PATH_A_ONLY -> pathAStats
+            MergeStrategy.PATH_B_ONLY -> pathBStats
+            MergeStrategy.MERGED_MAX -> {
+                val merged = mutableMapOf<String, Long>()
+                for (key in pathAStats.keys + pathBStats.keys) {
+                    merged[key] = maxOf(pathAStats[key] ?: 0L, pathBStats[key] ?: 0L)
+                }
+                merged
+            }
+            MergeStrategy.MERGED_MIN -> {
+                val merged = mutableMapOf<String, Long>()
+                for (key in pathAStats.keys + pathBStats.keys) {
+                    val a = pathAStats[key] ?: 0L
+                    val b = pathBStats[key] ?: 0L
+                    merged[key] = when {
+                        a > 0 && b > 0 -> minOf(a, b)
+                        a > 0 -> a
+                        else -> b
                     }
                 }
-            } catch (_: Exception) {
-                // 忽略查询异常
+                merged
             }
         }
 

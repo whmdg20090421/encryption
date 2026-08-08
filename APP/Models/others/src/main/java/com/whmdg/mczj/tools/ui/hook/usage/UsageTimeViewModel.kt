@@ -49,9 +49,9 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
         // 读取持久化的合并策略
         val savedStrategy = prefs.getString(KEY_MERGE_STRATEGY, null)
         val strategy = if (savedStrategy != null) {
-            try { MergeStrategy.valueOf(savedStrategy) } catch (_: Exception) { MergeStrategy.MAX }
+            try { MergeStrategy.valueOf(savedStrategy) } catch (_: Exception) { MergeStrategy.MERGED_MAX }
         } else {
-            MergeStrategy.MAX
+            MergeStrategy.MERGED_MAX
         }
         _uiState.value = _uiState.value.copy(mergeStrategy = strategy)
 
