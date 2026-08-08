@@ -86,7 +86,6 @@ object HourlyUsageXlsxGenerator {
 
                 // 分隔线行
                 ws.value(r, 0, "—— 路径 A 原始数据（queryUsageStats） ——")
-                ws.merge(r, 0, r, 6)
                 ws.range(r, 0, r, 6).style()
                     .bold()
                     .fillColor("D9D9D9")
