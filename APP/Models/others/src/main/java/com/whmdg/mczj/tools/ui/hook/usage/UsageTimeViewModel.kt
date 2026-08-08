@@ -22,7 +22,7 @@ data class UsageTimeUiState(
     val totalScreenTime: String = "0h 0m",
     val totalScreenTimeMillis: Long = 0L,
     val appUsageList: List<AppUsageInfo> = emptyList(),
-    val mergeStrategy: MergeStrategy = MergeStrategy.MAX,
+    val mergeStrategy: MergeStrategy = MergeStrategy.MERGED_MAX,
     val error: String? = null
 )
 
