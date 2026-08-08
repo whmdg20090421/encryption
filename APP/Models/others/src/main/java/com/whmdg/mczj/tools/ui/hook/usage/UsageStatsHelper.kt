@@ -53,12 +53,47 @@ class UsageStatsHelper(private val context: Context) {
 
     companion object {
         /** 最低使用时长阈值（30 秒），过滤掉短暂启动 */
-        private const val MIN_USAGE_MS = 30_000L
+        private const val MIN_USAGE_MS = 0L
     }
 
     /**
      * 检查是否已授予"使用情况访问权限"
      */
+    /** Path A 原始数据条目 */
+    data class PathAStatEntry(
+        val packageName: String,
+        val totalTimeInForeground: Long,
+        val lastTimeUsed: Long,
+        val firstTimeStamp: Long,
+        val totalTimeVisible: Long,
+        val totalTimeForegroundServiceUsed: Long,
+    )
+
+    /**
+     * 获取 Path A（queryUsageStats）的原始数据，用于导出调试
+     */
+    fun getPathARawStats(startTime: Long, endTime: Long): List<PathAStatEntry> {
+        val statsManager = usageStatsManager ?: return emptyList()
+        return try {
+            statsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
+                ?.filter { it.totalTimeInForeground > 0 }
+                ?.map { stats ->
+                    PathAStatEntry(
+                        packageName = stats.packageName,
+                        totalTimeInForeground = stats.totalTimeInForeground,
+                        lastTimeUsed = stats.lastTimeUsed,
+                        firstTimeStamp = stats.firstTimeStamp,
+                        totalTimeVisible = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) stats.totalTimeVisible else 0L,
+                        totalTimeForegroundServiceUsed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) stats.totalTimeForegroundServiceUsed else 0L,
+                    )
+                }
+                ?.sortedByDescending { it.totalTimeInForeground }
+                ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     fun hasUsagePermission(): Boolean {
         return try {
             val appOpsManager =

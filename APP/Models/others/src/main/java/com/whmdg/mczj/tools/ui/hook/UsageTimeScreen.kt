@@ -8,6 +8,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -119,61 +121,51 @@ fun UsageTimeScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
-                }
-            )
-        },
-        bottomBar = {
-            // 底部导航栏：右侧设置按钮
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                // 设置按钮（右对齐）
-                Box(modifier = Modifier.align(Alignment.CenterEnd)) {
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(
-                            Icons.Default.Settings,
-                            contentDescription = "设置",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
+                },
+                actions = {
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(
+                                Icons.Default.Settings,
+                                contentDescription = "设置",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
 
-                    // 弹出菜单：从按钮右上角向左下角展开
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("数据来源") },
-                            onClick = {
-                                showMenu = false
-                                coroutineScope.launch {
-                                    pathResult = viewModel.getPathTimes()
-                                    showDataSourceDialog = true
-                                }
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("查看数据") },
-                            onClick = {
-                                showMenu = false
-                                showExportLoading = true
-                                coroutineScope.launch {
-                                    val intent = viewModel.buildAndShareXlsx()
-                                    showExportLoading = false
-                                    if (intent != null) {
-                                        context.startActivity(
-                                            Intent.createChooser(intent, "分享使用时长数据")
-                                        )
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("数据来源") },
+                                onClick = {
+                                    showMenu = false
+                                    coroutineScope.launch {
+                                        pathResult = viewModel.getPathTimes()
+                                        showDataSourceDialog = true
                                     }
                                 }
-                            }
-                        )
+                            )
+                            DropdownMenuItem(
+                                text = { Text("查看数据") },
+                                onClick = {
+                                    showMenu = false
+                                    showExportLoading = true
+                                    coroutineScope.launch {
+                                        val intent = viewModel.buildAndShareXlsx()
+                                        showExportLoading = false
+                                        if (intent != null) {
+                                            context.startActivity(
+                                                Intent.createChooser(intent, "分享使用时长数据")
+                                            )
+                                        }
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
-            }
+            )
         }
     ) { innerPadding ->
         Box(
@@ -383,11 +375,22 @@ private fun AppUsageList(appUsageList: List<AppUsageInfo>) {
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
+        Text(
+            text = "统计详情",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
         Card(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(
+                    BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
+                    RoundedCornerShape(16.dp)
+                ),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                containerColor = MaterialTheme.colorScheme.surface
             )
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
@@ -414,7 +417,7 @@ private fun AppUsageRow(appUsageInfo: AppUsageInfo) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         AppIconBox(appUsageInfo)

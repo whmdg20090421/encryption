@@ -135,8 +135,19 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
             usageStatsHelper.buildHourlyTable()
         } ?: return null
 
+        // 获取 Path A 原始数据（今日 00:00 ~ 现在）
+        val pathAStats = withContext(Dispatchers.IO) {
+            val calendar = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.HOUR_OF_DAY, 0)
+                set(java.util.Calendar.MINUTE, 0)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+            }
+            usageStatsHelper.getPathARawStats(calendar.timeInMillis, System.currentTimeMillis())
+        }
+
         val file = withContext(Dispatchers.IO) {
-            HourlyUsageXlsxGenerator.generate(getApplication(), table)
+            HourlyUsageXlsxGenerator.generate(getApplication(), table, pathAStats)
         }
 
         return HourlyUsageXlsxGenerator.createShareIntent(getApplication(), file)

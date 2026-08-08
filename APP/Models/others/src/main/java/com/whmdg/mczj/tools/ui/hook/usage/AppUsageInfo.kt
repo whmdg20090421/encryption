@@ -13,9 +13,10 @@ data class AppUsageInfo(
     val usagePercentage: Float = 0f,
     val rank: Int = 0
 ) {
-    /** 格式化使用时长，如 "2h 30m" / "45m 12s" / "8s" */
+    /** 格式化使用时长，如 "2h 30m" / "45m 12s" / "小于 1 分钟" */
     val formattedTime: String
         get() {
+            if (usageTimeMillis < 60_000L) return "小于 1 分钟"
             val hours = usageTimeMillis / (1000 * 60 * 60)
             val minutes = (usageTimeMillis / (1000 * 60)) % 60
             val seconds = (usageTimeMillis / 1000) % 60

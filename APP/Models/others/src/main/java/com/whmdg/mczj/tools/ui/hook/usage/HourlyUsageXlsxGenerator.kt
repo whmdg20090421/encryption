@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
 import org.dhatim.fastexcel.Workbook
-import org.dhatim.fastexcel.Worksheet
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -22,7 +21,7 @@ object HourlyUsageXlsxGenerator {
      * @param table 表格数据
      * @return 生成的 XLSX 文件
      */
-    fun generate(context: Context, table: HourlyUsageTable): File {
+    fun generate(context: Context, table: HourlyUsageTable, pathAStats: List<UsageStatsHelper.PathAStatEntry> = emptyList()): File {
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val fileName = "使用时长_$timestamp.xlsx"
         val file = File(context.cacheDir, fileName)
@@ -80,6 +79,58 @@ object HourlyUsageXlsxGenerator {
                 .horizontalAlignment("center")
                 .verticalAlignment("center")
                 .set()
+
+            // ── Path A 原始数据（空两行 + 分隔线） ──
+            if (pathAStats.isNotEmpty()) {
+                var r = summaryR + 3  // 空两行（summaryR+1, summaryR+2 空行，数据从 summaryR+3 开始）
+
+                // 分隔线行
+                ws.value(r, 0, "—— 路径 A 原始数据（queryUsageStats） ——")
+                ws.merge(r, 0, r, 6)
+                ws.range(r, 0, r, 6).style()
+                    .bold()
+                    .fillColor("D9D9D9")
+                    .horizontalAlignment("center")
+                    .set()
+                r++
+
+                // Path A 表头
+                ws.value(r, 0, "包名")
+                ws.value(r, 1, "前台总时长 (ms)")
+                ws.value(r, 2, "前台总时长")
+                ws.value(r, 3, "最后使用时间")
+                ws.value(r, 4, "首次时间戳")
+                ws.value(r, 5, "可见总时长 (ms)")
+                ws.value(r, 6, "前台服务时长 (ms)")
+                ws.range(r, 0, r, 6).style()
+                    .bold()
+                    .fillColor("D9D9D9")
+                    .horizontalAlignment("center")
+                    .set()
+                r++
+
+                // Path A 数据行
+                val sdf = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
+                for (entry in pathAStats) {
+                    ws.value(r, 0, entry.packageName)
+                    ws.value(r, 1, entry.totalTimeInForeground)
+                    ws.value(r, 2, formatMillisForCell(entry.totalTimeInForeground))
+                    ws.value(r, 3, sdf.format(Date(entry.lastTimeUsed)))
+                    ws.value(r, 4, sdf.format(Date(entry.firstTimeStamp)))
+                    ws.value(r, 5, entry.totalTimeVisible)
+                    ws.value(r, 6, entry.totalTimeForegroundServiceUsed)
+                    ws.range(r, 1, r, 6).style()
+                        .horizontalAlignment("center")
+                        .set()
+                    r++
+                }
+
+                // Path A 列宽
+                ws.width(0, 40.0)
+                for (i in 1..6) {
+                    ws.width(i, 20.0)
+                }
+            }
 
             wb.finish()
         }
