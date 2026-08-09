@@ -104,6 +104,11 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
                     usageStatsHelper.getTodayUsage(strategy, excluded)
                 }
 
+                // 刷新包名→应用名缓存
+                withContext(Dispatchers.IO) {
+                    usageStatsHelper.refreshAppNameCache(usageList.map { it.packageName }.toSet())
+                }
+
                 val totalMillis = usageList.sumOf { it.usageTimeMillis }
                 val totalScreenTime = usageStatsHelper.formatScreenTime(totalMillis)
 

@@ -6,6 +6,7 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import com.whmdg.mczj.tools.AppDataPaths
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Process
@@ -51,9 +52,55 @@ class UsageStatsHelper(private val context: Context) {
         context.packageManager
     }
 
+    // ── 包名→应用名缓存 ──
+    private val appNameCache: MutableMap<String, String> by lazy {
+        loadAppNameCache().toMutableMap()
+    }
+    private val prefs by lazy {
+        context.getSharedPreferences(AppDataPaths.PREFS_HOOK, Context.MODE_PRIVATE)
+    }
+
     companion object {
         /** 最低使用时长阈值（30 秒），过滤掉短暂启动 */
         private const val MIN_USAGE_MS = 0L
+        private const val KEY_APP_NAME_CACHE = "app_name_cache"
+        private const val SEPARATOR = "\t" // 包名与名称的分隔符
+    }
+
+    /**
+     * 从 SharedPreferences 加载缓存
+     */
+    private fun loadAppNameCache(): Map<String, String> {
+        val set = prefs.getStringSet(KEY_APP_NAME_CACHE, null) ?: return emptyMap()
+        return set.mapNotNull { entry ->
+            val parts = entry.split(SEPARATOR, limit = 2)
+            if (parts.size == 2) parts[0] to parts[1] else null
+        }.toMap()
+    }
+
+    /**
+     * 将缓存写入 SharedPreferences
+     */
+    private fun saveAppNameCache() {
+        val set = appNameCache.map { "${it.key}$SEPARATOR${it.value}" }.toSet()
+        prefs.edit().putStringSet(KEY_APP_NAME_CACHE, set).apply()
+    }
+
+    /**
+     * 刷新缓存：遍历当前缓存条目，更新已变更的名称，删除已不存在且缓存中没有原始记录的条目
+     */
+    fun refreshAppNameCache(usedPackageNames: Set<String>) {
+        var changed = false
+        // 更新已变更的名称
+        for (pkg in usedPackageNames) {
+            val cachedName = appNameCache[pkg]
+            val currentName = queryAppName(pkg)
+            if (cachedName != currentName) {
+                appNameCache[pkg] = currentName
+                changed = true
+            }
+        }
+        if (changed) saveAppNameCache()
     }
 
     /**
@@ -414,13 +461,29 @@ class UsageStatsHelper(private val context: Context) {
         }
     }
 
+    /**
+     * 获取应用名称（优先读缓存，未命中则查询 PackageManager 并写入缓存）
+     */
     private fun getAppName(packageName: String): String {
+        // 优先读缓存
+        appNameCache[packageName]?.let { return it }
+
+        // 缓存未命中，查询系统
+        val name = queryAppName(packageName)
+        appNameCache[packageName] = name
+        saveAppNameCache()
+        return name
+    }
+
+    /**
+     * 直接查询 PackageManager 获取应用名称（不做缓存）
+     */
+    private fun queryAppName(packageName: String): String {
         return try {
             val appInfo = packageManager.getApplicationInfo(packageName, 0)
             packageManager.getApplicationLabel(appInfo).toString()
         } catch (_: PackageManager.NameNotFoundException) {
-            packageName.substringAfterLast(".")
-                .replaceFirstChar { it.uppercase(Locale.getDefault()) }
+            "已卸载应用"
         }
     }
 
@@ -601,7 +664,94 @@ class UsageStatsHelper(private val context: Context) {
     /**
      * 获取应用的类别
      */
+    /**
+     * 获取应用类别
+     *
+     * 三层匹配策略：
+     * 1. 包名精确匹配映射表
+     * 2. 应用名关键词匹配（通过缓存中的名称）
+     * 3. 系统 ApplicationInfo.category
+     */
     private fun getAppCategory(packageName: String): Int {
+        // ── 第一层：包名精确匹配（常用应用） ──
+        val packageCategoryMap = mapOf(
+            // 游戏
+            "com.tencent.tmgp.sgame" to ApplicationInfo.CATEGORY_GAME,           // 王者荣耀
+            "com.tencent.tmgp.pubgmhd" to ApplicationInfo.CATEGORY_GAME,         // 和平精英
+            "com.tencent.tmgp.cf" to ApplicationInfo.CATEGORY_GAME,              // 穿越火线
+            "com.tencent.tmgp.codev" to ApplicationInfo.CATEGORY_GAME,          // 无畏契约
+            "com.tencent.lolm" to ApplicationInfo.CATEGORY_GAME,                 // 英雄联盟手游
+            "com.tencent.jkchess" to ApplicationInfo.CATEGORY_GAME,              // 金铲铲之战
+            "com.miHoYo.Yuanshen" to ApplicationInfo.CATEGORY_GAME,             // 原神
+            "com.miHoYo.hkrpg" to ApplicationInfo.CATEGORY_GAME,                // 崩坏：星穹铁道
+            "com.netease.g93na" to ApplicationInfo.CATEGORY_GAME,               // 第五人格
+            "com.netease.mrzh" to ApplicationInfo.CATEGORY_GAME,                // 明日之后
+            "com.netease.g78na" to ApplicationInfo.CATEGORY_GAME,               // 蛋仔派对
+            "com.netease.g95" to ApplicationInfo.CATEGORY_GAME,                 // 永劫无间
+            "com.hypergryph.arknights" to ApplicationInfo.CATEGORY_GAME,        // 明日方舟
+            "com.supercell.clashofclans" to ApplicationInfo.CATEGORY_GAME,      // 部落冲突
+
+            // 视频
+            "com.ss.android.ugc.aweme" to ApplicationInfo.CATEGORY_VIDEO,       // 抖音
+            "com.ss.android.ugc.aweme.lite" to ApplicationInfo.CATEGORY_VIDEO,  // 抖音极速版
+            "tv.danmaku.bili" to ApplicationInfo.CATEGORY_VIDEO,                // 哔哩哔哩
+            "com.youku.phone" to ApplicationInfo.CATEGORY_VIDEO,                // 优酷
+            "com.qiyi.video" to ApplicationInfo.CATEGORY_VIDEO,                 // 爱奇艺
+            "com.tencent.qqlive" to ApplicationInfo.CATEGORY_VIDEO,             // 腾讯视频
+            "com.hunantv.imgo" to ApplicationInfo.CATEGORY_VIDEO,               // 芒果TV
+            "com.smile.gifmaker" to ApplicationInfo.CATEGORY_VIDEO,             // 快手
+            "com.ss.android.article.video" to ApplicationInfo.CATEGORY_VIDEO,   // 西瓜视频
+
+            // 音频
+            "com.netease.cloudmusic" to ApplicationInfo.CATEGORY_AUDIO,         // 网易云音乐
+            "com.kugou.android" to ApplicationInfo.CATEGORY_AUDIO,              // 酷狗音乐
+            "com.tencent.qqmusic" to ApplicationInfo.CATEGORY_AUDIO,            // QQ音乐
+            "com.ximalaya.ting.android" to ApplicationInfo.CATEGORY_AUDIO,      // 喜马拉雅
+            "com.kuwo.player" to ApplicationInfo.CATEGORY_AUDIO,                // 酷我音乐
+            "fm.qingting.qtradio" to ApplicationInfo.CATEGORY_AUDIO,            // 蜻蜓FM
+        )
+
+        // 包名精确匹配
+        packageCategoryMap[packageName]?.let { return it }
+
+        // ── 第二层：应用名关键词匹配 ──
+        val appName = appNameCache[packageName] ?: queryAppName(packageName)
+        val nameCategoryMap = listOf(
+            // 游戏关键词
+            ApplicationInfo.CATEGORY_GAME to listOf(
+                "王者", "荣耀", "和平精英", "穿越火线", "使命召唤", "QQ飞车",
+                "地下城", "勇士", "英雄联盟", "金铲铲", "无畏契约", "VALORANT",
+                "原神", "崩坏", "星穹铁道", "绝区零", "第五人格", "明日之后",
+                "蛋仔派对", "永劫无间", "剑与远征", "部落冲突", "皇室战争",
+                "元梦之星", "明日方舟", "白夜极光", "重返未来", "三国志",
+                "率土之滨", "阴阳师", "光遇", "光·遇", "我的世界", "Minecraft",
+                "迷你世界", "香肠派对", "逃跑吧", "球球大作战", "贪吃蛇",
+                "斗地主", "麻将", "棋牌", "三国杀", "狼人杀", "吃鸡",
+                "荒野行动", "王牌战争", "暗区突围", "弹壳特攻队", "植物大战僵尸",
+                "愤怒的小鸟", "Candy Crush", "Clash", "PUBG", "Roblox",
+            ),
+            // 视频关键词
+            ApplicationInfo.CATEGORY_VIDEO to listOf(
+                "抖音", "快手", "哔哩哔哩", "B站", "bilibili", "优酷", "爱奇艺",
+                "腾讯视频", "芒果", "乐视", "西瓜视频", "微视", "虎牙", "斗鱼",
+                "YY", "直播", "TikTok", "Netflix", "Disney", "YouTube",
+                "影视", "视频", "影院", "电影", "电视剧", "剧场",
+            ),
+            // 音频关键词
+            ApplicationInfo.CATEGORY_AUDIO to listOf(
+                "网易云", "酷狗", "QQ音乐", "酷我", "蜻蜓", "喜马拉雅",
+                "唱吧", "全民K歌", "汽水音乐", "Spotify", "Apple Music",
+                "音乐", "电台", "FM", "听书", "有声",
+            ),
+        )
+
+        for ((category, keywords) in nameCategoryMap) {
+            if (keywords.any { appName.contains(it, ignoreCase = true) }) {
+                return category
+            }
+        }
+
+        // ── 第三层：系统 category ──
         return try {
             val appInfo = packageManager.getApplicationInfo(packageName, 0)
             appInfo.category
