@@ -435,9 +435,9 @@ class UsageStatsHelper(private val context: Context) {
         val minutes = (totalMillis / (1000 * 60)) % 60
 
         return when {
-            hours > 0 -> "${hours}h ${minutes}m"
-            minutes > 0 -> "${minutes}m"
-            else -> "0m"
+            hours > 0 -> "${hours}小时${minutes}分"
+            minutes > 0 -> "${minutes}分"
+            else -> "0分"
         }
     }
 

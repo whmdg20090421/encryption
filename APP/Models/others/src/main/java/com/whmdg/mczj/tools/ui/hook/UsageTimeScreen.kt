@@ -9,8 +9,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -38,7 +37,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -383,6 +381,7 @@ private fun AppUsageList(
     totalScreenTime: String,
     hourlyTable: HourlyUsageTable?
 ) {
+    val cardBgColor = if (isSystemInDarkTheme()) MaterialTheme.colorScheme.surface else Color.White
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -391,15 +390,10 @@ private fun AppUsageList(
     ) {
         // ── 总用时卡片 ──
         Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(
-                    BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
-                    RoundedCornerShape(16.dp)
-                ),
+            modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
+                containerColor = cardBgColor
             )
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
@@ -435,26 +429,15 @@ private fun AppUsageList(
             modifier = Modifier.padding(bottom = 6.dp)
         )
         Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(
-                    BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
-                    RoundedCornerShape(16.dp)
-                ),
+            modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
+                containerColor = cardBgColor
             )
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 appUsageList.forEachIndexed { index, usage ->
                     AppUsageRow(appUsageInfo = usage)
-                    if (index < appUsageList.lastIndex) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                            color = MaterialTheme.colorScheme.outlineVariant
-                        )
-                    }
                 }
             }
         }
@@ -469,7 +452,8 @@ private fun AppUsageList(
 private fun HourlyBarChart(hourlyTable: HourlyUsageTable) {
     val summaryData = hourlyTable.summaryRow.hourlyMillis
     val outlineColor = MaterialTheme.colorScheme.outline
-    val fillColorArgb = 0xFF2196F3.toInt() // 蓝色填充
+    val fillColorArgb = 0xFF1565C0.toInt() // 深蓝色填充
+    val bgColorArgb = MaterialTheme.colorScheme.surface.toArgb() // 主题色背景
     val outlineColorArgb = outlineColor.toArgb()
 
     // Y 轴上限：max(60分钟, 最大小时使用时长)
@@ -493,17 +477,14 @@ private fun HourlyBarChart(hourlyTable: HourlyUsageTable) {
         val barWidth = w / barCount * 0.6f
         val barGap = w / barCount
         val radius = barWidth / 2
-        val strokeWidthPx = 1.dp.toPx()
-
-        val fillPaint = android.graphics.Paint().apply {
-            color = fillColorArgb
+        val bgPaint = android.graphics.Paint().apply {
+            color = bgColorArgb
             style = android.graphics.Paint.Style.FILL
             isAntiAlias = true
         }
-        val outlinePaint = android.graphics.Paint().apply {
-            color = outlineColorArgb
-            style = android.graphics.Paint.Style.STROKE
-            strokeWidth = strokeWidthPx
+        val fillPaint = android.graphics.Paint().apply {
+            color = fillColorArgb
+            style = android.graphics.Paint.Style.FILL
             isAntiAlias = true
         }
 
@@ -520,7 +501,10 @@ private fun HourlyBarChart(hourlyTable: HourlyUsageTable) {
                 cx + radius, capsuleBottom
             )
 
-            // 绘制填充（clipPath 裁切到胶囊形状内）
+            // 绘制浅灰背景填充
+            nativeCanvas.drawRoundRect(rectF, radius, radius, bgPaint)
+
+            // 绘制蓝色填充（clipPath 裁切到胶囊形状内）
             if (fillRatio > 0f) {
                 val fillHeight = (capsuleBottom - capsuleTop) * fillRatio
                 val fillTop = capsuleBottom - fillHeight
@@ -536,9 +520,6 @@ private fun HourlyBarChart(hourlyTable: HourlyUsageTable) {
                 )
                 nativeCanvas.restore()
             }
-
-            // 绘制胶囊描边
-            nativeCanvas.drawRoundRect(rectF, radius, radius, outlinePaint)
         }
 
         // X 轴标签
