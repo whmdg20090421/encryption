@@ -62,9 +62,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.Role
@@ -470,18 +468,17 @@ private fun AppUsageList(
 @Composable
 private fun HourlyBarChart(hourlyTable: HourlyUsageTable) {
     val summaryData = hourlyTable.summaryRow.hourlyMillis
-    val surfaceColor = MaterialTheme.colorScheme.onSurface
     val outlineColor = MaterialTheme.colorScheme.outline
+    val fillColorArgb = 0xFF2196F3.toInt() // 蓝色填充
+    val outlineColorArgb = outlineColor.toArgb()
 
     // Y 轴上限：max(60分钟, 最大小时使用时长)
     val sixtyMinutesMs = 60L * 60 * 1000
     val maxHourlyMs = summaryData.maxOrNull() ?: 0L
     val yMaxMs = maxOf(sixtyMinutesMs, maxHourlyMs)
 
-    // 柱状图尺寸
-    val chartHeight = 120.dp
+    val chartHeight = 160.dp
     val barCount = 24
-    // X 轴标签
     val xLabels = listOf(6, 12, 18, 24)
 
     Canvas(
@@ -489,38 +486,71 @@ private fun HourlyBarChart(hourlyTable: HourlyUsageTable) {
             .fillMaxWidth()
             .height(chartHeight)
     ) {
+        val nativeCanvas = drawContext.canvas.nativeCanvas
         val w = size.width
         val h = size.height
-        val barAreaHeight = h - 20.dp.toPx() // 留出底部标签空间
-        val barWidth = w / barCount * 0.7f
+        val barAreaHeight = h - 20.dp.toPx()
+        val barWidth = w / barCount * 0.6f
         val barGap = w / barCount
+        val radius = barWidth / 2
+        val strokeWidthPx = 1.dp.toPx()
 
-        // 绘制柱子（仅描边）
+        val fillPaint = android.graphics.Paint().apply {
+            color = fillColorArgb
+            style = android.graphics.Paint.Style.FILL
+            isAntiAlias = true
+        }
+        val outlinePaint = android.graphics.Paint().apply {
+            color = outlineColorArgb
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = strokeWidthPx
+            isAntiAlias = true
+        }
+
         for (i in 0 until barCount) {
             val valueMs = summaryData[i]
-            val barHeight = if (yMaxMs > 0) (valueMs.toFloat() / yMaxMs) * barAreaHeight else 0f
-            val x = i * barGap + (barGap - barWidth) / 2
+            val fillRatio = if (yMaxMs > 0) (valueMs.toFloat() / yMaxMs).coerceIn(0f, 1f) else 0f
+            val cx = i * barGap + barGap / 2
+            val capsuleTop = 0f
+            val capsuleBottom = barAreaHeight
 
-            if (barHeight > 0) {
-                drawRect(
-                    color = surfaceColor,
-                    topLeft = Offset(x, barAreaHeight - barHeight),
-                    size = Size(barWidth, barHeight),
-                    style = Stroke(width = 1.dp.toPx())
+            // 胶囊 RectF
+            val rectF = android.graphics.RectF(
+                cx - radius, capsuleTop,
+                cx + radius, capsuleBottom
+            )
+
+            // 绘制填充（clipPath 裁切到胶囊形状内）
+            if (fillRatio > 0f) {
+                val fillHeight = (capsuleBottom - capsuleTop) * fillRatio
+                val fillTop = capsuleBottom - fillHeight
+
+                nativeCanvas.save()
+                nativeCanvas.clipPath(android.graphics.Path().apply {
+                    addRoundRect(rectF, radius, radius, android.graphics.Path.Direction.CW)
+                })
+                nativeCanvas.drawRect(
+                    cx - radius, fillTop,
+                    cx + radius, capsuleBottom,
+                    fillPaint
                 )
+                nativeCanvas.restore()
             }
+
+            // 绘制胶囊描边
+            nativeCanvas.drawRoundRect(rectF, radius, radius, outlinePaint)
         }
 
         // X 轴标签
         val textPaint = android.graphics.Paint().apply {
-            color = outlineColor.toArgb()
+            color = outlineColorArgb
             textSize = 10.dp.toPx()
             textAlign = android.graphics.Paint.Align.CENTER
             isAntiAlias = true
         }
         for (label in xLabels) {
             val x = (label - 1) * barGap + barGap / 2
-            drawContext.canvas.nativeCanvas.drawText(
+            nativeCanvas.drawText(
                 label.toString(),
                 x,
                 h - 4.dp.toPx(),
