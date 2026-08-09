@@ -30,3 +30,21 @@ data class HourlyUsageTable(
         val totalMillis: Long get() = hourlyMillis.sum()
     }
 }
+
+/**
+ * 按应用类别分组的每小时数据
+ *
+ * 用于柱状图堆叠显示：游戏（紫）、视频/音频（橙）、其他（蓝）
+ */
+data class CategoryHourlyData(
+    /** 游戏类每小时数据（长度 24） */
+    val gameHourly: LongArray,
+    /** 视频/音频类每小时数据（长度 24） */
+    val mediaHourly: LongArray,
+    /** 其他类每小时数据（长度 24） */
+    val otherHourly: LongArray
+) {
+    val gameTotal: Long get() = gameHourly.sum()
+    val mediaTotal: Long get() = mediaHourly.sum()
+    val otherTotal: Long get() = otherHourly.sum()
+}

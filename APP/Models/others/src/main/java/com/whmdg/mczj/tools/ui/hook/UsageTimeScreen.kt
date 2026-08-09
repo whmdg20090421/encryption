@@ -43,6 +43,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -80,6 +81,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.whmdg.mczj.tools.ui.hook.usage.AppUsageInfo
+import com.whmdg.mczj.tools.ui.hook.usage.CategoryHourlyData
 import com.whmdg.mczj.tools.ui.hook.usage.HourlyUsageTable
 import com.whmdg.mczj.tools.ui.hook.usage.MergeStrategy
 import com.whmdg.mczj.tools.ui.hook.usage.PathResult
@@ -238,7 +240,8 @@ fun UsageTimeScreen(
                 AppUsageList(
                     appUsageList = uiState.appUsageList,
                     totalScreenTime = uiState.totalScreenTime,
-                    hourlyTable = uiState.hourlyTable
+                    hourlyTable = uiState.hourlyTable,
+                    categoryHourlyData = uiState.categoryHourlyData
                 )
             }
         }
@@ -666,7 +669,8 @@ private fun AppSelectionPanel(
 private fun AppUsageList(
     appUsageList: List<AppUsageInfo>,
     totalScreenTime: String,
-    hourlyTable: HourlyUsageTable?
+    hourlyTable: HourlyUsageTable?,
+    categoryHourlyData: CategoryHourlyData?
 ) {
     val cardBgColor = if (isSystemInDarkTheme()) MaterialTheme.colorScheme.surface else Color.White
     Column(
@@ -683,7 +687,7 @@ private fun AppUsageList(
                 containerColor = cardBgColor
             )
         ) {
-            Column(modifier = Modifier.padding(12.dp)) {
+            Column(modifier = Modifier.padding(15.dp)) {
                 // 总用时
                 Text(
                     text = totalScreenTime,
@@ -700,14 +704,14 @@ private fun AppUsageList(
                     modifier = Modifier.padding(top = 2.dp)
                 )
                 // 柱状图
-                if (hourlyTable != null) {
+                if (hourlyTable != null && categoryHourlyData != null) {
                     Spacer(modifier = Modifier.height(12.dp))
-                    HourlyBarChart(hourlyTable = hourlyTable)
+                    HourlyBarChart(hourlyTable = hourlyTable, categoryData = categoryHourlyData)
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         Text(
             text = "统计详情",
@@ -725,6 +729,13 @@ private fun AppUsageList(
             Column(modifier = Modifier.fillMaxWidth()) {
                 appUsageList.forEachIndexed { index, usage ->
                     AppUsageRow(appUsageInfo = usage)
+                    if (index < appUsageList.lastIndex) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                            thickness = 0.5.dp
+                        )
+                    }
                 }
             }
         }
@@ -736,12 +747,16 @@ private fun AppUsageList(
 // ==================== 每小时使用柱状图 ====================
 
 @Composable
-private fun HourlyBarChart(hourlyTable: HourlyUsageTable) {
+private fun HourlyBarChart(hourlyTable: HourlyUsageTable, categoryData: CategoryHourlyData) {
     val summaryData = hourlyTable.summaryRow.hourlyMillis
     val outlineColor = MaterialTheme.colorScheme.outline
-    val fillColorArgb = 0xFF1565C0.toInt() // 深蓝色填充
-    val bgColorArgb = MaterialTheme.colorScheme.surface.toArgb() // 主题色背景
+    val bgColorArgb = MaterialTheme.colorScheme.surface.toArgb()
     val outlineColorArgb = outlineColor.toArgb()
+
+    // 类别颜色
+    val gameColor = 0xFF7C3AED.toInt()      // 紫色
+    val mediaColor = 0xFFFF9800.toInt()     // 橙色
+    val otherColor = 0xFF1565C0.toInt()     // 蓝色
 
     // Y 轴上限：max(60分钟, 最大小时使用时长)
     val sixtyMinutesMs = 60L * 60 * 1000
@@ -752,83 +767,179 @@ private fun HourlyBarChart(hourlyTable: HourlyUsageTable) {
     val barCount = 24
     val xLabels = listOf("0:00", "6:00", "12:00", "18:00", "24:00")
 
-    Canvas(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(chartHeight)
-    ) {
-        val nativeCanvas = drawContext.canvas.nativeCanvas
-        val w = size.width
-        val h = size.height
-        val barAreaHeight = h - 20.dp.toPx()
-        val barWidth = w / barCount * 0.6f
-        val barGap = w / barCount
-        val radius = barWidth / 2
-        val bgPaint = android.graphics.Paint().apply {
-            color = bgColorArgb
-            style = android.graphics.Paint.Style.FILL
-            isAntiAlias = true
+    // 格式化类别总时长
+    fun formatCategoryTime(millis: Long): String {
+        if (millis <= 0) return "0分"
+        val hours = millis / (1000 * 60 * 60)
+        val minutes = (millis / (1000 * 60)) % 60
+        return when {
+            hours > 0 -> "${hours}小时${minutes}分"
+            minutes > 0 -> "${minutes}分"
+            else -> "0分"
         }
-        val fillPaint = android.graphics.Paint().apply {
-            color = fillColorArgb
-            style = android.graphics.Paint.Style.FILL
-            isAntiAlias = true
-        }
+    }
 
-        for (i in 0 until barCount) {
-            val valueMs = summaryData[i]
-            val fillRatio = if (yMaxMs > 0) (valueMs.toFloat() / yMaxMs).coerceIn(0f, 1f) else 0f
-            val cx = i * barGap + barGap / 2
-            val capsuleTop = 0f
-            val capsuleBottom = barAreaHeight
+    Column {
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(chartHeight)
+        ) {
+            val nativeCanvas = drawContext.canvas.nativeCanvas
+            val w = size.width
+            val h = size.height
+            val yAxisWidth = 36.dp.toPx()
+            val barAreaHeight = h - 20.dp.toPx()
+            val chartWidth = w - yAxisWidth
+            val barWidth = chartWidth / barCount * 0.6f
+            val barGap = chartWidth / barCount
+            val radius = barWidth / 2
 
-            // 胶囊 RectF
-            val rectF = android.graphics.RectF(
-                cx - radius, capsuleTop,
-                cx + radius, capsuleBottom
-            )
+            val bgPaint = android.graphics.Paint().apply {
+                color = bgColorArgb
+                style = android.graphics.Paint.Style.FILL
+                isAntiAlias = true
+            }
+            val gamePaint = android.graphics.Paint().apply {
+                color = gameColor
+                style = android.graphics.Paint.Style.FILL
+                isAntiAlias = true
+            }
+            val mediaPaint = android.graphics.Paint().apply {
+                color = mediaColor
+                style = android.graphics.Paint.Style.FILL
+                isAntiAlias = true
+            }
+            val otherPaint = android.graphics.Paint().apply {
+                color = otherColor
+                style = android.graphics.Paint.Style.FILL
+                isAntiAlias = true
+            }
 
-            // 绘制浅灰背景填充
-            nativeCanvas.drawRoundRect(rectF, radius, radius, bgPaint)
+            for (i in 0 until barCount) {
+                val gameMs = categoryData.gameHourly[i]
+                val mediaMs = categoryData.mediaHourly[i]
+                val otherMs = categoryData.otherHourly[i]
+                val totalMs = gameMs + mediaMs + otherMs
 
-            // 绘制蓝色填充（clipPath 裁切到胶囊形状内）
-            if (fillRatio > 0f) {
-                val fillHeight = (capsuleBottom - capsuleTop) * fillRatio
-                val fillTop = capsuleBottom - fillHeight
+                val cx = yAxisWidth + i * barGap + barGap / 2
+                val capsuleTop = 0f
+                val capsuleBottom = barAreaHeight
 
-                nativeCanvas.save()
-                nativeCanvas.clipPath(android.graphics.Path().apply {
-                    addRoundRect(rectF, radius, radius, android.graphics.Path.Direction.CW)
-                })
-                nativeCanvas.drawRect(
-                    cx - radius, fillTop,
-                    cx + radius, capsuleBottom,
-                    fillPaint
+                val rectF = android.graphics.RectF(
+                    cx - radius, capsuleTop,
+                    cx + radius, capsuleBottom
                 )
-                nativeCanvas.restore()
+
+                // 背景
+                nativeCanvas.drawRoundRect(rectF, radius, radius, bgPaint)
+
+                // 堆叠填充（clipPath 裁切到胶囊形状内）
+                if (totalMs > 0 && yMaxMs > 0) {
+                    val totalRatio = (totalMs.toFloat() / yMaxMs).coerceIn(0f, 1f)
+                    val totalFillHeight = (capsuleBottom - capsuleTop) * totalRatio
+
+                    // 各类别占比
+                    val gameRatio = gameMs.toFloat() / totalMs
+                    val mediaRatio = mediaMs.toFloat() / totalMs
+
+                    val gameFillHeight = totalFillHeight * gameRatio
+                    val mediaFillHeight = totalFillHeight * mediaRatio
+                    // otherFillHeight = totalFillHeight - gameFillHeight - mediaFillHeight
+
+                    nativeCanvas.save()
+                    nativeCanvas.clipPath(android.graphics.Path().apply {
+                        addRoundRect(rectF, radius, radius, android.graphics.Path.Direction.CW)
+                    })
+
+                    // 从底部向上堆叠：其他 → 视频 → 游戏
+                    var currentBottom = capsuleBottom
+
+                    // 其他（蓝色）
+                    if (otherMs > 0) {
+                        val h1 = totalFillHeight - gameFillHeight - mediaFillHeight
+                        nativeCanvas.drawRect(cx - radius, currentBottom - h1, cx + radius, currentBottom, otherPaint)
+                        currentBottom -= h1
+                    }
+                    // 视频/音频（橙色）
+                    if (mediaMs > 0) {
+                        nativeCanvas.drawRect(cx - radius, currentBottom - mediaFillHeight, cx + radius, currentBottom, mediaPaint)
+                        currentBottom -= mediaFillHeight
+                    }
+                    // 游戏（紫色）
+                    if (gameMs > 0) {
+                        nativeCanvas.drawRect(cx - radius, currentBottom - gameFillHeight, cx + radius, currentBottom, gamePaint)
+                    }
+
+                    nativeCanvas.restore()
+                }
+            }
+
+            // X 轴标签
+            val textPaint = android.graphics.Paint().apply {
+                color = outlineColorArgb
+                textSize = 10.dp.toPx()
+                isAntiAlias = true
+            }
+            val labelY = h - 4.dp.toPx()
+            val labelBarIndices = listOf(0, 6, 12, 18, 24)
+            for ((idx, label) in xLabels.withIndex()) {
+                val barIdx = labelBarIndices[idx]
+                val colonIdx = label.indexOf(':')
+                val colonOffset = textPaint.measureText(label, 0, colonIdx)
+                val colonX = if (barIdx < barCount) {
+                    yAxisWidth + barIdx * barGap + barGap / 2
+                } else {
+                    yAxisWidth + barIdx * barGap
+                }
+                textPaint.textAlign = android.graphics.Paint.Align.LEFT
+                nativeCanvas.drawText(label, colonX - colonOffset, labelY, textPaint)
+            }
+
+            // Y 轴标签
+            val yAxisLabelPaint = android.graphics.Paint().apply {
+                color = outlineColorArgb
+                textSize = 9.dp.toPx()
+                textAlign = android.graphics.Paint.Align.RIGHT
+                isAntiAlias = true
+            }
+            val yMaxMinutes = (yMaxMs / (1000 * 60)).toInt()
+            val yLabels = mutableListOf(0, 30, 60)
+            if (yMaxMinutes > 60) yLabels.add(yMaxMinutes)
+
+            for (label in yLabels) {
+                val ratio = label.toFloat() / yMaxMinutes.coerceAtLeast(1)
+                val y = barAreaHeight - ratio * barAreaHeight
+                nativeCanvas.drawText(
+                    label.toString(),
+                    yAxisWidth - 6.dp.toPx(),
+                    y + 3.dp.toPx(),
+                    yAxisLabelPaint
+                )
             }
         }
 
-        // X 轴标签（冒号对齐柱子边界）
-        val textPaint = android.graphics.Paint().apply {
-            color = outlineColorArgb
-            textSize = 10.dp.toPx()
-            isAntiAlias = true
-        }
-        val labelY = h - 4.dp.toPx()
-        // 标签对应的柱子索引：0, 6, 12, 18, 24（24 = 右边界）
-        val labelBarIndices = listOf(0, 6, 12, 18, 24)
-        for ((idx, label) in xLabels.withIndex()) {
-            val barIdx = labelBarIndices[idx]
-            val colonIdx = label.indexOf(':')
-            val colonOffset = textPaint.measureText(label, 0, colonIdx)
-            val colonX = if (barIdx < barCount) {
-                barIdx * barGap + barGap / 2
-            } else {
-                barIdx * barGap // 24:00 = 右边界
+        // 图例行：游戏 | 视频播放 | 其他
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            // 游戏
+            Column(horizontalAlignment = Alignment.Start) {
+                Text("游戏", style = MaterialTheme.typography.labelSmall, color = Color(gameColor))
+                Text(formatCategoryTime(categoryData.gameTotal), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
             }
-            textPaint.textAlign = android.graphics.Paint.Align.LEFT
-            nativeCanvas.drawText(label, colonX - colonOffset, labelY, textPaint)
+            // 视频播放
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("视频播放", style = MaterialTheme.typography.labelSmall, color = Color(mediaColor))
+                Text(formatCategoryTime(categoryData.mediaTotal), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+            }
+            // 其他
+            Column(horizontalAlignment = Alignment.End) {
+                Text("其他", style = MaterialTheme.typography.labelSmall, color = Color(otherColor))
+                Text(formatCategoryTime(categoryData.otherTotal), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface)
+            }
         }
     }
 }
@@ -868,11 +979,7 @@ private fun AppUsageRow(appUsageInfo: AppUsageInfo) {
 private fun AppIconBox(appUsageInfo: AppUsageInfo) {
     Box(
         modifier = Modifier
-            .size(48.dp)
-            .background(
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                shape = RoundedCornerShape(12.dp)
-            )
+            .size(40.dp)
             .padding(4.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -902,7 +1009,7 @@ private fun AppIconBox(appUsageInfo: AppUsageInfo) {
                     bitmap = bitmap.asImageBitmap(),
                     contentDescription = appUsageInfo.appName,
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(32.dp)
                         .clip(RoundedCornerShape(10.dp))
                 )
             } else {
@@ -916,7 +1023,7 @@ private fun AppIconBox(appUsageInfo: AppUsageInfo) {
 private fun IconPlaceholder() {
     Box(
         modifier = Modifier
-            .size(40.dp)
+            .size(32.dp)
             .background(GradientPurple.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
     )
 }

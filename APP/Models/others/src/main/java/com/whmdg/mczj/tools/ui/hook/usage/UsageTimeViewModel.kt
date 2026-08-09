@@ -24,6 +24,7 @@ data class UsageTimeUiState(
     val totalScreenTimeMillis: Long = 0L,
     val appUsageList: List<AppUsageInfo> = emptyList(),
     val hourlyTable: HourlyUsageTable? = null,
+    val categoryHourlyData: CategoryHourlyData? = null,
     val mergeStrategy: MergeStrategy = MergeStrategy.PATH_B_ONLY,
     val excludedPackages: Set<String> = emptySet(),
     val error: String? = null
@@ -111,12 +112,18 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
                     usageStatsHelper.buildHourlyTable(excluded)
                 }
 
+                // 加载按类别分组的数据
+                val categoryData = withContext(Dispatchers.IO) {
+                    usageStatsHelper.buildCategoryHourlyData(excluded)
+                }
+
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
                     appUsageList = usageList,
                     totalScreenTime = totalScreenTime,
                     totalScreenTimeMillis = totalMillis,
                     hourlyTable = hourlyTable,
+                    categoryHourlyData = categoryData,
                     error = null
                 )
             } catch (e: Exception) {

@@ -571,6 +571,46 @@ class UsageStatsHelper(private val context: Context) {
     }
 
     /**
+     * 构建按应用类别分组的每小时数据（用于柱状图堆叠显示）
+     *
+     * 复用 buildHourlyTable 的逻辑，额外按 ApplicationInfo.category 分组。
+     * @return 类别分组数据，无权限时返回 null
+     */
+    fun buildCategoryHourlyData(excludedPackages: Set<String> = emptySet()): CategoryHourlyData? {
+        val table = buildHourlyTable(excludedPackages) ?: return null
+
+        val gameHourly = LongArray(24)
+        val mediaHourly = LongArray(24)
+        val otherHourly = LongArray(24)
+
+        for (row in table.rows) {
+            val category = getAppCategory(row.packageName)
+            val target = when (category) {
+                ApplicationInfo.CATEGORY_GAME -> gameHourly
+                ApplicationInfo.CATEGORY_VIDEO, ApplicationInfo.CATEGORY_AUDIO -> mediaHourly
+                else -> otherHourly
+            }
+            for (i in 0 until 24) {
+                target[i] += row.hourlyMillis[i]
+            }
+        }
+
+        return CategoryHourlyData(gameHourly, mediaHourly, otherHourly)
+    }
+
+    /**
+     * 获取应用的类别
+     */
+    private fun getAppCategory(packageName: String): Int {
+        return try {
+            val appInfo = packageManager.getApplicationInfo(packageName, 0)
+            appInfo.category
+        } catch (_: PackageManager.NameNotFoundException) {
+            ApplicationInfo.CATEGORY_UNDEFINED
+        }
+    }
+
+    /**
      * 将一段使用时长按小时拆分，填入对应的桶中
      *
      * 例如 09:50 开始，10:05 结束：
