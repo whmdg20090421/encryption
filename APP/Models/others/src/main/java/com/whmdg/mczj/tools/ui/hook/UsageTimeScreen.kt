@@ -28,9 +28,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -40,6 +46,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -47,6 +54,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -103,6 +111,10 @@ fun UsageTimeScreen(
     var pathResult by remember { mutableStateOf<PathResult?>(null) }
     var showExportLoading by remember { mutableStateOf(false) }
     val context = LocalContext.current
+
+    // 排除应用弹窗状态
+    var showExcludePanel by remember { mutableStateOf(false) }
+    var showAppSelectionPanel by remember { mutableStateOf(false) }
 
     // onResume 时自动刷新
     DisposableEffect(lifecycleOwner) {
@@ -164,6 +176,14 @@ fun UsageTimeScreen(
                                             )
                                         }
                                     }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("排除应用") },
+                                onClick = {
+                                    showMenu = false
+                                    viewModel.openExcludePanel()
+                                    showExcludePanel = true
                                 }
                             )
                         }
@@ -251,6 +271,36 @@ fun UsageTimeScreen(
                 }
             },
             confirmButton = {}
+        )
+    }
+
+    // 排除应用主面板
+    if (showExcludePanel) {
+        ExcludeAppsPanel(
+            viewModel = viewModel,
+            onDismiss = {
+                viewModel.cancelExcludeChanges()
+                showExcludePanel = false
+            },
+            onConfirm = {
+                viewModel.saveExcludedPackages()
+                showExcludePanel = false
+            },
+            onSelectApps = {
+                showAppSelectionPanel = true
+            }
+        )
+    }
+
+    // 选择应用面板
+    if (showAppSelectionPanel) {
+        AppSelectionPanel(
+            viewModel = viewModel,
+            onDismiss = { showAppSelectionPanel = false },
+            onConfirm = { selected ->
+                viewModel.applySelectionToTemp(selected)
+                showAppSelectionPanel = false
+            }
         )
     }
 }
@@ -373,6 +423,243 @@ private fun formatPathTime(millis: Long): String {
     }
 }
 
+// ==================== 排除应用主面板 ====================
+
+@Composable
+private fun ExcludeAppsPanel(
+    viewModel: UsageTimeViewModel,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    onSelectApps: () -> Unit
+) {
+    var showInput by remember { mutableStateOf(false) }
+    var inputText by remember { mutableStateOf("") }
+    var inputError by remember { mutableStateOf<String?>(null) }
+    var tempExcluded by remember { mutableStateOf(viewModel.getTempExcludedPackages()) }
+
+    // 每次 recomposition 时刷新临时列表
+    LaunchedEffect(showInput) {
+        tempExcluded = viewModel.getTempExcludedPackages()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("排除应用") },
+        text = {
+            Column(modifier = Modifier.padding(0.dp)) {
+                // 第一行：添加应用 + 选择应用
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    TextButton(onClick = {
+                        showInput = !showInput
+                        inputText = ""
+                        inputError = null
+                    }) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("添加应用")
+                    }
+                    TextButton(onClick = {
+                        showInput = false
+                        inputText = ""
+                        inputError = null
+                        onSelectApps()
+                    }) {
+                        Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("选择应用")
+                    }
+                }
+
+                // 输入框（展开时显示）
+                AnimatedVisibility(visible = showInput) {
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = inputText,
+                                onValueChange = {
+                                    inputText = it
+                                    inputError = null
+                                },
+                                modifier = Modifier.weight(1f),
+                                placeholder = { Text("输入包名", style = MaterialTheme.typography.bodySmall) },
+                                singleLine = true,
+                                isError = inputError != null,
+                                textStyle = MaterialTheme.typography.bodySmall
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            IconButton(onClick = {
+                                val error = viewModel.addExcludedPackage(inputText)
+                                if (error != null) {
+                                    inputError = error
+                                } else {
+                                    inputText = ""
+                                    inputError = null
+                                    showInput = false
+                                    tempExcluded = viewModel.getTempExcludedPackages()
+                                }
+                            }) {
+                                Icon(Icons.Default.Check, contentDescription = "确认", tint = Color(0xFF4CAF50))
+                            }
+                            IconButton(onClick = {
+                                inputText = ""
+                                inputError = null
+                                showInput = false
+                            }) {
+                                Icon(Icons.Default.Close, contentDescription = "取消", tint = Color(0xFFF44336))
+                            }
+                        }
+                        // 错误提示
+                        if (inputError != null) {
+                            Text(
+                                text = inputError!!,
+                                color = Color(0xFFF44336),
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // 排除列表
+                if (tempExcluded.isEmpty()) {
+                    Text(
+                        text = "暂无排除应用",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                } else {
+                    Column {
+                        tempExcluded.forEach { pkg ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = pkg,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1
+                                )
+                                IconButton(
+                                    onClick = {
+                                        viewModel.removeExcludedPackage(pkg)
+                                        tempExcluded = viewModel.getTempExcludedPackages()
+                                    },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "删除",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("确认")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+// ==================== 选择应用面板 ====================
+
+@Composable
+private fun AppSelectionPanel(
+    viewModel: UsageTimeViewModel,
+    onDismiss: () -> Unit,
+    onConfirm: (Set<String>) -> Unit
+) {
+    val apps = remember { viewModel.getTodayAppsForSelection() }
+    val currentExcluded = remember { viewModel.getTempExcludedPackages() }
+    var selectedPackages by remember { mutableStateOf(currentExcluded.toMutableSet()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择要排除的应用") },
+        text = {
+            if (apps.isEmpty()) {
+                Text(
+                    text = "今日暂无使用数据",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 16.dp)
+                )
+            } else {
+                Column {
+                    apps.forEach { app ->
+                        val isChecked = selectedPackages.contains(app.packageName)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp)
+                                .selectable(
+                                    selected = isChecked,
+                                    onClick = {
+                                        selectedPackages = selectedPackages.toMutableSet().apply {
+                                            if (isChecked) remove(app.packageName) else add(app.packageName)
+                                        }
+                                    },
+                                    role = Role.Checkbox
+                                ),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = isChecked,
+                                onCheckedChange = null
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = app.appName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = app.formattedTime,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(selectedPackages) }) {
+                Text("确认")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
 // ==================== 应用使用列表（单卡片） ====================
 
 @Composable
@@ -463,7 +750,7 @@ private fun HourlyBarChart(hourlyTable: HourlyUsageTable) {
 
     val chartHeight = 160.dp
     val barCount = 24
-    val xLabels = listOf(6, 12, 18, 24)
+    val xLabels = listOf("0:00", "6:00", "12:00", "18:00", "24:00")
 
     Canvas(
         modifier = Modifier
@@ -522,21 +809,26 @@ private fun HourlyBarChart(hourlyTable: HourlyUsageTable) {
             }
         }
 
-        // X 轴标签
+        // X 轴标签（冒号对齐柱子边界）
         val textPaint = android.graphics.Paint().apply {
             color = outlineColorArgb
             textSize = 10.dp.toPx()
-            textAlign = android.graphics.Paint.Align.CENTER
             isAntiAlias = true
         }
-        for (label in xLabels) {
-            val x = (label - 1) * barGap + barGap / 2
-            nativeCanvas.drawText(
-                label.toString(),
-                x,
-                h - 4.dp.toPx(),
-                textPaint
-            )
+        val labelY = h - 4.dp.toPx()
+        // 标签对应的柱子索引：0, 6, 12, 18, 24（24 = 右边界）
+        val labelBarIndices = listOf(0, 6, 12, 18, 24)
+        for ((idx, label) in xLabels.withIndex()) {
+            val barIdx = labelBarIndices[idx]
+            val colonIdx = label.indexOf(':')
+            val colonOffset = textPaint.measureText(label, 0, colonIdx)
+            val colonX = if (barIdx < barCount) {
+                barIdx * barGap + barGap / 2
+            } else {
+                barIdx * barGap // 24:00 = 右边界
+            }
+            textPaint.textAlign = android.graphics.Paint.Align.LEFT
+            nativeCanvas.drawText(label, colonX - colonOffset, labelY, textPaint)
         }
     }
 }

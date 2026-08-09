@@ -3,6 +3,7 @@ package com.whmdg.mczj.tools.ui.hook.usage
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.whmdg.mczj.tools.AppDataPaths
@@ -19,11 +20,12 @@ import kotlinx.coroutines.withContext
 data class UsageTimeUiState(
     val isLoading: Boolean = false,
     val hasPermission: Boolean = false,
-    val totalScreenTime: String = "0h 0m",
+    val totalScreenTime: String = "0分",
     val totalScreenTimeMillis: Long = 0L,
     val appUsageList: List<AppUsageInfo> = emptyList(),
     val hourlyTable: HourlyUsageTable? = null,
-    val mergeStrategy: MergeStrategy = MergeStrategy.MERGED_MAX,
+    val mergeStrategy: MergeStrategy = MergeStrategy.PATH_B_ONLY,
+    val excludedPackages: Set<String> = emptySet(),
     val error: String? = null
 )
 
@@ -32,18 +34,23 @@ data class UsageTimeUiState(
  *
  * 管理今日使用时长数据的加载和状态。
  * onResume 时自动刷新数据。
- * 合并策略通过 SharedPreferences 持久化。
+ * 合并策略和排除列表通过 SharedPreferences 持久化。
  */
 class UsageTimeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val usageStatsHelper = UsageStatsHelper(application)
     private val prefs = application.getSharedPreferences(AppDataPaths.PREFS_HOOK, Context.MODE_PRIVATE)
+    private val packageManager: PackageManager = application.packageManager
 
     private val _uiState = MutableStateFlow(UsageTimeUiState())
     val uiState: StateFlow<UsageTimeUiState> = _uiState.asStateFlow()
 
+    // 临时排除列表（编辑中，未确认）
+    private var _tempExcludedPackages: MutableSet<String> = mutableSetOf()
+
     companion object {
         private const val KEY_MERGE_STRATEGY = "usage_merge_strategy"
+        private const val KEY_EXCLUDED_PACKAGES = "usage_excluded_packages"
     }
 
     init {
@@ -54,7 +61,11 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
         } else {
             MergeStrategy.PATH_B_ONLY
         }
-        _uiState.value = _uiState.value.copy(mergeStrategy = strategy)
+
+        // 读取持久化的排除列表
+        val excluded = prefs.getStringSet(KEY_EXCLUDED_PACKAGES, null)?.toSet() ?: emptySet()
+
+        _uiState.value = _uiState.value.copy(mergeStrategy = strategy, excludedPackages = excluded)
 
         checkPermissionAndLoad()
     }
@@ -71,7 +82,7 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
         } else {
             _uiState.value = _uiState.value.copy(
                 appUsageList = emptyList(),
-                totalScreenTime = "0h 0m",
+                totalScreenTime = "0分",
                 totalScreenTimeMillis = 0L,
                 error = null
             )
@@ -87,8 +98,9 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
 
             try {
                 val strategy = _uiState.value.mergeStrategy
+                val excluded = _uiState.value.excludedPackages
                 val usageList = withContext(Dispatchers.IO) {
-                    usageStatsHelper.getTodayUsage(strategy)
+                    usageStatsHelper.getTodayUsage(strategy, excluded)
                 }
 
                 val totalMillis = usageList.sumOf { it.usageTimeMillis }
@@ -96,7 +108,7 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
 
                 // 加载每小时使用数据（固定使用路径 B）
                 val hourlyTable = withContext(Dispatchers.IO) {
-                    usageStatsHelper.buildHourlyTable()
+                    usageStatsHelper.buildHourlyTable(excluded)
                 }
 
                 _uiState.value = _uiState.value.copy(
@@ -125,6 +137,98 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
         loadTodayUsage()
     }
 
+    // ── 排除应用管理 ──
+
+    /**
+     * 打开排除面板时调用，复制当前排除列表为临时列表
+     */
+    fun openExcludePanel() {
+        _tempExcludedPackages = _uiState.value.excludedPackages.toMutableSet()
+    }
+
+    /**
+     * 获取临时排除列表（供 UI 显示）
+     */
+    fun getTempExcludedPackages(): Set<String> = _tempExcludedPackages.toSet()
+
+    /**
+     * 手动添加排除包名（输入框确认时调用）
+     * @return 错误信息，成功返回 null
+     */
+    fun addExcludedPackage(packageName: String): String? {
+        val pkg = packageName.trim()
+        if (pkg.isEmpty()) return "包名不能为空"
+        if (_tempExcludedPackages.contains(pkg)) return "该包名已存在"
+        if (!isPackageExists(pkg)) return "该包名不存在，请确认后再试"
+        _tempExcludedPackages.add(pkg)
+        return null
+    }
+
+    /**
+     * 从临时列表移除排除包名
+     */
+    fun removeExcludedPackage(packageName: String) {
+        _tempExcludedPackages.remove(packageName)
+    }
+
+    /**
+     * 切换排除状态（选择面板用）
+     */
+    fun toggleExcludedPackage(packageName: String) {
+        if (_tempExcludedPackages.contains(packageName)) {
+            _tempExcludedPackages.remove(packageName)
+        } else {
+            _tempExcludedPackages.add(packageName)
+        }
+    }
+
+    /**
+     * 保存排除列表（主面板确认时调用）
+     */
+    fun saveExcludedPackages() {
+        val newSet = _tempExcludedPackages.toSet()
+        prefs.edit().putStringSet(KEY_EXCLUDED_PACKAGES, newSet).apply()
+        _uiState.value = _uiState.value.copy(excludedPackages = newSet)
+        loadTodayUsage()
+    }
+
+    /**
+     * 取消排除变更（主面板取消时调用）
+     */
+    fun cancelExcludeChanges() {
+        _tempExcludedPackages.clear()
+    }
+
+    /**
+     * 从选择面板确认时调用，将选择结果同步到临时列表
+     */
+    fun applySelectionToTemp(selectedPackages: Set<String>) {
+        _tempExcludedPackages.clear()
+        _tempExcludedPackages.addAll(selectedPackages)
+    }
+
+    /**
+     * 检查包名是否存在于设备
+     */
+    fun isPackageExists(packageName: String): Boolean {
+        return try {
+            packageManager.getApplicationInfo(packageName.trim(), 0)
+            true
+        } catch (_: PackageManager.NameNotFoundException) {
+            false
+        }
+    }
+
+    /**
+     * 获取今日使用的应用列表（用于选择面板）
+     * 排除系统应用，按使用时长降序
+     */
+    fun getTodayAppsForSelection(): List<AppUsageInfo> {
+        return _uiState.value.appUsageList
+    }
+
+    // ── 其他 ──
+
     /**
      * 获取各路径的原始时间（用于设置弹窗显示）
      */
@@ -138,8 +242,9 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
      * @return 分享 Intent，无权限或无数据时返回 null
      */
     suspend fun buildAndShareXlsx(): Intent? {
+        val excluded = _uiState.value.excludedPackages
         val table = withContext(Dispatchers.IO) {
-            usageStatsHelper.buildHourlyTable()
+            usageStatsHelper.buildHourlyTable(excluded)
         } ?: return null
 
         // 获取 Path A 原始数据（今日 00:00 ~ 现在）

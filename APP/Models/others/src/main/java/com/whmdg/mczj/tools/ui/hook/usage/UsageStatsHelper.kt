@@ -126,7 +126,10 @@ class UsageStatsHelper(private val context: Context) {
      * @param strategy 数据合并策略，默认取较大值
      * @return 按使用时长降序排列的应用列表，无权限时返回空列表
      */
-    fun getTodayUsage(strategy: MergeStrategy = MergeStrategy.MERGED_MAX): List<AppUsageInfo> {
+    fun getTodayUsage(
+        strategy: MergeStrategy = MergeStrategy.MERGED_MAX,
+        excludedPackages: Set<String> = emptySet()
+    ): List<AppUsageInfo> {
         if (!hasUsagePermission()) return emptyList()
 
         val calendar = Calendar.getInstance().apply {
@@ -139,7 +142,7 @@ class UsageStatsHelper(private val context: Context) {
         val startTime = calendar.timeInMillis
         val endTime = System.currentTimeMillis()
 
-        return getUsageForTimeRange(startTime, endTime, isToday = true, strategy = strategy)
+        return getUsageForTimeRange(startTime, endTime, isToday = true, strategy = strategy, excludedPackages = excludedPackages)
     }
 
     /**
@@ -221,7 +224,8 @@ class UsageStatsHelper(private val context: Context) {
         startTime: Long,
         endTime: Long,
         isToday: Boolean,
-        strategy: MergeStrategy = MergeStrategy.MERGED_MAX
+        strategy: MergeStrategy = MergeStrategy.MERGED_MAX,
+        excludedPackages: Set<String> = emptySet()
     ): List<AppUsageInfo> {
         val statsManager = usageStatsManager ?: return emptyList()
 
@@ -279,6 +283,7 @@ class UsageStatsHelper(private val context: Context) {
         return aggregatedStats
             .filter { it.value >= MIN_USAGE_MS }
             .filter { !isSystemApp(it.key) }
+            .filter { it.key !in excludedPackages }
             .map { (packageName, usageTime) ->
                 AppUsageInfo(
                     packageName = packageName,
@@ -462,7 +467,7 @@ class UsageStatsHelper(private val context: Context) {
      *
      * @return 表格数据，无权限时返回 null
      */
-    fun buildHourlyTable(): HourlyUsageTable? {
+    fun buildHourlyTable(excludedPackages: Set<String> = emptySet()): HourlyUsageTable? {
         if (!hasUsagePermission()) return null
 
         val calendar = Calendar.getInstance().apply {
@@ -539,6 +544,7 @@ class UsageStatsHelper(private val context: Context) {
         // 过滤系统应用，按总时长降序排列
         val rows = tableData
             .filter { !isSystemApp(it.key) }
+            .filter { it.key !in excludedPackages }
             .filter { it.value.sum() >= MIN_USAGE_MS }
             .map { (packageName, hourly) ->
                 HourlyUsageTable.HourlyRow(
