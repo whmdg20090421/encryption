@@ -22,6 +22,7 @@ data class UsageTimeUiState(
     val totalScreenTime: String = "0h 0m",
     val totalScreenTimeMillis: Long = 0L,
     val appUsageList: List<AppUsageInfo> = emptyList(),
+    val hourlyTable: HourlyUsageTable? = null,
     val mergeStrategy: MergeStrategy = MergeStrategy.MERGED_MAX,
     val error: String? = null
 )
@@ -49,9 +50,9 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
         // 读取持久化的合并策略
         val savedStrategy = prefs.getString(KEY_MERGE_STRATEGY, null)
         val strategy = if (savedStrategy != null) {
-            try { MergeStrategy.valueOf(savedStrategy) } catch (_: Exception) { MergeStrategy.MERGED_MAX }
+            try { MergeStrategy.valueOf(savedStrategy) } catch (_: Exception) { MergeStrategy.PATH_B_ONLY }
         } else {
-            MergeStrategy.MERGED_MAX
+            MergeStrategy.PATH_B_ONLY
         }
         _uiState.value = _uiState.value.copy(mergeStrategy = strategy)
 
@@ -93,11 +94,17 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
                 val totalMillis = usageList.sumOf { it.usageTimeMillis }
                 val totalScreenTime = usageStatsHelper.formatScreenTime(totalMillis)
 
+                // 加载每小时使用数据（固定使用路径 B）
+                val hourlyTable = withContext(Dispatchers.IO) {
+                    usageStatsHelper.buildHourlyTable()
+                }
+
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
                     appUsageList = usageList,
                     totalScreenTime = totalScreenTime,
                     totalScreenTimeMillis = totalMillis,
+                    hourlyTable = hourlyTable,
                     error = null
                 )
             } catch (e: Exception) {

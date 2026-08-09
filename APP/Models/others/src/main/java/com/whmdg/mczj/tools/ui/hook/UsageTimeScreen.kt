@@ -57,9 +57,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -69,6 +75,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.whmdg.mczj.tools.ui.hook.usage.AppUsageInfo
+import com.whmdg.mczj.tools.ui.hook.usage.HourlyUsageTable
 import com.whmdg.mczj.tools.ui.hook.usage.MergeStrategy
 import com.whmdg.mczj.tools.ui.hook.usage.PathResult
 import com.whmdg.mczj.tools.ui.hook.usage.UsageTimeViewModel
@@ -211,7 +218,11 @@ fun UsageTimeScreen(
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
-                AppUsageList(appUsageList = uiState.appUsageList)
+                AppUsageList(
+                    appUsageList = uiState.appUsageList,
+                    totalScreenTime = uiState.totalScreenTime,
+                    hourlyTable = uiState.hourlyTable
+                )
             }
         }
     }
@@ -308,10 +319,10 @@ private fun DataSourceDialog(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 listOf(
-                    MergeStrategy.PATH_A_ONLY to "仅路径 A（系统聚合）",
+                    MergeStrategy.PATH_A_ONLY to "仅路径 A（系统聚合）（数据可能不准）",
                     MergeStrategy.PATH_B_ONLY to "仅路径 B（实时事件）",
-                    MergeStrategy.MERGED_MAX to "合并取最大值",
-                    MergeStrategy.MERGED_MIN to "合并取最小值"
+                    MergeStrategy.MERGED_MAX to "合并取最大值（数据可能不准）",
+                    MergeStrategy.MERGED_MIN to "合并取最小值（数据可能不准）"
                 ).forEach { (strategy, label) ->
                     Row(
                         modifier = Modifier
@@ -368,13 +379,56 @@ private fun formatPathTime(millis: Long): String {
 // ==================== 应用使用列表（单卡片） ====================
 
 @Composable
-private fun AppUsageList(appUsageList: List<AppUsageInfo>) {
+private fun AppUsageList(
+    appUsageList: List<AppUsageInfo>,
+    totalScreenTime: String,
+    hourlyTable: HourlyUsageTable?
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
+        // ── 总用时卡片 ──
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(
+                    BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
+                    RoundedCornerShape(16.dp)
+                ),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            )
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                // 总用时
+                Text(
+                    text = totalScreenTime,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                // 当前日期
+                Text(
+                    text = java.text.SimpleDateFormat("yyyy年M月d日", java.util.Locale.getDefault())
+                        .format(java.util.Date()),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+                // 柱状图
+                if (hourlyTable != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HourlyBarChart(hourlyTable = hourlyTable)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         Text(
             text = "统计详情",
             style = MaterialTheme.typography.labelSmall,
@@ -410,6 +464,71 @@ private fun AppUsageList(appUsageList: List<AppUsageInfo>) {
     }
 }
 
+// ==================== 每小时使用柱状图 ====================
+
+@Composable
+private fun HourlyBarChart(hourlyTable: HourlyUsageTable) {
+    val summaryData = hourlyTable.summaryRow.hourlyMillis
+    val surfaceColor = MaterialTheme.colorScheme.onSurface
+    val outlineColor = MaterialTheme.colorScheme.outline
+
+    // Y 轴上限：max(60分钟, 最大小时使用时长)
+    val sixtyMinutesMs = 60L * 60 * 1000
+    val maxHourlyMs = summaryData.maxOrNull() ?: 0L
+    val yMaxMs = maxOf(sixtyMinutesMs, maxHourlyMs)
+
+    // 柱状图尺寸
+    val chartHeight = 120.dp
+    val barCount = 24
+    // X 轴标签
+    val xLabels = listOf(6, 12, 18, 24)
+
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(chartHeight)
+    ) {
+        val w = size.width
+        val h = size.height
+        val barAreaHeight = h - 20.dp.toPx() // 留出底部标签空间
+        val barWidth = w / barCount * 0.7f
+        val barGap = w / barCount
+
+        // 绘制柱子（仅描边）
+        for (i in 0 until barCount) {
+            val valueMs = summaryData[i]
+            val barHeight = if (yMaxMs > 0) (valueMs.toFloat() / yMaxMs) * barAreaHeight else 0f
+            val x = i * barGap + (barGap - barWidth) / 2
+
+            if (barHeight > 0) {
+                drawRect(
+                    color = surfaceColor,
+                    topLeft = Offset(x, barAreaHeight - barHeight),
+                    size = Size(barWidth, barHeight),
+                    style = Stroke(width = 1.dp.toPx())
+                )
+            }
+        }
+
+        // X 轴标签
+        val textPaint = android.graphics.Paint().apply {
+            color = outlineColor.toArgb()
+            textSize = 10.dp.toPx()
+            textAlign = android.graphics.Paint.Align.CENTER
+            isAntiAlias = true
+        }
+        for (label in xLabels) {
+            val x = (label - 1) * barGap + barGap / 2
+            drawContext.canvas.nativeCanvas.drawText(
+                label.toString(),
+                x,
+                h - 4.dp.toPx(),
+                textPaint
+            )
+        }
+    }
+}
+
 // ==================== 单个应用行 ====================
 
 @Composable
@@ -417,7 +536,7 @@ private fun AppUsageRow(appUsageInfo: AppUsageInfo) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         AppIconBox(appUsageInfo)
