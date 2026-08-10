@@ -2602,6 +2602,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     val pendingVaultOriginalPath: String? get() = currentPanel.pendingVaultOriginalPath
     /** vault 模式下的导航回调（由 FileManagerScreen 设置） */
     var onNavigateVault: ((Screen) -> Unit)? = null
+    /** 保险箱内容修改回调（由 FileManagerScreen 设置，同步注入到两个 Controller） */
+    var onVaultContentModified: ((vaultId: Int) -> Unit)? = null
+        set(value) {
+            field = value
+            controllerLeft.onVaultContentModified = value
+            controllerRight.onVaultContentModified = value
+        }
 
     init {
         // 权限级别（统一从 legacySp 读取，与 HomeScreen / 安全设置一致）

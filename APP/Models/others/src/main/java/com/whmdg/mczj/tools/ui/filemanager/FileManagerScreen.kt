@@ -217,7 +217,7 @@ fun FileManagerScreen(
             vm.onNavigateVault = { screen -> onNavigate(screen) }
             // 异步计算保险箱大小（仅首次未统计时）
             if (vaultSession.record.storageSize == 0L) {
-                vm.calculateFolderSizeAsync(vaultSession.vaultDir) { totalSize ->
+                vm.calculateFolderSizeAsync(vaultSession.vaultDir.absolutePath) { totalSize ->
                     vaultService?.setStorageSize(vaultSession.record.id, totalSize)
                 }
             }
