@@ -1,4 +1,4 @@
-package com.whmdg.mczj.tools.ui.filemanager
+package com.whmdg.mczj.tools.ui.viewer
 
 import android.graphics.Typeface
 import android.widget.Toast
@@ -13,6 +13,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import com.whmdg.mczj.tools.encryption.core.FileCodec
+import com.whmdg.mczj.tools.encryption.services.VaultKeyHolder
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.widget.CodeEditor
@@ -22,12 +24,47 @@ import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TextEditorScreen(filePath: String, onBack: () -> Unit, onSave: ((String) -> Unit)? = null) {
+fun TextEditorScreen(
+    filePath: String,
+    vaultSessionId: String? = null,
+    onBack: () -> Unit
+) {
     val context = LocalContext.current
     val file = remember { File(filePath) }
     var hasChanges by remember { mutableStateOf(false) }
     var editorRef by remember { mutableStateOf<CodeEditor?>(null) }
     var showSaveDialog by remember { mutableStateOf(false) }
+
+    fun saveContent() {
+        editorRef?.text?.toString()?.let { content ->
+            try {
+                if (vaultSessionId != null) {
+                    val ctx = VaultKeyHolder.get(vaultSessionId)
+                    if (ctx != null) {
+                        // 写入临时文件
+                        file.writeText(content)
+                        // 重新加密写回保险箱（覆盖原加密文件）
+                        FileCodec.encrypt(
+                            src = file,
+                            dst = File(ctx.originalEncryptedPath),
+                            dek = ctx.dek,
+                            encryptMetadata = ctx.encryptMetadata,
+                            customEncryption = ctx.customEncryption
+                        )
+                    } else {
+                        Toast.makeText(context, "保险箱会话已过期", Toast.LENGTH_SHORT).show()
+                        return
+                    }
+                } else {
+                    file.writeText(content)
+                }
+                hasChanges = false
+                DiagnosticLog.log("TextEditor", "保存成功: $filePath")
+            } catch (e: Exception) {
+                Toast.makeText(context, "保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     // 未保存时返回确认
     BackHandler {
@@ -41,19 +78,7 @@ fun TextEditorScreen(filePath: String, onBack: () -> Unit, onSave: ((String) -> 
             text = { Text("文件已修改但尚未保存，是否保存？") },
             confirmButton = {
                 TextButton(onClick = {
-                    editorRef?.text?.toString()?.let { content ->
-                        try {
-                            if (onSave != null) {
-                                onSave(content)
-                            } else {
-                                file.writeText(content)
-                            }
-                            hasChanges = false
-                            DiagnosticLog.log("TextEditor", "保存成功: $filePath")
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
-                        }
-                    }
+                    saveContent()
                     showSaveDialog = false
                     onBack()
                 }) { Text("保存") }
@@ -86,22 +111,7 @@ fun TextEditorScreen(filePath: String, onBack: () -> Unit, onSave: ((String) -> 
                 },
                 actions = {
                     IconButton(
-                        onClick = {
-                            editorRef?.text?.toString()?.let { content ->
-                                try {
-                                    if (onSave != null) {
-                                        onSave(content)
-                                    } else {
-                                        file.writeText(content)
-                                    }
-                                    hasChanges = false
-                                    Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
-                                    DiagnosticLog.log("TextEditor", "保存成功: $filePath")
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
+                        onClick = { saveContent() },
                         enabled = hasChanges
                     ) {
                         Icon(

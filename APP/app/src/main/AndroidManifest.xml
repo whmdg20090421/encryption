@@ -119,6 +119,13 @@
             android:launchMode="singleInstance"
             android:theme="@style/Theme.工具箱" />
 
+        <!-- 文件浏览 Activity（图片查看器 / 文本编辑器，与 FileManager 隔离） -->
+        <activity
+            android:name=".ui.viewer.ViewerActivity"
+            android:exported="false"
+            android:label="查看器"
+            android:theme="@style/Theme.工具箱" />
+
         <receiver
             android:name=".security.MyDeviceAdminReceiver"
             android:label="@string/app_name"

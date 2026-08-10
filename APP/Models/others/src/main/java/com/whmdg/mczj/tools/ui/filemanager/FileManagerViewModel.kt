@@ -54,6 +54,9 @@ import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import com.whmdg.mczj.tools.encryption.core.FileCodec
 import com.whmdg.mczj.tools.encryption.core.FileConstants
 import com.whmdg.mczj.tools.encryption.services.CryptoService
+import com.whmdg.mczj.tools.encryption.services.VaultKeyHolder
+import com.whmdg.mczj.tools.encryption.services.VaultViewContext
+import com.whmdg.mczj.tools.ui.viewer.ViewerActivity
 
 @Serializable
 data class RecycleBinEntry(
@@ -216,12 +219,6 @@ class FilePaneController(
         var currentScrollIndex by mutableIntStateOf(0)
             internal set
         var currentScrollOffset by mutableIntStateOf(0)
-            internal set
-
-        // ── Vault 临时状态 ──
-        var pendingVaultTextEntry by mutableStateOf<FileEntry?>(null)
-            internal set
-        var pendingVaultOriginalPath by mutableStateOf<String?>(null)
             internal set
 
         // ── 回收站路径 ──
@@ -2596,12 +2593,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** vault 模式下 TextEditor 的保存回调（临时文件路径 → 加密写回保险箱） */
-    /** 向后兼容：当前聚焦面板的 vault 临时状态 */
-    val pendingVaultTextEntry: FileEntry? get() = currentPanel.pendingVaultTextEntry
-    val pendingVaultOriginalPath: String? get() = currentPanel.pendingVaultOriginalPath
-    /** vault 模式下的导航回调（由 FileManagerScreen 设置） */
-    var onNavigateVault: ((Screen) -> Unit)? = null
     /** 保险箱内容修改回调（由 FileManagerScreen 设置，同步注入到两个 Controller） */
     var onVaultContentModified: ((vaultId: Int) -> Unit)? = null
         set(value) {
@@ -2890,9 +2881,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val panel = ctrl.state
         panel.path = safeDefault
         panel.entries = listOf()
-        panel.pendingVaultTextEntry = null
-        panel.pendingVaultOriginalPath = null
-        onNavigateVault = null
         cleanupVaultTempFiles()
     }
 
@@ -2905,14 +2893,25 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
 
-    /** vault 模式下打开文件：解密到临时文件后分发 */
-    fun openVaultFile(entry: FileEntry): Screen? {
-        val session = focusedController.vaultSession ?: return null
+    /** vault 模式下打开文件：解密到临时文件后启动 ViewerActivity */
+    fun openVaultFile(entry: FileEntry) {
+        val session = focusedController.vaultSession ?: return
 
         if (entry.isDirectory) {
             navigateToFolder(entry)
-            return null
+            return
         }
+
+        // 生成 sessionId 并存入 VaultKeyHolder
+        val sessionId = "vault_${System.currentTimeMillis()}_${entry.name.hashCode()}"
+        VaultKeyHolder.put(sessionId, VaultViewContext(
+            dek = session.dek,
+            vaultDir = session.vaultDir.absolutePath,
+            originalEncryptedPath = entry.path,
+            customEncryption = session.record.customEncryption,
+            encryptMetadata = session.record.encryptMetadata,
+            vaultId = session.record.id
+        ))
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -2933,71 +2932,21 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         ext in textExts -> {
                             val textFile = File(context.cacheDir, "vault_text_${entry.name}")
                             tempFile.copyTo(textFile, overwrite = true)
-                            val panel = currentPanel
-                            panel.pendingVaultTextEntry = entry.copy(path = textFile.absolutePath)
-                            panel.pendingVaultOriginalPath = entry.path  // 保存原始加密路径
-                            onNavigateVault?.invoke(Screen.TextEditor(textFile.absolutePath))
+                            context.startActivity(ViewerActivity.createTextIntent(context, textFile.absolutePath, sessionId))
                         }
                         ext in imageExts -> {
                             val imgFile = File(context.cacheDir, "vault_img_${entry.name}")
                             tempFile.copyTo(imgFile, overwrite = true)
-                            onNavigateVault?.invoke(Screen.ImageViewer(imgFile.absolutePath))
+                            context.startActivity(ViewerActivity.createImageIntent(context, imgFile.absolutePath, vaultSessionId = sessionId))
                         }
                         else -> {
+                            VaultKeyHolder.clear(sessionId)
                             openWithExternalApp(tempFile, entry.name)
                         }
                     }
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    loadError = e
-                }
-            }
-        }
-        return null
-    }
-
-    /** vault 模式下 TextEditor 保存回调：重新加密写回保险箱 */
-    fun handleVaultTextSave(content: String) {
-        val session = focusedController.vaultSession ?: return
-        val panel = currentPanel
-        val entry = panel.pendingVaultTextEntry ?: return
-        val originalPath = panel.pendingVaultOriginalPath ?: return
-
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                // 写入临时文件
-                val tempFile = File(entry.path)
-                tempFile.writeText(content)
-
-                // 计算保险箱内的相对子目录
-                val vaultDir = session.vaultDir
-                val originalFile = File(originalPath)
-                val subDir = originalFile.parentFile?.let { parent ->
-                    if (parent.absolutePath == vaultDir.absolutePath) ""
-                    else parent.relativeTo(vaultDir).path
-                } ?: ""
-
-                // 删除原始加密文件
-                SpecialPermissionVerifier.safeDelete(originalFile)
-
-                // 重新加密写回保险箱
-                CryptoService.encryptIntoVault(
-                    context = context,
-                    session = session,
-                    srcFile = tempFile,
-                    subDir = subDir,
-                    overwrite = true
-                )
-
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "已加密保存", Toast.LENGTH_SHORT).show()
-                    panel.pendingVaultTextEntry = null
-                    panel.pendingVaultOriginalPath = null
-                    refreshCurrent()
-                    onVaultContentModified?.invoke(session.record.id)
-                }
-            } catch (e: Exception) {
+                VaultKeyHolder.clear(sessionId)
                 withContext(Dispatchers.Main) {
                     loadError = e
                 }
@@ -3295,26 +3244,27 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
 
     // ── 文件操作 ──
-    fun openFile(context: Context, entry: FileEntry, isDebug: Boolean = false): Screen? {
+    fun openFile(context: Context, entry: FileEntry, isDebug: Boolean = false) {
         if (entry.permission.startsWith("l")) {
             pendingSymlinkEntry = entry
-            return null
+            return
         }
         // vault 模式：解密后打开（仅当前聚焦面板在保险箱内才走此路径）
         if (focusedController.isVaultMode) {
-            return openVaultFile(entry)
+            openVaultFile(entry)
+            return
         }
 
         DiagnosticLog.log("OpenFile", "请求打开: ${entry.path}")
         if (entry.name.endsWith(".apk", ignoreCase = true)) {
             DiagnosticLog.log("OpenFile", "APK 文件，弹出信息弹窗: ${entry.name}")
             pendingApkEntry = entry
-            return null
+            return
         }
         if (entry.name.endsWith(".apex", ignoreCase = true)) {
             DiagnosticLog.log("OpenFile", "拒绝打开 apex: ${entry.name}")
             Toast.makeText(context, "APEX 文件无法直接打开", Toast.LENGTH_SHORT).show()
-            return null
+            return
         }
         if (ArchiveBrowser.isArchiveFile(entry.name)) {
             // 7z 格式：检测加密状态，无密码则正常浏览，有密码/损坏则弹信息弹窗
@@ -3334,7 +3284,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 sevenZipAnalyzing = true
                 sevenZipInfo = null
-                return null
+                return
             }
             if (isDebug) {
                 DiagnosticLog.log("OpenFile", "压缩包文件（Debug 模式），解析信息: ${entry.name}")
@@ -3343,7 +3293,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 DiagnosticLog.log("OpenFile", "压缩包文件，进入浏览模式: ${entry.name}")
                 openArchive(entry)
             }
-            return null
+            return
         }
         val textExtensions = setOf(
             "txt", "md", "json", "xml", "html", "htm", "css", "js",
@@ -3355,7 +3305,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val ext = entry.name.substringAfterLast('.', "").lowercase()
         if (ext in textExtensions) {
             DiagnosticLog.log("OpenFile", "内置编辑器打开: ${entry.name}")
-            return Screen.TextEditor(entry.path)
+            context.startActivity(ViewerActivity.createTextIntent(context, entry.path))
+            return
         }
         val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
         if (ext in imageExtensions) {
@@ -3364,7 +3315,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions }
                 .map { it.path }
             val startIndex = imagePaths.indexOf(entry.path).coerceAtLeast(0)
-            return Screen.ImageViewer(entry.path, imagePaths, startIndex)
+            context.startActivity(ViewerActivity.createImageIntent(context, entry.path, imagePaths, startIndex))
+            return
         }
         // 外部 Intent
         try {
@@ -3622,8 +3574,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 供 FileManagerScreen 的 onFileClick 在 isInArchiveMode 时调用。
      * @return 提取成功后对应的 Screen，失败返回 null（由调用方 Toast 提示）
      */
-    suspend fun openArchiveFile(context: Context, entry: FileEntry): Screen? {
-        val session = archiveSession ?: return null
+    suspend fun openArchiveFile(context: Context, entry: FileEntry): Boolean {
+        val session = archiveSession ?: return false
         // 构建压缩包内相对路径
         val subPath = session.currentPath.removePrefix(session.archivePath).removePrefix("/")
         val relativePath = if (subPath.isEmpty()) entry.name else "$subPath/${entry.name}"
@@ -3637,12 +3589,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         )
         if (extracted == null) {
             DiagnosticLog.log("OpenFile", "提取失败: $relativePath")
-            return null
+            return false
         }
         DiagnosticLog.log("OpenFile", "提取成功: ${extracted.absolutePath}")
         // 用提取后的临时文件构建 FileEntry，复用 openFile 的类型判断
         val tempEntry = entry.copy(path = extracted.absolutePath, name = extracted.name)
-        return openFile(context, tempEntry)
+        openFile(context, tempEntry)
+        return true
     }
 
 

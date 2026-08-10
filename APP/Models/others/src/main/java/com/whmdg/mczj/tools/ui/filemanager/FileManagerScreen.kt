@@ -201,10 +201,8 @@ class SwipeUiState {
 @Composable
 fun FileManagerScreen(
     onBack: () -> Unit,
-    onNavigate: (Screen) -> Unit = {},
     vaultSession: VaultSession? = null,
-    vaultService: com.whmdg.mczj.tools.encryption.services.VaultService? = null,
-    onVaultSaveReady: (((String) -> Unit) -> Unit)? = null
+    vaultService: com.whmdg.mczj.tools.encryption.services.VaultService? = null
 ) {
     val context = LocalContext.current
     val vm: FileManagerViewModel = viewModel()
@@ -214,7 +212,6 @@ fun FileManagerScreen(
     LaunchedEffect(vaultSession) {
         if (vaultSession != null) {
             vm.initVaultMode(vaultSession)
-            vm.onNavigateVault = { screen -> onNavigate(screen) }
             // 异步计算保险箱大小（仅首次未统计时）
             if (vaultSession.record.storageSize == 0L) {
                 vm.calculateFolderSizeAsync(vaultSession.vaultDir.absolutePath) { totalSize ->
@@ -230,15 +227,6 @@ fun FileManagerScreen(
             vaultService?.markModified(vaultId)
         }
         onDispose { vm.onVaultContentModified = null }
-    }
-
-    // vault 模式保存回调注册
-    LaunchedEffect(vm.vaultSession, onVaultSaveReady) {
-        if (vm.vaultSession != null && onVaultSaveReady != null) {
-            onVaultSaveReady { content ->
-                vm.handleVaultTextSave(content)
-            }
-        }
     }
 
     var hasStoragePermission by remember {
@@ -1143,11 +1131,8 @@ fun FileManagerScreen(
                                             DiagnosticLog.log("FileMgr", "[$side] 压缩包内文件 name='${entry.name}'")
                                             vm.focusedPanel = side
                                             coroutineScope.launch {
-                                                val screen = vm.openArchiveFile(context, entry)
-                                                if (screen != null) {
-                                                    listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
-                                                    onNavigate(screen)
-                                                } else {
+                                                val success = vm.openArchiveFile(context, entry)
+                                                if (!success) {
                                                     Toast.makeText(context, "文件提取失败", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
@@ -1156,11 +1141,7 @@ fun FileManagerScreen(
                                         DiagnosticLog.beginSession("[$side] 点击文件 '${entry.name}'")
                                         DiagnosticLog.log("FileMgr", "[$side] 点击文件 name='${entry.name}' path='${entry.path}'")
                                         vm.focusedPanel = side
-                                        val screen = vm.openFile(context, entry, isDebugMode)
-                                        if (screen != null) {
-                                            listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
-                                            onNavigate(screen)
-                                        }
+                                        vm.openFile(context, entry, isDebugMode)
                                         vm.addHistory(entry.name, entry.path, false)
                                     },
                                     onLongClick = { entry ->

@@ -1,4 +1,4 @@
-package com.whmdg.mczj.tools.ui.filemanager
+package com.whmdg.mczj.tools.ui.viewer
 
 import androidx.compose.animation.core.SnapSpec
 import androidx.compose.foundation.background
