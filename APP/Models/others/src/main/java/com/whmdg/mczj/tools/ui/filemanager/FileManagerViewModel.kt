@@ -3336,7 +3336,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (resolver == null) {
                 // 没有匹配的应用，设置待处理状态由 UI 弹出警告
                 pendingExternalEntry = entry
-                return null
+                return
             }
             // 使用 createChooser 弹出应用选择器，让用户选择用哪个应用打开
             val chooser = android.content.Intent.createChooser(intent, "选择应用打开")
@@ -3348,7 +3348,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             DiagnosticLog.exportCrashReport(context, e, "外部Intent打开失败: ${entry.path}")
             Toast.makeText(context, "无法打开文件: ${e.message}", Toast.LENGTH_SHORT).show()
         }
-        return null
     }
 
 
