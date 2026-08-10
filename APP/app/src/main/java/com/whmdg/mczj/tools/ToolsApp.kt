@@ -2,8 +2,6 @@ package com.whmdg.mczj.tools
 
 import android.app.Application
 import android.content.Intent
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import android.webkit.WebView
 import coil3.ImageLoader
@@ -19,7 +17,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicBoolean
 
 class ToolsApp : Application(), SingletonImageLoader.Factory {
 
@@ -37,7 +34,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
             .setFlags(Shell.FLAG_MOUNT_MASTER)
             .setTimeout(10))
         installGlobalCrashHandler()
-        startAnrWatchdog()
+        AnrWatchdog.start(this)
         migrateWebViewData()
         AppIconHelper.init(this)
         WebView.setDataDirectorySuffix("app")
@@ -173,114 +170,4 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
         }
     }
 
-    // ── ANR 看门狗 ──
-
-    /**
-     * 主线程 ANR 看门狗。
-     * 守护线程每秒 ping 主线程一次，若 3 秒未响应则判定卡死，
-     * 启动持续采样线程记录主线程栈到 anr_reports/ 目录。
-     */
-    private fun startAnrWatchdog() {
-        val appCtx = applicationContext
-        val mainHandler = Handler(Looper.getMainLooper())
-        val pingReceived = AtomicBoolean(true)
-
-        Thread({
-            while (true) {
-                Thread.sleep(1000)
-                pingReceived.set(false)
-                mainHandler.post { pingReceived.set(true) }
-                Thread.sleep(3000)
-                if (!pingReceived.get()) {
-                    val mainThread = Looper.getMainLooper().thread
-                    val anrText = buildAnrReport(mainThread)
-                    // 写 crash 文件供 ErrorReportActivity 读取
-                    try {
-                        val crashDir = File(AppDataPaths.diagnostics(appCtx), "crash_tmp").apply { mkdirs() }
-                        File(crashDir, "latest_crash.txt").writeText(anrText)
-                    } catch (_: Exception) {}
-                    DiagnosticLog.log("ANR-Watchdog", anrText)
-                    // 启动错误报告 Activity
-                    try {
-                        val intent = Intent(appCtx, ErrorReportActivity::class.java)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                        appCtx.startActivity(intent)
-                    } catch (_: Exception) {}
-                    // 继续采样主线程栈
-                    startAnrSampling(mainThread)
-                    break
-                }
-            }
-        }, "ANR-Watchdog").apply {
-            isDaemon = true
-            start()
-        }
-    }
-
-    private fun buildAnrReport(mainThread: Thread): String {
-        val sb = StringBuilder()
-        sb.appendLine("异常类型: ANR (Application Not Responding)")
-        sb.appendLine("消息: 主线程无响应超过3秒")
-        sb.appendLine("线程: ${mainThread.name} (id=${mainThread.id})")
-        sb.appendLine()
-        sb.appendLine("--- 主线程调用栈 ---")
-        mainThread.stackTrace.forEachIndexed { i, f ->
-            sb.appendLine("  #${i.toString().padStart(2, '0')}  ${f.className}.${f.methodName}(${f.fileName ?: "?"}:${f.lineNumber})")
-        }
-        return sb.toString()
-    }
-
-    /**
-     * 持续采样主线程栈，增量追加写入文件，直到进程被杀。
-     * 每 500ms 采样一次，每次立即 flush 到磁盘。
-     */
-    private fun startAnrSampling(mainThread: Thread) {
-        val appCtx = applicationContext
-        Thread({
-            val dir = File(AppDataPaths.diagnostics(appCtx), "ANR日志").apply { mkdirs() }
-            val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val file = File(dir, "anr_$ts.txt")
-            var sampleCount = 0
-
-            cleanupOldAnrReports(dir)
-
-            file.appendText("=== ANR 检测开始: $ts ===\n")
-            file.appendText("主线程: ${mainThread.name} (id=${mainThread.id})\n\n")
-
-            while (true) {
-                try {
-                    sampleCount++
-                    val now = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
-                    val stack = mainThread.stackTrace
-                    val sb = StringBuilder()
-                    sb.appendLine("--- 采样 #$sampleCount [$now] ---")
-                    if (stack.isEmpty()) {
-                        sb.appendLine("  (栈为空)")
-                    } else {
-                        stack.forEach { f ->
-                            sb.appendLine("  at ${f.className}.${f.methodName}(${f.fileName ?: "?"}:${f.lineNumber})")
-                        }
-                    }
-                    sb.appendLine()
-                    file.appendText(sb.toString())
-                } catch (_: Exception) {
-                    break
-                }
-                Thread.sleep(500)
-            }
-        }, "ANR-Sampler").apply {
-            isDaemon = true
-            start()
-        }
-    }
-
-    private fun cleanupOldAnrReports(dir: File) {
-        try {
-            val files = dir.listFiles { f -> f.extension == "txt" }
-                ?.sortedByDescending { it.name } ?: return
-            if (files.size > 10) {
-                files.drop(10).forEach { it.delete() }
-            }
-        } catch (_: Exception) {}
-    }
 }

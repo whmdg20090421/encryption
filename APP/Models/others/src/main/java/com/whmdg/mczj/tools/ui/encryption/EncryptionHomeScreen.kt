@@ -508,6 +508,7 @@ fun VaultsListTab(
     var passwordVisible by remember { mutableStateOf(false) }
     // vault 解锁异步处理
     var pendingVaultUnlock by remember { mutableStateOf<Pair<VaultRecord, String>?>(null) }
+    var pendingCachedVaultUnlock by remember { mutableStateOf<VaultRecord?>(null) }
     var isVaultOpening by remember { mutableStateOf(false) }
 
     var alsoDeleteFiles by remember { mutableStateOf(false) }
@@ -599,6 +600,36 @@ fun VaultsListTab(
         } catch (e: Exception) {
             pendingVaultUnlock = null
             isVaultOpening = false
+            vaultListError = e
+        }
+    }
+
+    // 缓存密码异步解锁（与手动输入密码相同的异步流程）
+    LaunchedEffect(pendingCachedVaultUnlock) {
+        val vault = pendingCachedVaultUnlock ?: return@LaunchedEffect
+        isVaultOpening = true
+        try {
+            val cachedCipher = lockPrefs.getString("cached_pwd_${vault.id}", null)
+            val cachedIv = lockPrefs.getString("cached_iv_${vault.id}", null)
+            if (cachedCipher == null || cachedIv == null) {
+                throw Exception("缓存密码丢失，请手动输入密码")
+            }
+            val cipherBytes = android.util.Base64.decode(cachedCipher, android.util.Base64.NO_WRAP)
+            val ivBytes = android.util.Base64.decode(cachedIv, android.util.Base64.NO_WRAP)
+            val pwd = String(
+                com.whmdg.mczj.tools.auth.KeystoreMaster.unwrap(cipherBytes, ivBytes)!!,
+                Charsets.UTF_8
+            )
+            val session = withContext(Dispatchers.IO) {
+                vaultService.open(vault.id, pwd)
+            }
+            pendingCachedVaultUnlock = null
+            isVaultOpening = false
+            onNavigate(Screen.FileManager(session))
+        } catch (e: Exception) {
+            pendingCachedVaultUnlock = null
+            isVaultOpening = false
+            clearDeadline(vault.id.toString())
             vaultListError = e
         }
     }
@@ -927,19 +958,8 @@ fun VaultsListTab(
                                                 showTimerPicker = false
 
                                                 if (isVaultUnlocked(v.id.toString())) {
-                                                    try {
-                                                        val cachedCipher = lockPrefs.getString("cached_pwd_${v.id}", null)
-                                                        val cachedIv = lockPrefs.getString("cached_iv_${v.id}", null)
-                                                        val pwd = if (cachedCipher != null && cachedIv != null) {
-                                                            val cipherBytes = android.util.Base64.decode(cachedCipher, android.util.Base64.NO_WRAP)
-                                                            val ivBytes = android.util.Base64.decode(cachedIv, android.util.Base64.NO_WRAP)
-                                                            String(com.whmdg.mczj.tools.auth.KeystoreMaster.unwrap(cipherBytes, ivBytes)!!, Charsets.UTF_8)
-                                                        } else throw Exception("缓存密码丢失")
-                                                        val session = vaultService.open(v.id, pwd)
-                                                        onNavigate(Screen.FileManager(session))
-                                                    } catch (e: Exception) {
-                                                        clearDeadline(v.id.toString())
-                                                        showPasswordDialog = v
+                                                    if (!isVaultOpening) {
+                                                        pendingCachedVaultUnlock = v
                                                     }
                                                 } else {
                                                     clearDeadline(v.id.toString())
