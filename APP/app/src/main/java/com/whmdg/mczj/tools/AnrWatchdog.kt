@@ -7,7 +7,8 @@ import android.os.Debug
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import com.whmdg.mczj.tools.util.AppDataPaths
+import android.util.Printer
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import java.io.File
 import java.text.SimpleDateFormat
@@ -82,7 +83,7 @@ object AnrWatchdog {
     private val mainThread: Thread get() = Looper.getMainLooper().thread
 
     // ── Looper 消息派发观察状态 ──
-    private var savedPrinter: Looper.Printer? = null
+    private var savedPrinter: Printer? = null
     private val dispatchStartTime = AtomicLong(0L)
     private val currentDispatchMsg = AtomicReference<String?>(null)
 
@@ -117,7 +118,7 @@ object AnrWatchdog {
         savedPrinter = try {
             looper::class.java.getDeclaredField("mLogging")
                 .apply { isAccessible = true }
-                .get(looper) as? Looper.Printer
+                .get(looper) as? Printer
         } catch (_: Exception) {
             null
         }
