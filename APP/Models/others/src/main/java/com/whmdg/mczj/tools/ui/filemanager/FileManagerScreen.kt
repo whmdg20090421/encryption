@@ -216,19 +216,20 @@ fun FileManagerScreen(
             vm.initVaultMode(vaultSession)
             vm.onNavigateVault = { screen -> onNavigate(screen) }
             // 异步计算保险箱大小（仅首次未统计时）
-            if (vaultService != null && vaultSession.record.storageSize == 0L) {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    withContext(Dispatchers.Main) {
-                        android.widget.Toast.makeText(context, "正在初始化保险箱大小...", android.widget.Toast.LENGTH_SHORT).show()
-                    }
-                    val size = vaultService.calculateDirSize(vaultSession.vaultDir)
-                    vaultService.setStorageSize(vaultSession.record.id, size)
-                    withContext(Dispatchers.Main) {
-                        android.widget.Toast.makeText(context, "保险箱大小：${com.whmdg.mczj.tools.util.FormatUtils.formatBytes(size)}", android.widget.Toast.LENGTH_SHORT).show()
-                    }
+            if (vaultSession.record.storageSize == 0L) {
+                vm.calculateFolderSizeAsync(vaultSession.vaultDir) { totalSize ->
+                    vaultService?.setStorageSize(vaultSession.record.id, totalSize)
                 }
             }
         }
+    }
+
+    // 保险箱内容修改回调（更新 lastModifiedAt）
+    DisposableEffect(vaultService, vm) {
+        vm.onVaultContentModified = { vaultId ->
+            vaultService?.markModified(vaultId)
+        }
+        onDispose { vm.onVaultContentModified = null }
     }
 
     // vault 模式保存回调注册

@@ -917,6 +917,20 @@ private fun HourlyBarChart(hourlyTable: HourlyUsageTable, categoryData: Category
                     yAxisLabelPaint
                 )
             }
+
+            // 30/60 分钟基准虚线
+            val gridLinePaint = android.graphics.Paint().apply {
+                color = android.graphics.Color.argb(179, 128, 128, 128) // 深灰 70% 不透明
+                style = android.graphics.Paint.Style.STROKE
+                strokeWidth = 0.5.dp.toPx()
+                isAntiAlias = true
+                pathEffect = android.graphics.DashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()), 0f)
+            }
+            for (mark in listOf(30, 60)) {
+                val ratio = mark.toFloat() / yMaxMinutes.coerceAtLeast(1)
+                val y = barAreaHeight - ratio * barAreaHeight
+                nativeCanvas.drawLine(yAxisWidth, y, w, y, gridLinePaint)
+            }
         }
 
         // 图例行：游戏 | 视频播放 | 其他

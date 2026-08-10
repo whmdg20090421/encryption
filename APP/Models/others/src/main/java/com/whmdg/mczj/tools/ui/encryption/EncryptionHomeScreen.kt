@@ -852,7 +852,7 @@ fun VaultsListTab(
                                 VaultInfoRow("存储用量", if (vault.storageSize > 0) com.whmdg.mczj.tools.util.FormatUtils.formatBytes(vault.storageSize) else "未统计")
                                 Spacer(modifier = Modifier.height(10.dp))
                                 // 最后更改时间
-                                VaultInfoRow("最后更改时间", formatIsoTime(vault.lastModifiedAt) ?: "未知(Null)")
+                                VaultInfoRow("最后更改时间", formatIsoTime(vault.lastModifiedAt) ?: "暂未被修改")
                                 Spacer(modifier = Modifier.height(10.dp))
                                 // 最后打开时间
                                 VaultInfoRow("最后打开时间", formatIsoTime(vault.lastOpenedAt) ?: "未知(Null)")

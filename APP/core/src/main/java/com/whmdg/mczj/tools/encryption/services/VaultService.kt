@@ -451,6 +451,7 @@ class VaultService(private val context: Context) {
         _db.save(context)
         vaults.clear()
         vaults.addAll(_db.vaults)
+        markModified(id)
     }
 
     /**

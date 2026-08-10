@@ -112,6 +112,8 @@ class FilePaneController(
     // ── 回调（由 Coordinator 注入，用于处理需要身份信息的副作用） ──
     /** 进入压缩包模式时触发（Coordinator 用于保存会话缓存） */
     var onArchiveSessionEntered: ((ArchiveBrowser.ArchiveSession) -> Unit)? = null
+    /** 保险箱内容被修改时触发（Coordinator 用于更新 lastModifiedAt） */
+    var onVaultContentModified: ((vaultId: Int) -> Unit)? = null
 
     // 最近一次 listDirEntriesViaShell 的 stderr，用于调用方判断失败原因
     private var lastShellStderr = ""
@@ -1207,12 +1209,19 @@ class FilePaneController(
             val (_, err, exit) = try {
                 executeShell("mv $escapedSrc $escapedDst")
             } catch (e: Exception) { return e.message ?: "重命名失败" }
-            return if (exit == 0) null else "重命名失败: $err"
+            if (exit == 0) {
+                if (isVaultMode) onVaultContentModified?.invoke(vaultSession!!.record.id)
+                return null
+            }
+            return "重命名失败: $err"
         }
 
         if (dest.exists()) return "已存在同名文件或文件夹"
         return try {
-            if (source.renameTo(dest)) null else "重命名失败"
+            if (source.renameTo(dest)) {
+                if (isVaultMode) onVaultContentModified?.invoke(vaultSession!!.record.id)
+                null
+            } else "重命名失败"
         } catch (e: Exception) { e.message ?: "重命名失败" }
     }
 
@@ -1226,11 +1235,18 @@ class FilePaneController(
             val (_, err, exit) = try {
                 executeShell("rm $flag $escaped")
             } catch (e: Exception) { return e.message ?: "删除失败" }
-            return if (exit == 0) null else "删除失败: $err"
+            if (exit == 0) {
+                if (isVaultMode) onVaultContentModified?.invoke(vaultSession!!.record.id)
+                return null
+            }
+            return "删除失败: $err"
         }
         val file = File(entry.path)
         return try {
-            if (SpecialPermissionVerifier.safeDelete(file)) null else "删除失败"
+            if (SpecialPermissionVerifier.safeDelete(file)) {
+                if (isVaultMode) onVaultContentModified?.invoke(vaultSession!!.record.id)
+                null
+            } else "删除失败"
         } catch (e: Exception) { e.message ?: "删除失败" }
     }
 
@@ -1246,13 +1262,20 @@ class FilePaneController(
             val (_, err, exit) = try {
                 executeShell(cmd)
             } catch (e: Exception) { return e.message ?: "创建失败" }
-            return if (exit == 0) null else "创建失败: $err"
+            if (exit == 0) {
+                if (isVaultMode) onVaultContentModified?.invoke(vaultSession!!.record.id)
+                return null
+            }
+            return "创建失败: $err"
         }
 
         if (target.exists()) return "已存在同名文件或文件夹"
         return try {
             val success = if (isFolder) target.mkdir() else target.createNewFile()
-            if (success) null else "创建失败"
+            if (success) {
+                if (isVaultMode) onVaultContentModified?.invoke(vaultSession!!.record.id)
+                null
+            } else "创建失败"
         } catch (e: Exception) { e.message ?: "创建失败" }
     }
 
@@ -2562,11 +2585,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return path == root || path.startsWith("$root/")
     }
 
-    /** 导航后检查当前聚焦面板是否离开了 vault，若是则销毁密钥 */
-    private fun checkVaultPanelExit() {
-        if (!isVaultMode) return
-        if (!isPathInVault(currentPanel.path)) {
-            exitVaultMode()
+    /** 导航后检查指定面板是否离开了 vault，若是则销毁该面板的密钥 */
+    private fun checkVaultPanelExit(ctrl: FilePaneController) {
+        if (!ctrl.isVaultMode) return
+        val vaultDir = ctrl.vaultSession?.vaultDir?.absolutePath ?: return
+        if (ctrl.state.path != vaultDir && !ctrl.state.path.startsWith("$vaultDir/")) {
+            ctrl.vaultSession?.dispose()
+            ctrl.vaultSession = null
+            cleanupVaultTempFiles()
         }
     }
 
@@ -2772,7 +2798,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 核心导航：切换路径 + 刷新列表（异步） ──
     fun navigateTo(path: String, onComplete: ((String) -> Unit)? = null) {
-        focusedController.navigateTo(path, onComplete, onPathChanged = { checkVaultPanelExit() })
+        focusedController.navigateTo(path, onComplete, onPathChanged = { checkVaultPanelExit(focusedController) })
     }
 
     /** 软链接弹窗状态：null=不显示，FileEntry=被点击的软链接 */
@@ -2851,11 +2877,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun exitVaultMode() {
-        panels.exitVaultMode()
-        左.path = safeDefault
-        左.entries = listOf()
-        左.pendingVaultTextEntry = null
-        左.pendingVaultOriginalPath = null
+        val ctrl = focusedController
+        ctrl.vaultSession?.dispose()
+        ctrl.vaultSession = null
+        val panel = ctrl.state
+        panel.path = safeDefault
+        panel.entries = listOf()
+        panel.pendingVaultTextEntry = null
+        panel.pendingVaultOriginalPath = null
         onNavigateVault = null
         cleanupVaultTempFiles()
     }
@@ -2871,7 +2900,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** vault 模式下打开文件：解密到临时文件后分发 */
     fun openVaultFile(entry: FileEntry): Screen? {
-        val session = vaultSession ?: return null
+        val session = focusedController.vaultSession ?: return null
 
         if (entry.isDirectory) {
             navigateToFolder(entry)
@@ -2923,7 +2952,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** vault 模式下 TextEditor 保存回调：重新加密写回保险箱 */
     fun handleVaultTextSave(content: String) {
-        val session = vaultSession ?: return
+        val session = focusedController.vaultSession ?: return
         val panel = currentPanel
         val entry = panel.pendingVaultTextEntry ?: return
         val originalPath = panel.pendingVaultOriginalPath ?: return
@@ -2959,6 +2988,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     panel.pendingVaultTextEntry = null
                     panel.pendingVaultOriginalPath = null
                     refreshCurrent()
+                    onVaultContentModified?.invoke(session.record.id)
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -2986,7 +3016,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      *
      * 完成后将 FolderSizeDb 持久化并刷新当前面板列表。
      */
-    fun calculateFolderSizeAsync(rootPath: String) {
+    fun calculateFolderSizeAsync(rootPath: String, onTotalSizeReady: ((Long) -> Unit)? = null) {
         if (SizeCalcManager.isCalculating) {
             Toast.makeText(context, "已有统计任务在进行中", Toast.LENGTH_SHORT).show()
             return
@@ -3020,6 +3050,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         folderSizeDb = FolderSizeDb.load(saveDir)
                         refreshCurrent()
                         SizeCalcManager.finish(result.rootSize, result.tree)
+                        onTotalSizeReady?.invoke(result.rootSize)
                     }
                     is SizeCalcResult.PermissionDenied -> {
                         // 弹窗询问用户是否保存已统计的部分结果
@@ -3262,8 +3293,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             pendingSymlinkEntry = entry
             return null
         }
-        // vault 模式：解密后打开
-        if (isVaultMode) {
+        // vault 模式：解密后打开（仅当前聚焦面板在保险箱内才走此路径）
+        if (focusedController.isVaultMode) {
             return openVaultFile(entry)
         }
 
