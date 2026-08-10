@@ -17,9 +17,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Stroke
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.drawscope.CornerRadius
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -29,7 +29,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.encryption.services.VaultService
-import com.whmdg.mczj.tools.ui.LocalIsDarkMode
+import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.components.glowEffect
 import com.whmdg.mczj.tools.util.FormatUtils
 
