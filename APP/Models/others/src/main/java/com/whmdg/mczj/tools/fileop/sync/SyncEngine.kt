@@ -145,7 +145,7 @@ class SyncEngine(
             val success = try {
                 // 确保远程目录存在
                 ensureRemoteDir(buildRemotePath(remoteBasePath, ""), relPath)
-                webdavClient.uploadFile(localFile, remotePath) { bytesWritten, total ->
+                webdavClient.uploadFile(localFile, remotePath) { bytesWritten ->
                     fileProgress[relPath] = fileProgress[relPath]!!.copy(uploadedBytes = bytesWritten)
                     val nowMs = System.currentTimeMillis()
                     val dtMs = nowMs - lastTimeMs
@@ -191,7 +191,7 @@ class SyncEngine(
             localFile.parentFile?.mkdirs()
 
             val success = try {
-                webdavClient.downloadFile(remoteInfo.remotePath, localFile) { bytesRead, total ->
+                webdavClient.downloadFile(remoteInfo.remotePath, localFile) { bytesRead ->
                     fileProgress[relPath] = fileProgress[relPath]!!.copy(uploadedBytes = bytesRead)
                     val nowMs = System.currentTimeMillis()
                     val dtMs = nowMs - lastTimeMs
