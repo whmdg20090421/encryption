@@ -52,7 +52,10 @@ open class Screen {
     data class FileManager(
         val vaultSession: VaultSession? = null,
         val cloudMode: Boolean = false,
-        val webdavConfig: com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig? = null,
+        val webdavUrl: String = "",
+        val webdavUser: String = "",
+        val webdavPassword: String = "",
+        val webdavPath: String = "",
         val cloudVaultDir: String? = null,
         val cloudVaultId: Int = 0,
         val cloudVaultName: String = ""

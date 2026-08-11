@@ -282,7 +282,10 @@ fun MainAppContainer() {
                 vaultSession = currentScreen.vaultSession,
                 vaultService = vaultService,
                 cloudMode = currentScreen.cloudMode,
-                webdavConfig = currentScreen.webdavConfig,
+                webdavUrl = currentScreen.webdavUrl,
+                webdavUser = currentScreen.webdavUser,
+                webdavPassword = currentScreen.webdavPassword,
+                webdavPath = currentScreen.webdavPath,
                 cloudVaultDir = currentScreen.cloudVaultDir,
                 cloudVaultId = currentScreen.cloudVaultId,
                 cloudVaultName = currentScreen.cloudVaultName

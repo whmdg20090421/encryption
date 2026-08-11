@@ -201,7 +201,10 @@ fun EncryptionHomeScreen(
                         onNavigateToFileManager = { config, vaultDir, vaultId, vaultName ->
                             onNavigate(Screen.FileManager(
                                 cloudMode = true,
-                                webdavConfig = config,
+                                webdavUrl = "${config.protocol}://${config.host}:${config.port}",
+                                webdavUser = config.username,
+                                webdavPassword = config.password,
+                                webdavPath = config.relativePath,
                                 cloudVaultDir = vaultDir,
                                 cloudVaultId = vaultId,
                                 cloudVaultName = vaultName

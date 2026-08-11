@@ -575,7 +575,7 @@ private fun WebDavSettingsDialog(
 }
 
 /** 解析 WebDAV URL 为 (protocol, host, port) */
-private fun parseWebDavUrl(url: String): Triple<String, String, Int>? {
+fun parseWebDavUrlPublic(url: String): Triple<String, String, Int>? {
     val trimmed = url.trim()
     if (trimmed.isBlank()) return null
     return try {
