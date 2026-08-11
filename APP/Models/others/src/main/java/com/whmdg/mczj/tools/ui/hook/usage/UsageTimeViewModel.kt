@@ -27,6 +27,7 @@ data class UsageTimeUiState(
     val categoryHourlyData: CategoryHourlyData? = null,
     val mergeStrategy: MergeStrategy = MergeStrategy.PATH_B_ONLY,
     val excludedPackages: Set<String> = emptySet(),
+    val excludedTimeRanges: List<ExcludedTimeRange> = emptyList(),
     val error: String? = null
 )
 
@@ -48,10 +49,12 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
 
     // 临时排除列表（编辑中，未确认）
     private var _tempExcludedPackages: MutableSet<String> = mutableSetOf()
+    private var _tempExcludedTimeRanges: MutableList<ExcludedTimeRange> = mutableListOf()
 
     companion object {
         private const val KEY_MERGE_STRATEGY = "usage_merge_strategy"
         private const val KEY_EXCLUDED_PACKAGES = "usage_excluded_packages"
+        private const val KEY_EXCLUDED_TIME_RANGES = "usage_excluded_time_ranges"
     }
 
     init {
@@ -66,7 +69,16 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
         // 读取持久化的排除列表
         val excluded = prefs.getStringSet(KEY_EXCLUDED_PACKAGES, null)?.toSet() ?: emptySet()
 
-        _uiState.value = _uiState.value.copy(mergeStrategy = strategy, excludedPackages = excluded)
+        // 读取持久化的排除时间段
+        val excludedRanges = ExcludedTimeRange.fromJson(
+            prefs.getString(KEY_EXCLUDED_TIME_RANGES, null)
+        )
+
+        _uiState.value = _uiState.value.copy(
+            mergeStrategy = strategy,
+            excludedPackages = excluded,
+            excludedTimeRanges = excludedRanges
+        )
 
         checkPermissionAndLoad()
     }
@@ -98,10 +110,24 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
 
             try {
+                // 清理过期的一次性排除时间段
+                val now = System.currentTimeMillis()
+                val currentRanges = _uiState.value.excludedTimeRanges
+                val validRanges = currentRanges.filter { range ->
+                    range.isRecurring || range.endMillis > now
+                }
+                if (validRanges.size < currentRanges.size) {
+                    prefs.edit()
+                        .putString(KEY_EXCLUDED_TIME_RANGES, ExcludedTimeRange.toJson(validRanges))
+                        .apply()
+                    _uiState.value = _uiState.value.copy(excludedTimeRanges = validRanges)
+                }
+
                 val strategy = _uiState.value.mergeStrategy
                 val excluded = _uiState.value.excludedPackages
+                val excludedRanges = _uiState.value.excludedTimeRanges
                 val usageList = withContext(Dispatchers.IO) {
-                    usageStatsHelper.getTodayUsage(strategy, excluded)
+                    usageStatsHelper.getTodayUsage(strategy, excluded, excludedRanges)
                 }
 
                 // 刷新包名→应用名缓存
@@ -114,12 +140,12 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
 
                 // 加载每小时使用数据（固定使用路径 B）
                 val hourlyTable = withContext(Dispatchers.IO) {
-                    usageStatsHelper.buildHourlyTable(excluded)
+                    usageStatsHelper.buildHourlyTable(excluded, excludedRanges)
                 }
 
                 // 加载按类别分组的数据
                 val categoryData = withContext(Dispatchers.IO) {
-                    usageStatsHelper.buildCategoryHourlyData(excluded)
+                    usageStatsHelper.buildCategoryHourlyData(excluded, excludedRanges)
                 }
 
                 _uiState.value = _uiState.value.copy(
@@ -156,6 +182,7 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
      */
     fun openExcludePanel() {
         _tempExcludedPackages = _uiState.value.excludedPackages.toMutableSet()
+        _tempExcludedTimeRanges = _uiState.value.excludedTimeRanges.toMutableList()
     }
 
     /**
@@ -199,8 +226,12 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
      */
     fun saveExcludedPackages() {
         val newSet = _tempExcludedPackages.toSet()
-        prefs.edit().putStringSet(KEY_EXCLUDED_PACKAGES, newSet).apply()
-        _uiState.value = _uiState.value.copy(excludedPackages = newSet)
+        val newRanges = _tempExcludedTimeRanges.toList()
+        prefs.edit()
+            .putStringSet(KEY_EXCLUDED_PACKAGES, newSet)
+            .putString(KEY_EXCLUDED_TIME_RANGES, ExcludedTimeRange.toJson(newRanges))
+            .apply()
+        _uiState.value = _uiState.value.copy(excludedPackages = newSet, excludedTimeRanges = newRanges)
         loadTodayUsage()
     }
 
@@ -209,6 +240,7 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
      */
     fun cancelExcludeChanges() {
         _tempExcludedPackages.clear()
+        _tempExcludedTimeRanges.clear()
     }
 
     /**
@@ -217,6 +249,27 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
     fun applySelectionToTemp(selectedPackages: Set<String>) {
         _tempExcludedPackages.clear()
         _tempExcludedPackages.addAll(selectedPackages)
+    }
+
+    // ── 排除时间段管理 ──
+
+    /**
+     * 获取临时排除时间段列表（供 UI 显示）
+     */
+    fun getTempExcludedTimeRanges(): List<ExcludedTimeRange> = _tempExcludedTimeRanges.toList()
+
+    /**
+     * 添加排除时间段到临时列表
+     */
+    fun addExcludedTimeRange(range: ExcludedTimeRange) {
+        _tempExcludedTimeRanges.add(range)
+    }
+
+    /**
+     * 从临时列表移除排除时间段
+     */
+    fun removeExcludedTimeRange(id: Long) {
+        _tempExcludedTimeRanges.removeAll { it.id == id }
     }
 
     /**
@@ -255,8 +308,9 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
      */
     suspend fun buildAndShareXlsx(): Intent? {
         val excluded = _uiState.value.excludedPackages
+        val excludedRanges = _uiState.value.excludedTimeRanges
         val table = withContext(Dispatchers.IO) {
-            usageStatsHelper.buildHourlyTable(excluded)
+            usageStatsHelper.buildHourlyTable(excluded, excludedRanges)
         } ?: return null
 
         // 获取 Path A 原始数据（今日 00:00 ~ 现在）

@@ -68,6 +68,38 @@ class UsageStatsHelper(private val context: Context) {
     }
 
     /**
+     * 判断一段使用事件是否与一次性排除时间段重叠
+     */
+    private fun isExcludedByOneTimeRange(
+        resumeTime: Long, pauseTime: Long,
+        oneTimeRanges: List<ExcludedTimeRange>
+    ): Boolean {
+        return oneTimeRanges.any { range ->
+            resumeTime < range.endMillis && pauseTime > range.startMillis
+        }
+    }
+
+    /**
+     * 判断某个时间点是否被周期性排除规则命中
+     *
+     * 条件：时间点所在日期的星期几在 repeatDays 中，
+     * 且时间点的分钟在排除范围内。
+     */
+    private fun isMinuteExcludedByRecurring(
+        timeMillis: Long,
+        recurringRanges: List<ExcludedTimeRange>
+    ): Boolean {
+        if (recurringRanges.isEmpty()) return false
+        val cal = Calendar.getInstance()
+        cal.timeInMillis = timeMillis
+        val dow = (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7 + 1 // Monday=1..Sunday=7
+        val minuteOfDay = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+        return recurringRanges.any { range ->
+            dow in range.repeatDays!! && minuteOfDay >= range.startMinuteOfDay && minuteOfDay < range.endMinuteOfDay
+        }
+    }
+
+    /**
      * 从 SharedPreferences 加载缓存
      */
     private fun loadAppNameCache(): Map<String, String> {
@@ -175,7 +207,8 @@ class UsageStatsHelper(private val context: Context) {
      */
     fun getTodayUsage(
         strategy: MergeStrategy = MergeStrategy.MERGED_MAX,
-        excludedPackages: Set<String> = emptySet()
+        excludedPackages: Set<String> = emptySet(),
+        excludedTimeRanges: List<ExcludedTimeRange> = emptyList()
     ): List<AppUsageInfo> {
         if (!hasUsagePermission()) return emptyList()
 
@@ -189,7 +222,7 @@ class UsageStatsHelper(private val context: Context) {
         val startTime = calendar.timeInMillis
         val endTime = System.currentTimeMillis()
 
-        return getUsageForTimeRange(startTime, endTime, isToday = true, strategy = strategy, excludedPackages = excludedPackages)
+        return getUsageForTimeRange(startTime, endTime, isToday = true, strategy = strategy, excludedPackages = excludedPackages, excludedTimeRanges = excludedTimeRanges)
     }
 
     /**
@@ -272,7 +305,8 @@ class UsageStatsHelper(private val context: Context) {
         endTime: Long,
         isToday: Boolean,
         strategy: MergeStrategy = MergeStrategy.MERGED_MAX,
-        excludedPackages: Set<String> = emptySet()
+        excludedPackages: Set<String> = emptySet(),
+        excludedTimeRanges: List<ExcludedTimeRange> = emptyList()
     ): List<AppUsageInfo> {
         val statsManager = usageStatsManager ?: return emptyList()
 
@@ -295,7 +329,7 @@ class UsageStatsHelper(private val context: Context) {
 
         // 路径 B：UsageEvents 实时数据（仅今日）
         val pathBStats = if (isToday) {
-            try { getUsageFromEvents(startTime, endTime) } catch (_: Exception) { emptyMap() }
+            try { getUsageFromEvents(startTime, endTime, excludedTimeRanges) } catch (_: Exception) { emptyMap() }
         } else {
             emptyMap()
         }
@@ -348,8 +382,15 @@ class UsageStatsHelper(private val context: Context) {
      * 跟踪 ACTIVITY_RESUMED / ACTIVITY_PAUSED 事件对，
      * 比 queryUsageStats 更精确（尤其是今日数据）。
      */
-    private fun getUsageFromEvents(startTime: Long, endTime: Long): Map<String, Long> {
+    private fun getUsageFromEvents(
+        startTime: Long,
+        endTime: Long,
+        excludedTimeRanges: List<ExcludedTimeRange> = emptyList()
+    ): Map<String, Long> {
         val statsManager = usageStatsManager ?: return emptyMap()
+
+        val oneTimeRanges = excludedTimeRanges.filter { !it.isRecurring }
+        val recurringRanges = excludedTimeRanges.filter { it.isRecurring }
 
         val usageMap = mutableMapOf<String, Long>()
         val lastResumeTime = mutableMapOf<String, Long>()
@@ -376,7 +417,9 @@ class UsageStatsHelper(private val context: Context) {
                         val resumeTime = lastResumeTime.remove(packageName)
                         if (resumeTime != null && resumeTime > 0) {
                             val duration = event.timeStamp - resumeTime
-                            if (duration in 1 until 24 * 60 * 60 * 1000) {
+                            if (duration in 1 until 24 * 60 * 60 * 1000
+                                && !isExcludedByOneTimeRange(resumeTime, event.timeStamp, oneTimeRanges)
+                                && !isMinuteExcludedByRecurring((resumeTime + event.timeStamp) / 2, recurringRanges)) {
                                 usageMap[packageName] = (usageMap[packageName] ?: 0L) + duration
                             }
                         }
@@ -387,7 +430,9 @@ class UsageStatsHelper(private val context: Context) {
                             val resumeTime = lastResumeTime.remove(packageName)
                             if (resumeTime != null && resumeTime > 0) {
                                 val duration = event.timeStamp - resumeTime
-                                if (duration in 1 until 24 * 60 * 60 * 1000) {
+                                if (duration in 1 until 24 * 60 * 60 * 1000
+                                    && !isExcludedByOneTimeRange(resumeTime, event.timeStamp, oneTimeRanges)
+                                    && !isMinuteExcludedByRecurring((resumeTime + event.timeStamp) / 2, recurringRanges)) {
                                     usageMap[packageName] = (usageMap[packageName] ?: 0L) + duration
                                 }
                             }
@@ -401,7 +446,9 @@ class UsageStatsHelper(private val context: Context) {
             for ((packageName, resumeTime) in lastResumeTime) {
                 if (resumeTime > 0 && currentTime > resumeTime) {
                     val duration = currentTime - resumeTime
-                    if (duration in 1 until 24 * 60 * 60 * 1000) {
+                    if (duration in 1 until 24 * 60 * 60 * 1000
+                        && !isExcludedByOneTimeRange(resumeTime, currentTime, oneTimeRanges)
+                        && !isMinuteExcludedByRecurring((resumeTime + currentTime) / 2, recurringRanges)) {
                         usageMap[packageName] = (usageMap[packageName] ?: 0L) + duration
                     }
                 }
@@ -530,7 +577,10 @@ class UsageStatsHelper(private val context: Context) {
      *
      * @return 表格数据，无权限时返回 null
      */
-    fun buildHourlyTable(excludedPackages: Set<String> = emptySet()): HourlyUsageTable? {
+    fun buildHourlyTable(
+        excludedPackages: Set<String> = emptySet(),
+        excludedTimeRanges: List<ExcludedTimeRange> = emptyList()
+    ): HourlyUsageTable? {
         if (!hasUsagePermission()) return null
 
         val calendar = Calendar.getInstance().apply {
@@ -543,6 +593,9 @@ class UsageStatsHelper(private val context: Context) {
         val endTime = System.currentTimeMillis()
 
         val statsManager = usageStatsManager ?: return null
+
+        val oneTimeRanges = excludedTimeRanges.filter { !it.isRecurring }
+        val recurringRanges = excludedTimeRanges.filter { it.isRecurring }
 
         // 包名 → 24 小时桶（毫秒）
         val tableData = mutableMapOf<String, LongArray>()
@@ -570,9 +623,10 @@ class UsageStatsHelper(private val context: Context) {
                     UsageEvents.Event.ACTIVITY_PAUSED -> {
                         val resumeTime = lastResumeTime.remove(packageName) ?: continue
                         val pauseTime = event.timeStamp
-                        if (pauseTime > resumeTime) {
+                        if (pauseTime > resumeTime
+                            && !isExcludedByOneTimeRange(resumeTime, pauseTime, oneTimeRanges)) {
                             addUsageToHourlyBuckets(
-                                tableData, packageName, resumeTime, pauseTime, startOfDay
+                                tableData, packageName, resumeTime, pauseTime, startOfDay, recurringRanges
                             )
                         }
                     }
@@ -581,9 +635,10 @@ class UsageStatsHelper(private val context: Context) {
                         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                             val resumeTime = lastResumeTime.remove(packageName) ?: continue
                             val pauseTime = event.timeStamp
-                            if (pauseTime > resumeTime) {
+                            if (pauseTime > resumeTime
+                                && !isExcludedByOneTimeRange(resumeTime, pauseTime, oneTimeRanges)) {
                                 addUsageToHourlyBuckets(
-                                    tableData, packageName, resumeTime, pauseTime, startOfDay
+                                    tableData, packageName, resumeTime, pauseTime, startOfDay, recurringRanges
                                 )
                             }
                         }
@@ -594,9 +649,10 @@ class UsageStatsHelper(private val context: Context) {
             // 处理仍在前台的应用
             val currentTime = System.currentTimeMillis().coerceAtMost(endTime)
             for ((packageName, resumeTime) in lastResumeTime) {
-                if (resumeTime > 0 && currentTime > resumeTime) {
+                if (resumeTime > 0 && currentTime > resumeTime
+                    && !isExcludedByOneTimeRange(resumeTime, currentTime, oneTimeRanges)) {
                     addUsageToHourlyBuckets(
-                        tableData, packageName, resumeTime, currentTime, startOfDay
+                        tableData, packageName, resumeTime, currentTime, startOfDay, recurringRanges
                     )
                 }
             }
@@ -639,8 +695,11 @@ class UsageStatsHelper(private val context: Context) {
      * 复用 buildHourlyTable 的逻辑，额外按 ApplicationInfo.category 分组。
      * @return 类别分组数据，无权限时返回 null
      */
-    fun buildCategoryHourlyData(excludedPackages: Set<String> = emptySet()): CategoryHourlyData? {
-        val table = buildHourlyTable(excludedPackages) ?: return null
+    fun buildCategoryHourlyData(
+        excludedPackages: Set<String> = emptySet(),
+        excludedTimeRanges: List<ExcludedTimeRange> = emptyList()
+    ): CategoryHourlyData? {
+        val table = buildHourlyTable(excludedPackages, excludedTimeRanges) ?: return null
 
         val gameHourly = LongArray(24)
         val mediaHourly = LongArray(24)
@@ -772,22 +831,40 @@ class UsageStatsHelper(private val context: Context) {
         packageName: String,
         startTime: Long,
         endTime: Long,
-        startOfDay: Long
+        startOfDay: Long,
+        recurringRanges: List<ExcludedTimeRange> = emptyList()
     ) {
         val hourly = tableData.getOrPut(packageName) { LongArray(24) }
 
+        // 预计算今天的星期几，用于周期性排除
+        val todayDow = if (recurringRanges.isNotEmpty()) {
+            val cal = Calendar.getInstance()
+            cal.timeInMillis = startOfDay
+            (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7 + 1 // Monday=1..Sunday=7
+        } else 0
+
         var current = startTime
         while (current < endTime) {
-            // 当前小时的结束时间
             val hoursSinceMidnight = ((current - startOfDay) / (1000 * 60 * 60)).toInt()
             if (hoursSinceMidnight < 0 || hoursSinceMidnight >= 24) break
 
             val hourEnd = startOfDay + (hoursSinceMidnight.toLong() + 1) * 1000 * 60 * 60
             val segmentEnd = minOf(endTime, hourEnd)
-            val duration = segmentEnd - current
 
-            if (duration > 0) {
-                hourly[hoursSinceMidnight] += duration
+            // 周期性排除：检查该小时是否在排除范围内
+            val hourMinuteStart = hoursSinceMidnight * 60
+            val hourMinuteEnd = (hoursSinceMidnight + 1) * 60
+            val excludedByRecurring = recurringRanges.any { range ->
+                todayDow in range.repeatDays!! &&
+                    hourMinuteStart < range.endMinuteOfDay &&
+                    hourMinuteEnd > range.startMinuteOfDay
+            }
+
+            if (!excludedByRecurring) {
+                val duration = segmentEnd - current
+                if (duration > 0) {
+                    hourly[hoursSinceMidnight] += duration
+                }
             }
 
             current = segmentEnd

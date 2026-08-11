@@ -8,11 +8,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,6 +24,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -28,12 +36,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -50,6 +62,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -58,10 +71,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -72,21 +87,28 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.whmdg.mczj.tools.ui.hook.usage.AppUsageInfo
 import com.whmdg.mczj.tools.ui.hook.usage.CategoryHourlyData
+import com.whmdg.mczj.tools.ui.hook.usage.ExcludedTimeRange
 import com.whmdg.mczj.tools.ui.hook.usage.HourlyUsageTable
 import com.whmdg.mczj.tools.ui.hook.usage.MergeStrategy
 import com.whmdg.mczj.tools.ui.hook.usage.PathResult
 import com.whmdg.mczj.tools.ui.hook.usage.UsageTimeViewModel
-import kotlinx.coroutines.launch
 
 // ==================== 自定义颜色 ====================
 
@@ -117,6 +139,9 @@ fun UsageTimeScreen(
     // 排除应用弹窗状态
     var showExcludePanel by remember { mutableStateOf(false) }
     var showAppSelectionPanel by remember { mutableStateOf(false) }
+    var showTimeRangeDialog by remember { mutableStateOf(false) }
+    var showFixedTimeDialog by remember { mutableStateOf(false) }
+    var excludeRefreshTrigger by remember { mutableIntStateOf(0) }
 
     // onResume 时自动刷新
     DisposableEffect(lifecycleOwner) {
@@ -181,7 +206,7 @@ fun UsageTimeScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("排除应用") },
+                                text = { Text("排除应用与时间") },
                                 onClick = {
                                     showMenu = false
                                     viewModel.openExcludePanel()
@@ -291,6 +316,37 @@ fun UsageTimeScreen(
             },
             onSelectApps = {
                 showAppSelectionPanel = true
+            },
+            onAddTimeRange = {
+                showTimeRangeDialog = true
+            },
+            onAddFixedTime = {
+                showFixedTimeDialog = true
+            },
+            refreshTrigger = excludeRefreshTrigger
+        )
+    }
+
+    // 添加排除时间段对话框
+    if (showTimeRangeDialog) {
+        ExcludeTimeRangeDialog(
+            onDismiss = { showTimeRangeDialog = false },
+            onConfirm = { range ->
+                viewModel.addExcludedTimeRange(range)
+                showTimeRangeDialog = false
+                excludeRefreshTrigger++
+            }
+        )
+    }
+
+    // 添加固定排除时段对话框
+    if (showFixedTimeDialog) {
+        ExcludeFixedTimeDialog(
+            onDismiss = { showFixedTimeDialog = false },
+            onConfirm = { range ->
+                viewModel.addExcludedTimeRange(range)
+                showFixedTimeDialog = false
+                excludeRefreshTrigger++
             }
         )
     }
@@ -303,6 +359,7 @@ fun UsageTimeScreen(
             onConfirm = { selected ->
                 viewModel.applySelectionToTemp(selected)
                 showAppSelectionPanel = false
+                excludeRefreshTrigger++
             }
         )
     }
@@ -426,28 +483,33 @@ private fun formatPathTime(millis: Long): String {
     }
 }
 
-// ==================== 排除应用主面板 ====================
+// ==================== 排除应用与时间主面板 ====================
 
 @Composable
 private fun ExcludeAppsPanel(
     viewModel: UsageTimeViewModel,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
-    onSelectApps: () -> Unit
+    onSelectApps: () -> Unit,
+    onAddTimeRange: () -> Unit,
+    onAddFixedTime: () -> Unit,
+    refreshTrigger: Int = 0
 ) {
     var showInput by remember { mutableStateOf(false) }
     var inputText by remember { mutableStateOf("") }
     var inputError by remember { mutableStateOf<String?>(null) }
     var tempExcluded by remember { mutableStateOf(viewModel.getTempExcludedPackages()) }
+    var tempTimeRanges by remember { mutableStateOf(viewModel.getTempExcludedTimeRanges()) }
 
-    // 每次 recomposition 时刷新临时列表
-    LaunchedEffect(showInput) {
+    // 面板首次显示、输入框状态变化、或从子对话框返回时，刷新临时列表
+    LaunchedEffect(showInput, refreshTrigger) {
         tempExcluded = viewModel.getTempExcludedPackages()
+        tempTimeRanges = viewModel.getTempExcludedTimeRanges()
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("排除应用") },
+        title = { Text("排除应用与时间") },
         text = {
             Column(modifier = Modifier.padding(0.dp)) {
                 // 第一行：添加应用 + 选择应用
@@ -473,6 +535,25 @@ private fun ExcludeAppsPanel(
                         Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("选择应用")
+                    }
+                }
+
+                // 第二行：添加时间 + 固定时长
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    TextButton(onClick = {
+                        onAddTimeRange()
+                    }) {
+                        Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("添加时间")
+                    }
+                    TextButton(onClick = { onAddFixedTime() }) {
+                        Icon(Icons.Default.DateRange, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("固定时长")
                     }
                 }
 
@@ -532,7 +613,7 @@ private fun ExcludeAppsPanel(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                // 排除列表
+                // 排除应用列表
                 if (tempExcluded.isEmpty()) {
                     Text(
                         text = "暂无排除应用",
@@ -569,6 +650,44 @@ private fun ExcludeAppsPanel(
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
+                            }
+                        }
+                    }
+                }
+
+                // 分隔线 + 排除时间段列表
+                if (tempTimeRanges.isNotEmpty()) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                    tempTimeRanges.forEach { range ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (range.isRecurring) {
+                                    ExcludedTimeRange.formatRecurring(range.startMinuteOfDay, range.endMinuteOfDay, range.repeatDays!!)
+                                } else {
+                                    ExcludedTimeRange.formatOneTime(range.startMillis, range.endMillis)
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1
+                            )
+                            IconButton(
+                                onClick = {
+                                    viewModel.removeExcludedTimeRange(range.id)
+                                    tempTimeRanges = viewModel.getTempExcludedTimeRanges()
+                                },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = "删除",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
                     }
@@ -1136,6 +1255,674 @@ private fun PermissionRequiredState() {
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
+        )
+    }
+}
+
+// ==================== 排除时间段对话框 ====================
+
+/**
+ * 排除时间段对话框
+ *
+ * 两行输入：从 [年] [月日] [时分] 和 到 [年] [月日] [时分]
+ * 默认：从 = 今天 00:00，到 = 当前时间
+ * 三个输入框各自弹出底部面板，互斥（同时只能展开一个）
+ */
+@Composable
+private fun ExcludeTimeRangeDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (ExcludedTimeRange) -> Unit
+) {
+    val now = java.util.Calendar.getInstance()
+
+    // 从：今天 00:00
+    var fromYear by remember { mutableIntStateOf(now.get(java.util.Calendar.YEAR)) }
+    var fromMonth by remember { mutableIntStateOf(now.get(java.util.Calendar.MONTH)) }
+    var fromDay by remember { mutableIntStateOf(now.get(java.util.Calendar.DAY_OF_MONTH)) }
+    var fromHour by remember { mutableIntStateOf(0) }
+    var fromMinute by remember { mutableIntStateOf(0) }
+
+    // 到：当前时间
+    var toYear by remember { mutableIntStateOf(now.get(java.util.Calendar.YEAR)) }
+    var toMonth by remember { mutableIntStateOf(now.get(java.util.Calendar.MONTH)) }
+    var toDay by remember { mutableIntStateOf(now.get(java.util.Calendar.DAY_OF_MONTH)) }
+    var toHour by remember { mutableIntStateOf(now.get(java.util.Calendar.HOUR_OF_DAY)) }
+    var toMinute by remember { mutableIntStateOf(now.get(java.util.Calendar.MINUTE)) }
+
+    // 当前展开的面板（互斥）
+    sealed class ActivePanel {
+        data object None : ActivePanel()
+        data class Year(val isFrom: Boolean) : ActivePanel()
+        data class MonthDay(val isFrom: Boolean) : ActivePanel()
+        data class HourMinute(val isFrom: Boolean) : ActivePanel()
+    }
+    var activePanel by remember { mutableStateOf<ActivePanel>(ActivePanel.None) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+        val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+        val dialogWidth = screenWidth * 0.85f
+        val dialogHeight = screenHeight * 0.7f
+
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .width(dialogWidth)
+                    .height(dialogHeight)
+                    .padding(16.dp)
+            ) {
+                // 标题
+                Text(
+                    text = "排除时间段",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                // 从
+                Text(
+                    text = "从",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                TimePointRow(
+                    year = fromYear, month = fromMonth, day = fromDay,
+                    hour = fromHour, minute = fromMinute,
+                    onYearClick = { if (activePanel is ActivePanel.None) activePanel = ActivePanel.Year(true) },
+                    onMonthDayClick = { if (activePanel is ActivePanel.None) activePanel = ActivePanel.MonthDay(true) },
+                    onHourMinuteClick = { if (activePanel is ActivePanel.None) activePanel = ActivePanel.HourMinute(true) }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 到
+                Text(
+                    text = "到",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                TimePointRow(
+                    year = toYear, month = toMonth, day = toDay,
+                    hour = toHour, minute = toMinute,
+                    onYearClick = { if (activePanel is ActivePanel.None) activePanel = ActivePanel.Year(false) },
+                    onMonthDayClick = { if (activePanel is ActivePanel.None) activePanel = ActivePanel.MonthDay(false) },
+                    onHourMinuteClick = { if (activePanel is ActivePanel.None) activePanel = ActivePanel.HourMinute(false) }
+                )
+
+                // 面板区域
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    when (val panel = activePanel) {
+                        is ActivePanel.Year -> {
+                            val initialYear = if (panel.isFrom) fromYear else toYear
+                            YearWheelPanel(
+                                initialYear = initialYear,
+                                onConfirm = { selectedYear ->
+                                    if (panel.isFrom) fromYear = selectedYear else toYear = selectedYear
+                                    activePanel = ActivePanel.None
+                                },
+                                onCancel = { activePanel = ActivePanel.None }
+                            )
+                        }
+                        is ActivePanel.MonthDay -> {
+                            val initYear = if (panel.isFrom) fromYear else toYear
+                            val initMonth = if (panel.isFrom) fromMonth else toMonth
+                            val initDay = if (panel.isFrom) fromDay else toDay
+                            MonthDayPanel(
+                                initYear = initYear, initMonth = initMonth, initDay = initDay,
+                                onConfirm = { y, m, d ->
+                                    if (panel.isFrom) { fromYear = y; fromMonth = m; fromDay = d }
+                                    else { toYear = y; toMonth = m; toDay = d }
+                                    activePanel = ActivePanel.None
+                                },
+                                onCancel = { activePanel = ActivePanel.None }
+                            )
+                        }
+                        is ActivePanel.HourMinute -> {
+                            val initHour = if (panel.isFrom) fromHour else toHour
+                            val initMinute = if (panel.isFrom) fromMinute else toMinute
+                            HourMinutePanel(
+                                initHour = initHour, initMinute = initMinute,
+                                onConfirm = { h, m ->
+                                    if (panel.isFrom) { fromHour = h; fromMinute = m }
+                                    else { toHour = h; toMinute = m }
+                                    activePanel = ActivePanel.None
+                                },
+                                onCancel = { activePanel = ActivePanel.None }
+                            )
+                        }
+                        is ActivePanel.None -> {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = "点击上方输入框选择时间",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 底部按钮
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    TextButton(onClick = {
+                        val startCal = java.util.Calendar.getInstance().apply {
+                            set(fromYear, fromMonth, fromDay, fromHour, fromMinute, 0)
+                            set(java.util.Calendar.MILLISECOND, 0)
+                        }
+                        val endCal = java.util.Calendar.getInstance().apply {
+                            set(toYear, toMonth, toDay, toHour, toMinute, 0)
+                            set(java.util.Calendar.MILLISECOND, 0)
+                        }
+                        onConfirm(ExcludedTimeRange(
+                            startMillis = startCal.timeInMillis,
+                            endMillis = endCal.timeInMillis
+                        ))
+                    }) {
+                        Text("确定", color = AccentPrimary)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==================== 固定排除时段对话框 ====================
+
+@Composable
+private fun ExcludeFixedTimeDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (ExcludedTimeRange) -> Unit
+) {
+    var selStartHour by remember { mutableIntStateOf(0) }
+    var selStartMinute by remember { mutableIntStateOf(0) }
+    var selEndHour by remember { mutableIntStateOf(0) }
+    var selEndMinute by remember { mutableIntStateOf(0) }
+    var selectedDays by remember { mutableStateOf(setOf<Int>()) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        val screenWidth = LocalConfiguration.current.screenWidthDp.dp
+        val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+        val dialogWidth = screenWidth * 0.85f
+        val dialogHeight = screenHeight * 0.55f
+
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .width(dialogWidth)
+                    .height(dialogHeight)
+                    .padding(16.dp)
+            ) {
+                Text(
+                    text = "固定排除时段",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                // 起始时分
+                Text(
+                    text = "起始时间",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(modifier = Modifier.fillMaxWidth().height(120.dp)) {
+                    TimeWheel(
+                        range = 0..23, selected = selStartHour,
+                        onSelect = { selStartHour = it },
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        label = { "%02d".format(it) }
+                    )
+                    TimeWheel(
+                        range = 0..59, selected = selStartMinute,
+                        onSelect = { selStartMinute = it },
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        label = { "%02d".format(it) }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 结束时分
+                Text(
+                    text = "结束时间",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(modifier = Modifier.fillMaxWidth().height(120.dp)) {
+                    TimeWheel(
+                        range = 0..23, selected = selEndHour,
+                        onSelect = { selEndHour = it },
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        label = { "%02d".format(it) }
+                    )
+                    TimeWheel(
+                        range = 0..59, selected = selEndMinute,
+                        onSelect = { selEndMinute = it },
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        label = { "%02d".format(it) }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 星期选择
+                Text(
+                    text = "重复日期",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    val dayLabels = listOf("一", "二", "三", "四", "五", "六", "日")
+                    for (i in 1..7) {
+                        val isSelected = i in selectedDays
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isSelected) AccentPrimary
+                                    else MaterialTheme.colorScheme.surfaceContainerLow
+                                )
+                                .clickable {
+                                    selectedDays = if (isSelected) selectedDays - i
+                                    else selectedDays + i
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = dayLabels[i - 1],
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (isSelected) Color.White
+                                else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                // 按钮
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    TextButton(
+                        onClick = {
+                            val startMod = selStartHour * 60 + selStartMinute
+                            val endMod = selEndHour * 60 + selEndMinute
+                            onConfirm(ExcludedTimeRange(
+                                startMinuteOfDay = startMod,
+                                endMinuteOfDay = endMod,
+                                repeatDays = selectedDays
+                            ))
+                        },
+                        enabled = selectedDays.isNotEmpty() &&
+                            (selStartHour * 60 + selStartMinute) < (selEndHour * 60 + selEndMinute)
+                    ) {
+                        Text("确定", color = if (selectedDays.isNotEmpty() &&
+                            (selStartHour * 60 + selStartMinute) < (selEndHour * 60 + selEndMinute))
+                            AccentPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==================== 时间点行（年 | 月日 | 时分） ====================
+
+@Composable
+private fun TimePointRow(
+    year: Int, month: Int, day: Int,
+    hour: Int, minute: Int,
+    onYearClick: () -> Unit,
+    onMonthDayClick: () -> Unit,
+    onHourMinuteClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = Modifier
+                .weight(0.3f)
+                .clickable(onClick = onYearClick)
+        ) {
+            Text(
+                text = "$year",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                textAlign = TextAlign.Center
+            )
+        }
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = Modifier
+                .weight(0.4f)
+                .clickable(onClick = onMonthDayClick)
+        ) {
+            Text(
+                text = String.format("%02d-%02d", month + 1, day),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                textAlign = TextAlign.Center
+            )
+        }
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            modifier = Modifier
+                .weight(0.3f)
+                .clickable(onClick = onHourMinuteClick)
+        ) {
+            Text(
+                text = String.format("%02d:%02d", hour, minute),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+// ==================== 年份滚轮面板 ====================
+
+@Composable
+private fun YearWheelPanel(
+    initialYear: Int,
+    onConfirm: (Int) -> Unit,
+    onCancel: () -> Unit
+) {
+    var selectedYear by remember { mutableIntStateOf(initialYear) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
+            TimeWheel(
+                range = (currentYear - 10)..(currentYear + 10),
+                selected = selectedYear,
+                onSelect = { selectedYear = it },
+                modifier = Modifier.fillMaxSize(),
+                label = { "$it" }
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            TextButton(onClick = onCancel) {
+                Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            TextButton(onClick = { onConfirm(selectedYear) }) {
+                Text("确定", color = AccentPrimary)
+            }
+        }
+    }
+}
+
+// ==================== 月日选择面板（日历网格） ====================
+
+@Composable
+private fun MonthDayPanel(
+    initYear: Int, initMonth: Int, initDay: Int,
+    onConfirm: (year: Int, month: Int, day: Int) -> Unit,
+    onCancel: () -> Unit
+) {
+    var calYear by remember { mutableIntStateOf(initYear) }
+    var calMonth by remember { mutableIntStateOf(initMonth) }
+    var selDay by remember { mutableIntStateOf(initDay) }
+
+    val daysInMonth = remember(calYear, calMonth) {
+        val cal = java.util.Calendar.getInstance()
+        cal.set(calYear, calMonth, 1)
+        cal.getActualMaximum(java.util.Calendar.DAY_OF_MONTH)
+    }
+    val firstDayOfWeek = remember(calYear, calMonth) {
+        val cal = java.util.Calendar.getInstance()
+        cal.set(calYear, calMonth, 1)
+        (cal.get(java.util.Calendar.DAY_OF_WEEK) + 5) % 7
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = {
+                if (calMonth == 0) { calMonth = 11; calYear-- } else calMonth--
+            }) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "上月", tint = AccentPrimary)
+            }
+            Text(
+                text = "%04d-%02d".format(calYear, calMonth + 1),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 8.dp)
+            )
+            IconButton(onClick = {
+                if (calMonth == 11) { calMonth = 0; calYear++ } else calMonth++
+            }) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "下月", tint = AccentPrimary)
+            }
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            listOf("一", "二", "三", "四", "五", "六", "日").forEach {
+                Text(
+                    text = it,
+                    modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(7),
+            modifier = Modifier.fillMaxWidth().weight(1f)
+        ) {
+            items(firstDayOfWeek) { Spacer(Modifier.aspectRatio(1f)) }
+            items(daysInMonth) { day ->
+                val d = day + 1
+                val isSelected = d == selDay
+                Box(
+                    modifier = Modifier
+                        .aspectRatio(1f)
+                        .padding(2.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(if (isSelected) AccentPrimary else Color.Transparent)
+                        .clickable { selDay = d },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "$d",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isSelected) Color.White
+                        else MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            TextButton(onClick = onCancel) {
+                Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            TextButton(onClick = { onConfirm(calYear, calMonth, selDay) }) {
+                Text("确定", color = AccentPrimary)
+            }
+        }
+    }
+}
+
+// ==================== 时分选择面板 ====================
+
+@Composable
+private fun HourMinutePanel(
+    initHour: Int, initMinute: Int,
+    onConfirm: (hour: Int, minute: Int) -> Unit,
+    onCancel: () -> Unit
+) {
+    var selHour by remember { mutableIntStateOf(initHour) }
+    var selMinute by remember { mutableIntStateOf(initMinute) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            TimeWheel(
+                range = 0..23,
+                selected = selHour,
+                onSelect = { selHour = it },
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                label = { "%02d".format(it) }
+            )
+            TimeWheel(
+                range = 0..59,
+                selected = selMinute,
+                onSelect = { selMinute = it },
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                label = { "%02d".format(it) }
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            TextButton(onClick = onCancel) {
+                Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            TextButton(onClick = { onConfirm(selHour, selMinute) }) {
+                Text("确定", color = AccentPrimary)
+            }
+        }
+    }
+}
+
+// ==================== TimeWheel（无限循环滚轮） ====================
+
+@Composable
+private fun TimeWheel(
+    range: IntRange,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier,
+    label: (Int) -> String
+) {
+    val size = range.last - range.first + 1
+    val totalItems = size * 10000
+    val initialIndex = totalItems / 2 + (selected - range.first)
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
+    val itemHeight = 36.dp
+    val itemSpacing = 4.dp
+    val totalItemHeight = itemHeight + itemSpacing
+    val density = LocalDensity.current
+
+    var firstLayout by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        if (firstLayout) {
+            snapshotFlow { listState.layoutInfo.viewportEndOffset }
+                .first { it > 0 }
+            val vpH = listState.layoutInfo.let { it.viewportEndOffset - it.viewportStartOffset }
+            val ih = with(density) { itemHeight.roundToPx() }
+            listState.scrollToItem(initialIndex, -((vpH - ih) / 2))
+            firstLayout = false
+        }
+    }
+
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .distinctUntilChanged()
+            .filter { !it }
+            .collect {
+                val info = listState.layoutInfo
+                val items = info.visibleItemsInfo
+                if (items.isEmpty()) return@collect
+                val vpH = info.viewportEndOffset - info.viewportStartOffset
+                val centerY = vpH / 2f
+                val best = items.minByOrNull {
+                    kotlin.math.abs(it.offset + it.size / 2f - centerY)
+                } ?: return@collect
+                val scrollOffset = -((vpH - best.size) / 2).toInt()
+                listState.animateScrollToItem(best.index, scrollOffset)
+                onSelect(range.first + (best.index % size + size) % size)
+            }
+    }
+
+    val scope = rememberCoroutineScope()
+    Box(modifier = modifier) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            items(totalItems) { index ->
+                val value = range.first + (index % size + size) % size
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(itemHeight)
+                        .padding(vertical = itemSpacing / 2)
+                        .clickable {
+                            onSelect(value)
+                            scope.launch {
+                                val info = listState.layoutInfo
+                                val vpH = info.viewportEndOffset - info.viewportStartOffset
+                                val ih = (itemHeight.value * density.density).toInt()
+                                listState.animateScrollToItem(index, -((vpH - ih) / 2))
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label(value),
+                        style = if (value == selected) MaterialTheme.typography.titleLarge
+                        else MaterialTheme.typography.bodyLarge,
+                        color = if (value == selected) AccentPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.6f)
+                .height(totalItemHeight)
+                .align(Alignment.Center)
+                .clip(RoundedCornerShape(4.dp))
+                .background(AccentPrimary.copy(alpha = 0.12f))
         )
     }
 }
