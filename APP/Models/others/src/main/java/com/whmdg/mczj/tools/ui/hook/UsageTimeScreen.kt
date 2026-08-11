@@ -1261,6 +1261,14 @@ private fun PermissionRequiredState() {
 
 // ==================== 排除时间段对话框 ====================
 
+/** ExcludeTimeRangeDialog 中当前展开的子面板 */
+private sealed class ActivePanel {
+    data object None : ActivePanel()
+    data class Year(val isFrom: Boolean) : ActivePanel()
+    data class MonthDay(val isFrom: Boolean) : ActivePanel()
+    data class HourMinute(val isFrom: Boolean) : ActivePanel()
+}
+
 /**
  * 排除时间段对话框
  *
@@ -1289,13 +1297,6 @@ private fun ExcludeTimeRangeDialog(
     var toHour by remember { mutableIntStateOf(now.get(java.util.Calendar.HOUR_OF_DAY)) }
     var toMinute by remember { mutableIntStateOf(now.get(java.util.Calendar.MINUTE)) }
 
-    // 当前展开的面板（互斥）
-    sealed class ActivePanel {
-        data object None : ActivePanel()
-        data class Year(val isFrom: Boolean) : ActivePanel()
-        data class MonthDay(val isFrom: Boolean) : ActivePanel()
-        data class HourMinute(val isFrom: Boolean) : ActivePanel()
-    }
     var activePanel by remember { mutableStateOf<ActivePanel>(ActivePanel.None) }
 
     Dialog(onDismissRequest = onDismiss) {
