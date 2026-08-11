@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -27,12 +28,28 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.whmdg.mczj.tools.encryption.data.VaultPaths
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.encryption.services.VaultService
+import com.whmdg.mczj.tools.fileop.webdav.WebDavConnectionStatus
+import com.whmdg.mczj.tools.fileop.webdav.WebDavAccountState
+import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
+import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
+import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.components.glowEffect
 import com.whmdg.mczj.tools.util.FormatUtils
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 云盘同步项（UI 数据模型 + 持久化字段） */
 data class CloudSyncItem(
@@ -68,7 +85,8 @@ class CloudSyncEvents {
 fun CloudSyncScreen(
     vaultService: VaultService,
     events: CloudSyncEvents,
-    onShowVaultSheet: () -> Unit
+    onShowVaultSheet: () -> Unit,
+    onNavigateToFileManager: (webdavConfig: WebDavServerConfig, vaultDir: String, vaultId: Int, vaultName: String) -> Unit = { _, _, _, _ -> }
 ) {
     val isDarkMode = LocalIsDarkMode.current
     val context = LocalContext.current
@@ -76,7 +94,12 @@ fun CloudSyncScreen(
     val syncItems = remember { mutableStateListOf<CloudSyncItem>() }
     val processedVaultIds = remember { mutableSetOf<Int>() }
 
-    // 从持久化存储加载同步项
+    // WebDAV 账户状态
+    val scope = rememberCoroutineScope()
+    var accountState by remember { mutableStateOf(WebDavAccountState()) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
+
+    // 从持久化存储加载同步项 + 检测 WebDAV 连接状态
     LaunchedEffect(Unit) {
         val saved = CloudSyncStore.load(context)
         if (saved.isNotEmpty()) {
@@ -84,6 +107,24 @@ fun CloudSyncScreen(
             syncItems.addAll(saved)
             processedVaultIds.addAll(saved.filter { it.id.startsWith("vault_") }
                 .map { it.id.removePrefix("vault_").toIntOrNull() ?: 0 })
+        }
+        // 检测 WebDAV 连接状态
+        val configs = WebDavServerStore.getAll(context)
+        val config = configs.firstOrNull()
+        if (config == null) {
+            accountState = WebDavAccountState(WebDavConnectionStatus.NOT_LOGGED_IN)
+        } else {
+            accountState = accountState.copy(config = config, displayName = config.getDefaultName())
+            val ok = withContext(Dispatchers.IO) {
+                try {
+                    val client = WebDavFileClient(config)
+                    client.testConnection()
+                    true
+                } catch (_: Exception) { false }
+            }
+            accountState = accountState.copy(
+                status = if (ok) WebDavConnectionStatus.LOGGED_IN else WebDavConnectionStatus.EXPIRED
+            )
         }
     }
 
@@ -121,39 +162,131 @@ fun CloudSyncScreen(
             )
         }
 
-        if (syncItems.isEmpty()) {
-            // 空状态
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // ── 顶部状态栏：云盘标题 + 连接状态 + 齿轮 ──
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Cloud,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = if (isDarkMode) Color(0xFF38D4F5) else Color(0xFF00838F)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "云盘",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B)
+                )
+                Spacer(modifier = Modifier.weight(1f))
+
+                // 连接状态指示
+                val statusColor = when (accountState.status) {
+                    WebDavConnectionStatus.LOGGED_IN -> Color(0xFF4CAF50)
+                    WebDavConnectionStatus.EXPIRED -> Color(0xFFFFC107)
+                    WebDavConnectionStatus.NOT_LOGGED_IN -> Color(0xFFE57373)
+                }
+                val statusText = when (accountState.status) {
+                    WebDavConnectionStatus.LOGGED_IN -> "已登录"
+                    WebDavConnectionStatus.EXPIRED -> "已失效"
+                    WebDavConnectionStatus.NOT_LOGGED_IN -> "未登录"
+                }
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(statusColor, CircleShape)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    statusText,
+                    fontSize = 12.sp,
+                    color = statusColor
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(
+                    onClick = { showSettingsDialog = true },
+                    modifier = Modifier.size(32.dp)
+                ) {
                     Icon(
-                        Icons.Default.Cloud,
-                        contentDescription = null,
-                        modifier = Modifier.size(64.dp),
-                        tint = if (isDarkMode) Color(0xFF334155) else Color(0xFFCBD5E1)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        "暂无同步项目",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = if (isDarkMode) Color(0xFF64748B) else Color(0xFF94A3B8)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "点击右下角 + 添加保险箱或文件夹",
-                        fontSize = 12.sp,
-                        color = if (isDarkMode) Color(0xFF475569) else Color(0xFFB0BEC5)
+                        Icons.Outlined.Settings,
+                        contentDescription = "设置",
+                        modifier = Modifier.size(18.dp),
+                        tint = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
                     )
                 }
             }
-        } else {
-            // 同步列表
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(vertical = 8.dp)
-            ) {
-                items(syncItems, key = { it.id }) { item ->
-                    CloudSyncCard(item)
+
+            // ── 内容区域 ──
+            if (syncItems.isEmpty()) {
+                // 空状态
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.Cloud,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = if (isDarkMode) Color(0xFF334155) else Color(0xFFCBD5E1)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            "暂无同步项目",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (isDarkMode) Color(0xFF64748B) else Color(0xFF94A3B8)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "点击右下角 + 添加保险箱或文件夹",
+                            fontSize = 12.sp,
+                            color = if (isDarkMode) Color(0xFF475569) else Color(0xFFB0BEC5)
+                        )
+                    }
+                }
+            } else {
+                // 同步列表
+                var showConfirmDialog by remember { mutableStateOf<CloudSyncItem?>(null) }
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(vertical = 8.dp)
+                ) {
+                    items(syncItems, key = { it.id }) { item ->
+                        CloudSyncCard(
+                            item = item,
+                            onClick = { showConfirmDialog = item }
+                        )
+                    }
+                }
+
+                // 确认进入云盘模式弹窗
+                showConfirmDialog?.let { item ->
+                    AlertDialog(
+                        onDismissRequest = { showConfirmDialog = null },
+                        title = { Text("打开云盘同步") },
+                        text = { Text("是否打开「${item.vaultName}」的云盘同步管理？") },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                showConfirmDialog = null
+                                val config = accountState.config
+                                if (config != null && item.type == "保险箱") {
+                                    val vaultRecord = vaultService.getVault(item.vaultId)
+                                    if (vaultRecord != null) {
+                                        val vaultDir = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
+                                            context, vaultRecord.location, vaultRecord.relativePath
+                                        ).absolutePath
+                                        onNavigateToFileManager(config, vaultDir, item.vaultId, item.vaultName)
+                                    }
+                                }
+                            }) { Text("确认") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showConfirmDialog = null }) { Text("取消") }
+                        }
+                    )
                 }
             }
         }
@@ -256,18 +389,217 @@ fun CloudSyncScreen(
                 Icon(Icons.Default.Add, contentDescription = "添加")
             }
         }
+
+        // ── WebDAV 设置弹窗 ──
+        if (showSettingsDialog) {
+            WebDavSettingsDialog(
+                initialConfig = accountState.config,
+                onDismiss = { showSettingsDialog = false },
+                onSave = { config ->
+                    WebDavServerStore.save(context, config)
+                    showSettingsDialog = false
+                    // 重新检测连接状态
+                    accountState = WebDavAccountState(
+                        config = config,
+                        displayName = config.getDefaultName()
+                    )
+                    // 异步检测
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            try {
+                                val client = WebDavFileClient(config)
+                                client.testConnection()
+                                true
+                            } catch (_: Exception) { false }
+                        }
+                        accountState = accountState.copy(
+                            status = if (ok) WebDavConnectionStatus.LOGGED_IN else WebDavConnectionStatus.EXPIRED
+                        )
+                    }
+                }
+            )
+        }
     }
+}
+
+// ── WebDAV 设置弹窗 ──
+@Composable
+private fun WebDavSettingsDialog(
+    initialConfig: WebDavServerConfig?,
+    onDismiss: () -> Unit,
+    onSave: (WebDavServerConfig) -> Unit
+) {
+    var url by remember { mutableStateOf(initialConfig?.let { "${it.protocol}://${it.host}:${it.port}" } ?: "") }
+    var username by remember { mutableStateOf(initialConfig?.username ?: "") }
+    var password by remember { mutableStateOf(initialConfig?.password ?: "") }
+    var path by remember { mutableStateOf(initialConfig?.relativePath ?: "") }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf<String?>(null) }
+    var testSuccess by remember { mutableStateOf(false) }
+    var isTesting by remember { mutableStateOf(false) }
+    val dialogScope = rememberCoroutineScope()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("WebDAV 服务器配置") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 网址
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("网址") },
+                    placeholder = { Text("https://dav.example.com") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                // 账户
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text("账户") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                // 密码
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("密码") },
+                    singleLine = true,
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }, modifier = Modifier.size(24.dp)) {
+                            Icon(
+                                if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                // 路径（可选）
+                OutlinedTextField(
+                    value = path,
+                    onValueChange = { path = it },
+                    label = { Text("路径（可选）") },
+                    placeholder = { Text("/留空则用根目录") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // 测试连接按钮
+                Button(
+                    onClick = {
+                        isTesting = true
+                        testResult = null
+                        val parsed = parseWebDavUrl(url)
+                        if (parsed == null) {
+                            testResult = "网址格式错误"
+                            testSuccess = false
+                            isTesting = false
+                            return@Button
+                        }
+                        val config = WebDavServerConfig(
+                            protocol = parsed.first,
+                            host = parsed.second,
+                            port = parsed.third,
+                            username = username.trim(),
+                            password = password,
+                            relativePath = path.trim()
+                        )
+                        dialogScope.launch {
+                            val ok = withContext(Dispatchers.IO) {
+                                try {
+                                    val client = WebDavFileClient(config)
+                                    client.testConnection()
+                                    true
+                                } catch (e: Exception) {
+                                    testResult = "连接失败: ${e.message}"
+                                    false
+                                }
+                            }
+                            if (ok) {
+                                testResult = "连接成功"
+                                testSuccess = true
+                            } else if (testResult == null) {
+                                testResult = "连接失败"
+                                testSuccess = false
+                            }
+                            isTesting = false
+                        }
+                    },
+                    enabled = !isTesting && url.isNotBlank() && username.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isTesting) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("测试连接")
+                }
+
+                // 测试结果
+                if (testResult != null) {
+                    Text(
+                        text = testResult!!,
+                        fontSize = 13.sp,
+                        color = if (testSuccess) Color(0xFF4CAF50) else Color(0xFFE57373)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val parsed = parseWebDavUrl(url)
+                    if (parsed != null) {
+                        onSave(WebDavServerConfig(
+                            protocol = parsed.first,
+                            host = parsed.second,
+                            port = parsed.third,
+                            username = username.trim(),
+                            password = password,
+                            relativePath = path.trim()
+                        ))
+                    }
+                },
+                enabled = url.isNotBlank() && username.isNotBlank()
+            ) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+/** 解析 WebDAV URL 为 (protocol, host, port) */
+private fun parseWebDavUrl(url: String): Triple<String, String, Int>? {
+    val trimmed = url.trim()
+    if (trimmed.isBlank()) return null
+    return try {
+        val uri = java.net.URI(trimmed)
+        val scheme = uri.scheme ?: "https"
+        val host = uri.host ?: return null
+        val port = if (uri.port > 0) uri.port else if (scheme == "https") 443 else 80
+        Triple(scheme, host, port)
+    } catch (_: Exception) { null }
 }
 
 // ── 云盘同步卡片 ──
 @Composable
-private fun CloudSyncCard(item: CloudSyncItem) {
+private fun CloudSyncCard(
+    item: CloudSyncItem,
+    onClick: () -> Unit = {}
+) {
     val isDarkMode = LocalIsDarkMode.current
     val glowEnabled = true
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable { onClick() }
             .padding(
                 horizontal = 16.dp,
                 vertical = if (glowEnabled) 8.dp else 4.dp

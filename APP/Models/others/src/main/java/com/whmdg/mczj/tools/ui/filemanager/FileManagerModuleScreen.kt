@@ -4,12 +4,18 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
 import com.whmdg.mczj.tools.encryption.services.VaultService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
+import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
 
 @Composable
 fun FileManagerModuleScreen(
     onBack: () -> Unit,
     vaultSession: VaultSession? = null,
-    vaultService: VaultService? = null
+    vaultService: VaultService? = null,
+    cloudMode: Boolean = false,
+    webdavConfig: WebDavServerConfig? = null,
+    cloudVaultDir: String? = null,
+    cloudVaultId: Int = 0,
+    cloudVaultName: String = ""
 ) {
     BackHandler(enabled = true) {
         onBack()
@@ -20,6 +26,11 @@ fun FileManagerModuleScreen(
     FileManagerScreen(
         onBack = { onBack() },
         vaultSession = vaultSession,
-        vaultService = vaultService
+        vaultService = vaultService,
+        cloudMode = cloudMode,
+        webdavConfig = webdavConfig,
+        cloudVaultDir = cloudVaultDir,
+        cloudVaultId = cloudVaultId,
+        cloudVaultName = cloudVaultName
     )
 }

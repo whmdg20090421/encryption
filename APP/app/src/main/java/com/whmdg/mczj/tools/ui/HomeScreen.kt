@@ -280,7 +280,12 @@ fun MainAppContainer() {
             FileManagerModuleScreen(
                 onBack = { navigateBack() },
                 vaultSession = currentScreen.vaultSession,
-                vaultService = vaultService
+                vaultService = vaultService,
+                cloudMode = currentScreen.cloudMode,
+                webdavConfig = currentScreen.webdavConfig,
+                cloudVaultDir = currentScreen.cloudVaultDir,
+                cloudVaultId = currentScreen.cloudVaultId,
+                cloudVaultName = currentScreen.cloudVaultName
             )
         }
         is Screen.BatchDownloader -> {

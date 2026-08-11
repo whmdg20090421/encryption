@@ -197,7 +197,16 @@ fun EncryptionHomeScreen(
                     1 -> CloudSyncScreen(
                         vaultService = vaultService,
                         events = cloudSyncEvents,
-                        onShowVaultSheet = { showCloudVaultSheet = true }
+                        onShowVaultSheet = { showCloudVaultSheet = true },
+                        onNavigateToFileManager = { config, vaultDir, vaultId, vaultName ->
+                            onNavigate(Screen.FileManager(
+                                cloudMode = true,
+                                webdavConfig = config,
+                                cloudVaultDir = vaultDir,
+                                cloudVaultId = vaultId,
+                                cloudVaultName = vaultName
+                            ))
+                        }
                     )
                     2 -> EncryptionSettingsTab(settings = settings)
             }

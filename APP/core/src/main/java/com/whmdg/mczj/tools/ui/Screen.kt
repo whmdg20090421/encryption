@@ -49,7 +49,14 @@ open class Screen {
 
     // 8 个模块入口
     object Encryption : Screen()
-    data class FileManager(val vaultSession: VaultSession? = null) : Screen()
+    data class FileManager(
+        val vaultSession: VaultSession? = null,
+        val cloudMode: Boolean = false,
+        val webdavConfig: com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig? = null,
+        val cloudVaultDir: String? = null,
+        val cloudVaultId: Int = 0,
+        val cloudVaultName: String = ""
+    ) : Screen()
     object AppPermissions : Screen()
     object BatchDownloader : Screen()
     object Security : Screen()

@@ -18,6 +18,11 @@ import com.whmdg.mczj.tools.ui.FileEntry
 import com.whmdg.mczj.tools.ui.Screen
 import com.whmdg.mczj.tools.ui.encryption.EncryptionSettings
 import com.whmdg.mczj.tools.ui.isDebugAuth
+import com.whmdg.mczj.tools.encryption.data.UploadStatus
+import com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
+import com.whmdg.mczj.tools.fileop.sync.SyncMode
+import com.whmdg.mczj.tools.fileop.sync.SyncPhase
+import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.util.FileAccessLevel
 import com.whmdg.mczj.tools.auth.PasswordDialog
 
@@ -202,7 +207,12 @@ class SwipeUiState {
 fun FileManagerScreen(
     onBack: () -> Unit,
     vaultSession: VaultSession? = null,
-    vaultService: com.whmdg.mczj.tools.encryption.services.VaultService? = null
+    vaultService: com.whmdg.mczj.tools.encryption.services.VaultService? = null,
+    cloudMode: Boolean = false,
+    webdavConfig: com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig? = null,
+    cloudVaultDir: String? = null,
+    cloudVaultId: Int = 0,
+    cloudVaultName: String = ""
 ) {
     val context = LocalContext.current
     val vm: FileManagerViewModel = viewModel()
@@ -227,6 +237,22 @@ fun FileManagerScreen(
                         vaultService?.setFileCount(vaultSession.record.id, count)
                     }
                 }
+            }
+        }
+    }
+
+    // 云盘模式初始化
+    LaunchedEffect(cloudMode) {
+        if (cloudMode && webdavConfig != null && cloudVaultDir != null) {
+            vm.panels.enterCloudMode(webdavConfig, cloudVaultDir, cloudVaultId, cloudVaultName)
+        }
+    }
+
+    // 退出时清理云盘模式
+    DisposableEffect(Unit) {
+        onDispose {
+            if (vm.panels.isCloudMode) {
+                vm.panels.exitCloudMode()
             }
         }
     }
@@ -1105,9 +1131,78 @@ fun FileManagerScreen(
 
                     val activePanel = vm.currentPanel
                     val currentFontSize = vm.fileNameFontSize  // ponytail: 在 Layout 外读取，使状态变化触发重组
+                    val isCloudMode = vm.panels.isCloudMode
                     Layout(
                         modifier = Modifier.fillMaxSize(),
                         content = {
+                            if (isCloudMode) {
+                                // 云盘模式：左位置渲染云盘面板
+                                val cloudState = vm.panels.cloud?.state
+                                if (cloudState != null) {
+                                    CloudPanelContent(
+                                        cloudState = cloudState,
+                                        isFocused = vm.focusedPanel == FocusedPanel.LEFT,
+                                        onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
+                                        onNavigateUp = { vm.panels.cloud?.goUp() },
+                                        onNavigateTo = { path -> vm.panels.cloud?.navigateTo(path) },
+                                        onSync = { mode -> vm.panels.cloud?.startSync(mode) },
+                                        onBack = {
+                                            vm.panels.exitCloudMode()
+                                            onBack()
+                                        }
+                                    )
+                                }
+                                // 右面板（普通模式）
+                                val rightPanel = vm.右
+                                FileBrowserPanel(
+                                    entries = rightPanel.entries,
+                                    isFocused = vm.focusedPanel == FocusedPanel.RIGHT,
+                                    currentPath = rightPanel.path,
+                                    isLeftPanel = false,
+                                    onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
+                                    onFolderClick = { entry ->
+                                        vm.focusedPanel = FocusedPanel.RIGHT
+                                        if (rightPanel.isInArchiveMode) {
+                                            vm.navigateInArchive(entry)
+                                        } else if (vm.recycleBinPanel == vm.focusedPanel) {
+                                            vm.navigateInRecycleBin(entry)
+                                        } else {
+                                            listStates[1].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
+                                            if (rightPanel.isWebDavMode) {
+                                                vm.navigateToWebDavFolder(entry.name)
+                                            } else {
+                                                vm.navigateToFolder(entry)
+                                            }
+                                            rightPanel.selectedPaths = emptySet(); swipeStates[1].selectFlag = 0; swipeStates[1].lastIndex = -1
+                                        }
+                                    },
+                                    onFileClick = { entry ->
+                                        vm.focusedPanel = FocusedPanel.RIGHT
+                                        vm.openFile(context, entry, isDebugMode)
+                                        vm.addHistory(entry.name, entry.path, false)
+                                    },
+                                    onLongClick = { entry ->
+                                        selectedEntry = entry
+                                        vm.focusedPanel = FocusedPanel.RIGHT
+                                    },
+                                    modifier = Modifier,
+                                    folderSizeDb = vm.folderSizeDb,
+                                    parentPath = parentPaths[1],
+                                    lazyListState = listStates[1],
+                                    onNavigateUp = {
+                                        vm.focusedPanel = FocusedPanel.RIGHT
+                                        saveScrollAndGoUp()
+                                    },
+                                    archiveSizeProvider = null,
+                                    onVisibleRangeChanged = null,
+                                    thumbnailLoader = null,
+                                    selectedPaths = rightPanel.selectedPaths,
+                                    onSwipeSelect = { entry, index -> },
+                                    onToggleSelect = { entry -> },
+                                    extFlagsMap = rightPanel.extFlagsMap,
+                                    fileNameFontSize = currentFontSize
+                                )
+                            } else {
                             FocusedPanel.entries.forEach { side ->
                                 val panel = vm.panels[side.panelId].state
                                 val idx = side.index
@@ -1209,6 +1304,7 @@ fun FileManagerScreen(
                                     fileNameFontSize = currentFontSize
                                 )
                             }
+                            } // end else (non-cloud mode)
                         }
                     ) { measurables, constraints ->
                         val halfWidth = constraints.maxWidth / 2
@@ -5262,4 +5358,205 @@ private fun findVaultSession(vm: FileManagerViewModel, vaultId: Int): VaultSessi
     val rightSession = vm.panels.right.vaultSession
     if (rightSession != null && rightSession.record.id == vaultId) return rightSession
     return null
+}
+
+// ==================== 云盘面板内容 ====================
+
+@Composable
+private fun CloudPanelContent(
+    cloudState: CloudPaneController.CloudPanelState,
+    isFocused: Boolean,
+    onFocus: () -> Unit,
+    onNavigateUp: () -> Unit,
+    onNavigateTo: (String) -> Unit,
+    onSync: (SyncMode) -> Unit,
+    onBack: () -> Unit
+) {
+    val isDarkMode = LocalIsDarkMode.current
+    val bgColor = if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(bgColor)
+            .clickable { onFocus() }
+    ) {
+        // ── 顶部栏 ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onNavigateUp, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "返回上级",
+                    modifier = Modifier.size(20.dp),
+                    tint = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B))
+            }
+            Text(
+                cloudState.currentPath.substringAfterLast('/').ifEmpty { "/" },
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B),
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onBack, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.Close, "退出云盘",
+                    modifier = Modifier.size(18.dp),
+                    tint = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B))
+            }
+        }
+
+        // ── 同步状态栏 ──
+        val task = cloudState.syncTask
+        if (task.phase == SyncPhase.SYNCING || task.phase == SyncPhase.SCANNING) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                LinearProgressIndicator(
+                    progress = { task.overallProgress },
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                    color = Color(0xFF00C8FF),
+                    trackColor = if (isDarkMode) Color(0xFF1E293B) else Color(0xFFE2E8F0)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    buildString {
+                        if (task.phase == SyncPhase.SCANNING) append("扫描中...")
+                        else append("${task.currentFileName ?: ""} · ${FormatUtils.formatBytes(task.speed)}/s · ${task.completedFiles}/${task.totalFiles} 文件")
+                    },
+                    fontSize = 11.sp,
+                    color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+                )
+            }
+        }
+
+        // ── 文件列表 ──
+        if (cloudState.isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
+            }
+        } else if (cloudState.loadError != null) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("加载失败: ${cloudState.loadError?.message}",
+                    color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+            }
+        } else {
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(cloudState.entries, key = { it.remotePath }) { entry ->
+                    CloudFileItem(
+                        entry = entry,
+                        syncProgress = cloudState.syncTask.fileProgress[entry.name],
+                        isDarkMode = isDarkMode,
+                        onClick = {
+                            if (entry.isDirectory) {
+                                onNavigateTo(entry.remotePath)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        // ── 底部同步按钮 ──
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val canSync = task.phase == SyncPhase.IDLE || task.phase == SyncPhase.COMPLETED || task.phase == SyncPhase.FAILED
+            OutlinedButton(
+                onClick = { onSync(SyncMode.LOCAL_TO_CLOUD) },
+                enabled = canSync,
+                modifier = Modifier.weight(1f)
+            ) { Text("本地→云端", fontSize = 12.sp) }
+            OutlinedButton(
+                onClick = { onSync(SyncMode.CLOUD_TO_LOCAL) },
+                enabled = canSync,
+                modifier = Modifier.weight(1f)
+            ) { Text("云端→本地", fontSize = 12.sp) }
+            OutlinedButton(
+                onClick = { onSync(SyncMode.BIDIRECTIONAL) },
+                enabled = canSync,
+                modifier = Modifier.weight(1f)
+            ) { Text("双向同步", fontSize = 12.sp) }
+        }
+    }
+}
+
+// ==================== 云盘文件项（带进度条） ====================
+
+@Composable
+private fun CloudFileItem(
+    entry: CloudPaneController.CloudFileEntry,
+    syncProgress: SyncFileProgress?,
+    isDarkMode: Boolean,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = if (entry.isDirectory) Color(0xFFFFC107) else if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                entry.name,
+                fontSize = 13.sp,
+                color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B),
+                modifier = Modifier.weight(1f),
+                maxLines = 1
+            )
+            if (!entry.isDirectory) {
+                Text(
+                    FormatUtils.formatBytes(entry.size),
+                    fontSize = 11.sp,
+                    color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+                )
+            }
+        }
+
+        // ── 进度条 ──
+        if (!entry.isDirectory) {
+            Spacer(modifier = Modifier.height(2.dp))
+            CloudProgressBar(syncProgress)
+        }
+    }
+}
+
+// ==================== 云盘进度条（字节级） ====================
+
+@Composable
+private fun CloudProgressBar(syncProgress: SyncFileProgress?) {
+    Canvas(modifier = Modifier.fillMaxWidth().height(2.dp)) {
+        when {
+            syncProgress == null || syncProgress.status == UploadStatus.PENDING || syncProgress.status == UploadStatus.PAUSED_PERMANENT -> {
+                // 未上传 / 永久暂停：全红
+                drawRect(Color(0xFFE57373), size = size)
+            }
+            syncProgress.status == UploadStatus.COMPLETED -> {
+                // 已完成：全绿
+                drawRect(Color(0xFF4CAF50), size = size)
+            }
+            syncProgress.status == UploadStatus.UPLOADING -> {
+                // 正在上传：绿色(已传) + 黄色(当前) + 红色(待传)
+                val uploaded = syncProgress.progress
+                val chunk = min(0.05f, 1f - uploaded)
+                val remaining = 1f - uploaded - chunk
+                drawRect(Color(0xFF4CAF50), size = Size(size.width * uploaded, size.height))
+                drawRect(Color(0xFFFFC107), topLeft = Offset(size.width * uploaded, 0f), size = Size(size.width * chunk, size.height))
+                drawRect(Color(0xFFE57373), topLeft = Offset(size.width * (uploaded + chunk), 0f), size = Size(size.width * remaining, size.height))
+            }
+        }
+    }
 }

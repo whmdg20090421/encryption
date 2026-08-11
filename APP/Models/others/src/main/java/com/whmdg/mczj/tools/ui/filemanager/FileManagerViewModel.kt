@@ -6,6 +6,7 @@ import android.content.pm.ApplicationInfo
 import android.util.Log
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
+import com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
 import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -33,6 +34,7 @@ import com.whmdg.mczj.tools.util.SizeCalcResult
 import com.whmdg.mczj.tools.util.calculateFolderSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Job
@@ -2366,6 +2368,66 @@ class PanelCoordinator(
     /** 获取当前活跃的 vault session（优先左面板） */
     val activeVaultSession: VaultSession?
         get() = left.vaultSession ?: right.vaultSession
+
+    // ── 云盘模式 ──
+
+    /** 云盘面板控制器（仅云盘模式时非 null） */
+    var cloud: CloudPaneController? = null
+        private set
+
+    /** 是否处于云盘模式 */
+    var isCloudMode: Boolean = false
+        private set
+
+    // 保存左面板挂起前的状态
+    private var savedLeftPath: String? = null
+    private var savedLeftNavState: PanelNavState? = null
+    private var savedLeftScrollIndex: Int = 0
+    private var savedLeftScrollOffset: Int = 0
+
+    /** 进入云盘模式：挂起左面板，激活云盘面板 */
+    fun enterCloudMode(
+        webdavConfig: WebDavServerConfig,
+        vaultDir: String,
+        vaultId: Int,
+        vaultName: String
+    ) {
+        // 保存左面板状态
+        savedLeftPath = left.state.path
+        savedLeftNavState = left.state.navState
+        savedLeftScrollIndex = left.state.currentScrollIndex
+        savedLeftScrollOffset = left.state.currentScrollOffset
+        // 创建云盘面板
+        val controller = CloudPaneController(
+            context = context,
+            scope = CoroutineScope(Dispatchers.Main + SupervisorJob()),
+            webdavConfig = webdavConfig,
+            vaultDir = vaultDir,
+            vaultId = vaultId,
+            vaultName = vaultName
+        )
+        controller.init()
+        cloud = controller
+        isCloudMode = true
+    }
+
+    /** 退出云盘模式：释放云盘面板，恢复左面板 */
+    fun exitCloudMode() {
+        cloud?.dispose()
+        cloud = null
+        isCloudMode = false
+        // 恢复左面板状态
+        savedLeftPath?.let { path ->
+            left.state.path = path
+            savedLeftNavState?.let { left.state.navState = it }
+            left.loadDirectory(path, panel = left.state)
+        }
+    }
+
+    /** 云盘面板查询入口（右面板需要时必须通过此方法） */
+    fun queryCloudFileStatus(relativePath: String): SyncFileProgress? {
+        return cloud?.getSyncState(relativePath)
+    }
 
     // ── 初始化 ──
 

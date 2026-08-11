@@ -162,6 +162,9 @@ class VaultService(private val context: Context) {
         )
     }
 
+    /** 获取指定 ID 的保险箱记录 */
+    fun getVault(id: Int): VaultRecord? = _db.vaults.find { it.id == id }
+
     /** 标记保险箱内容已修改（导入/重命名/删除文件后调用） */
     fun markModified(id: Int) {
         val rec = _db.vaults.find { it.id == id } ?: return
