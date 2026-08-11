@@ -553,7 +553,7 @@ private fun WebDavSettingsDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    val parsed = parseWebDavUrl(url)
+                    val parsed = parseWebDavUrlPublic(url)
                     if (parsed != null) {
                         onSave(WebDavServerConfig(
                             protocol = parsed.first,
