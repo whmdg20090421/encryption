@@ -44,7 +44,9 @@ data class CloudSyncItem(
     val lastSyncTime: String,
     val cloudSize: Long,
     val diffFileCount: Int,
-    val webdavPath: String = "" // 云端目标路径
+    val webdavPath: String = "", // 云端目标路径
+    val localFileCount: Int? = null, // 本地文件数量（仅保险箱类型）
+    val cloudFileCount: Int? = null  // 云端文件数量
 )
 
 /**
@@ -98,7 +100,8 @@ fun CloudSyncScreen(
                 vaultSize = vault.storageSize,
                 lastSyncTime = "未同步",
                 cloudSize = 0,
-                diffFileCount = 0
+                diffFileCount = 0,
+                localFileCount = vault.fileCount
             )
             syncItems.add(item)
             CloudSyncStore.save(context, syncItems.toList())
@@ -385,9 +388,15 @@ private fun CloudSyncCard(item: CloudSyncItem) {
                     Spacer(modifier = Modifier.height(4.dp))
                     CloudInfoRow("最后同步", item.lastSyncTime, isDarkMode)
                     Spacer(modifier = Modifier.height(4.dp))
-                    CloudInfoRow("本地大小", FormatUtils.formatBytes(item.vaultSize), isDarkMode)
+                    CloudInfoRow("本地大小", buildString {
+                        append(FormatUtils.formatBytes(item.vaultSize))
+                        if (item.type == "保险箱" && item.localFileCount != null) append(" (${item.localFileCount} 个文件)")
+                    }, isDarkMode)
                     Spacer(modifier = Modifier.height(4.dp))
-                    CloudInfoRow("云端大小", FormatUtils.formatBytes(item.cloudSize), isDarkMode)
+                    CloudInfoRow("云端大小", buildString {
+                        append(FormatUtils.formatBytes(item.cloudSize))
+                        if (item.type == "保险箱" && item.cloudFileCount != null) append(" (${item.cloudFileCount} 个文件)")
+                    }, isDarkMode)
                     Spacer(modifier = Modifier.height(4.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),

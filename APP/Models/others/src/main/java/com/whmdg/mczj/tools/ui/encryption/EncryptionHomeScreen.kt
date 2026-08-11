@@ -288,7 +288,10 @@ fun EncryptionHomeScreen(
                                         modifier = Modifier.weight(1f)
                                     )
                                     Text(
-                                        if (vault.storageSize > 0) FormatUtils.formatBytes(vault.storageSize) else "未统计",
+                                        buildString {
+                                            append(if (vault.storageSize > 0) FormatUtils.formatBytes(vault.storageSize) else "未统计")
+                                            if (vault.fileCount != null) append(" (${vault.fileCount} 个文件)")
+                                        },
                                         fontSize = 12.sp,
                                         fontFamily = FontFamily.Monospace,
                                         color = if (isDarkMode) Color(0xFFA8D4F0) else Color(0xFF0EA5E9)
@@ -843,7 +846,10 @@ fun VaultsListTab(
                                 VaultInfoRow("存储路径", pathDisplay)
                                 Spacer(modifier = Modifier.height(10.dp))
                                 // 大小占位
-                                VaultInfoRow("存储用量", if (vault.storageSize > 0) com.whmdg.mczj.tools.util.FormatUtils.formatBytes(vault.storageSize) else "未统计")
+                                VaultInfoRow("存储用量", buildString {
+                                    append(if (vault.storageSize > 0) com.whmdg.mczj.tools.util.FormatUtils.formatBytes(vault.storageSize) else "未统计")
+                                    if (vault.fileCount != null) append(" (${vault.fileCount} 个文件)")
+                                })
                                 Spacer(modifier = Modifier.height(10.dp))
                                 // 最后更改时间
                                 VaultInfoRow("最后更改时间", formatIsoTime(vault.lastModifiedAt) ?: "暂未被修改")

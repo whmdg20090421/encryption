@@ -26,7 +26,8 @@ class DeleteJob(
     private val manager: FileOperationManager,
     private val context: Context,
     private val vaultId: Int? = null,
-    private val vaultSizeDelta: Long = 0L
+    private val vaultSizeDelta: Long = 0L,
+    private val vaultFileCountDelta: Int = 0
 ) : FileOperationJob() {
 
     private var skipAllErrors = false
@@ -120,6 +121,10 @@ class DeleteJob(
             // 报告保险箱存储用量变更
             if (vaultId != null && vaultSizeDelta != 0L) {
                 manager.notifyVaultSizeChange(vaultId, vaultSizeDelta)
+            }
+            // 报告保险箱文件数量变更
+            if (vaultId != null && vaultFileCountDelta != 0) {
+                manager.notifyVaultFileCountChange(vaultId, vaultFileCountDelta)
             }
         }
     }

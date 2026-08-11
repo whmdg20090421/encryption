@@ -218,6 +218,16 @@ fun FileManagerScreen(
                     vaultService?.setStorageSize(vaultSession.record.id, totalSize)
                 }
             }
+            // 异步计算保险箱文件数量（仅首次未统计时）
+            if (vaultSession.record.fileCount == null) {
+                withContext(Dispatchers.IO) {
+                    val count = java.io.File(vaultSession.vaultDir.absolutePath)
+                        .walkTopDown().filter { it.isFile }.count()
+                    withContext(Dispatchers.Main) {
+                        vaultService?.setFileCount(vaultSession.record.id, count)
+                    }
+                }
+            }
         }
     }
 
@@ -2535,7 +2545,19 @@ fun FileManagerScreen(
                     .sumOf { it.size }
                     .let { if (it > 0) -it else 0L }
             } else 0L
-            FileOperationManager.delete(deleteEntries, recycleBinEnabled, accessLevel, context, vaultId, vaultDelta)
+            // 计算保险箱文件数量 delta
+            val vaultFileCountDelta = if (vaultId != null) {
+                val vaultRoot = vaultSession!!.vaultDir.absolutePath
+                deleteEntries
+                    .filter { it.path == vaultRoot || it.path.startsWith("$vaultRoot/") }
+                    .sumOf { entry ->
+                        if (entry.isDirectory) {
+                            java.io.File(entry.path).walkTopDown().filter { it.isFile }.count().toInt()
+                        } else 1
+                    }
+                    .let { if (it > 0) -it else 0 }
+            } else 0
+            FileOperationManager.delete(deleteEntries, recycleBinEnabled, accessLevel, context, vaultId, vaultDelta, vaultFileCountDelta)
             if (vm.focusedPanel == FocusedPanel.LEFT) {
                 vm.左.selectedPaths = emptySet(); swipeStates[0].selectFlag = 0; swipeStates[0].lastIndex = -1
             } else {

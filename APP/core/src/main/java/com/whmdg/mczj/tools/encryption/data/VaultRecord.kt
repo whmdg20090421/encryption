@@ -19,5 +19,6 @@ data class VaultRecord(
     val createdAt: String, // 存 ISO8601 字符串
     @SerialName("last_opened_at") val lastOpenedAt: String? = null,
     @SerialName("last_modified_at") val lastModifiedAt: String? = null,
-    @SerialName("storage_size") val storageSize: Long = 0  // 字节，0 = 未统计
+    @SerialName("storage_size") val storageSize: Long = 0,  // 字节，0 = 未统计
+    @SerialName("file_count") val fileCount: Int? = null    // 文件数量，null = 未统计
 )

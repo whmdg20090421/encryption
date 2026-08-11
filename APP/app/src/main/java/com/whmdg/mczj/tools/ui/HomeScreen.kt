@@ -121,7 +121,13 @@ fun MainAppContainer() {
         FileOperationManager.setVaultSizeChangeCallback { vaultId, delta ->
             vaultService.updateStorageSize(vaultId, delta)
         }
-        onDispose { FileOperationManager.setVaultSizeChangeCallback(null) }
+        FileOperationManager.setVaultFileCountChangeCallback { vaultId, delta ->
+            vaultService.updateFileCount(vaultId, delta)
+        }
+        onDispose {
+            FileOperationManager.setVaultSizeChangeCallback(null)
+            FileOperationManager.setVaultFileCountChangeCallback(null)
+        }
     }
 
     // ── 诊断状态（Debug 模式） ──

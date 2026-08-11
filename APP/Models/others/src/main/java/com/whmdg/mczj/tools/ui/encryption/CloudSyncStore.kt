@@ -34,7 +34,9 @@ object CloudSyncStore {
                     lastSyncTime = obj.optString("lastSyncTime", "未同步"),
                     cloudSize = obj.optLong("cloudSize", 0),
                     diffFileCount = obj.optInt("diffFileCount", 0),
-                    webdavPath = obj.optString("webdavPath", "")
+                    webdavPath = obj.optString("webdavPath", ""),
+                    localFileCount = if (obj.has("localFileCount")) obj.optInt("localFileCount") else null,
+                    cloudFileCount = if (obj.has("cloudFileCount")) obj.optInt("cloudFileCount") else null
                 )
             }
         } catch (_: Exception) {
@@ -56,6 +58,8 @@ object CloudSyncStore {
             obj.put("cloudSize", item.cloudSize)
             obj.put("diffFileCount", item.diffFileCount)
             obj.put("webdavPath", item.webdavPath)
+            if (item.localFileCount != null) obj.put("localFileCount", item.localFileCount)
+            if (item.cloudFileCount != null) obj.put("cloudFileCount", item.cloudFileCount)
             arr.put(obj)
         }
         prefs(context).edit().putString(KEY_SYNC_ITEMS, arr.toString()).apply()

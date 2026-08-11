@@ -466,6 +466,31 @@ class VaultService(private val context: Context) {
     }
 
     /**
+     * 更新保险箱文件数量（delta 可正可负）
+     */
+    fun updateFileCount(id: Int, delta: Int) {
+        val rec = _db.vaults.find { it.id == id } ?: return
+        val cur = rec.fileCount ?: 0
+        val newCount = (cur + delta).coerceAtLeast(0)
+        _db.replaceVault(rec.copy(fileCount = newCount))
+        _db.save(context)
+        vaults.clear()
+        vaults.addAll(_db.vaults)
+        markModified(id)
+    }
+
+    /**
+     * 直接设置保险箱文件数量（用于首次统计）
+     */
+    fun setFileCount(id: Int, count: Int) {
+        val rec = _db.vaults.find { it.id == id } ?: return
+        _db.replaceVault(rec.copy(fileCount = count))
+        _db.save(context)
+        vaults.clear()
+        vaults.addAll(_db.vaults)
+    }
+
+    /**
      * 刷新指定文件夹的大小（增量、自底向上冒泡）。
      *
      * 算法：

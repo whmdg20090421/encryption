@@ -8,6 +8,7 @@ import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 复制/移动目的枚举。
@@ -90,25 +91,33 @@ class CopyJob(
     // ── 保险箱存储用量 delta 追踪 ──
     private val vaultBytesAdded = AtomicLong(0)
     private val vaultBytesRemoved = AtomicLong(0)
+    private val vaultFilesAdded = AtomicInteger(0)
+    private val vaultFilesRemoved = AtomicInteger(0)
 
     /** 根据目的获取阶段文字 */
     private val phaseName: String
         get() = if (purpose == CopyPurpose.MOVE) "正在移动" else "正在复制"
 
-    /** 报告保险箱存储用量变更 */
+    /** 报告保险箱存储用量及文件数量变更 */
     private fun reportVaultSizeChange() {
         val added = vaultBytesAdded.get()
         val removed = vaultBytesRemoved.get()
+        val filesAdded = vaultFilesAdded.get()
+        val filesRemoved = vaultFilesRemoved.get()
         when (vaultContext) {
             is VaultOperationContext.ExternalToVault -> {
                 if (added > 0) manager.notifyVaultSizeChange(vaultContext.targetSession.record.id, added)
+                if (filesAdded > 0) manager.notifyVaultFileCountChange(vaultContext.targetSession.record.id, filesAdded)
             }
             is VaultOperationContext.VaultToExternal -> {
                 if (removed > 0) manager.notifyVaultSizeChange(vaultContext.sourceSession.record.id, -removed)
+                if (filesRemoved > 0) manager.notifyVaultFileCountChange(vaultContext.sourceSession.record.id, -filesRemoved)
             }
             is VaultOperationContext.CrossVault -> {
                 if (added > 0) manager.notifyVaultSizeChange(vaultContext.targetSession.record.id, added)
                 if (removed > 0) manager.notifyVaultSizeChange(vaultContext.sourceSession.record.id, -removed)
+                if (filesAdded > 0) manager.notifyVaultFileCountChange(vaultContext.targetSession.record.id, filesAdded)
+                if (filesRemoved > 0) manager.notifyVaultFileCountChange(vaultContext.sourceSession.record.id, -filesRemoved)
             }
             else -> return
         }
@@ -259,6 +268,7 @@ class CopyJob(
                 currentStep = "加密: ${srcFile.name}"
                 val encrypted = CryptoService.encryptIntoVault(context, ctx.targetSession, srcFile, subDir)
                 vaultBytesAdded.addAndGet(encrypted.length())
+                vaultFilesAdded.incrementAndGet()
                 doneBytes += srcFile.length()
             }
             doneFiles++
@@ -300,6 +310,7 @@ class CopyJob(
             currentStep = "加密: ${file.name}"
             val encrypted = CryptoService.encryptIntoVault(context, session, file, fileSubDir)
             vaultBytesAdded.addAndGet(encrypted.length())
+            vaultFilesAdded.incrementAndGet()
             doneBytes += file.length()
             manager.updateProgress(FileOpProgress(
                 phase = "正在加密",
@@ -360,6 +371,10 @@ class CopyJob(
                 vaultBytesRemoved.addAndGet(
                     if (srcFile.isDirectory) srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
                     else srcFile.length()
+                )
+                vaultFilesRemoved.addAndGet(
+                    if (srcFile.isDirectory) srcFile.walkTopDown().filter { it.isFile }.count()
+                    else 1
                 )
                 srcFile.deleteRecursively()
             }
@@ -450,6 +465,10 @@ class CopyJob(
                         if (srcFile.isDirectory) srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
                         else srcFile.length()
                     )
+                    vaultFilesRemoved.addAndGet(
+                        if (srcFile.isDirectory) srcFile.walkTopDown().filter { it.isFile }.count()
+                        else 1
+                    )
                     srcFile.deleteRecursively()
                 }
             }
@@ -512,6 +531,7 @@ class CopyJob(
             val subDir = if (targetSubDir.isEmpty()) "" else targetSubDir
             val encrypted = CryptoService.encryptIntoVault(context, targetSession, decryptedFile, subDir, overwrite = true)
             vaultBytesAdded.addAndGet(encrypted.length())
+            vaultFilesAdded.incrementAndGet()
         } finally {
             // 清理临时解密文件
             tempDir.listFiles()?.forEach { f ->
