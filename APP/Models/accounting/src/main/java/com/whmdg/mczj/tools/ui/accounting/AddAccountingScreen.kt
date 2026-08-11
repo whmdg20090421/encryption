@@ -1568,7 +1568,6 @@ private fun TimeWheel(
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
     val itemHeight = 36.dp
     val itemSpacing = 4.dp
-    val totalItemHeight = itemHeight + itemSpacing
     val density = LocalDensity.current
 
     // 首次布局：用 scrollToItem（无动画）直接居中，避免闪烁
@@ -1584,30 +1583,39 @@ private fun TimeWheel(
         }
     }
 
-    // 滚动停止时自动吸中（动画）
+    // 滚动停止后自动吸中：debounce 100ms，确保 fling 完全结束
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }
             .distinctUntilChanged()
-            .filter { !it }
-            .collect {
-                val info = listState.layoutInfo
-                val items = info.visibleItemsInfo
-                if (items.isEmpty()) return@collect
-                val vpH = info.viewportEndOffset - info.viewportStartOffset
-                val centerY = vpH / 2f
-                // 找离视口中心最近的 item
-                val best = items.minByOrNull {
-                    kotlin.math.abs(it.offset + it.size / 2f - centerY)
-                } ?: return@collect
-                // 让该 item 居中：offset = -(vpH - itemHeight) / 2
-                val scrollOffset = -((vpH - best.size) / 2).toInt()
-                listState.animateScrollToItem(best.index, scrollOffset)
-                onSelect(range.first + (best.index % size + size) % size)
+            .collect { scrolling ->
+                if (!scrolling) {
+                    delay(100)
+                    val info = listState.layoutInfo
+                    val vpH = info.viewportEndOffset - info.viewportStartOffset
+                    val centerOffset = with(density) { (itemHeight / 2).roundToPx() }
+                    val initialOffset = (vpH - with(density) { itemHeight.roundToPx() }) / 2
+                    val best = (0 until size).minByOrNull { i ->
+                        val itemCenter = initialOffset + i * with(density) { (itemHeight + itemSpacing).roundToPx() } + centerOffset
+                        kotlin.math.abs(itemCenter - info.viewportStartOffset)
+                    } ?: return@collect
+                    val scrollOffset = -((vpH - with(density) { itemHeight.roundToPx() }) / 2)
+                    listState.animateScrollToItem(best, scrollOffset)
+                    onSelect(range.first + (best % size + size) % size)
+                }
             }
     }
 
     val scope = rememberCoroutineScope()
     Box(modifier = modifier) {
+        // 选择蓝色框：固定在视口中心
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.6f)
+                .height(itemHeight)
+                .align(Alignment.Center)
+                .clip(RoundedCornerShape(4.dp))
+                .background(cyan.copy(alpha = 0.12f))
+        )
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
@@ -1625,7 +1633,7 @@ private fun TimeWheel(
                             scope.launch {
                                 val info = listState.layoutInfo
                                 val vpH = info.viewportEndOffset - info.viewportStartOffset
-                                val ih = (itemHeight.value * density.density).toInt()
+                                val ih = with(density) { itemHeight.roundToPx() }
                                 listState.animateScrollToItem(index, -((vpH - ih) / 2))
                             }
                         },
@@ -1641,15 +1649,6 @@ private fun TimeWheel(
                 }
             }
         }
-        // 视口中心青色选择条
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .height(totalItemHeight)
-                .align(Alignment.Center)
-                .clip(RoundedCornerShape(4.dp))
-                .background(cyan.copy(alpha = 0.12f))
-        )
     }
 }
 

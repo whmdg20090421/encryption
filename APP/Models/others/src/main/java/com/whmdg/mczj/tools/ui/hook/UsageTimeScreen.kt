@@ -94,6 +94,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
@@ -1850,9 +1851,9 @@ private fun TimeWheel(
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
     val itemHeight = 36.dp
     val itemSpacing = 4.dp
-    val totalItemHeight = itemHeight + itemSpacing
     val density = LocalDensity.current
 
+    // 首次布局：scrollToItem 居中初始项
     var firstLayout by remember { mutableStateOf(true) }
     LaunchedEffect(listState) {
         if (firstLayout) {
@@ -1865,27 +1866,39 @@ private fun TimeWheel(
         }
     }
 
+    // 滚动停止后自动吸中：debounce 100ms，确保 fling 完全结束
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }
             .distinctUntilChanged()
-            .filter { !it }
-            .collect {
-                val info = listState.layoutInfo
-                val items = info.visibleItemsInfo
-                if (items.isEmpty()) return@collect
-                val vpH = info.viewportEndOffset - info.viewportStartOffset
-                val centerY = vpH / 2f
-                val best = items.minByOrNull {
-                    kotlin.math.abs(it.offset + it.size / 2f - centerY)
-                } ?: return@collect
-                val scrollOffset = -((vpH - best.size) / 2).toInt()
-                listState.animateScrollToItem(best.index, scrollOffset)
-                onSelect(range.first + (best.index % size + size) % size)
+            .collect { scrolling ->
+                if (!scrolling) {
+                    delay(100)
+                    val info = listState.layoutInfo
+                    val vpH = info.viewportEndOffset - info.viewportStartOffset
+                    val centerOffset = with(density) { (itemHeight / 2).roundToPx() }
+                    val initialOffset = (vpH - with(density) { itemHeight.roundToPx() }) / 2
+                    val best = (0 until size).minByOrNull { i ->
+                        val itemCenter = initialOffset + i * with(density) { (itemHeight + itemSpacing).roundToPx() } + centerOffset
+                        kotlin.math.abs(itemCenter - info.viewportStartOffset)
+                    } ?: return@collect
+                    val scrollOffset = -((vpH - with(density) { itemHeight.roundToPx() }) / 2)
+                    listState.animateScrollToItem(best, scrollOffset)
+                    onSelect(range.first + (best % size + size) % size)
+                }
             }
     }
 
     val scope = rememberCoroutineScope()
     Box(modifier = modifier) {
+        // 选择蓝色框：固定在视口中心
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.6f)
+                .height(itemHeight)
+                .align(Alignment.Center)
+                .clip(RoundedCornerShape(4.dp))
+                .background(AccentPrimary.copy(alpha = 0.12f))
+        )
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
@@ -1903,7 +1916,7 @@ private fun TimeWheel(
                             scope.launch {
                                 val info = listState.layoutInfo
                                 val vpH = info.viewportEndOffset - info.viewportStartOffset
-                                val ih = (itemHeight.value * density.density).toInt()
+                                val ih = with(density) { itemHeight.roundToPx() }
                                 listState.animateScrollToItem(index, -((vpH - ih) / 2))
                             }
                         },
@@ -1919,13 +1932,5 @@ private fun TimeWheel(
                 }
             }
         }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .height(totalItemHeight)
-                .align(Alignment.Center)
-                .clip(RoundedCornerShape(4.dp))
-                .background(AccentPrimary.copy(alpha = 0.12f))
-        )
     }
 }
