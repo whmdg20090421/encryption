@@ -1414,29 +1414,31 @@ private fun ExcludeTimeRangeDialog(
                     }
                 }
 
-                // 底部按钮
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    TextButton(onClick = onDismiss) {
-                        Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    TextButton(onClick = {
-                        val startCal = java.util.Calendar.getInstance().apply {
-                            set(fromYear, fromMonth, fromDay, fromHour, fromMinute, 0)
-                            set(java.util.Calendar.MILLISECOND, 0)
+                // 底部按钮（子面板展开时隐藏）
+                AnimatedVisibility(visible = activePanel is ActivePanel.None) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        TextButton(onClick = onDismiss) {
+                            Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        val endCal = java.util.Calendar.getInstance().apply {
-                            set(toYear, toMonth, toDay, toHour, toMinute, 0)
-                            set(java.util.Calendar.MILLISECOND, 0)
+                        TextButton(onClick = {
+                            val startCal = java.util.Calendar.getInstance().apply {
+                                set(fromYear, fromMonth, fromDay, fromHour, fromMinute, 0)
+                                set(java.util.Calendar.MILLISECOND, 0)
+                            }
+                            val endCal = java.util.Calendar.getInstance().apply {
+                                set(toYear, toMonth, toDay, toHour, toMinute, 0)
+                                set(java.util.Calendar.MILLISECOND, 0)
+                            }
+                            onConfirm(ExcludedTimeRange(
+                                startMillis = startCal.timeInMillis,
+                                endMillis = endCal.timeInMillis
+                            ))
+                        }) {
+                            Text("确定", color = AccentPrimary)
                         }
-                        onConfirm(ExcludedTimeRange(
-                            startMillis = startCal.timeInMillis,
-                            endMillis = endCal.timeInMillis
-                        ))
-                    }) {
-                        Text("确定", color = AccentPrimary)
                     }
                 }
             }
@@ -1453,15 +1455,15 @@ private fun ExcludeFixedTimeDialog(
 ) {
     var selStartHour by remember { mutableIntStateOf(0) }
     var selStartMinute by remember { mutableIntStateOf(0) }
-    var selEndHour by remember { mutableIntStateOf(0) }
-    var selEndMinute by remember { mutableIntStateOf(0) }
+    var selEndHour by remember { mutableIntStateOf(23) }
+    var selEndMinute by remember { mutableIntStateOf(59) }
     var selectedDays by remember { mutableStateOf(setOf<Int>()) }
 
     Dialog(onDismissRequest = onDismiss) {
         val screenWidth = LocalConfiguration.current.screenWidthDp.dp
         val screenHeight = LocalConfiguration.current.screenHeightDp.dp
         val dialogWidth = screenWidth * 0.85f
-        val dialogHeight = screenHeight * 0.55f
+        val dialogHeight = screenHeight * 0.7f
 
         Surface(
             shape = RoundedCornerShape(28.dp),

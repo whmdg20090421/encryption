@@ -110,11 +110,20 @@ class UsageTimeViewModel(application: Application) : AndroidViewModel(applicatio
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
 
             try {
-                // 清理过期的一次性排除时间段
+                // 清理过期的一次性排除时间段（结束日期的次日才清理）
                 val now = System.currentTimeMillis()
                 val currentRanges = _uiState.value.excludedTimeRanges
                 val validRanges = currentRanges.filter { range ->
-                    range.isRecurring || range.endMillis > now
+                    if (range.isRecurring) return@filter true
+                    val endCal = java.util.Calendar.getInstance().apply {
+                        timeInMillis = range.endMillis
+                        add(java.util.Calendar.DAY_OF_YEAR, 1)
+                        set(java.util.Calendar.HOUR_OF_DAY, 0)
+                        set(java.util.Calendar.MINUTE, 0)
+                        set(java.util.Calendar.SECOND, 0)
+                        set(java.util.Calendar.MILLISECOND, 0)
+                    }
+                    now < endCal.timeInMillis
                 }
                 if (validRanges.size < currentRanges.size) {
                     prefs.edit()
