@@ -23,6 +23,8 @@ import com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
 import com.whmdg.mczj.tools.fileop.sync.SyncMode
 import com.whmdg.mczj.tools.fileop.sync.SyncPhase
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Size
 import com.whmdg.mczj.tools.util.FileAccessLevel
 import com.whmdg.mczj.tools.auth.PasswordDialog
 
@@ -103,6 +105,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.abs
+import kotlin.math.min
 import kotlin.math.roundToInt
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties

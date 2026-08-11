@@ -494,7 +494,7 @@ private fun WebDavSettingsDialog(
                     onClick = {
                         isTesting = true
                         testResult = null
-                        val parsed = parseWebDavUrl(url)
+                        val parsed = parseWebDavUrlPublic(url)
                         if (parsed == null) {
                             testResult = "网址格式错误"
                             testSuccess = false
