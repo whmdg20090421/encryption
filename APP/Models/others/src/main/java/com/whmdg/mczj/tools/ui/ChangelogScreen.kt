@@ -29,6 +29,48 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V4.1",
+        date = "2026-08-11",
+        items = listOf(
+            // ── Hook 模块 · 使用时长 ──
+            "数字健康隐藏应用使用时长：完整实现手机使用时长统计功能",
+            "屏幕使用时长页面：queryEvents 事件配对计算时长，支持 4 种数据来源策略",
+            "每小时使用时长表格 + XLSX 导出分享",
+            "胶囊柱状图按类别堆叠（游戏紫/视频橙/其他蓝）+ 图例行 + 总时长统计",
+            "应用名缓存机制 + 双匹配分类（包名 + 关键词）+ 已卸载应用显示",
+            "排除应用功能：输入框校验 + 选择面板 + 持久化，支持一次性/周期性排除",
+            // ── 文件管理器 ──
+            "ImageViewer/TextEditor 独立 Activity：解决返回手势穿透问题",
+            "文件管理器三角色架构重构：Controller/Coordinator/ViewModel 分层",
+            "SmartWrapText 智能换行：onTextLayout 两阶段分割 + 扩展名保留截断 + 字体大小调节",
+            "文件管理器导航交错滑入动画 + 预加载机制 + 两阶段渐进加载",
+            "文件管理器弹窗提取为独立 Composable + 刷新保留滚动位置",
+            "FUSE 路径解析重写 + 权限编辑器改造 + 修改后验证",
+            // ── Shell/权限 ──
+            "Shell 守护进程：持久 shell 进程池，避免每次命令 fork",
+            "FUSE 权限修改拦截 + 权限编辑器 UI 紧凑化 + 应用桌面名显示",
+            "ROOT 文件操作 shell 流式复制 + 错误详情弹窗",
+            // ── 加密/保险箱 ──
+            "保险箱感知的文件复制/移动：自动加密引入/解密导出/跨箱转码",
+            "加密文件后缀 .aes → .whm，删除法律尾声，保留头部 magic 标识",
+            "vault session 隔离：每个 Controller 独立持有，Coordinator 注入",
+            "保险箱大小初始化 + 操作摘要弹窗 + vault 面板离开时自动销毁密钥",
+            // ── 云盘同步 ──
+            "云盘同步模块独立：修复添加保险箱无响应 bug",
+            "云盘同步面板 UI：FAB 展开菜单 + 保险箱选择弹窗 + 同步卡片",
+            "云盘同步项持久化：退出/杀进程后不再丢失",
+            // ── ANR 看门狗 ──
+            "增强版 ANR 看门狗：Looper 观察 + 心跳双检测 + 缓存密码异步开箱",
+            // ── Hook 模块重构 ──
+            "YukiHookAPI 集成 + Hook 作用域改用 LSPosed ILSPManagerService 实时查询",
+            "hidden API 绕过改用 JNI native 层调用，解决 Java 反射被拦截问题",
+            // ── 其他 ──
+            "压缩包自然排序 + 7zzs UTF-8 输出",
+            "NotePredictor Embedding Table 重构 + 模型信息显示 UI",
+            "minSdk 提升 24 → 26"
+        )
+    ),
+    ChangelogVersion(
         version = "V4.0",
         date = "2026-07-21",
         items = listOf(
