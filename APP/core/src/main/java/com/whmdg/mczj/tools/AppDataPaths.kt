@@ -76,6 +76,13 @@ object AppDataPaths {
         return dir
     }
 
+    /** 云盘同步模块目录 */
+    fun cloudSync(context: Context): File {
+        val dir = File(root(context), "云盘")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     /** 日记模块目录 */
     fun diary(context: Context): File {
         val dir = File(root(context), "日记")
@@ -191,6 +198,9 @@ object AppDataPaths {
 
     /** Hook 模块 SharedPreferences */
     const val PREFS_HOOK = "hook_prefs"
+
+    /** 云盘同步 SharedPreferences */
+    const val PREFS_CLOUD_SYNC = "cloud_sync_prefs"
 
     /** 分类图标主题色 SharedPreferences Key（十六进制颜色值，如 "#00BCD4"） */
     const val PREF_KEY_ICON_COLOR = "category_icon_color"

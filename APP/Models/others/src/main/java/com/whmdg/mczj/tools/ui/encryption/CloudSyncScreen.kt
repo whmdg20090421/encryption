@@ -32,16 +32,19 @@ import com.whmdg.mczj.tools.encryption.services.VaultService
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.components.glowEffect
 import com.whmdg.mczj.tools.util.FormatUtils
+import androidx.compose.ui.platform.LocalContext
 
-/** 云盘同步项（UI 数据模型） */
+/** 云盘同步项（UI 数据模型 + 持久化字段） */
 data class CloudSyncItem(
     val id: String,
+    val vaultId: Int = 0,       // 保险箱 ID（vault 类型时使用）
     val vaultName: String,
     val type: String,           // "保险箱" 或 "本地文件夹"
     val vaultSize: Long,
     val lastSyncTime: String,
     val cloudSize: Long,
-    val diffFileCount: Int
+    val diffFileCount: Int,
+    val webdavPath: String = "" // 云端目标路径
 )
 
 /**
@@ -66,24 +69,39 @@ fun CloudSyncScreen(
     onShowVaultSheet: () -> Unit
 ) {
     val isDarkMode = LocalIsDarkMode.current
+    val context = LocalContext.current
     var fabExpanded by remember { mutableStateOf(false) }
     val syncItems = remember { mutableStateListOf<CloudSyncItem>() }
     val processedVaultIds = remember { mutableSetOf<Int>() }
+
+    // 从持久化存储加载同步项
+    LaunchedEffect(Unit) {
+        val saved = CloudSyncStore.load(context)
+        if (saved.isNotEmpty()) {
+            syncItems.clear()
+            syncItems.addAll(saved)
+            processedVaultIds.addAll(saved.filter { it.id.startsWith("vault_") }
+                .map { it.id.removePrefix("vault_").toIntOrNull() ?: 0 })
+        }
+    }
 
     // 处理外部传入的保险箱添加请求
     LaunchedEffect(events.requestCounter) {
         val vault = events.addVaultRequest ?: return@LaunchedEffect
         if (vault.id !in processedVaultIds) {
             processedVaultIds.add(vault.id)
-            syncItems.add(CloudSyncItem(
+            val item = CloudSyncItem(
                 id = "vault_${vault.id}",
+                vaultId = vault.id,
                 vaultName = vault.name,
                 type = "保险箱",
                 vaultSize = vault.storageSize,
                 lastSyncTime = "未同步",
                 cloudSize = 0,
                 diffFileCount = 0
-            ))
+            )
+            syncItems.add(item)
+            CloudSyncStore.save(context, syncItems.toList())
         }
     }
 
