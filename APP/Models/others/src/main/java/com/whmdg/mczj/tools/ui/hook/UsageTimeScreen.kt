@@ -1485,7 +1485,9 @@ private fun ExcludeFixedTimeDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(4.dp))
-                TimePicker(state = startTimeState)
+                Box(contentAlignment = Alignment.Center) {
+                    TimePicker(state = startTimeState)
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -1496,7 +1498,9 @@ private fun ExcludeFixedTimeDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(4.dp))
-                TimePicker(state = endTimeState)
+                Box(contentAlignment = Alignment.Center) {
+                    TimePicker(state = endTimeState)
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -1775,7 +1779,9 @@ private fun HourMinutePanel(
     val timeState = rememberTimePickerState(initialHour = initHour, initialMinute = initMinute, is24Hour = true)
 
     Column(modifier = Modifier.fillMaxSize()) {
-        TimePicker(state = timeState)
+        Box(contentAlignment = Alignment.Center) {
+            TimePicker(state = timeState)
+        }
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween
