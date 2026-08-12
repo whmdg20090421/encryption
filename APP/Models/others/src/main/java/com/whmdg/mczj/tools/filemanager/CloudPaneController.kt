@@ -77,8 +77,8 @@ class CloudPaneController(
             state.syncIndex = state.syncIndex.copy(remoteBasePath = webdavConfig.relativePath)
         }
 
-        // 列出云端根目录
-        scope.launch { navigateTo(state.syncIndex.effectiveRemoteBase) }
+        // 列出 WebDAV 根目录（用户可从这里导航到保险箱子目录）
+        scope.launch { navigateTo(state.syncIndex.remoteBasePath) }
     }
 
     /** 导航到云端目录 */
