@@ -18,7 +18,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.text.font.FontWeight
@@ -33,9 +32,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -1406,6 +1402,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DateTimePickerDialog(
     initYear: Int, initMonth: Int, initDay: Int,
@@ -1517,23 +1514,13 @@ private fun DateTimePickerDialog(
                 // 青色分割线
                 HorizontalDivider(color = cyan, thickness = 1.dp)
 
-                // 下半：时间齿轮（weight均分）
-                Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    TimeWheel(
-                        range = 0..23,
-                        selected = selHour,
-                        onSelect = { selHour = it },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        label = { "%02d".format(it) }
-                    )
-                    TimeWheel(
-                        range = 0..59,
-                        selected = selMinute,
-                        onSelect = { selMinute = it },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        label = { "%02d".format(it) }
-                    )
-                }
+                // 下半：时间选择器
+                val timeState = rememberTimePickerState(
+                    initialHour = selHour,
+                    initialMinute = selMinute,
+                    is24Hour = true
+                )
+                TimePicker(state = timeState)
 
                 // 确认按钮
                 Row(
@@ -1543,109 +1530,9 @@ private fun DateTimePickerDialog(
                     TextButton(onClick = onDismiss) {
                         Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    TextButton(onClick = { onConfirm(calYear, calMonth, selDay, selHour, selMinute) }) {
+                    TextButton(onClick = { onConfirm(calYear, calMonth, selDay, timeState.hour, timeState.minute) }) {
                         Text("确定", color = cyan)
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TimeWheel(
-    range: IntRange,
-    selected: Int,
-    onSelect: (Int) -> Unit,
-    modifier: Modifier,
-    label: (Int) -> String
-) {
-    val context = LocalContext.current
-    val cyan = remember { Color(android.graphics.Color.parseColor(getCategoryIconColor(context))) }
-    val size = range.last - range.first + 1
-    val totalItems = size * 10000
-    val initialIndex = totalItems / 2 + (selected - range.first)
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
-    val itemHeight = 36.dp
-    val itemSpacing = 4.dp
-    val density = LocalDensity.current
-
-    // 首次布局：用 scrollToItem（无动画）直接居中，避免闪烁
-    var firstLayout by remember { mutableStateOf(true) }
-    LaunchedEffect(listState) {
-        if (firstLayout) {
-            snapshotFlow { listState.layoutInfo.viewportEndOffset }
-                .first { it > 0 }
-            val vpH = listState.layoutInfo.let { it.viewportEndOffset - it.viewportStartOffset }
-            val ih = with(density) { itemHeight.roundToPx() }
-            listState.scrollToItem(initialIndex, -((vpH - ih) / 2))
-            firstLayout = false
-        }
-    }
-
-    // 滚动停止后自动吸中：debounce 100ms，确保 fling 完全结束
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress }
-            .distinctUntilChanged()
-            .collect { scrolling ->
-                if (!scrolling) {
-                    delay(100)
-                    val info = listState.layoutInfo
-                    val vpH = info.viewportEndOffset - info.viewportStartOffset
-                    val centerOffset = with(density) { (itemHeight / 2).roundToPx() }
-                    val initialOffset = (vpH - with(density) { itemHeight.roundToPx() }) / 2
-                    val best = (0 until size).minByOrNull { i ->
-                        val itemCenter = initialOffset + i * with(density) { (itemHeight + itemSpacing).roundToPx() } + centerOffset
-                        kotlin.math.abs(itemCenter - info.viewportStartOffset)
-                    } ?: return@collect
-                    val scrollOffset = -((vpH - with(density) { itemHeight.roundToPx() }) / 2)
-                    listState.animateScrollToItem(best, scrollOffset)
-                    onSelect(range.first + (best % size + size) % size)
-                }
-            }
-    }
-
-    val scope = rememberCoroutineScope()
-    Box(modifier = modifier) {
-        // 选择蓝色框：固定在视口中心
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .height(itemHeight)
-                .align(Alignment.Center)
-                .clip(RoundedCornerShape(4.dp))
-                .background(cyan.copy(alpha = 0.12f))
-        )
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            items(totalItems) { index ->
-                val value = range.first + (index % size + size) % size
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(itemHeight)
-                        .padding(vertical = itemSpacing / 2)
-                        .clickable {
-                            onSelect(value)
-                            scope.launch {
-                                val info = listState.layoutInfo
-                                val vpH = info.viewportEndOffset - info.viewportStartOffset
-                                val ih = with(density) { itemHeight.roundToPx() }
-                                listState.animateScrollToItem(index, -((vpH - ih) / 2))
-                            }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = label(value),
-                        style = if (value == selected) MaterialTheme.typography.titleLarge
-                        else MaterialTheme.typography.bodyLarge,
-                        color = if (value == selected) cyan
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
         }

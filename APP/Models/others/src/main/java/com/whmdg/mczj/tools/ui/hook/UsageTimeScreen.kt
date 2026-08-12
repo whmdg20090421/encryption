@@ -24,11 +24,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -56,6 +54,10 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -76,7 +78,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -88,16 +89,12 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -1449,22 +1446,19 @@ private fun ExcludeTimeRangeDialog(
 
 // ==================== 固定排除时段对话框 ====================
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ExcludeFixedTimeDialog(
     onDismiss: () -> Unit,
     onConfirm: (ExcludedTimeRange) -> Unit
 ) {
-    var selStartHour by remember { mutableIntStateOf(0) }
-    var selStartMinute by remember { mutableIntStateOf(0) }
-    var selEndHour by remember { mutableIntStateOf(23) }
-    var selEndMinute by remember { mutableIntStateOf(59) }
     var selectedDays by remember { mutableStateOf(setOf<Int>()) }
+    val startTimeState = rememberTimePickerState(initialHour = 0, initialMinute = 0, is24Hour = true)
+    val endTimeState = rememberTimePickerState(initialHour = 23, initialMinute = 59, is24Hour = true)
 
     Dialog(onDismissRequest = onDismiss) {
         val screenWidth = LocalConfiguration.current.screenWidthDp.dp
-        val screenHeight = LocalConfiguration.current.screenHeightDp.dp
         val dialogWidth = screenWidth * 0.85f
-        val dialogHeight = screenHeight * 0.7f
 
         Surface(
             shape = RoundedCornerShape(28.dp),
@@ -1474,7 +1468,7 @@ private fun ExcludeFixedTimeDialog(
             Column(
                 modifier = Modifier
                     .width(dialogWidth)
-                    .height(dialogHeight)
+                    .verticalScroll(rememberScrollState())
                     .padding(16.dp)
             ) {
                 Text(
@@ -1491,20 +1485,7 @@ private fun ExcludeFixedTimeDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(4.dp))
-                Row(modifier = Modifier.fillMaxWidth().height(120.dp)) {
-                    TimeWheel(
-                        range = 0..23, selected = selStartHour,
-                        onSelect = { selStartHour = it },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        label = { "%02d".format(it) }
-                    )
-                    TimeWheel(
-                        range = 0..59, selected = selStartMinute,
-                        onSelect = { selStartMinute = it },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        label = { "%02d".format(it) }
-                    )
-                }
+                TimePicker(state = startTimeState)
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -1515,20 +1496,7 @@ private fun ExcludeFixedTimeDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(4.dp))
-                Row(modifier = Modifier.fillMaxWidth().height(120.dp)) {
-                    TimeWheel(
-                        range = 0..23, selected = selEndHour,
-                        onSelect = { selEndHour = it },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        label = { "%02d".format(it) }
-                    )
-                    TimeWheel(
-                        range = 0..59, selected = selEndMinute,
-                        onSelect = { selEndMinute = it },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        label = { "%02d".format(it) }
-                    )
-                }
+                TimePicker(state = endTimeState)
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -1582,8 +1550,8 @@ private fun ExcludeFixedTimeDialog(
                     }
                     TextButton(
                         onClick = {
-                            val startMod = selStartHour * 60 + selStartMinute
-                            val endMod = selEndHour * 60 + selEndMinute
+                            val startMod = startTimeState.hour * 60 + startTimeState.minute
+                            val endMod = endTimeState.hour * 60 + endTimeState.minute
                             onConfirm(ExcludedTimeRange(
                                 startMinuteOfDay = startMod,
                                 endMinuteOfDay = endMod,
@@ -1591,10 +1559,10 @@ private fun ExcludeFixedTimeDialog(
                             ))
                         },
                         enabled = selectedDays.isNotEmpty() &&
-                            (selStartHour * 60 + selStartMinute) < (selEndHour * 60 + selEndMinute)
+                            (startTimeState.hour * 60 + startTimeState.minute) < (endTimeState.hour * 60 + endTimeState.minute)
                     ) {
                         Text("确定", color = if (selectedDays.isNotEmpty() &&
-                            (selStartHour * 60 + selStartMinute) < (selEndHour * 60 + selEndMinute))
+                            (startTimeState.hour * 60 + startTimeState.minute) < (endTimeState.hour * 60 + endTimeState.minute))
                             AccentPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -1664,25 +1632,23 @@ private fun TimePointRow(
 
 // ==================== 年份滚轮面板 ====================
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun YearWheelPanel(
     initialYear: Int,
     onConfirm: (Int) -> Unit,
     onCancel: () -> Unit
 ) {
-    var selectedYear by remember { mutableIntStateOf(initialYear) }
+    val initialMillis = remember(initialYear) {
+        java.util.Calendar.getInstance().apply {
+            set(initialYear, 0, 1, 0, 0, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+    }
+    val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            val currentYear = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
-            TimeWheel(
-                range = (currentYear - 10)..(currentYear + 10),
-                selected = selectedYear,
-                onSelect = { selectedYear = it },
-                modifier = Modifier.fillMaxSize(),
-                label = { "$it" }
-            )
-        }
+        DatePicker(state = datePickerState, showModeToggle = false)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -1690,7 +1656,11 @@ private fun YearWheelPanel(
             TextButton(onClick = onCancel) {
                 Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            TextButton(onClick = { onConfirm(selectedYear) }) {
+            TextButton(onClick = {
+                val cal = java.util.Calendar.getInstance()
+                cal.timeInMillis = datePickerState.selectedDateMillis ?: initialMillis
+                onConfirm(cal.get(java.util.Calendar.YEAR))
+            }) {
                 Text("确定", color = AccentPrimary)
             }
         }
@@ -1795,32 +1765,17 @@ private fun MonthDayPanel(
 
 // ==================== 时分选择面板 ====================
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HourMinutePanel(
     initHour: Int, initMinute: Int,
     onConfirm: (hour: Int, minute: Int) -> Unit,
     onCancel: () -> Unit
 ) {
-    var selHour by remember { mutableIntStateOf(initHour) }
-    var selMinute by remember { mutableIntStateOf(initMinute) }
+    val timeState = rememberTimePickerState(initialHour = initHour, initialMinute = initMinute, is24Hour = true)
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            TimeWheel(
-                range = 0..23,
-                selected = selHour,
-                onSelect = { selHour = it },
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                label = { "%02d".format(it) }
-            )
-            TimeWheel(
-                range = 0..59,
-                selected = selMinute,
-                onSelect = { selMinute = it },
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                label = { "%02d".format(it) }
-            )
-        }
+        TimePicker(state = timeState)
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -1828,108 +1783,8 @@ private fun HourMinutePanel(
             TextButton(onClick = onCancel) {
                 Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            TextButton(onClick = { onConfirm(selHour, selMinute) }) {
+            TextButton(onClick = { onConfirm(timeState.hour, timeState.minute) }) {
                 Text("确定", color = AccentPrimary)
-            }
-        }
-    }
-}
-
-// ==================== TimeWheel（无限循环滚轮） ====================
-
-@Composable
-private fun TimeWheel(
-    range: IntRange,
-    selected: Int,
-    onSelect: (Int) -> Unit,
-    modifier: Modifier,
-    label: (Int) -> String
-) {
-    val size = range.last - range.first + 1
-    val totalItems = size * 10000
-    val initialIndex = totalItems / 2 + (selected - range.first)
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
-    val itemHeight = 36.dp
-    val itemSpacing = 4.dp
-    val density = LocalDensity.current
-
-    // 首次布局：scrollToItem 居中初始项
-    var firstLayout by remember { mutableStateOf(true) }
-    LaunchedEffect(listState) {
-        if (firstLayout) {
-            snapshotFlow { listState.layoutInfo.viewportEndOffset }
-                .first { it > 0 }
-            val vpH = listState.layoutInfo.let { it.viewportEndOffset - it.viewportStartOffset }
-            val ih = with(density) { itemHeight.roundToPx() }
-            listState.scrollToItem(initialIndex, -((vpH - ih) / 2))
-            firstLayout = false
-        }
-    }
-
-    // 滚动停止后自动吸中：debounce 100ms，确保 fling 完全结束
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress }
-            .distinctUntilChanged()
-            .collect { scrolling ->
-                if (!scrolling) {
-                    delay(100)
-                    val info = listState.layoutInfo
-                    val vpH = info.viewportEndOffset - info.viewportStartOffset
-                    val centerOffset = with(density) { (itemHeight / 2).roundToPx() }
-                    val initialOffset = (vpH - with(density) { itemHeight.roundToPx() }) / 2
-                    val best = (0 until size).minByOrNull { i ->
-                        val itemCenter = initialOffset + i * with(density) { (itemHeight + itemSpacing).roundToPx() } + centerOffset
-                        kotlin.math.abs(itemCenter - info.viewportStartOffset)
-                    } ?: return@collect
-                    val scrollOffset = -((vpH - with(density) { itemHeight.roundToPx() }) / 2)
-                    listState.animateScrollToItem(best, scrollOffset)
-                    onSelect(range.first + (best % size + size) % size)
-                }
-            }
-    }
-
-    val scope = rememberCoroutineScope()
-    Box(modifier = modifier) {
-        // 选择蓝色框：固定在视口中心
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .height(itemHeight)
-                .align(Alignment.Center)
-                .clip(RoundedCornerShape(4.dp))
-                .background(AccentPrimary.copy(alpha = 0.12f))
-        )
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            items(totalItems) { index ->
-                val value = range.first + (index % size + size) % size
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(itemHeight)
-                        .padding(vertical = itemSpacing / 2)
-                        .clickable {
-                            onSelect(value)
-                            scope.launch {
-                                val info = listState.layoutInfo
-                                val vpH = info.viewportEndOffset - info.viewportStartOffset
-                                val ih = with(density) { itemHeight.roundToPx() }
-                                listState.animateScrollToItem(index, -((vpH - ih) / 2))
-                            }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = label(value),
-                        style = if (value == selected) MaterialTheme.typography.titleLarge
-                        else MaterialTheme.typography.bodyLarge,
-                        color = if (value == selected) AccentPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
             }
         }
     }
