@@ -5484,11 +5484,11 @@ private fun CloudFileItem(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .heightIn(min = 60.dp)
+            .height(60.dp)
             .padding(horizontal = 16.dp)
     ) {
-        // Top 7/10: icon + filename（与右面板一致）
-        Row(modifier = Modifier.weight(7f).fillMaxHeight()) {
+        // Top: icon + filename
+        Row(modifier = Modifier.weight(7f)) {
             Box(
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 contentAlignment = Alignment.Center
@@ -5503,7 +5503,7 @@ private fun CloudFileItem(
             }
             Text(
                 text = entry.name,
-                modifier = Modifier.weight(4f),
+                modifier = Modifier.weight(4f).fillMaxHeight(),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 fontSize = 12.sp,
@@ -5511,27 +5511,20 @@ private fun CloudFileItem(
                 textAlign = TextAlign.Center,
             )
         }
-        // Bottom 3/10: 大小 + 进度条（压缩空间）
-        Column(modifier = Modifier.weight(3f).fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = if (entry.isDirectory) "" else "",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = FormatUtils.formatBytes(entry.totalSize),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        // Bottom: 大小 + 进度条
+        Row(
+            modifier = Modifier.weight(3f).fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 左侧：大小
+            Text(
+                text = FormatUtils.formatBytes(entry.totalSize),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // 右侧：进度条
+            Box(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
                 SyncStatusBar(
                     totalSize = entry.totalSize,
                     uploadedSize = entry.uploadedSize,
