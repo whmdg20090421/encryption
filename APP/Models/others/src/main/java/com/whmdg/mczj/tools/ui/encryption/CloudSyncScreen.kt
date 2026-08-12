@@ -514,13 +514,15 @@ private fun WebDavSettingsDialog(
                             isTesting = false
                             return@Button
                         }
+                        val urlPath = extractPathFromUrl(url)
+                        val effectivePath = path.trim().ifEmpty { urlPath }
                         val config = WebDavServerConfig(
                             protocol = parsed.first,
                             host = parsed.second,
                             port = parsed.third,
                             username = username.trim(),
                             password = password,
-                            relativePath = path.trim()
+                            relativePath = effectivePath
                         )
                         dialogScope.launch {
                             val ok = withContext(Dispatchers.IO) {
@@ -569,13 +571,15 @@ private fun WebDavSettingsDialog(
                 onClick = {
                     val parsed = parseWebDavUrlPublic(url)
                     if (parsed != null) {
+                        val urlPath = extractPathFromUrl(url)
+                        val effectivePath = path.trim().ifEmpty { urlPath }
                         onSave(WebDavServerConfig(
                             protocol = parsed.first,
                             host = parsed.second,
                             port = parsed.third,
                             username = username.trim(),
                             password = password,
-                            relativePath = path.trim()
+                            relativePath = effectivePath
                         ))
                     }
                 },
@@ -588,7 +592,7 @@ private fun WebDavSettingsDialog(
     )
 }
 
-/** 解析 WebDAV URL 为 (protocol, host, port) */
+/** 解析 WebDAV URL 为 (protocol, host, port, path) */
 fun parseWebDavUrlPublic(url: String): Triple<String, String, Int>? {
     val trimmed = url.trim()
     if (trimmed.isBlank()) return null
@@ -599,6 +603,15 @@ fun parseWebDavUrlPublic(url: String): Triple<String, String, Int>? {
         val port = if (uri.port > 0) uri.port else if (scheme == "https") 443 else 80
         Triple(scheme, host, port)
     } catch (_: Exception) { null }
+}
+
+/** 从 URL 中提取路径部分（不含主机和端口） */
+fun extractPathFromUrl(url: String): String {
+    val trimmed = url.trim()
+    return try {
+        val uri = java.net.URI(trimmed)
+        (uri.path ?: "").trim('/')
+    } catch (_: Exception) { "" }
 }
 
 // ── 云盘同步卡片 ──
