@@ -99,6 +99,7 @@ fun CloudSyncScreen(
     val scope = rememberCoroutineScope()
     var accountState by remember { mutableStateOf(WebDavAccountState()) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var confirmError by remember { mutableStateOf<Throwable?>(null) }
 
     // 从持久化存储加载同步项 + 检测 WebDAV 连接状态
     LaunchedEffect(Unit) {
@@ -273,21 +274,19 @@ fun CloudSyncScreen(
                         confirmButton = {
                             TextButton(onClick = {
                                 showConfirmDialog = null
-                                val config = accountState.config
-                                if (config == null) {
-                                    android.widget.Toast.makeText(context, "请先配置 WebDAV 账户", android.widget.Toast.LENGTH_SHORT).show()
-                                    return@TextButton
+                                try {
+                                    val config = accountState.config
+                                        ?: throw IllegalStateException("请先配置 WebDAV 账户")
+                                    if (item.type != "保险箱") return@TextButton
+                                    val vaultRecord = vaultService.getVault(item.vaultId)
+                                        ?: throw IllegalStateException("保险箱不存在 (id=${item.vaultId})，请重新添加")
+                                    val vaultDir = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
+                                        context, vaultRecord.location, vaultRecord.relativePath
+                                    ).absolutePath
+                                    onNavigateToFileManager(config, vaultDir, item.vaultId, item.vaultName)
+                                } catch (e: Exception) {
+                                    confirmError = e
                                 }
-                                if (item.type != "保险箱") return@TextButton
-                                val vaultRecord = vaultService.getVault(item.vaultId)
-                                if (vaultRecord == null) {
-                                    android.widget.Toast.makeText(context, "保险箱不存在 (id=${item.vaultId})，请重新添加", android.widget.Toast.LENGTH_SHORT).show()
-                                    return@TextButton
-                                }
-                                val vaultDir = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
-                                    context, vaultRecord.location, vaultRecord.relativePath
-                                ).absolutePath
-                                onNavigateToFileManager(config, vaultDir, item.vaultId, item.vaultName)
                             }) { Text("确认") }
                         },
                         dismissButton = {
@@ -295,6 +294,12 @@ fun CloudSyncScreen(
                         }
                     )
                 }
+
+                // 报错弹窗
+                com.whmdg.mczj.tools.ui.ErrorDialog(
+                    error = confirmError,
+                    onDismiss = { confirmError = null }
+                )
             }
         }
 
