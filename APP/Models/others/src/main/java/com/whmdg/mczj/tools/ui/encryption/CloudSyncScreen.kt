@@ -118,6 +118,7 @@ fun CloudSyncScreen(
             accountState = accountState.copy(config = config, displayName = config.getDefaultName())
             val ok = withContext(Dispatchers.IO) {
                 try {
+                    WebDavAuthenticator.addTransientServer(config)
                     val client = WebDavFileClient(config)
                     client.testConnection()
                     true
@@ -273,15 +274,20 @@ fun CloudSyncScreen(
                             TextButton(onClick = {
                                 showConfirmDialog = null
                                 val config = accountState.config
-                                if (config != null && item.type == "保险箱") {
-                                    val vaultRecord = vaultService.getVault(item.vaultId)
-                                    if (vaultRecord != null) {
-                                        val vaultDir = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
-                                            context, vaultRecord.location, vaultRecord.relativePath
-                                        ).absolutePath
-                                        onNavigateToFileManager(config, vaultDir, item.vaultId, item.vaultName)
-                                    }
+                                if (config == null) {
+                                    android.widget.Toast.makeText(context, "请先配置 WebDAV 账户", android.widget.Toast.LENGTH_SHORT).show()
+                                    return@TextButton
                                 }
+                                if (item.type != "保险箱") return@TextButton
+                                val vaultRecord = vaultService.getVault(item.vaultId)
+                                if (vaultRecord == null) {
+                                    android.widget.Toast.makeText(context, "保险箱不存在 (id=${item.vaultId})，请重新添加", android.widget.Toast.LENGTH_SHORT).show()
+                                    return@TextButton
+                                }
+                                val vaultDir = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
+                                    context, vaultRecord.location, vaultRecord.relativePath
+                                ).absolutePath
+                                onNavigateToFileManager(config, vaultDir, item.vaultId, item.vaultName)
                             }) { Text("确认") }
                         },
                         dismissButton = {
