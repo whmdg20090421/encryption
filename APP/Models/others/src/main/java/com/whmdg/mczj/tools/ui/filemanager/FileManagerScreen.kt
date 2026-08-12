@@ -5484,37 +5484,61 @@ private fun CloudFileItem(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .heightIn(min = 60.dp)
+            .padding(horizontal = 16.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = if (entry.isDirectory) Color(0xFFFFC107) else if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
+        // Top 7/10: icon + filename（与右面板一致）
+        Row(modifier = Modifier.weight(7f).fillMaxHeight()) {
+            Box(
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp),
+                    tint = if (entry.isDirectory) MaterialTheme.colorScheme.primary
+                           else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Text(
-                entry.name,
-                fontSize = 13.sp,
-                color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B),
-                modifier = Modifier.weight(1f),
-                maxLines = 1
-            )
-            Text(
-                FormatUtils.formatBytes(entry.totalSize),
-                fontSize = 11.sp,
-                color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+                text = entry.name,
+                modifier = Modifier.weight(4f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                fontSize = 12.sp,
+                lineHeight = 12.sp,
+                textAlign = TextAlign.Center,
             )
         }
-
-        // ── 进度条（聚合同步状态） ──
-        Spacer(modifier = Modifier.height(2.dp))
-        SyncStatusBar(
-            totalSize = entry.totalSize,
-            uploadedSize = entry.uploadedSize,
-            uploadingSize = entry.uploadingSize
-        )
+        // Bottom 3/10: 大小 + 进度条（压缩空间）
+        Column(modifier = Modifier.weight(3f).fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (entry.isDirectory) "" else "",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = FormatUtils.formatBytes(entry.totalSize),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                SyncStatusBar(
+                    totalSize = entry.totalSize,
+                    uploadedSize = entry.uploadedSize,
+                    uploadingSize = entry.uploadingSize
+                )
+            }
+        }
     }
 }
 
@@ -5526,7 +5550,7 @@ private fun SyncStatusBar(
     uploadedSize: Long,
     uploadingSize: Long
 ) {
-    Canvas(modifier = Modifier.fillMaxWidth().height(2.dp)) {
+    Canvas(modifier = Modifier.fillMaxWidth().height(3.dp)) {
         if (totalSize <= 0L) {
             // 无文件或空文件夹：红色
             drawRect(Color(0xFFE57373), size = size)
