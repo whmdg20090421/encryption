@@ -788,7 +788,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 }
                 // 支付账户（转账时显示"转出账户"）
                 Row(
-                    modifier = Modifier.weight(1f).clickable { showAccountDialog = true },
+                    modifier = Modifier.weight(1.4f).clickable { showAccountDialog = true },
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -819,7 +819,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 }
                 // 优惠
                 Row(
-                    modifier = Modifier.weight(1f).clickable { showDiscountDialog = true },
+                    modifier = Modifier.weight(0.9f).clickable { showDiscountDialog = true },
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -829,7 +829,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 }
                 // 报销账户
                 Row(
-                    modifier = Modifier.weight(1f).clickable { showReimbursementDialog = true },
+                    modifier = Modifier.weight(0.9f).clickable { showReimbursementDialog = true },
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -839,7 +839,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 }
                 // 附件
                 Row(
-                    modifier = Modifier.weight(1f).clickable { showAttachmentSheet = true },
+                    modifier = Modifier.weight(0.9f).clickable { showAttachmentSheet = true },
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -849,7 +849,7 @@ fun AddAccountingScreen(onBack: () -> Unit, bookName: String, recordId: String? 
                 }
                 // 属性
                 Row(
-                    modifier = Modifier.weight(1f).clickable { showAttrSheet = true },
+                    modifier = Modifier.weight(0.9f).clickable { showAttrSheet = true },
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
