@@ -1463,11 +1463,11 @@ private fun ExcludeFixedTimeDialog(
         Surface(
             shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
+            tonalElevation = 6.dp,
+            modifier = Modifier.width(dialogWidth)
         ) {
             Column(
                 modifier = Modifier
-                    .width(dialogWidth)
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp)
             ) {
