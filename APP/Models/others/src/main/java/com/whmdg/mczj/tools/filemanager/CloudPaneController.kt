@@ -20,7 +20,7 @@ import java.io.File
  * 云盘面板控制器。
  *
  * 显示本地保险箱文件 + 同步状态（不从 WebDAV 读取）。
- * 每个文件/文件夹下方有进度条显示同步状态：红=未上传，绿=已完成，黄=上传中。
+ * 文件夹显示聚合同步状态（自底向上冒泡）。
  */
 class CloudPaneController(
     private val context: Context,
@@ -36,7 +36,6 @@ class CloudPaneController(
 
     /** 云盘面板状态（完全独立，使用 mutableStateOf 驱动 Compose recomposition） */
     class CloudPanelState {
-        /** 当前相对路径（相对于 vaultDir），"/" 表示根目录 */
         var currentPath by mutableStateOf("/")
         var entries by mutableStateOf<List<CloudFileEntry>>(emptyList())
         var isLoading by mutableStateOf(false)
@@ -46,15 +45,19 @@ class CloudPaneController(
         var syncIndex by mutableStateOf(VaultSyncIndex())
     }
 
-    /** 本地文件条目（带同步状态） */
+    /** 文件/文件夹条目（带聚合同步状态） */
     data class CloudFileEntry(
         val name: String,
-        /** 相对于 vaultDir 的路径，如 "/docs/report.whm" */
         val relativePath: String,
         val isDirectory: Boolean,
-        val size: Long,
+        /** 文件：自身大小；文件夹：下所有文件总大小 */
+        val totalSize: Long,
+        /** 文件：自身大小（如已完成）；文件夹：下所有已完成文件总大小 */
+        val uploadedSize: Long,
+        /** 文件夹：下所有正在上传文件总大小 */
+        val uploadingSize: Long,
         val lastModified: Long = 0,
-        /** 同步状态（仅文件有，文件夹为 null） */
+        /** 文件的单个同步状态（文件夹为 null，用聚合字段代替） */
         val syncStatus: UploadStatus? = null
     )
 
@@ -69,7 +72,6 @@ class CloudPaneController(
 
     /** 初始化：加载索引 + 列出本地保险箱根目录 */
     fun init() {
-        // 加载本地索引
         val indexFile = File(vaultDir, "vault_sync_index.json")
         if (indexFile.exists()) {
             try {
@@ -80,17 +82,14 @@ class CloudPaneController(
             } catch (_: Exception) {}
         }
 
-        // 如果索引没有保险箱名称，自动设置
         if (state.syncIndex.vaultFolderName.isEmpty()) {
             state.syncIndex = state.syncIndex.copy(vaultFolderName = vaultName)
         }
 
-        // 如果索引没有远程路径，从 WebDAV 配置初始化
         if (state.syncIndex.remoteBasePath.isEmpty() && webdavConfig.relativePath.isNotEmpty()) {
             state.syncIndex = state.syncIndex.copy(remoteBasePath = webdavConfig.relativePath)
         }
 
-        // 列出本地保险箱根目录
         navigateTo("/")
     }
 
@@ -115,9 +114,9 @@ class CloudPaneController(
 
     /** 返回上级目录 */
     fun goUp(): String? {
+        if (state.currentPath == "/") return null
         val parent = state.currentPath.substringBeforeLast('/', "")
-        if (parent.isEmpty()) return null
-        val parentPath = if (parent == "") "/" else parent
+        val parentPath = if (parent.isEmpty()) "/" else parent
         navigateTo(parentPath)
         return parentPath
     }
@@ -133,10 +132,7 @@ class CloudPaneController(
                     state.syncTask = taskState
                 },
                 onFileComplete = { relativePath, success ->
-                    // 同步完成后刷新当前目录
-                    if (success) {
-                        navigateTo(state.currentPath)
-                    }
+                    if (success) navigateTo(state.currentPath)
                 }
             )
             try {
@@ -146,7 +142,6 @@ class CloudPaneController(
                     index = state.syncIndex
                 )
                 state.syncIndex = updatedIndex
-                // 保存索引
                 saveIndex(updatedIndex)
             } catch (e: CancellationException) {
                 throw e
@@ -154,73 +149,114 @@ class CloudPaneController(
         }
     }
 
-    /** 暂停同步 */
     fun pauseSync() {
         syncJob?.cancel()
         state.syncTask = state.syncTask.copy(phase = SyncPhase.IDLE)
     }
 
-    /** 获取文件同步状态 */
     fun getSyncState(path: String): SyncFileProgress? {
         return state.syncTask.fileProgress[path]
     }
 
-    /** 刷新当前目录 */
     fun refresh() {
         navigateTo(state.currentPath)
     }
 
-    /** 释放资源 */
     fun dispose() {
         syncJob?.cancel()
     }
 
     // ── 内部方法 ──
 
-    /** 列出本地保险箱目录下的文件和文件夹 */
+    /**
+     * 列出本地保险箱目录，自底向上聚合文件夹同步状态。
+     * 返回的列表已排序：文件夹在前，文件在后。
+     */
     private fun listLocalFiles(relativePath: String): List<CloudFileEntry> {
         val dir = File(vaultDir, relativePath.trimStart('/'))
         if (!dir.exists() || !dir.isDirectory) return emptyList()
 
-        val entries = mutableListOf<CloudFileEntry>()
         val children = dir.listFiles() ?: return emptyList()
+        val entries = mutableListOf<CloudFileEntry>()
 
         for (file in children) {
-            val name = file.name
-            if (name in excludedFiles) continue
-
-            val childRelativePath = if (relativePath == "/") "/$name" else "$relativePath/$name"
+            if (file.name in excludedFiles) continue
+            val childRelativePath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
 
             if (file.isDirectory) {
+                // 递归聚合文件夹状态
+                val agg = aggregateFolder(childRelativePath)
                 entries.add(CloudFileEntry(
-                    name = name,
+                    name = file.name,
                     relativePath = childRelativePath,
                     isDirectory = true,
-                    size = 0,
-                    lastModified = file.lastModified(),
-                    syncStatus = null
+                    totalSize = agg.totalSize,
+                    uploadedSize = agg.uploadedSize,
+                    uploadingSize = agg.uploadingSize,
+                    lastModified = file.lastModified()
                 ))
             } else {
-                // 从索引中查找同步状态
+                // 文件：从索引查同步状态
                 val syncEntry = state.syncIndex.entries[childRelativePath]
                 val status = syncEntry?.uploadStatus ?: UploadStatus.PENDING
-
+                val fileSize = file.length()
                 entries.add(CloudFileEntry(
-                    name = name,
+                    name = file.name,
                     relativePath = childRelativePath,
                     isDirectory = false,
-                    size = file.length(),
+                    totalSize = fileSize,
+                    uploadedSize = if (status == UploadStatus.COMPLETED) fileSize else 0,
+                    uploadingSize = if (status == UploadStatus.UPLOADING) fileSize else 0,
                     lastModified = file.lastModified(),
                     syncStatus = status
                 ))
             }
         }
 
-        // 排序：文件夹在前，文件在后，按名称排序
         return entries.sortedWith(compareBy<CloudFileEntry> { !it.isDirectory }.thenBy { it.name })
     }
 
-    /** 保存索引到文件 */
+    /** 递归聚合文件夹下所有文件的同步状态 */
+    private fun aggregateFolder(relativePath: String): FolderAggregate {
+        val dir = File(vaultDir, relativePath.trimStart('/'))
+        if (!dir.exists() || !dir.isDirectory) return FolderAggregate()
+
+        val children = dir.listFiles() ?: return FolderAggregate()
+        var totalSize = 0L
+        var uploadedSize = 0L
+        var uploadingSize = 0L
+
+        for (file in children) {
+            if (file.name in excludedFiles) continue
+
+            if (file.isDirectory) {
+                val childPath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
+                val childAgg = aggregateFolder(childPath)
+                totalSize += childAgg.totalSize
+                uploadedSize += childAgg.uploadedSize
+                uploadingSize += childAgg.uploadingSize
+            } else {
+                val fileSize = file.length()
+                totalSize += fileSize
+                val childPath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
+                val syncEntry = state.syncIndex.entries[childPath]
+                when (syncEntry?.uploadStatus) {
+                    UploadStatus.COMPLETED -> uploadedSize += fileSize
+                    UploadStatus.UPLOADING -> uploadingSize += fileSize
+                    else -> {} // PENDING / PAUSED_PERMANENT → 不计入
+                }
+            }
+        }
+
+        return FolderAggregate(totalSize, uploadedSize, uploadingSize)
+    }
+
+    private data class FolderAggregate(
+        val totalSize: Long = 0,
+        val uploadedSize: Long = 0,
+        val uploadingSize: Long = 0
+    )
+
     private fun saveIndex(index: VaultSyncIndex) {
         try {
             val indexFile = File(vaultDir, "vault_sync_index.json")

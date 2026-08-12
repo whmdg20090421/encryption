@@ -116,7 +116,13 @@ fun CloudSyncScreen(
         if (config == null) {
             accountState = WebDavAccountState(WebDavConnectionStatus.NOT_LOGGED_IN)
         } else {
-            accountState = accountState.copy(config = config, displayName = config.getDefaultName())
+            // 先从缓存乐观显示为已登录，再异步验证
+            accountState = WebDavAccountState(
+                status = WebDavConnectionStatus.LOGGED_IN,
+                config = config,
+                displayName = config.getDefaultName()
+            )
+            // 异步验证连接
             val ok = withContext(Dispatchers.IO) {
                 try {
                     WebDavAuthenticator.addTransientServer(config)
@@ -125,9 +131,9 @@ fun CloudSyncScreen(
                     true
                 } catch (_: Exception) { false }
             }
-            accountState = accountState.copy(
-                status = if (ok) WebDavConnectionStatus.LOGGED_IN else WebDavConnectionStatus.EXPIRED
-            )
+            if (!ok) {
+                accountState = accountState.copy(status = WebDavConnectionStatus.EXPIRED)
+            }
         }
     }
 

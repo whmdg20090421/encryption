@@ -19,7 +19,6 @@ import com.whmdg.mczj.tools.ui.Screen
 import com.whmdg.mczj.tools.ui.encryption.EncryptionSettings
 import com.whmdg.mczj.tools.ui.isDebugAuth
 import com.whmdg.mczj.tools.encryption.data.UploadStatus
-import com.whmdg.mczj.tools.fileop.sync.SyncMode
 import com.whmdg.mczj.tools.fileop.sync.SyncPhase
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import androidx.compose.foundation.Canvas
@@ -1159,7 +1158,6 @@ fun FileManagerScreen(
                                         onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
                                         onNavigateUp = { vm.panels.cloud?.goUp() },
                                         onNavigateTo = { path -> vm.panels.cloud?.navigateTo(path) },
-                                        onSync = { mode -> vm.panels.cloud?.startSync(mode) },
                                         onBack = {
                                             vm.panels.exitCloudMode()
                                             onBack()
@@ -5383,7 +5381,6 @@ private fun CloudPanelContent(
     onFocus: () -> Unit,
     onNavigateUp: () -> Unit,
     onNavigateTo: (String) -> Unit,
-    onSync: (SyncMode) -> Unit,
     onBack: () -> Unit
 ) {
     val isDarkMode = LocalIsDarkMode.current
@@ -5472,31 +5469,6 @@ private fun CloudPanelContent(
                 }
             }
         }
-
-        // ── 底部同步按钮 ──
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val canSync = task.phase == SyncPhase.IDLE || task.phase == SyncPhase.COMPLETED || task.phase == SyncPhase.FAILED
-            OutlinedButton(
-                onClick = { onSync(SyncMode.LOCAL_TO_CLOUD) },
-                enabled = canSync,
-                modifier = Modifier.weight(1f)
-            ) { Text("本地→云端", fontSize = 12.sp) }
-            OutlinedButton(
-                onClick = { onSync(SyncMode.CLOUD_TO_LOCAL) },
-                enabled = canSync,
-                modifier = Modifier.weight(1f)
-            ) { Text("云端→本地", fontSize = 12.sp) }
-            OutlinedButton(
-                onClick = { onSync(SyncMode.BIDIRECTIONAL) },
-                enabled = canSync,
-                modifier = Modifier.weight(1f)
-            ) { Text("双向同步", fontSize = 12.sp) }
-        }
     }
 }
 
@@ -5529,33 +5501,45 @@ private fun CloudFileItem(
                 modifier = Modifier.weight(1f),
                 maxLines = 1
             )
-            if (!entry.isDirectory) {
-                Text(
-                    FormatUtils.formatBytes(entry.size),
-                    fontSize = 11.sp,
-                    color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
-                )
-            }
+            Text(
+                FormatUtils.formatBytes(entry.totalSize),
+                fontSize = 11.sp,
+                color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+            )
         }
 
-        // ── 进度条（同步状态） ──
-        if (!entry.isDirectory) {
-            Spacer(modifier = Modifier.height(2.dp))
-            SyncStatusBar(entry.syncStatus)
-        }
+        // ── 进度条（聚合同步状态） ──
+        Spacer(modifier = Modifier.height(2.dp))
+        SyncStatusBar(
+            totalSize = entry.totalSize,
+            uploadedSize = entry.uploadedSize,
+            uploadingSize = entry.uploadingSize
+        )
     }
 }
 
-// ==================== 同步状态进度条 ====================
+// ==================== 同步状态进度条（三色段） ====================
 
 @Composable
-private fun SyncStatusBar(status: UploadStatus?) {
-    val color = when (status) {
-        UploadStatus.COMPLETED -> Color(0xFF4CAF50)   // 绿：已完成
-        UploadStatus.UPLOADING -> Color(0xFFFFC107)    // 黄：上传中
-        else -> Color(0xFFE57373)                       // 红：未上传 / 失败
-    }
+private fun SyncStatusBar(
+    totalSize: Long,
+    uploadedSize: Long,
+    uploadingSize: Long
+) {
     Canvas(modifier = Modifier.fillMaxWidth().height(2.dp)) {
-        drawRect(color, size = size)
+        if (totalSize <= 0L) {
+            // 无文件或空文件夹：红色
+            drawRect(Color(0xFFE57373), size = size)
+            return@Canvas
+        }
+        val greenW = (uploadedSize.toFloat() / totalSize) * size.width
+        val yellowW = (uploadingSize.toFloat() / totalSize) * size.width
+        val redW = size.width - greenW - yellowW
+        // 绿色段：已上传
+        if (greenW > 0f) drawRect(Color(0xFF4CAF50), size = Size(greenW, size.height))
+        // 黄色段：上传中
+        if (yellowW > 0f) drawRect(Color(0xFFFFC107), topLeft = Offset(greenW, 0f), size = Size(yellowW, size.height))
+        // 红色段：剩余
+        if (redW > 0f) drawRect(Color(0xFFE57373), topLeft = Offset(greenW + yellowW, 0f), size = Size(redW, size.height))
     }
 }
