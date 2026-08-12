@@ -54,9 +54,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.DatePicker
 import androidx.compose.material3.TimePicker
-import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.TimePickerDialog
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -1636,23 +1635,31 @@ private fun TimePointRow(
 
 // ==================== 年份滚轮面板 ====================
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun YearWheelPanel(
     initialYear: Int,
     onConfirm: (Int) -> Unit,
     onCancel: () -> Unit
 ) {
-    val initialMillis = remember(initialYear) {
-        java.util.Calendar.getInstance().apply {
-            set(initialYear, 0, 1, 0, 0, 0)
-            set(java.util.Calendar.MILLISECOND, 0)
-        }.timeInMillis
-    }
-    val datePickerState = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+    var yearText by remember { mutableStateOf(initialYear.toString()) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        DatePicker(state = datePickerState, showModeToggle = false)
+        OutlinedTextField(
+            value = yearText,
+            onValueChange = { value ->
+                // 只允许数字，最多4位
+                if (value.length <= 4 && value.all { it.isDigit() }) {
+                    yearText = value
+                }
+            },
+            label = { Text("年份") },
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+            ),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.weight(1f))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -1661,9 +1668,10 @@ private fun YearWheelPanel(
                 Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             TextButton(onClick = {
-                val cal = java.util.Calendar.getInstance()
-                cal.timeInMillis = datePickerState.selectedDateMillis ?: initialMillis
-                onConfirm(cal.get(java.util.Calendar.YEAR))
+                val year = yearText.toIntOrNull()
+                if (year != null && year in 1900..2100) {
+                    onConfirm(year)
+                }
             }) {
                 Text("确定", color = AccentPrimary)
             }
@@ -1778,20 +1786,20 @@ private fun HourMinutePanel(
 ) {
     val timeState = rememberTimePickerState(initialHour = initHour, initialMinute = initMinute, is24Hour = true)
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(contentAlignment = Alignment.Center) {
-            TimePicker(state = timeState)
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            TextButton(onClick = onCancel) {
-                Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+    TimePickerDialog(
+        onDismissRequest = onCancel,
+        confirmButton = {
             TextButton(onClick = { onConfirm(timeState.hour, timeState.minute) }) {
                 Text("确定", color = AccentPrimary)
             }
-        }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) {
+                Text("取消", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        title = { Text("选择时间") }
+    ) {
+        TimePicker(state = timeState)
     }
 }
