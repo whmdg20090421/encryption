@@ -2372,11 +2372,15 @@ class PanelCoordinator(
     // ── 云盘模式 ──
 
     /** 云盘面板控制器（仅云盘模式时非 null） */
-    var cloud: CloudPaneController? = null
+    var cloud: CloudPaneController? by mutableStateOf(null)
         private set
 
     /** 是否处于云盘模式 */
-    var isCloudMode: Boolean = false
+    var isCloudMode: Boolean by mutableStateOf(false)
+        private set
+
+    /** 云盘模式正在初始化 */
+    var isCloudLoading: Boolean by mutableStateOf(false)
         private set
 
     // 保存左面板挂起前的状态
@@ -2386,12 +2390,13 @@ class PanelCoordinator(
     private var savedLeftScrollOffset: Int = 0
 
     /** 进入云盘模式：挂起左面板，激活云盘面板 */
-    fun enterCloudMode(
+    suspend fun enterCloudMode(
         webdavConfig: WebDavServerConfig,
         vaultDir: String,
         vaultId: Int,
         vaultName: String
     ) {
+        isCloudLoading = true
         // 保存左面板状态
         savedLeftPath = left.state.path
         savedLeftNavState = left.state.navState
@@ -2409,6 +2414,7 @@ class PanelCoordinator(
         controller.init()
         cloud = controller
         isCloudMode = true
+        isCloudLoading = false
     }
 
     /** 退出云盘模式：释放云盘面板，恢复左面板 */
@@ -2416,6 +2422,7 @@ class PanelCoordinator(
         cloud?.dispose()
         cloud = null
         isCloudMode = false
+        isCloudLoading = false
         // 恢复左面板状态
         savedLeftPath?.let { path ->
             left.state.path = path

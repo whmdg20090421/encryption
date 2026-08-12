@@ -72,6 +72,11 @@ class CloudPaneController(
             state.syncIndex = state.syncIndex.copy(vaultFolderName = vaultName)
         }
 
+        // 如果索引没有远程路径，从 WebDAV 配置初始化
+        if (state.syncIndex.remoteBasePath.isEmpty() && webdavConfig.relativePath.isNotEmpty()) {
+            state.syncIndex = state.syncIndex.copy(remoteBasePath = webdavConfig.relativePath)
+        }
+
         // 列出云端根目录
         scope.launch { navigateTo(state.syncIndex.effectiveRemoteBase) }
     }

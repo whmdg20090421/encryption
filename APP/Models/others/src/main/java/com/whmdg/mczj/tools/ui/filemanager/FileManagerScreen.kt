@@ -1136,10 +1136,21 @@ fun FileManagerScreen(
                     val activePanel = vm.currentPanel
                     val currentFontSize = vm.fileNameFontSize  // ponytail: 在 Layout 外读取，使状态变化触发重组
                     val isCloudMode = vm.panels.isCloudMode
+                    val isCloudLoading = vm.panels.isCloudLoading
                     Layout(
                         modifier = Modifier.fillMaxSize(),
                         content = {
-                            if (isCloudMode) {
+                            if (isCloudLoading && !isCloudMode) {
+                                // 云盘初始化中：左位置显示加载圈
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator()
+                                }
+                                // 右面板（占位，等初始化完成后替换）
+                                Spacer(modifier = Modifier.fillMaxSize())
+                            } else if (isCloudMode) {
                                 // 云盘模式：左位置渲染云盘面板
                                 val cloudState = vm.panels.cloud?.state
                                 if (cloudState != null) {
