@@ -19,8 +19,8 @@ import java.io.File
 /**
  * 云盘面板控制器。
  *
- * 管理云盘面板的所有状态，与左右 FilePaneController 完全隔离。
- * 通过 PanelCoordinator 与其他面板交互。
+ * 显示本地保险箱文件 + 同步状态（不从 WebDAV 读取）。
+ * 每个文件/文件夹下方有进度条显示同步状态：红=未上传，绿=已完成，黄=上传中。
  */
 class CloudPaneController(
     private val context: Context,
@@ -36,6 +36,7 @@ class CloudPaneController(
 
     /** 云盘面板状态（完全独立，使用 mutableStateOf 驱动 Compose recomposition） */
     class CloudPanelState {
+        /** 当前相对路径（相对于 vaultDir），"/" 表示根目录 */
         var currentPath by mutableStateOf("/")
         var entries by mutableStateOf<List<CloudFileEntry>>(emptyList())
         var isLoading by mutableStateOf(false)
@@ -45,16 +46,28 @@ class CloudPaneController(
         var syncIndex by mutableStateOf(VaultSyncIndex())
     }
 
-    /** 云端文件条目 */
+    /** 本地文件条目（带同步状态） */
     data class CloudFileEntry(
         val name: String,
-        val remotePath: String,
+        /** 相对于 vaultDir 的路径，如 "/docs/report.whm" */
+        val relativePath: String,
         val isDirectory: Boolean,
         val size: Long,
-        val lastModified: Long = 0
+        val lastModified: Long = 0,
+        /** 同步状态（仅文件有，文件夹为 null） */
+        val syncStatus: UploadStatus? = null
     )
 
-    /** 初始化：加载索引 + 列出云端根目录 */
+    /** 排除的系统文件 */
+    private val excludedFiles = setOf(
+        "vault_config.json",
+        "vault_config.backup.json",
+        "vault_sync_index.json",
+        "name_mappings.json",
+        "folder_sizes.json"
+    )
+
+    /** 初始化：加载索引 + 列出本地保险箱根目录 */
     fun init() {
         // 加载本地索引
         val indexFile = File(vaultDir, "vault_sync_index.json")
@@ -77,29 +90,21 @@ class CloudPaneController(
             state.syncIndex = state.syncIndex.copy(remoteBasePath = webdavConfig.relativePath)
         }
 
-        // 列出 WebDAV 根目录（用户可从这里导航到保险箱子目录）
-        scope.launch { navigateTo(state.syncIndex.remoteBasePath) }
+        // 列出本地保险箱根目录
+        navigateTo("/")
     }
 
-    /** 导航到云端目录 */
+    /** 导航到本地保险箱内的相对路径 */
     fun navigateTo(path: String) {
         scope.launch {
             state.isLoading = true
             state.loadError = null
             try {
-                val children = withContext(Dispatchers.IO) {
-                    webdavClient.listChildren(path)
+                val entries = withContext(Dispatchers.IO) {
+                    listLocalFiles(path)
                 }
                 state.currentPath = path
-                state.entries = (children ?: emptyList()).map {
-                    CloudFileEntry(
-                        name = it.name,
-                        remotePath = it.remotePath,
-                        isDirectory = it.isDirectory,
-                        size = it.size,
-                        lastModified = it.lastModified
-                    )
-                }.sortedWith(compareBy<CloudFileEntry> { !it.isDirectory }.thenBy { it.name })
+                state.entries = entries
             } catch (e: Exception) {
                 state.loadError = e
                 state.entries = emptyList()
@@ -111,9 +116,10 @@ class CloudPaneController(
     /** 返回上级目录 */
     fun goUp(): String? {
         val parent = state.currentPath.substringBeforeLast('/', "")
-        if (parent.isEmpty() || parent == state.syncIndex.effectiveRemoteBase) return null
-        navigateTo(parent)
-        return parent
+        if (parent.isEmpty()) return null
+        val parentPath = if (parent == "") "/" else parent
+        navigateTo(parentPath)
+        return parentPath
     }
 
     /** 启动同步 */
@@ -167,6 +173,51 @@ class CloudPaneController(
     /** 释放资源 */
     fun dispose() {
         syncJob?.cancel()
+    }
+
+    // ── 内部方法 ──
+
+    /** 列出本地保险箱目录下的文件和文件夹 */
+    private fun listLocalFiles(relativePath: String): List<CloudFileEntry> {
+        val dir = File(vaultDir, relativePath.trimStart('/'))
+        if (!dir.exists() || !dir.isDirectory) return emptyList()
+
+        val entries = mutableListOf<CloudFileEntry>()
+        val children = dir.listFiles() ?: return emptyList()
+
+        for (file in children) {
+            val name = file.name
+            if (name in excludedFiles) continue
+
+            val childRelativePath = if (relativePath == "/") "/$name" else "$relativePath/$name"
+
+            if (file.isDirectory) {
+                entries.add(CloudFileEntry(
+                    name = name,
+                    relativePath = childRelativePath,
+                    isDirectory = true,
+                    size = 0,
+                    lastModified = file.lastModified(),
+                    syncStatus = null
+                ))
+            } else {
+                // 从索引中查找同步状态
+                val syncEntry = state.syncIndex.entries[childRelativePath]
+                val status = syncEntry?.uploadStatus ?: UploadStatus.PENDING
+
+                entries.add(CloudFileEntry(
+                    name = name,
+                    relativePath = childRelativePath,
+                    isDirectory = false,
+                    size = file.length(),
+                    lastModified = file.lastModified(),
+                    syncStatus = status
+                ))
+            }
+        }
+
+        // 排序：文件夹在前，文件在后，按名称排序
+        return entries.sortedWith(compareBy<CloudFileEntry> { !it.isDirectory }.thenBy { it.name })
     }
 
     /** 保存索引到文件 */

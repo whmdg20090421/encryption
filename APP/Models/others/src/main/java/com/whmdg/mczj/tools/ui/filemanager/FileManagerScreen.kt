@@ -19,7 +19,6 @@ import com.whmdg.mczj.tools.ui.Screen
 import com.whmdg.mczj.tools.ui.encryption.EncryptionSettings
 import com.whmdg.mczj.tools.ui.isDebugAuth
 import com.whmdg.mczj.tools.encryption.data.UploadStatus
-import com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
 import com.whmdg.mczj.tools.fileop.sync.SyncMode
 import com.whmdg.mczj.tools.fileop.sync.SyncPhase
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
@@ -5460,14 +5459,13 @@ private fun CloudPanelContent(
             }
         } else {
             LazyColumn(modifier = Modifier.weight(1f)) {
-                items(cloudState.entries, key = { it.remotePath }) { entry ->
+                items(cloudState.entries, key = { it.relativePath }) { entry ->
                     CloudFileItem(
                         entry = entry,
-                        syncProgress = cloudState.syncTask.fileProgress[entry.name],
                         isDarkMode = isDarkMode,
                         onClick = {
                             if (entry.isDirectory) {
-                                onNavigateTo(entry.remotePath)
+                                onNavigateTo(entry.relativePath)
                             }
                         }
                     )
@@ -5507,7 +5505,6 @@ private fun CloudPanelContent(
 @Composable
 private fun CloudFileItem(
     entry: CloudPaneController.CloudFileEntry,
-    syncProgress: SyncFileProgress?,
     isDarkMode: Boolean,
     onClick: () -> Unit
 ) {
@@ -5541,37 +5538,24 @@ private fun CloudFileItem(
             }
         }
 
-        // ── 进度条 ──
+        // ── 进度条（同步状态） ──
         if (!entry.isDirectory) {
             Spacer(modifier = Modifier.height(2.dp))
-            CloudProgressBar(syncProgress)
+            SyncStatusBar(entry.syncStatus)
         }
     }
 }
 
-// ==================== 云盘进度条（字节级） ====================
+// ==================== 同步状态进度条 ====================
 
 @Composable
-private fun CloudProgressBar(syncProgress: SyncFileProgress?) {
+private fun SyncStatusBar(status: UploadStatus?) {
+    val color = when (status) {
+        UploadStatus.COMPLETED -> Color(0xFF4CAF50)   // 绿：已完成
+        UploadStatus.UPLOADING -> Color(0xFFFFC107)    // 黄：上传中
+        else -> Color(0xFFE57373)                       // 红：未上传 / 失败
+    }
     Canvas(modifier = Modifier.fillMaxWidth().height(2.dp)) {
-        when {
-            syncProgress == null || syncProgress.status == UploadStatus.PENDING || syncProgress.status == UploadStatus.PAUSED_PERMANENT -> {
-                // 未上传 / 永久暂停：全红
-                drawRect(Color(0xFFE57373), size = size)
-            }
-            syncProgress.status == UploadStatus.COMPLETED -> {
-                // 已完成：全绿
-                drawRect(Color(0xFF4CAF50), size = size)
-            }
-            syncProgress.status == UploadStatus.UPLOADING -> {
-                // 正在上传：绿色(已传) + 黄色(当前) + 红色(待传)
-                val uploaded = syncProgress.progress
-                val chunk = min(0.05f, 1f - uploaded)
-                val remaining = 1f - uploaded - chunk
-                drawRect(Color(0xFF4CAF50), size = Size(size.width * uploaded, size.height))
-                drawRect(Color(0xFFFFC107), topLeft = Offset(size.width * uploaded, 0f), size = Size(size.width * chunk, size.height))
-                drawRect(Color(0xFFE57373), topLeft = Offset(size.width * (uploaded + chunk), 0f), size = Size(size.width * remaining, size.height))
-            }
-        }
+        drawRect(color, size = size)
     }
 }
