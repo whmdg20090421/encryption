@@ -5543,20 +5543,18 @@ private fun SyncStatusBar(
     uploadedSize: Long,
     uploadingSize: Long
 ) {
-    Canvas(modifier = Modifier.fillMaxWidth().height(3.dp)) {
-        if (totalSize <= 0L) {
-            // 无文件或空文件夹：红色
-            drawRect(Color(0xFFE57373), size = size)
-            return@Canvas
-        }
-        val greenW = (uploadedSize.toFloat() / totalSize) * size.width
-        val yellowW = (uploadingSize.toFloat() / totalSize) * size.width
-        val redW = size.width - greenW - yellowW
-        // 绿色段：已上传
-        if (greenW > 0f) drawRect(Color(0xFF4CAF50), size = Size(greenW, size.height))
-        // 黄色段：上传中
-        if (yellowW > 0f) drawRect(Color(0xFFFFC107), topLeft = Offset(greenW, 0f), size = Size(yellowW, size.height))
-        // 红色段：剩余
-        if (redW > 0f) drawRect(Color(0xFFE57373), topLeft = Offset(greenW + yellowW, 0f), size = Size(redW, size.height))
+    val fraction = if (totalSize > 0) uploadedSize.toFloat() / totalSize else 0f
+    val uploadFraction = if (totalSize > 0) uploadingSize.toFloat() / totalSize else 0f
+    val color = when {
+        fraction >= 1f -> Color(0xFF4CAF50)   // 绿：全部完成
+        fraction > 0f || uploadFraction > 0f -> Color(0xFFFFC107) // 黄：部分上传
+        else -> Color(0xFFE57373)               // 红：未上传
     }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(3.dp)
+            .clip(RoundedCornerShape(1.5.dp))
+            .background(color)
+    )
 }
