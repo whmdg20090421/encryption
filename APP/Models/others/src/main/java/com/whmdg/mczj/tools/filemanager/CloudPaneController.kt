@@ -165,6 +165,8 @@ class CloudPaneController(
         // 启动上传
         syncJob?.cancel()
         syncJob = scope.launch {
+            val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
+            val logFile = File(logDir, "${vaultName}_sync_error.log")
             val engine = SyncEngine(
                 webdavClient = webdavClient,
                 vaultDir = vaultDir,
@@ -173,7 +175,8 @@ class CloudPaneController(
                 },
                 onFileComplete = { path, success ->
                     refreshCurrentEntry(path)
-                }
+                },
+                logFile = logFile
             )
             engine.uploadSingleFile(
                 relativePath = relativePath,
@@ -263,6 +266,8 @@ class CloudPaneController(
     fun startSync(mode: SyncMode) {
         syncJob?.cancel()
         syncJob = scope.launch {
+            val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
+            val logFile = File(logDir, "${vaultName}_sync_error.log")
             val engine = SyncEngine(
                 webdavClient = webdavClient,
                 vaultDir = vaultDir,
@@ -271,7 +276,8 @@ class CloudPaneController(
                 },
                 onFileComplete = { relativePath, success ->
                     if (success) navigateTo(state.currentPath)
-                }
+                },
+                logFile = logFile
             )
             try {
                 engine.startSync(

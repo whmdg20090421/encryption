@@ -9,7 +9,11 @@ import com.whmdg.mczj.tools.encryption.data.VaultSyncIndex
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
 import kotlinx.coroutines.*
 import java.io.File
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.security.MessageDigest
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 /**
  * 同步引擎：负责本地保险箱与 WebDAV 云端之间的文件同步。
@@ -22,7 +26,8 @@ class SyncEngine(
     private val webdavClient: WebDavFileClient,
     private val vaultDir: String,
     private val onProgress: (SyncTaskState) -> Unit,
-    private val onFileComplete: (relativePath: String, success: Boolean) -> Unit
+    private val onFileComplete: (relativePath: String, success: Boolean) -> Unit,
+    private val logFile: File? = null
 ) {
     @Volatile
     private var isCancelled = false
@@ -283,6 +288,7 @@ class SyncEngine(
             calculateMd5(localFile)
         }
 
+        var uploadError: String? = null
         val uploadSuccess = try {
             ensureRemoteDir(buildRemotePath(remoteBasePath, ""), relativePath)
             webdavClient.uploadFile(localFile, remotePath) { bytesWritten ->
@@ -290,6 +296,8 @@ class SyncEngine(
             }
             true
         } catch (e: Exception) {
+            uploadError = "${e.javaClass.simpleName}: ${e.message}"
+            logError("上传失败", relativePath, remotePath, e)
             false
         }
 
@@ -307,21 +315,26 @@ class SyncEngine(
 
         // ③ 上传失败处理
         if (!uploadSuccess) {
-            syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, "上传失败")
-            onComplete(false, "上传失败")
+            val reason = uploadError ?: "上传失败"
+            syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
+            onComplete(false, reason)
             return@withContext
         }
 
         // ④ 二次验证：检查云端文件是否存在
+        var verifyError: String? = null
         val cloudExists = try {
             webdavClient.exists(remotePath)
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            verifyError = "${e.javaClass.simpleName}: ${e.message}"
+            logError("二次验证异常", relativePath, remotePath, e)
             false
         }
 
         if (!cloudExists) {
-            syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, "二次验证失败：云端文件不存在")
-            onComplete(false, "二次验证失败")
+            val reason = verifyError ?: "二次验证失败：云端文件不存在"
+            syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
+            onComplete(false, reason)
             return@withContext
         }
 
@@ -498,4 +511,27 @@ class SyncEngine(
         speed = speed,
         fileProgress = fileProgress.toMap()
     )
+
+    /** 写入错误日志到文件 */
+    private fun logError(action: String, relativePath: String, remotePath: String, error: Exception) {
+        val file = logFile ?: return
+        try {
+            val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+            val sw = StringWriter()
+            error.printStackTrace(PrintWriter(sw))
+            val entry = buildString {
+                appendLine("════════════════════════════════════════")
+                appendLine("时间: $timestamp")
+                appendLine("操作: $action")
+                appendLine("本地路径: $relativePath")
+                appendLine("远程路径: $remotePath")
+                appendLine("错误类型: ${error.javaClass.name}")
+                appendLine("错误信息: ${error.message}")
+                appendLine("堆栈:")
+                appendLine(sw.toString())
+            }
+            file.parentFile?.mkdirs()
+            file.appendText(entry)
+        } catch (_: Exception) {}
+    }
 }
