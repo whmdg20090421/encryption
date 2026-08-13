@@ -637,6 +637,12 @@ fun FileManagerScreen(
                                 else "${it.archiveName} / ${it.currentPath.removePrefix(it.archivePath).trimStart('/')}"
                             } ?: "压缩包"
                             vm.recycleBinPanel == vm.focusedPanel -> "回收站"
+                            vm.panels.isCloudMode && vm.focusedPanel == FocusedPanel.LEFT -> {
+                                val cloudPath = vm.panels.cloud?.state?.currentPath ?: "/"
+                                val vaultName = vm.panels.cloud?.state?.syncIndex?.vaultFolderName ?: ""
+                                if (cloudPath == "/") vaultName.ifEmpty { "云盘" }
+                                else "$vaultName / ${cloudPath.removePrefix("/").trimStart('/')}"
+                            }
                             else -> currentPath
                         }
                         StartEllipsisText(
@@ -1158,6 +1164,7 @@ fun FileManagerScreen(
                                         onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
                                         onNavigateUp = { vm.panels.cloud?.goUp() },
                                         onNavigateTo = { path -> vm.panels.cloud?.navigateTo(path) },
+                                        parentPath = parentPaths[0],
                                         onBack = {
                                             vm.panels.exitCloudMode()
                                             onBack()
@@ -5381,6 +5388,7 @@ private fun CloudPanelContent(
     onFocus: () -> Unit,
     onNavigateUp: () -> Unit,
     onNavigateTo: (String) -> Unit,
+    parentPath: String?,
     onBack: () -> Unit
 ) {
     val isDarkMode = LocalIsDarkMode.current
@@ -5392,32 +5400,6 @@ private fun CloudPanelContent(
             .background(bgColor)
             .clickable { onFocus() }
     ) {
-        // ── 顶部栏 ──
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onNavigateUp, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "返回上级",
-                    modifier = Modifier.size(20.dp),
-                    tint = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B))
-            }
-            Text(
-                cloudState.currentPath.substringAfterLast('/').ifEmpty { "/" },
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = if (isDarkMode) Color(0xFFE8F4FF) else Color(0xFF1E293B),
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = onBack, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Default.Close, "退出云盘",
-                    modifier = Modifier.size(18.dp),
-                    tint = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B))
-            }
-        }
-
         // ── 同步状态栏 ──
         val task = cloudState.syncTask
         if (task.phase == SyncPhase.SYNCING || task.phase == SyncPhase.SCANNING) {
@@ -5456,6 +5438,23 @@ private fun CloudPanelContent(
             }
         } else {
             LazyColumn(modifier = Modifier.weight(1f)) {
+                // 返回上一级卡片（与 CloudFileItem 同布局，进度条位置留空）
+                if (parentPath != null) {
+                    item(key = "__parent__") {
+                        CloudFileItem(
+                            entry = CloudPaneController.CloudFileEntry(
+                                name = "返回上一级",
+                                relativePath = parentPath,
+                                isDirectory = true,
+                                totalSize = 0,
+                                uploadedSize = 0,
+                                uploadingSize = 0
+                            ),
+                            isDarkMode = isDarkMode,
+                            onClick = onNavigateUp
+                        )
+                    }
+                }
                 items(cloudState.entries, key = { it.relativePath }) { entry ->
                     CloudFileItem(
                         entry = entry,
@@ -5511,25 +5510,25 @@ private fun CloudFileItem(
                 textAlign = TextAlign.Center,
             )
         }
-        // Bottom: 大小 + 进度条
+        // Bottom: 大小 + 进度条（totalSize=0 时留空，用于"返回上一级"占位）
         Row(
             modifier = Modifier.weight(3f).fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 左侧：大小
-            Text(
-                text = FormatUtils.formatBytes(entry.totalSize),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            // 右侧：进度条
-            Box(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
-                SyncStatusBar(
-                    totalSize = entry.totalSize,
-                    uploadedSize = entry.uploadedSize,
-                    uploadingSize = entry.uploadingSize
+            if (entry.totalSize > 0) {
+                Text(
+                    text = FormatUtils.formatBytes(entry.totalSize),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Box(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
+                    SyncStatusBar(
+                        totalSize = entry.totalSize,
+                        uploadedSize = entry.uploadedSize,
+                        uploadingSize = entry.uploadingSize
+                    )
+                }
             }
         }
     }

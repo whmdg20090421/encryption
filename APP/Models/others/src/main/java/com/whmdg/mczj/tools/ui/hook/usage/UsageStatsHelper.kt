@@ -463,49 +463,17 @@ class UsageStatsHelper(private val context: Context) {
     }
 
     /**
-     * 判断是否为应过滤的系统组件
-     *
-     * 保留用户可见的系统应用（Google 套件、Play Store 等），
-     * 过滤掉 SystemUI、Settings、电话等核心组件。
+     * 判断是否为核心系统进程（不可交互，无用户界面）
+     * 只排除 android、SystemUI、Shell、电话服务等核心进程，其他应用全部显示。
      */
     private fun isSystemApp(packageName: String): Boolean {
-        val whitelistPrefixes = listOf(
-            "com.google.android.apps.",
-            "com.google.android.youtube",
-            "com.android.chrome",
-            "com.android.vending",
-        )
-        if (whitelistPrefixes.any { packageName.startsWith(it) }) return false
-
-        val blacklistPrefixes = listOf(
+        return packageName in setOf(
+            "android",
             "com.android.systemui",
-            "com.android.settings",
+            "com.android.shell",
             "com.android.phone",
-            "com.android.incallui",
             "com.android.server",
-            "com.android.providers.",
-            "com.android.inputmethod",
-            "com.google.android.inputmethod",
-            "com.android.internal",
-            "com.android.keyguard",
-            "com.android.launcher",
-            "com.android.packageinstaller",
-            "com.android.permissioncontroller",
         )
-        val blacklistExact = listOf("android", "com.android.shell")
-
-        if (blacklistExact.contains(packageName) ||
-            blacklistPrefixes.any { packageName.startsWith(it) }
-        ) return true
-
-        return try {
-            val appInfo = packageManager.getApplicationInfo(packageName, 0)
-            val isSystemApp = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-            val isUpdated = (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-            isSystemApp && !isUpdated
-        } catch (_: PackageManager.NameNotFoundException) {
-            true
-        }
     }
 
     /**
