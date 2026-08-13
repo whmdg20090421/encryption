@@ -4,8 +4,10 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.whmdg.mczj.tools.encryption.data.SyncDatabase
+import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
+import com.whmdg.mczj.tools.encryption.data.SyncStatus
 import com.whmdg.mczj.tools.encryption.data.VaultSyncIndex
-import com.whmdg.mczj.tools.encryption.data.UploadStatus
 import com.whmdg.mczj.tools.fileop.sync.SyncEngine
 import com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
 import com.whmdg.mczj.tools.fileop.sync.SyncMode
@@ -15,12 +17,14 @@ import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
 import kotlinx.coroutines.*
 import java.io.File
+import java.time.Instant
 
 /**
  * 云盘面板控制器。
  *
  * 显示本地保险箱文件 + 同步状态（不从 WebDAV 读取）。
  * 文件夹显示聚合同步状态（自底向上冒泡）。
+ * 使用 SyncDatabase（SQLite）管理本地表和云端表。
  */
 class CloudPaneController(
     private val context: Context,
@@ -33,6 +37,7 @@ class CloudPaneController(
     val state = CloudPanelState()
     private val webdavClient = WebDavFileClient(webdavConfig)
     private var syncJob: Job? = null
+    private lateinit var syncDb: SyncDatabase
 
     /** 云盘面板状态（完全独立，使用 mutableStateOf 驱动 Compose recomposition） */
     class CloudPanelState {
@@ -42,7 +47,7 @@ class CloudPaneController(
         var loadError by mutableStateOf<Throwable?>(null)
         var selectedPaths by mutableStateOf<Set<String>>(emptySet())
         var syncTask by mutableStateOf(SyncTaskState())
-        var syncIndex by mutableStateOf(VaultSyncIndex())
+        var vaultFolderName by mutableStateOf("")
     }
 
     /** 文件/文件夹条目（带聚合同步状态） */
@@ -58,7 +63,7 @@ class CloudPaneController(
         val uploadingSize: Long,
         val lastModified: Long = 0,
         /** 文件的单个同步状态（文件夹为 null，用聚合字段代替） */
-        val syncStatus: UploadStatus? = null
+        val syncStatus: SyncStatus? = null
     )
 
     /** 排除的系统文件 */
@@ -66,30 +71,24 @@ class CloudPaneController(
         "vault_config.json",
         "vault_config.backup.json",
         "vault_sync_index.json",
+        "vault_sync.db",
         "name_mappings.json",
         "folder_sizes.json"
     )
 
-    /** 初始化：加载索引 + 列出本地保险箱根目录 */
+    /** 远程基准路径 */
+    private val remoteBasePath: String
+        get() {
+            val base = webdavConfig.relativePath.trimEnd('/')
+            val folder = vaultName
+            return if (base.isEmpty()) "/$folder" else "$base/$folder"
+        }
+
+    /** 初始化：打开 DB + 同步本地文件 + 列出根目录 */
     fun init() {
-        val indexFile = File(vaultDir, "vault_sync_index.json")
-        if (indexFile.exists()) {
-            try {
-                val json = indexFile.readText()
-                if (json.isNotBlank()) {
-                    state.syncIndex = kotlinx.serialization.json.Json.decodeFromString<VaultSyncIndex>(json)
-                }
-            } catch (_: Exception) {}
-        }
-
-        if (state.syncIndex.vaultFolderName.isEmpty()) {
-            state.syncIndex = state.syncIndex.copy(vaultFolderName = vaultName)
-        }
-
-        if (state.syncIndex.remoteBasePath.isEmpty() && webdavConfig.relativePath.isNotEmpty()) {
-            state.syncIndex = state.syncIndex.copy(remoteBasePath = webdavConfig.relativePath)
-        }
-
+        syncDb = SyncDatabase.getInstance(context, vaultDir)
+        state.vaultFolderName = vaultName
+        syncLocalFiles()
         navigateTo("/")
     }
 
@@ -121,7 +120,147 @@ class CloudPaneController(
         return parentPath
     }
 
-    /** 启动同步 */
+    /** 上传单个文件 */
+    fun uploadFile(relativePath: String) {
+        // 并发保护：检查是否有文件正在上传
+        val uploading = syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
+        if (uploading.isNotEmpty()) {
+            state.loadError = IllegalStateException("当前有文件正在上传，请等待完成")
+            return
+        }
+
+        // 边界：COMPLETED 文件再次上传，检查是否已修改
+        val localFile = File(vaultDir, relativePath.trimStart('/'))
+        if (!localFile.exists()) {
+            state.loadError = IllegalStateException("本地文件不存在")
+            return
+        }
+
+        val existingEntry = syncDb.getEntry("local_entries", relativePath)
+        if (existingEntry != null && existingEntry.status == SyncStatus.COMPLETED) {
+            val currentLastModified = Instant.ofEpochMilli(localFile.lastModified()).toString()
+            if (existingEntry.lastModified == currentLastModified) {
+                // 文件未修改，跳过
+                return
+            }
+        }
+
+        // 录入本地表（如果是新文件）
+        if (existingEntry == null) {
+            syncDb.upsertEntry("local_entries", SyncEntryRow(
+                path = relativePath,
+                size = localFile.length(),
+                lastModified = Instant.ofEpochMilli(localFile.lastModified()).toString(),
+                md5 = null,
+                cloudHash = null,
+                status = SyncStatus.PENDING,
+                lastSyncTime = null,
+                failReason = null
+            ))
+        }
+
+        // 标记为 QUEUED
+        syncDb.updateStatus("local_entries", relativePath, SyncStatus.QUEUED)
+        refreshCurrentEntry(relativePath)
+
+        // 启动上传
+        syncJob?.cancel()
+        syncJob = scope.launch {
+            val engine = SyncEngine(
+                webdavClient = webdavClient,
+                vaultDir = vaultDir,
+                onProgress = { taskState ->
+                    state.syncTask = taskState
+                },
+                onFileComplete = { path, success ->
+                    refreshCurrentEntry(path)
+                }
+            )
+            engine.uploadSingleFile(
+                relativePath = relativePath,
+                remoteBasePath = remoteBasePath,
+                syncDb = syncDb,
+                onProgress = { uploadedBytes, totalBytes ->
+                    // 进度通过 onProgress 回调更新
+                },
+                onComplete = { success, error ->
+                    if (!success && error != null) {
+                        state.loadError = IllegalStateException(error)
+                    }
+                    navigateTo(state.currentPath)
+                }
+            )
+        }
+    }
+
+    /** 删除本地文件 + 从本地表移除 */
+    fun deleteLocal(relativePath: String) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                val localFile = File(vaultDir, relativePath.trimStart('/'))
+                if (localFile.exists()) {
+                    if (localFile.isDirectory) {
+                        localFile.deleteRecursively()
+                    } else {
+                        localFile.delete()
+                    }
+                }
+                // 从本地表移除
+                syncDb.deleteEntry("local_entries", relativePath)
+                // 如果是目录，也移除子条目
+                syncDb.deleteEntriesByPrefix("local_entries", relativePath)
+            }
+            navigateTo(state.currentPath)
+        }
+    }
+
+    /** 删除云端文件 + 从云端表移除 */
+    fun deleteCloud(relativePath: String) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                val remotePath = "$remoteBasePath/${relativePath.trimStart('/')}"
+                try {
+                    webdavClient.delete(remotePath)
+                } catch (_: Exception) {}
+                // 从云端表移除
+                syncDb.deleteEntry("cloud_entries", relativePath)
+                syncDb.deleteEntriesByPrefix("cloud_entries", relativePath)
+                // 本地状态重置为 PENDING
+                syncDb.updateStatus("local_entries", relativePath, SyncStatus.PENDING)
+            }
+            navigateTo(state.currentPath)
+        }
+    }
+
+    /** 同时删除本地和云端 */
+    fun deleteBoth(relativePath: String) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                // 删除本地文件
+                val localFile = File(vaultDir, relativePath.trimStart('/'))
+                if (localFile.exists()) {
+                    if (localFile.isDirectory) {
+                        localFile.deleteRecursively()
+                    } else {
+                        localFile.delete()
+                    }
+                }
+                // 删除云端文件
+                val remotePath = "$remoteBasePath/${relativePath.trimStart('/')}"
+                try {
+                    webdavClient.delete(remotePath)
+                } catch (_: Exception) {}
+                // 从两张表移除
+                syncDb.deleteEntry("local_entries", relativePath)
+                syncDb.deleteEntriesByPrefix("local_entries", relativePath)
+                syncDb.deleteEntry("cloud_entries", relativePath)
+                syncDb.deleteEntriesByPrefix("cloud_entries", relativePath)
+            }
+            navigateTo(state.currentPath)
+        }
+    }
+
+    /** 启动批量同步（保留旧接口，暂未使用） */
     fun startSync(mode: SyncMode) {
         syncJob?.cancel()
         syncJob = scope.launch {
@@ -136,13 +275,11 @@ class CloudPaneController(
                 }
             )
             try {
-                val updatedIndex = engine.startSync(
+                engine.startSync(
                     mode = mode,
-                    remoteBasePath = state.syncIndex.effectiveRemoteBase,
-                    index = state.syncIndex
+                    remoteBasePath = remoteBasePath,
+                    index = VaultSyncIndex()
                 )
-                state.syncIndex = updatedIndex
-                saveIndex(updatedIndex)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {}
@@ -159,6 +296,7 @@ class CloudPaneController(
     }
 
     fun refresh() {
+        syncLocalFiles()
         navigateTo(state.currentPath)
     }
 
@@ -167,6 +305,57 @@ class CloudPaneController(
     }
 
     // ── 内部方法 ──
+
+    /**
+     * 同步本地文件到数据库。
+     * - 本地有、表中无 → 新增（PENDING）
+     * - 本地无、表中有 → 移除
+     * - 本地有、表中有 → 检查 lastModified 变化则重置为 PENDING
+     */
+    private fun syncLocalFiles() {
+        val dir = File(vaultDir)
+        if (!dir.exists()) return
+
+        val dbPaths = syncDb.getAllEntries("local_entries").map { it.path }.toSet()
+        val localPaths = mutableSetOf<String>()
+
+        dir.walkTopDown().forEach { file ->
+            if (file.name in excludedFiles) return@forEach
+            val relativePath = "/" + file.relativeTo(dir).path.replace('\\', '/')
+            localPaths.add(relativePath)
+
+            if (file.isFile) {
+                val existing = syncDb.getEntry("local_entries", relativePath)
+                val currentLastModified = Instant.ofEpochMilli(file.lastModified()).toString()
+                val currentSize = file.length()
+
+                if (existing == null) {
+                    // 新文件 → 录入
+                    syncDb.upsertEntry("local_entries", SyncEntryRow(
+                        path = relativePath,
+                        size = currentSize,
+                        lastModified = currentLastModified,
+                        md5 = null,
+                        cloudHash = null,
+                        status = SyncStatus.PENDING,
+                        lastSyncTime = null,
+                        failReason = null
+                    ))
+                } else if (existing.lastModified != currentLastModified || existing.size != currentSize) {
+                    // 文件被修改 → 重置为 PENDING
+                    syncDb.updateSize("local_entries", relativePath, currentSize, currentLastModified)
+                    syncDb.updateStatus("local_entries", relativePath, SyncStatus.PENDING)
+                }
+            }
+        }
+
+        // 移除本地已不存在的条目
+        for (dbPath in dbPaths) {
+            if (dbPath !in localPaths) {
+                syncDb.deleteEntry("local_entries", dbPath)
+            }
+        }
+    }
 
     /**
      * 列出本地保险箱目录，自底向上聚合文件夹同步状态。
@@ -196,17 +385,17 @@ class CloudPaneController(
                     lastModified = file.lastModified()
                 ))
             } else {
-                // 文件：从索引查同步状态
-                val syncEntry = state.syncIndex.entries[childRelativePath]
-                val status = syncEntry?.uploadStatus ?: UploadStatus.PENDING
+                // 文件：从 DB 查同步状态
+                val dbEntry = syncDb.getEntry("local_entries", childRelativePath)
+                val status = dbEntry?.status ?: SyncStatus.PENDING
                 val fileSize = file.length()
                 entries.add(CloudFileEntry(
                     name = file.name,
                     relativePath = childRelativePath,
                     isDirectory = false,
                     totalSize = fileSize,
-                    uploadedSize = if (status == UploadStatus.COMPLETED) fileSize else 0,
-                    uploadingSize = if (status == UploadStatus.UPLOADING) fileSize else 0,
+                    uploadedSize = if (status == SyncStatus.COMPLETED) fileSize else 0,
+                    uploadingSize = if (status == SyncStatus.UPLOADING) fileSize else 0,
                     lastModified = file.lastModified(),
                     syncStatus = status
                 ))
@@ -239,11 +428,11 @@ class CloudPaneController(
                 val fileSize = file.length()
                 totalSize += fileSize
                 val childPath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
-                val syncEntry = state.syncIndex.entries[childPath]
-                when (syncEntry?.uploadStatus) {
-                    UploadStatus.COMPLETED -> uploadedSize += fileSize
-                    UploadStatus.UPLOADING -> uploadingSize += fileSize
-                    else -> {} // PENDING / PAUSED_PERMANENT → 不计入
+                val dbEntry = syncDb.getEntry("local_entries", childPath)
+                when (dbEntry?.status) {
+                    SyncStatus.COMPLETED -> uploadedSize += fileSize
+                    SyncStatus.UPLOADING -> uploadingSize += fileSize
+                    else -> {} // PENDING / QUEUED / PAUSED → 不计入
                 }
             }
         }
@@ -251,16 +440,23 @@ class CloudPaneController(
         return FolderAggregate(totalSize, uploadedSize, uploadingSize)
     }
 
+    /** 刷新当前目录中单个条目的状态 */
+    private fun refreshCurrentEntry(relativePath: String) {
+        val parentPath = relativePath.substringBeforeLast('/', "/")
+        if (parentPath == state.currentPath || relativePath.startsWith(state.currentPath)) {
+            // 该条目在当前视图中，刷新列表
+            scope.launch {
+                val entries = withContext(Dispatchers.IO) {
+                    listLocalFiles(state.currentPath)
+                }
+                state.entries = entries
+            }
+        }
+    }
+
     private data class FolderAggregate(
         val totalSize: Long = 0,
         val uploadedSize: Long = 0,
         val uploadingSize: Long = 0
     )
-
-    private fun saveIndex(index: VaultSyncIndex) {
-        try {
-            val indexFile = File(vaultDir, "vault_sync_index.json")
-            indexFile.writeText(kotlinx.serialization.json.Json.encodeToString(VaultSyncIndex.serializer(), index))
-        } catch (_: Exception) {}
-    }
 }

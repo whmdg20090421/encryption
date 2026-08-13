@@ -1,6 +1,9 @@
 package com.whmdg.mczj.tools.fileop.sync
 
+import com.whmdg.mczj.tools.encryption.data.SyncDatabase
+import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
 import com.whmdg.mczj.tools.encryption.data.SyncEntry
+import com.whmdg.mczj.tools.encryption.data.SyncStatus
 import com.whmdg.mczj.tools.encryption.data.UploadStatus
 import com.whmdg.mczj.tools.encryption.data.VaultSyncIndex
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
@@ -13,7 +16,7 @@ import java.security.MessageDigest
  *
  * - 扫描本地/云端文件，计算差异
  * - 逐文件上传/下载，实时报告进度
- * - 失败标记为 PAUSED_PERMANENT（不支持断点续传）
+ * - 失败标记为 PAUSED（不支持断点续传）
  */
 class SyncEngine(
     private val webdavClient: WebDavFileClient,
@@ -60,7 +63,7 @@ class SyncEngine(
                     val entry = currentIndex.entries[relPath]
                     when {
                         entry == null -> toUpload.add(localInfo)
-                        entry.uploadStatus == UploadStatus.PAUSED_PERMANENT -> { /* 跳过 */ }
+                        entry.uploadStatus == UploadStatus.PAUSED -> { /* 跳过 */ }
                         entry.uploadStatus == UploadStatus.COMPLETED && entry.md5 == localInfo.md5 -> { /* 跳过 */ }
                         else -> toUpload.add(localInfo)
                     }
@@ -171,8 +174,8 @@ class SyncEngine(
                 transferredBytes += localInfo.size
                 onFileComplete(relPath, true)
             } else {
-                fileProgress[relPath] = fileProgress[relPath]!!.copy(status = UploadStatus.PAUSED_PERMANENT)
-                currentIndex = updateIndexEntry(currentIndex, relPath, localInfo.md5, localInfo.size, UploadStatus.PAUSED_PERMANENT)
+                fileProgress[relPath] = fileProgress[relPath]!!.copy(status = UploadStatus.PAUSED)
+                currentIndex = updateIndexEntry(currentIndex, relPath, localInfo.md5, localInfo.size, UploadStatus.PAUSED)
                 onFileComplete(relPath, false)
             }
             onProgress(buildTaskState(mode, SyncPhase.SYNCING, totalFiles, completedFiles, totalBytes, transferredBytes, fileProgress, relPath))
@@ -218,7 +221,7 @@ class SyncEngine(
                 transferredBytes += remoteInfo.size
                 onFileComplete(relPath, true)
             } else {
-                fileProgress[relPath] = fileProgress[relPath]!!.copy(status = UploadStatus.PAUSED_PERMANENT)
+                fileProgress[relPath] = fileProgress[relPath]!!.copy(status = UploadStatus.PAUSED)
                 onFileComplete(relPath, false)
             }
             onProgress(buildTaskState(mode, SyncPhase.SYNCING, totalFiles, completedFiles, totalBytes, transferredBytes, fileProgress, relPath))
@@ -240,6 +243,126 @@ class SyncEngine(
 
     fun cancel() {
         isCancelled = true
+    }
+
+    /**
+     * 上传单个文件（完整流程）。
+     *
+     * ① 标记为 UPLOADING（锁定）
+     * ② 启动上传 + 后台异步计算 MD5
+     * ③ 上传完成
+     * ④ 二次验证云端文件存在
+     * ⑤ 获取云端信息（大小、时间、cloudHash）
+     * ⑥ 写入云端表
+     * ⑦ 更新本地表为 COMPLETED（解锁）
+     */
+    suspend fun uploadSingleFile(
+        relativePath: String,
+        remoteBasePath: String,
+        syncDb: SyncDatabase,
+        onProgress: (uploadedBytes: Long, totalBytes: Long) -> Unit,
+        onComplete: (success: Boolean, error: String?) -> Unit
+    ) = withContext(Dispatchers.IO) {
+        val localFile = File(vaultDir, relativePath.trimStart('/'))
+
+        // 边界检查：文件不存在
+        if (!localFile.exists() || !localFile.isFile) {
+            syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, "本地文件已删除")
+            onComplete(false, "本地文件已删除")
+            return@withContext
+        }
+
+        val fileSize = localFile.length()
+        val remotePath = buildRemotePath(remoteBasePath, relativePath)
+
+        // ① 锁定 → UPLOADING
+        syncDb.updateStatus("local_entries", relativePath, SyncStatus.UPLOADING)
+
+        // ② 启动上传 + 后台异步计算 MD5
+        val md5Deferred = async {
+            calculateMd5(localFile)
+        }
+
+        val uploadSuccess = try {
+            ensureRemoteDir(buildRemotePath(remoteBasePath, ""), relativePath)
+            webdavClient.uploadFile(localFile, remotePath) { bytesWritten ->
+                onProgress(bytesWritten, fileSize)
+            }
+            true
+        } catch (e: Exception) {
+            false
+        }
+
+        // 等待 MD5 计算完成
+        val md5 = try {
+            md5Deferred.await()
+        } catch (_: Exception) {
+            null
+        }
+
+        // 写入 MD5（无论上传是否成功，都记录已计算的 MD5）
+        if (md5 != null) {
+            syncDb.updateMd5("local_entries", relativePath, md5)
+        }
+
+        // ③ 上传失败处理
+        if (!uploadSuccess) {
+            syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, "上传失败")
+            onComplete(false, "上传失败")
+            return@withContext
+        }
+
+        // ④ 二次验证：检查云端文件是否存在
+        val cloudExists = try {
+            webdavClient.exists(remotePath)
+        } catch (_: Exception) {
+            false
+        }
+
+        if (!cloudExists) {
+            syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, "二次验证失败：云端文件不存在")
+            onComplete(false, "二次验证失败")
+            return@withContext
+        }
+
+        // ⑤ 获取云端信息
+        var cloudSize: Long = fileSize
+        var cloudLastModified: String? = null
+        var cloudHash: String? = null
+
+        try {
+            val parentPath = remotePath.substringBeforeLast('/')
+            val fileName = remotePath.substringAfterLast('/')
+            val children = webdavClient.listChildren(parentPath)
+            val cloudFile = children?.find { it.name == fileName }
+            if (cloudFile != null) {
+                cloudSize = cloudFile.size
+                cloudLastModified = java.time.Instant.ofEpochMilli(cloudFile.lastModified).toString()
+            }
+        } catch (_: Exception) {
+            // 获取云端信息失败，不阻塞流程
+        }
+
+        // ⑥ 写入云端表
+        val now = java.time.Instant.now().toString()
+        syncDb.upsertEntry("cloud_entries", SyncEntryRow(
+            path = relativePath,
+            size = cloudSize,
+            lastModified = cloudLastModified ?: now,
+            md5 = md5 ?: "",
+            cloudHash = cloudHash,
+            status = SyncStatus.COMPLETED,
+            lastSyncTime = now,
+            failReason = if (cloudLastModified == null) "云端元数据获取失败" else null
+        ))
+
+        // ⑦ 更新本地表 → COMPLETED（解锁）
+        syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
+        if (cloudHash != null) {
+            syncDb.updateCloudHash("local_entries", relativePath, cloudHash)
+        }
+
+        onComplete(true, null)
     }
 
     // ── 内部方法 ──
