@@ -8,7 +8,8 @@ import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
 import com.whmdg.mczj.tools.encryption.data.SyncStatus
 import com.whmdg.mczj.tools.encryption.data.VaultSyncIndex
-import com.whmdg.mczj.tools.fileop.sync.SyncEngineimport com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
+import com.whmdg.mczj.tools.fileop.sync.SyncEngine
+import com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
 import com.whmdg.mczj.tools.fileop.sync.SyncMode
 import com.whmdg.mczj.tools.fileop.sync.SyncPhase
 import com.whmdg.mczj.tools.fileop.sync.SyncTaskState
