@@ -18,6 +18,10 @@ import java.io.OutputStream
  */
 class WebDavFileClient(private val config: WebDavServerConfig) {
 
+    init {
+        WebDavAuthenticator.addTransientServer(config)
+    }
+
     private val authority = config.toAuthority()
 
     private fun path(remotePath: String): WebDavPath {

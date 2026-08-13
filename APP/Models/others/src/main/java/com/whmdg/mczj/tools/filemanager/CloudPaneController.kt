@@ -8,8 +8,7 @@ import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
 import com.whmdg.mczj.tools.encryption.data.SyncStatus
 import com.whmdg.mczj.tools.encryption.data.VaultSyncIndex
-import com.whmdg.mczj.tools.fileop.sync.SyncEngine
-import com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
+import com.whmdg.mczj.tools.fileop.sync.SyncEngineimport com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
 import com.whmdg.mczj.tools.fileop.sync.SyncMode
 import com.whmdg.mczj.tools.fileop.sync.SyncPhase
 import com.whmdg.mczj.tools.fileop.sync.SyncTaskState
@@ -71,7 +70,6 @@ class CloudPaneController(
         "vault_config.json",
         "vault_config.backup.json",
         "vault_sync_index.json",
-        "vault_sync.db",
         "name_mappings.json",
         "folder_sizes.json"
     )
@@ -86,7 +84,7 @@ class CloudPaneController(
 
     /** 初始化：打开 DB + 同步本地文件 + 列出根目录 */
     fun init() {
-        syncDb = SyncDatabase.getInstance(context, vaultDir)
+        syncDb = SyncDatabase.getInstance(context, vaultName)
         state.vaultFolderName = vaultName
         syncLocalFiles()
         navigateTo("/")

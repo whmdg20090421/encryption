@@ -1020,8 +1020,6 @@ object AccountingRepository {
             authType = "password",
             relativePath = relativePath
         )
-        // 注册到全局 Authenticator
-        com.whmdg.mczj.tools.fileop.webdav.WebDavAuthenticator.addTransientServer(config)
         return com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient(config)
     }
 

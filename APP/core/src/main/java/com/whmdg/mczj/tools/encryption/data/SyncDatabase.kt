@@ -4,12 +4,13 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
 
 /**
  * 云盘同步索引数据库。
  *
- * 每个保险箱独立一个 DB 文件：<vaultDir>/vault_sync.db
+ * 每个同步任务独立一个 DB 文件：<AppDataPaths.encryption>/云盘同步/<syncName>/vault_sync.db
  * 两张表：local_entries（本地文件状态）、cloud_entries（云端文件状态）。
  * 按 path 字典序存储，查询时 ORDER BY path 即可得到树形结构。
  */
@@ -22,8 +23,15 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
 
         private val instances = mutableMapOf<String, SyncDatabase>()
 
-        fun getInstance(context: Context, vaultDir: String): SyncDatabase {
-            val dbFile = File(vaultDir, "vault_sync.db")
+        /**
+         * 获取同步数据库实例。
+         * @param syncName 同步任务名称（保险箱名或用户输入的名称）
+         * DB 路径：<AppDataPaths.encryption>/云盘同步/<syncName>/vault_sync.db
+         */
+        fun getInstance(context: Context, syncName: String): SyncDatabase {
+            val syncDir = File(AppDataPaths.encryption(context), "云盘同步/$syncName")
+            if (!syncDir.exists()) syncDir.mkdirs()
+            val dbFile = File(syncDir, "vault_sync.db")
             val path = dbFile.absolutePath
             return instances[path] ?: synchronized(this) {
                 instances[path] ?: SyncDatabase(context.applicationContext, path).also {

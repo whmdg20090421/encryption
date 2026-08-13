@@ -37,7 +37,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.whmdg.mczj.tools.fileop.webdav.WebDavAuthenticator
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
@@ -131,14 +130,8 @@ fun WebDavEditDialog(
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    // Register auth temporarily for connection test
-                    WebDavAuthenticator.addTransientServer(config)
-                    try {
-                        val client = WebDavFileClient(config)
-                        client.testConnection()
-                    } finally {
-                        WebDavAuthenticator.removeTransientServer(config)
-                    }
+                    val client = WebDavFileClient(config)
+                    client.testConnection()
                 }
                 // Connection succeeded, save
                 WebDavServerStore.save(context, config)

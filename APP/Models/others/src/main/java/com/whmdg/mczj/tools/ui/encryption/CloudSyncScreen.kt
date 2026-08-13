@@ -33,7 +33,6 @@ import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.encryption.services.VaultService
 import com.whmdg.mczj.tools.fileop.webdav.WebDavConnectionStatus
 import com.whmdg.mczj.tools.fileop.webdav.WebDavAccountState
-import com.whmdg.mczj.tools.fileop.webdav.WebDavAuthenticator
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
@@ -125,7 +124,6 @@ fun CloudSyncScreen(
             // 异步验证连接
             val ok = withContext(Dispatchers.IO) {
                 try {
-                    WebDavAuthenticator.addTransientServer(config)
                     val client = WebDavFileClient(config)
                     client.testConnection()
                     true
@@ -427,7 +425,6 @@ fun CloudSyncScreen(
                     scope.launch {
                         val ok = withContext(Dispatchers.IO) {
                             try {
-                                WebDavAuthenticator.addTransientServer(config)
                                 val client = WebDavFileClient(config)
                                 client.testConnection()
                                 true
@@ -535,7 +532,6 @@ private fun WebDavSettingsDialog(
                         dialogScope.launch {
                             val ok = withContext(Dispatchers.IO) {
                                 try {
-                                    WebDavAuthenticator.addTransientServer(config)
                                     val client = WebDavFileClient(config)
                                     client.testConnection()
                                     true
