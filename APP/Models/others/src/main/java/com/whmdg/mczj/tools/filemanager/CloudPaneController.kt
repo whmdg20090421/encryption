@@ -83,10 +83,14 @@ class CloudPaneController(
             return if (base.isEmpty()) "/$folder" else "$base/$folder"
         }
 
-    /** 初始化：打开 DB + 同步本地文件 + 列出根目录 */
+    /** 初始化：打开 DB + 注册日志写入器 + 同步本地文件 + 列出根目录 */
     fun init() {
         syncDb = SyncDatabase.getInstance(context, vaultName)
         state.vaultFolderName = vaultName
+        // 注册云盘日志写入器
+        com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.externalWriter = { tag, message ->
+            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.log(context, tag, message)
+        }
         syncLocalFiles()
         navigateTo("/")
     }
@@ -192,13 +196,14 @@ class CloudPaneController(
                     // 进度通过 onProgress 回调更新
                 },
                 onComplete = { success, error ->
-                    if (!success && error != null) {
-                        android.widget.Toast.makeText(context, "上传失败: $error，请查看日志", android.widget.Toast.LENGTH_LONG).show()
+                    scope.launch {
+                        if (!success && error != null) {
+                            android.widget.Toast.makeText(context, "上传失败: $error，请查看日志", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                        navigateTo(state.currentPath)
                     }
-                    navigateTo(state.currentPath)
                 },
                 onStatusChange = {
-                    // 状态变更时刷新 UI（从 IO 线程调用，需要切到 Main）
                     scope.launch { navigateTo(state.currentPath) }
                 }
             )

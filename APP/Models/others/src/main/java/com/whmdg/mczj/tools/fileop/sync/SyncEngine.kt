@@ -279,6 +279,7 @@ class SyncEngine(
         val remotePath = buildRemotePath(remoteBasePath, relativePath)
         val parentPath = remotePath.substringBeforeLast('/')
         val fileName = remotePath.substringAfterLast('/')
+        CloudSyncLogger.logSync("SyncEngine", "开始上传: $relativePath -> $remotePath (大小: $fileSize)")
 
         // ① 预检查：确保远程目录存在
         ensureRemoteDir(remoteBasePath, relativePath)
@@ -307,6 +308,7 @@ class SyncEngine(
                 val cloudEntry = syncDb.getEntry("cloud_entries", relativePath)
                 if (cloudEntry != null && cloudEntry.md5 == localMd5) {
                     // 完全相同 → 跳过
+                    CloudSyncLogger.logSync("SyncEngine", "跳过上传（文件相同）: $relativePath")
                     syncDb.updateMd5("local_entries", relativePath, localMd5)
                     syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
                     onComplete(true, null)
@@ -364,6 +366,7 @@ class SyncEngine(
         // ② 上传失败处理
         if (!uploadSuccess) {
             val reason = lastError ?: "上传失败"
+            CloudSyncLogger.logSync("SyncEngine", "上传失败: $relativePath - $reason")
             syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
             onComplete(false, reason)
             return@withContext
@@ -386,6 +389,7 @@ class SyncEngine(
         // ③ 验证：比较大小
         if (cloudSizeAfterUpload >= 0 && cloudSizeAfterUpload != fileSize) {
             val reason = "传输损坏: 本地${fileSize}字节 vs 云端${cloudSizeAfterUpload}字节"
+            CloudSyncLogger.logSync("SyncEngine", "验证失败: $relativePath - $reason")
             logError("验证失败", relativePath, remotePath, IllegalStateException(reason))
             try { webdavClient.delete(remotePath) } catch (_: Exception) {}
             syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
@@ -407,6 +411,7 @@ class SyncEngine(
         ))
 
         // ④ 更新本地表 → COMPLETED（解锁）
+        CloudSyncLogger.logSync("SyncEngine", "上传成功: $relativePath (大小: $fileSize)")
         syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
         onComplete(true, null)
     }
@@ -578,8 +583,12 @@ class SyncEngine(
         fileProgress = fileProgress.toMap()
     )
 
-    /** 写入错误日志到所有日志文件 */
+    /** 写入错误日志到所有日志文件 + 云盘日志 */
     private fun logError(action: String, relativePath: String, remotePath: String, error: Exception) {
+        // 写入云盘日志（如果开启）
+        CloudSyncLogger.logSyncError("SyncEngine", "$action | $relativePath -> $remotePath", error)
+
+        // 写入本次上传的日志文件
         if (logFiles.isEmpty()) return
         val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
         val sw = StringWriter()
