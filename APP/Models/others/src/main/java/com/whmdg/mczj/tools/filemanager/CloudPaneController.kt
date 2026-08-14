@@ -165,8 +165,14 @@ class CloudPaneController(
         // 启动上传
         syncJob?.cancel()
         syncJob = scope.launch {
-            val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
-            val logFile = File(logDir, "${vaultName}_sync_error.log")
+            val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+            val logFileName = "${vaultName}_upload_${timestamp}.log"
+            // 内部存储日志
+            val internalLogDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
+            val internalLogFile = File(internalLogDir, logFileName)
+            // 外部存储日志
+            val externalLogDir = context.getExternalFilesDir(null)?.let { File(it, "Android_tools/云盘") }
+            val externalLogFile = externalLogDir?.let { File(it, logFileName) }
             val engine = SyncEngine(
                 webdavClient = webdavClient,
                 vaultDir = vaultDir,
@@ -176,7 +182,7 @@ class CloudPaneController(
                 onFileComplete = { path, success ->
                     refreshCurrentEntry(path)
                 },
-                logFile = logFile
+                logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
             engine.uploadSingleFile(
                 relativePath = relativePath,
@@ -187,9 +193,8 @@ class CloudPaneController(
                 },
                 onComplete = { success, error ->
                     if (!success && error != null) {
-                        state.loadError = IllegalStateException(error)
+                        android.widget.Toast.makeText(context, "上传失败: $error，请查看日志", android.widget.Toast.LENGTH_LONG).show()
                     }
-                    // 用 refreshCurrentEntry 替代 navigateTo，避免清除 loadError
                     refreshCurrentEntry(relativePath)
                 }
             )
@@ -267,8 +272,12 @@ class CloudPaneController(
     fun startSync(mode: SyncMode) {
         syncJob?.cancel()
         syncJob = scope.launch {
-            val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
-            val logFile = File(logDir, "${vaultName}_sync_error.log")
+            val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+            val logFileName = "${vaultName}_batch_${timestamp}.log"
+            val internalLogDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
+            val internalLogFile = File(internalLogDir, logFileName)
+            val externalLogDir = context.getExternalFilesDir(null)?.let { File(it, "Android_tools/云盘") }
+            val externalLogFile = externalLogDir?.let { File(it, logFileName) }
             val engine = SyncEngine(
                 webdavClient = webdavClient,
                 vaultDir = vaultDir,
@@ -278,7 +287,7 @@ class CloudPaneController(
                 onFileComplete = { relativePath, success ->
                     if (success) navigateTo(state.currentPath)
                 },
-                logFile = logFile
+                logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
             try {
                 engine.startSync(

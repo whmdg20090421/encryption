@@ -27,7 +27,7 @@ class SyncEngine(
     private val vaultDir: String,
     private val onProgress: (SyncTaskState) -> Unit,
     private val onFileComplete: (relativePath: String, success: Boolean) -> Unit,
-    private val logFile: File? = null
+    private val logFiles: List<File> = emptyList()
 ) {
     @Volatile
     private var isCancelled = false
@@ -440,18 +440,35 @@ class SyncEngine(
         }
     }
 
-    /** 确保远程目录存在，失败时抛出异常 */
+    /** 确保远程目录存在，先检查再创建 */
     private suspend fun ensureRemoteDir(basePath: String, relativePath: String) = withContext(Dispatchers.IO) {
+        // 收集所有需要存在的目录路径（从根到目标的父目录）
+        val allDirs = mutableListOf<String>()
+        // 1. basePath 本身（如 webdav/TF）
+        allDirs.add(basePath.trimEnd('/'))
+        // 2. relativePath 的各级父目录
         val parts = relativePath.trimStart('/').split('/')
-        if (parts.size <= 1) return@withContext
-        var current = basePath.trimEnd('/')
-        for (i in 0 until parts.size - 1) {
-            current = "$current/${parts[i]}"
-            try {
-                webdavClient.mkdir(current)
-            } catch (e: Exception) {
-                // MKCOL 已存在目录可能返回 405，忽略；其他错误记录但继续
-                logError("创建远程目录", current, current, e)
+        if (parts.size > 1) {
+            var current = basePath.trimEnd('/')
+            for (i in 0 until parts.size - 1) {
+                current = "$current/${parts[i]}"
+                allDirs.add(current)
+            }
+        }
+
+        // 逐级检查，不存在才创建
+        for (dir in allDirs) {
+            val exists = try {
+                webdavClient.exists(dir)
+            } catch (_: Exception) {
+                false
+            }
+            if (!exists) {
+                try {
+                    webdavClient.mkdir(dir)
+                } catch (e: Exception) {
+                    logError("创建远程目录", dir, dir, e)
+                }
             }
         }
     }
@@ -517,26 +534,28 @@ class SyncEngine(
         fileProgress = fileProgress.toMap()
     )
 
-    /** 写入错误日志到文件 */
+    /** 写入错误日志到所有日志文件 */
     private fun logError(action: String, relativePath: String, remotePath: String, error: Exception) {
-        val file = logFile ?: return
-        try {
-            val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-            val sw = StringWriter()
-            error.printStackTrace(PrintWriter(sw))
-            val entry = buildString {
-                appendLine("════════════════════════════════════════")
-                appendLine("时间: $timestamp")
-                appendLine("操作: $action")
-                appendLine("本地路径: $relativePath")
-                appendLine("远程路径: $remotePath")
-                appendLine("错误类型: ${error.javaClass.name}")
-                appendLine("错误信息: ${error.message}")
-                appendLine("堆栈:")
-                appendLine(sw.toString())
-            }
-            file.parentFile?.mkdirs()
-            file.appendText(entry)
-        } catch (_: Exception) {}
+        if (logFiles.isEmpty()) return
+        val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+        val sw = StringWriter()
+        error.printStackTrace(PrintWriter(sw))
+        val entry = buildString {
+            appendLine("════════════════════════════════════════")
+            appendLine("时间: $timestamp")
+            appendLine("操作: $action")
+            appendLine("本地路径: $relativePath")
+            appendLine("远程路径: $remotePath")
+            appendLine("错误类型: ${error.javaClass.name}")
+            appendLine("错误信息: ${error.message}")
+            appendLine("堆栈:")
+            appendLine(sw.toString())
+        }
+        for (file in logFiles) {
+            try {
+                file.parentFile?.mkdirs()
+                file.appendText(entry)
+            } catch (_: Exception) {}
+        }
     }
 }
