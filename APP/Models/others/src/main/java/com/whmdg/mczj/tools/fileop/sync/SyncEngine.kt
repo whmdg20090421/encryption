@@ -253,13 +253,10 @@ class SyncEngine(
     /**
      * 上传单个文件（完整流程）。
      *
-     * ① 标记为 UPLOADING（锁定）
-     * ② 启动上传 + 后台异步计算 MD5
-     * ③ 上传完成
-     * ④ 二次验证云端文件存在
-     * ⑤ 获取云端信息（大小、时间、cloudHash）
-     * ⑥ 写入云端表
-     * ⑦ 更新本地表为 COMPLETED（解锁）
+     * ① 预检查：确保远程目录存在 → 检查云端文件 → 比较大小 → 比较 MD5 → 跳过或上传
+     * ② 上传（带重试，最多3次）
+     * ③ 验证：比较本地大小 vs 云端大小
+     * ④ 记录：写入云端表 → 更新本地表为 COMPLETED
      */
     suspend fun uploadSingleFile(
         relativePath: String,
@@ -280,25 +277,77 @@ class SyncEngine(
         val fileSize = localFile.length()
         val remotePath = buildRemotePath(remoteBasePath, relativePath)
 
-        // ① 锁定 → UPLOADING
+        // ① 预检查：确保远程目录存在
+        ensureRemoteDir(remoteBasePath, relativePath)
+
+        // ① 预检查：检查云端文件是否已存在
+        val cloudExists = try {
+            webdavClient.exists(remotePath)
+        } catch (_: Exception) {
+            false
+        }
+
+        if (cloudExists) {
+            // 云端已有文件 → 比较大小
+            var cloudSize: Long = -1
+            try {
+                val parentPath = remotePath.substringBeforeLast('/')
+                val fileName = remotePath.substringAfterLast('/')
+                val children = webdavClient.listChildren(parentPath)
+                val cloudFile = children?.find { it.name == fileName }
+                if (cloudFile != null) {
+                    cloudSize = cloudFile.size
+                }
+            } catch (_: Exception) {}
+
+            if (cloudSize == fileSize) {
+                // 大小相同 → 比较 MD5
+                val localMd5 = calculateMd5(localFile)
+                val cloudEntry = syncDb.getEntry("cloud_entries", relativePath)
+                if (cloudEntry != null && cloudEntry.md5 == localMd5) {
+                    // 完全相同 → 跳过
+                    syncDb.updateMd5("local_entries", relativePath, localMd5)
+                    syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
+                    onComplete(true, null)
+                    return@withContext
+                }
+                // MD5 不同或云端表无记录 → 继续上传
+            }
+            // 大小不同 → 继续上传
+        }
+
+        // ② 锁定 → UPLOADING
         syncDb.updateStatus("local_entries", relativePath, SyncStatus.UPLOADING)
 
-        // ② 启动上传 + 后台异步计算 MD5
+        // ② 后台异步计算 MD5
         val md5Deferred = async {
             calculateMd5(localFile)
         }
 
-        var uploadError: String? = null
-        val uploadSuccess = try {
-            ensureRemoteDir(buildRemotePath(remoteBasePath, ""), relativePath)
-            webdavClient.uploadFile(localFile, remotePath) { bytesWritten ->
-                onProgress(bytesWritten, fileSize)
+        // ② 上传（带重试）
+        val maxRetries = 3
+        var uploadSuccess = false
+        var lastError: String? = null
+
+        for (attempt in 1..maxRetries) {
+            try {
+                webdavClient.uploadFile(localFile, remotePath) { bytesWritten ->
+                    onProgress(bytesWritten, fileSize)
+                }
+                uploadSuccess = true
+                break
+            } catch (e: Exception) {
+                lastError = "${e.javaClass.simpleName}: ${e.message}"
+                logError("上传失败(第${attempt}次)", relativePath, remotePath, e)
+
+                // 判断是否可重试
+                if (!isRetryable(e) || attempt >= maxRetries) {
+                    break
+                }
+                // 指数退避：1秒、2秒、4秒
+                val delayMs = 1000L * (1 shl (attempt - 1))
+                kotlinx.coroutines.delay(delayMs)
             }
-            true
-        } catch (e: Exception) {
-            uploadError = "${e.javaClass.simpleName}: ${e.message}"
-            logError("上传失败", relativePath, remotePath, e)
-            false
         }
 
         // 等待 MD5 计算完成
@@ -313,69 +362,78 @@ class SyncEngine(
             syncDb.updateMd5("local_entries", relativePath, md5)
         }
 
-        // ③ 上传失败处理
+        // ② 上传失败处理
         if (!uploadSuccess) {
-            val reason = uploadError ?: "上传失败"
+            val reason = lastError ?: "上传失败"
             syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
             onComplete(false, reason)
             return@withContext
         }
 
-        // ④ 二次验证：检查云端文件是否存在
-        var verifyError: String? = null
-        val cloudExists = try {
-            webdavClient.exists(remotePath)
-        } catch (e: Exception) {
-            verifyError = "${e.javaClass.simpleName}: ${e.message}"
-            logError("二次验证异常", relativePath, remotePath, e)
-            false
-        }
-
-        if (!cloudExists) {
-            val reason = verifyError ?: "二次验证失败：云端文件不存在"
-            syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
-            onComplete(false, reason)
-            return@withContext
-        }
-
-        // ⑤ 获取云端信息
-        var cloudSize: Long = fileSize
-        var cloudLastModified: String? = null
-        var cloudHash: String? = null
-
+        // ③ 验证：比较本地大小 vs 云端大小
+        var cloudSizeAfterUpload: Long = -1
         try {
             val parentPath = remotePath.substringBeforeLast('/')
             val fileName = remotePath.substringAfterLast('/')
             val children = webdavClient.listChildren(parentPath)
             val cloudFile = children?.find { it.name == fileName }
             if (cloudFile != null) {
-                cloudSize = cloudFile.size
-                cloudLastModified = java.time.Instant.ofEpochMilli(cloudFile.lastModified).toString()
+                cloudSizeAfterUpload = cloudFile.size
             }
-        } catch (_: Exception) {
-            // 获取云端信息失败，不阻塞流程
+        } catch (e: Exception) {
+            logError("获取云端文件信息失败", relativePath, remotePath, e)
         }
 
-        // ⑥ 写入云端表
+        if (cloudSizeAfterUpload >= 0 && cloudSizeAfterUpload != fileSize) {
+            // 大小不一致 → 传输损坏
+            val reason = "传输损坏: 本地${fileSize}字节 vs 云端${cloudSizeAfterUpload}字节"
+            logError("验证失败", relativePath, remotePath, IllegalStateException(reason))
+            try { webdavClient.delete(remotePath) } catch (_: Exception) {}
+            syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
+            onComplete(false, reason)
+            return@withContext
+        }
+
+        // ④ 记录：写入云端表
         val now = java.time.Instant.now().toString()
+        val cloudLastModified = if (cloudSizeAfterUpload >= 0) {
+            try {
+                val parentPath = remotePath.substringBeforeLast('/')
+                val fileName = remotePath.substringAfterLast('/')
+                val children = webdavClient.listChildren(parentPath)
+                val cloudFile = children?.find { it.name == fileName }
+                cloudFile?.lastModified?.let { java.time.Instant.ofEpochMilli(it).toString() }
+            } catch (_: Exception) { null }
+        } else null
+
         syncDb.upsertEntry("cloud_entries", SyncEntryRow(
             path = relativePath,
-            size = cloudSize,
+            size = if (cloudSizeAfterUpload >= 0) cloudSizeAfterUpload else fileSize,
             lastModified = cloudLastModified ?: now,
             md5 = md5 ?: "",
-            cloudHash = cloudHash,
+            cloudHash = null,
             status = SyncStatus.COMPLETED,
             lastSyncTime = now,
             failReason = if (cloudLastModified == null) "云端元数据获取失败" else null
         ))
 
-        // ⑦ 更新本地表 → COMPLETED（解锁）
+        // ④ 更新本地表 → COMPLETED（解锁）
         syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
-        if (cloudHash != null) {
-            syncDb.updateCloudHash("local_entries", relativePath, cloudHash)
-        }
-
         onComplete(true, null)
+    }
+
+    /** 判断异常是否可重试 */
+    private fun isRetryable(e: Exception): Boolean {
+        val msg = e.message?.lowercase() ?: ""
+        // 网络错误、超时、5xx 服务器错误可重试
+        if (e is java.io.IOException) return true
+        if (msg.contains("timeout") || msg.contains("connection")) return true
+        if (msg.contains("500") || msg.contains("502") || msg.contains("503") || msg.contains("504")) return true
+        if (msg.contains("429")) return true
+        // 401、403、404 不可重试
+        if (msg.contains("401") || msg.contains("403") || msg.contains("404")) return false
+        // 默认可重试
+        return true
     }
 
     // ── 内部方法 ──
