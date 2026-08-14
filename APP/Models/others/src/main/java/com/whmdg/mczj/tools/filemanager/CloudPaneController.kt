@@ -124,14 +124,14 @@ class CloudPaneController(
         // 并发保护：检查是否有文件正在上传
         val uploading = syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
         if (uploading.isNotEmpty()) {
-            state.loadError = IllegalStateException("当前有文件正在上传，请等待完成")
+            android.widget.Toast.makeText(context, "当前有文件正在上传，请等待完成", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
 
         // 边界：COMPLETED 文件再次上传，检查是否已修改
         val localFile = File(vaultDir, relativePath.trimStart('/'))
         if (!localFile.exists()) {
-            state.loadError = IllegalStateException("本地文件不存在")
+            android.widget.Toast.makeText(context, "本地文件不存在", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -195,7 +195,11 @@ class CloudPaneController(
                     if (!success && error != null) {
                         android.widget.Toast.makeText(context, "上传失败: $error，请查看日志", android.widget.Toast.LENGTH_LONG).show()
                     }
-                    refreshCurrentEntry(relativePath)
+                    navigateTo(state.currentPath)
+                },
+                onStatusChange = {
+                    // 状态变更时刷新 UI（从 IO 线程调用，需要切到 Main）
+                    scope.launch { navigateTo(state.currentPath) }
                 }
             )
         }

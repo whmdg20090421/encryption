@@ -263,7 +263,8 @@ class SyncEngine(
         remoteBasePath: String,
         syncDb: SyncDatabase,
         onProgress: (uploadedBytes: Long, totalBytes: Long) -> Unit,
-        onComplete: (success: Boolean, error: String?) -> Unit
+        onComplete: (success: Boolean, error: String?) -> Unit,
+        onStatusChange: () -> Unit = {}
     ) = withContext(Dispatchers.IO) {
         val localFile = File(vaultDir, relativePath.trimStart('/'))
 
@@ -318,6 +319,7 @@ class SyncEngine(
 
         // ② 锁定 → UPLOADING
         syncDb.updateStatus("local_entries", relativePath, SyncStatus.UPLOADING)
+        onStatusChange()
 
         // ② 后台异步计算 MD5
         val md5Deferred = async {
