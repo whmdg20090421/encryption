@@ -254,7 +254,7 @@ class SyncEngine(
      * 上传单个文件（完整流程）。
      *
      * ① 预检查：确保远程目录存在 → 检查云端文件 → 比较大小 → 比较 MD5 → 跳过或上传
-     * ② 上传（带重试，最多3次）
+     * ② 上传（带重试，网络错误重试1次，等待1秒）
      * ③ 验证：比较本地大小 vs 云端大小
      * ④ 记录：写入云端表 → 更新本地表为 COMPLETED
      */
@@ -276,6 +276,8 @@ class SyncEngine(
 
         val fileSize = localFile.length()
         val remotePath = buildRemotePath(remoteBasePath, relativePath)
+        val parentPath = remotePath.substringBeforeLast('/')
+        val fileName = remotePath.substringAfterLast('/')
 
         // ① 预检查：确保远程目录存在
         ensureRemoteDir(remoteBasePath, relativePath)
@@ -291,8 +293,6 @@ class SyncEngine(
             // 云端已有文件 → 比较大小
             var cloudSize: Long = -1
             try {
-                val parentPath = remotePath.substringBeforeLast('/')
-                val fileName = remotePath.substringAfterLast('/')
                 val children = webdavClient.listChildren(parentPath)
                 val cloudFile = children?.find { it.name == fileName }
                 if (cloudFile != null) {
@@ -324,12 +324,11 @@ class SyncEngine(
             calculateMd5(localFile)
         }
 
-        // ② 上传（带重试）
-        val maxRetries = 3
+        // ② 上传（网络错误重试1次，等待1秒）
         var uploadSuccess = false
         var lastError: String? = null
 
-        for (attempt in 1..maxRetries) {
+        for (attempt in 1..2) {
             try {
                 webdavClient.uploadFile(localFile, remotePath) { bytesWritten ->
                     onProgress(bytesWritten, fileSize)
@@ -340,13 +339,11 @@ class SyncEngine(
                 lastError = "${e.javaClass.simpleName}: ${e.message}"
                 logError("上传失败(第${attempt}次)", relativePath, remotePath, e)
 
-                // 判断是否可重试
-                if (!isRetryable(e) || attempt >= maxRetries) {
+                // 只有网络错误才重试，且只重试1次
+                if (!isRetryable(e) || attempt >= 2) {
                     break
                 }
-                // 指数退避：1秒、2秒、4秒
-                val delayMs = 1000L * (1 shl (attempt - 1))
-                kotlinx.coroutines.delay(delayMs)
+                kotlinx.coroutines.delay(1000L)
             }
         }
 
@@ -370,22 +367,22 @@ class SyncEngine(
             return@withContext
         }
 
-        // ③ 验证：比较本地大小 vs 云端大小
+        // ③ 验证：获取云端文件信息（大小 + 时间），一次调用复用
         var cloudSizeAfterUpload: Long = -1
+        var cloudLastModified: String? = null
         try {
-            val parentPath = remotePath.substringBeforeLast('/')
-            val fileName = remotePath.substringAfterLast('/')
             val children = webdavClient.listChildren(parentPath)
             val cloudFile = children?.find { it.name == fileName }
             if (cloudFile != null) {
                 cloudSizeAfterUpload = cloudFile.size
+                cloudLastModified = java.time.Instant.ofEpochMilli(cloudFile.lastModified).toString()
             }
         } catch (e: Exception) {
             logError("获取云端文件信息失败", relativePath, remotePath, e)
         }
 
+        // ③ 验证：比较大小
         if (cloudSizeAfterUpload >= 0 && cloudSizeAfterUpload != fileSize) {
-            // 大小不一致 → 传输损坏
             val reason = "传输损坏: 本地${fileSize}字节 vs 云端${cloudSizeAfterUpload}字节"
             logError("验证失败", relativePath, remotePath, IllegalStateException(reason))
             try { webdavClient.delete(remotePath) } catch (_: Exception) {}
@@ -396,16 +393,6 @@ class SyncEngine(
 
         // ④ 记录：写入云端表
         val now = java.time.Instant.now().toString()
-        val cloudLastModified = if (cloudSizeAfterUpload >= 0) {
-            try {
-                val parentPath = remotePath.substringBeforeLast('/')
-                val fileName = remotePath.substringAfterLast('/')
-                val children = webdavClient.listChildren(parentPath)
-                val cloudFile = children?.find { it.name == fileName }
-                cloudFile?.lastModified?.let { java.time.Instant.ofEpochMilli(it).toString() }
-            } catch (_: Exception) { null }
-        } else null
-
         syncDb.upsertEntry("cloud_entries", SyncEntryRow(
             path = relativePath,
             size = if (cloudSizeAfterUpload >= 0) cloudSizeAfterUpload else fileSize,
@@ -422,17 +409,14 @@ class SyncEngine(
         onComplete(true, null)
     }
 
-    /** 判断异常是否可重试 */
+    /** 判断异常是否可重试（网络错误、超时、5xx 可重试；401/403/404 不可重试） */
     private fun isRetryable(e: Exception): Boolean {
         val msg = e.message?.lowercase() ?: ""
-        // 网络错误、超时、5xx 服务器错误可重试
         if (e is java.io.IOException) return true
         if (msg.contains("timeout") || msg.contains("connection")) return true
         if (msg.contains("500") || msg.contains("502") || msg.contains("503") || msg.contains("504")) return true
         if (msg.contains("429")) return true
-        // 401、403、404 不可重试
         if (msg.contains("401") || msg.contains("403") || msg.contains("404")) return false
-        // 默认可重试
         return true
     }
 
