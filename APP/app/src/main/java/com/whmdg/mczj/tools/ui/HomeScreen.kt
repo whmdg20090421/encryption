@@ -861,12 +861,13 @@ fun FunctionalTestScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_RP_HUB, Context.MODE_PRIVATE) }
     var debugMode by remember { mutableStateOf(prefs.getBoolean("debug_mode", false)) }
+    var cloudLogEnabled by remember { mutableStateOf(com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.isEnabled(context)) }
     val hasDebugPerm = PermissionManager.has(Feature.DEBUG_MODE)
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("功能性测试") },
+                title = { Text("调试设置") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -890,12 +891,12 @@ fun FunctionalTestScreen(onBack: () -> Unit) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text("无权限", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
                         Spacer(Modifier.height(8.dp))
-                        Text("当前密钥不含 DEBUG_MODE 权限，无法使用功能性测试。", color = MaterialTheme.colorScheme.onErrorContainer)
+                        Text("当前密钥不含 DEBUG_MODE 权限，无法使用调试设置。", color = MaterialTheme.colorScheme.onErrorContainer)
                     }
                 }
             } else {
                 SettingsSection(
-                    title = "RP-Hub",
+                    title = "旧 Debug 模式",
                     icon = Icons.Default.BugReport
                 ) {
                     CompactSettingsToggle(
@@ -906,6 +907,24 @@ fun FunctionalTestScreen(onBack: () -> Unit) {
                         onCheckedChange = {
                             debugMode = it
                             prefs.edit().putBoolean("debug_mode", it).apply()
+                        }
+                    )
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                SettingsSection(
+                    title = "云盘 Debug",
+                    icon = Icons.Default.CloudUpload
+                ) {
+                    CompactSettingsToggle(
+                        title = "云盘日志",
+                        subtitle = "开启后自动保存同步日志到外部存储",
+                        icon = Icons.Default.List,
+                        checked = cloudLogEnabled,
+                        onCheckedChange = {
+                            cloudLogEnabled = it
+                            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.setEnabled(context, it)
                         }
                     )
                 }

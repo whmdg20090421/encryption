@@ -286,7 +286,6 @@ fun FileManagerScreen(
     var showSettingsMenu by remember { mutableStateOf(false) }
     var showFontSizeDialog by remember { mutableStateOf(false) }
     var showSortDialog by remember { mutableStateOf(false) }
-    var showDebugDialog by remember { mutableStateOf(false) }
     var tempSortField by remember { mutableStateOf(vm.sortField) }
     var tempSortOrder by remember { mutableStateOf(vm.sortOrder) }
     var showSortSizeRefreshDialog by remember { mutableStateOf(false) }
@@ -753,18 +752,6 @@ fun FileManagerScreen(
                                 },
                                 onClick = {
                                     showFontSizeDialog = true
-                                    showSettingsMenu = false
-                                }
-                            )
-                            HorizontalDivider()
-                            // 调试
-                            DropdownMenuItem(
-                                text = { Text("调试") },
-                                trailingIcon = {
-                                    Icon(Icons.Default.BugReport, contentDescription = null, modifier = Modifier.size(18.dp))
-                                },
-                                onClick = {
-                                    showDebugDialog = true
                                     showSettingsMenu = false
                                 }
                             )
@@ -3741,118 +3728,6 @@ fun FileManagerScreen(
             dismissButton = {
                 TextButton(onClick = { showFontSizeDialog = false }) {
                     Text("取消")
-                }
-            }
-        )
-    }
-    // ── 调试设置对话框 ──
-    if (showDebugDialog) {
-        var cloudLogEnabled by remember { mutableStateOf(com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.isEnabled(context)) }
-        var diagnosticInfo by remember { mutableStateOf<String?>(null) }
-        var diagnosticError by remember { mutableStateOf<Throwable?>(null) }
-
-        AlertDialog(
-            onDismissRequest = { showDebugDialog = false },
-            title = { Text("调试设置") },
-            text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    // ── 默认配置 ──
-                    Text("默认配置", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-
-                    val legacySp = context.getSharedPreferences(AppDataPaths.PREFS_LEGACY_SPECIAL_PERMISSIONS, Context.MODE_PRIVATE)
-                    val permissionLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
-                    Text("当前权限级别: $permissionLevel", fontSize = 13.sp)
-
-                    if (permissionLevel == "ROOT") {
-                        LaunchedEffect(Unit) {
-                            try {
-                                val isRootAvailable = SpecialPermissionVerifier.isRootAvailable()
-                                if (!isRootAvailable) {
-                                    diagnosticError = SecurityException("Root 权限异常：已设置 Root 模式但无法获取 root 权限")
-                                } else {
-                                    val mountInfo = try {
-                                        val selfNs = ShellExecutor.execute(Permission.ROOT, "stat -c '%i' /proc/self/ns/mnt")
-                                        val initNs = ShellExecutor.execute(Permission.ROOT, "stat -c '%i' /proc/1/ns/mnt")
-                                        val sameNs = selfNs.trim() == initNs.trim()
-                                        "挂载命名空间: self=${selfNs.trim()} init=${initNs.trim()} 同一=$sameNs"
-                                    } catch (e: Exception) {
-                                        "无法获取命名空间信息: ${e.message}"
-                                    }
-                                    diagnosticInfo = "Root 权限已就绪\n$mountInfo"
-                                }
-                            } catch (e: Exception) {
-                                diagnosticError = e
-                            }
-                        }
-                    }
-
-                    diagnosticInfo?.let {
-                        Spacer(Modifier.height(4.dp))
-                        Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    diagnosticError?.let {
-                        Spacer(Modifier.height(4.dp))
-                        Text("诊断异常: ${it.message}", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-                    HorizontalDivider()
-                    Spacer(Modifier.height(16.dp))
-
-                    // ── 云盘日志 ──
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("云盘日志", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                            Text(
-                                "开启后自动保存同步日志到外部存储",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = cloudLogEnabled,
-                            onCheckedChange = {
-                                cloudLogEnabled = it
-                                com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.setEnabled(context, it)
-                            }
-                        )
-                    }
-
-                    // 日志文件列表
-                    if (cloudLogEnabled) {
-                        Spacer(Modifier.height(8.dp))
-                        val logFiles = com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.getLogFiles(context)
-                        if (logFiles.isNotEmpty()) {
-                            Text("日志文件 (${logFiles.size} 个):", fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                            Spacer(Modifier.height(4.dp))
-                            for (file in logFiles.take(5)) {
-                                Text(
-                                    "${file.name} (${com.whmdg.mczj.tools.util.FormatUtils.formatBytes(file.length())})",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            if (logFiles.size > 5) {
-                                Text("... 还有 ${logFiles.size - 5} 个文件", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            TextButton(onClick = {
-                                com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.clearLogs(context)
-                            }) {
-                                Text("清除所有日志", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showDebugDialog = false }) {
-                    Text("关闭")
                 }
             }
         )
