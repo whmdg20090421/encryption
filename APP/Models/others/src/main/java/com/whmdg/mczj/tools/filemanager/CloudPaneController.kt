@@ -83,15 +83,10 @@ class CloudPaneController(
             return if (base.isEmpty()) "/$folder" else "$base/$folder"
         }
 
-    /** 初始化：打开 DB + 创建日志目录 + 同步本地文件 + 列出根目录 */
+    /** 初始化：打开 DB + 同步本地文件 + 列出根目录 */
     fun init() {
         syncDb = SyncDatabase.getInstance(context, vaultName)
         state.vaultFolderName = vaultName
-        // 创建日志目录
-        try {
-            val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
-            File(logDir, vaultName).mkdirs()
-        } catch (_: Exception) {}
         syncLocalFiles()
         navigateTo("/")
     }
@@ -171,9 +166,7 @@ class CloudPaneController(
         syncJob?.cancel()
         syncJob = scope.launch {
             val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
-            val syncLogDir = File(logDir, vaultName)
-            if (!syncLogDir.exists()) syncLogDir.mkdirs()
-            val logFile = File(syncLogDir, "sync_error.log")
+            val logFile = File(logDir, "${vaultName}_sync_error.log")
             val engine = SyncEngine(
                 webdavClient = webdavClient,
                 vaultDir = vaultDir,
@@ -194,22 +187,10 @@ class CloudPaneController(
                 },
                 onComplete = { success, error ->
                     if (!success && error != null) {
-                        // 写入错误日志
-                        try {
-                            val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-                            logFile.appendText("════════════════════════════════════════\n时间: $timestamp\n路径: $relativePath\n错误: $error\n\n")
-                        } catch (_: Exception) {}
-                        // 刷新列表（显示 PAUSED 状态），再设置错误信息
-                        scope.launch {
-                            val entries = withContext(Dispatchers.IO) {
-                                listLocalFiles(state.currentPath)
-                            }
-                            state.entries = entries
-                            state.loadError = IllegalStateException(error)
-                        }
-                    } else {
-                        navigateTo(state.currentPath)
+                        state.loadError = IllegalStateException(error)
                     }
+                    // 用 refreshCurrentEntry 替代 navigateTo，避免清除 loadError
+                    refreshCurrentEntry(relativePath)
                 }
             )
         }
@@ -287,9 +268,7 @@ class CloudPaneController(
         syncJob?.cancel()
         syncJob = scope.launch {
             val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
-            val syncLogDir = File(logDir, vaultName)
-            if (!syncLogDir.exists()) syncLogDir.mkdirs()
-            val logFile = File(syncLogDir, "sync_error.log")
+            val logFile = File(logDir, "${vaultName}_sync_error.log")
             val engine = SyncEngine(
                 webdavClient = webdavClient,
                 vaultDir = vaultDir,

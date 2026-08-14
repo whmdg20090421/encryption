@@ -440,14 +440,19 @@ class SyncEngine(
         }
     }
 
-    /** 确保远程目录存在 */
+    /** 确保远程目录存在，失败时抛出异常 */
     private suspend fun ensureRemoteDir(basePath: String, relativePath: String) = withContext(Dispatchers.IO) {
         val parts = relativePath.trimStart('/').split('/')
         if (parts.size <= 1) return@withContext
         var current = basePath.trimEnd('/')
         for (i in 0 until parts.size - 1) {
             current = "$current/${parts[i]}"
-            try { webdavClient.mkdir(current) } catch (_: Exception) {}
+            try {
+                webdavClient.mkdir(current)
+            } catch (e: Exception) {
+                // MKCOL 已存在目录可能返回 405，忽略；其他错误记录但继续
+                logError("创建远程目录", current, current, e)
+            }
         }
     }
 
