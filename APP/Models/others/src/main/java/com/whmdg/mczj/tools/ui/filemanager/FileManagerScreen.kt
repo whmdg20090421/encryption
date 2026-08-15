@@ -5007,7 +5007,8 @@ private fun FileEntryRow(
     folderSize: String = "",
     extFlags: String = "",
     thumbnail: ImageBitmap? = null,
-    fileNameFontSize: Float = 12f
+    fileNameFontSize: Float = 12f,
+    cloudExtra: (@Composable () -> Unit)? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -5026,7 +5027,7 @@ private fun FileEntryRow(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 60.dp)
+                .then(if (cloudExtra != null) Modifier.height(60.dp) else Modifier.heightIn(min = 60.dp))
                 .offset { IntOffset(swipeOffset.value.roundToInt(), 0) }
                 .pointerInput(Unit) {
                     awaitEachGesture {
@@ -5090,144 +5091,122 @@ private fun FileEntryRow(
                 .combinedClickable(onClick = onClick, onLongClick = onLongClick)
                 .padding(horizontal = 16.dp)
         ) {
-            Spacer(modifier = Modifier.weight(0.5f))
-            Column(modifier = Modifier.weight(9f)) {
-            // Top 7/10: icon (left 1/5) + filename (right 4/5)
-            Row(modifier = Modifier.weight(7f).fillMaxHeight()) {
-                Box(
-                    modifier = Modifier.weight(1f).fillMaxHeight(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    val ext = extractExtension(entry.name)
-                    val category = categorizeFile(ext)
-                    val isImageFile = category == FileCategory.IMAGE && !entry.isDirectory
-                        && entry.name != "返回上一级"
+            // 文件内容（icon + filename + 底部信息）
+            val fileContent: @Composable ColumnScope.() -> Unit = {
+                Spacer(modifier = Modifier.weight(0.5f))
+                Column(modifier = Modifier.weight(9f)) {
+                Row(modifier = Modifier.weight(7f).fillMaxHeight()) {
+                    Box(
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val ext = extractExtension(entry.name)
+                        val category = categorizeFile(ext)
+                        val isImageFile = category == FileCategory.IMAGE && !entry.isDirectory
+                            && entry.name != "返回上一级"
 
-                    if (isImageFile) {
-                        if (thumbnail != null) {
-                            // 压缩包内图片：使用缓存的缩略图
-                            Image(
-                                painter = BitmapPainter(thumbnail),
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(RoundedCornerShape(4.dp)),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else {
-                            val imagePlaceholder = getFileTypeDrawableRes(category)
-                            val density = LocalDensity.current
-                            val px36 = with(density) { 36.dp.roundToPx() }
-                            AsyncImage(
-                                model = ImageRequest.Builder(context)
-                                    .data(entry.path)
-                                    .size(CoilSize(px36, px36))
-                                    .build(),
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(RoundedCornerShape(4.dp)),
-                                contentScale = ContentScale.Crop,
-                                placeholder = imagePlaceholder?.let { painterResource(it) },
-                                error = imagePlaceholder?.let { painterResource(it) }
-                            )
-                        }
-                    } else {
-                        val fileDrawableRes = if (!entry.isDirectory && entry.name != "返回上一级") {
-                            getFileTypeDrawableRes(category)
-                        } else null
-
-                        if (fileDrawableRes != null) {
-                            Icon(
-                                painter = painterResource(fileDrawableRes),
-                                contentDescription = null,
-                                modifier = Modifier.size(36.dp),
-                                tint = Color.Unspecified
-                            )
-                        } else if (!entry.isDirectory && entry.name != "返回上一级"
-                            && category == FileCategory.APK) {
-                            FileTypeIcon(
-                                filename = entry.name,
-                                filePath = entry.path,
-                                iconSize = 36.dp
-                            )
-                        } else {
-                            val appIconBitmap = if (entry.isDirectory && entry.name != "返回上一级") {
-                                val parentPath = File(entry.path).parent
-                                if (parentPath != null && AppIconHelper.isAppPackageDir(parentPath, entry.name)) {
-                                    AppIconHelper.getAppIconBitmap(context, entry.name)
-                                } else null
-                            } else null
-
-                            if (appIconBitmap != null) {
+                        if (isImageFile) {
+                            if (thumbnail != null) {
                                 Image(
-                                    painter = BitmapPainter(appIconBitmap),
+                                    painter = BitmapPainter(thumbnail),
                                     contentDescription = null,
-                                    modifier = Modifier.size(36.dp),
+                                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(4.dp)),
+                                    contentScale = ContentScale.Crop
                                 )
                             } else {
-                                Icon(
-                                    imageVector = when {
-                                        entry.name == "返回上一级" -> Icons.Default.ArrowUpward
-                                        entry.isDirectory -> Icons.Default.Folder
-                                        else -> Icons.Default.InsertDriveFile
-                                    },
+                                val imagePlaceholder = getFileTypeDrawableRes(category)
+                                val density = LocalDensity.current
+                                val px36 = with(density) { 36.dp.roundToPx() }
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context).data(entry.path).size(CoilSize(px36, px36)).build(),
                                     contentDescription = null,
-                                    modifier = Modifier.size(36.dp),
-                                    tint = if (isFocused) MaterialTheme.colorScheme.primary
-                                           else MaterialTheme.colorScheme.onSurfaceVariant
+                                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(4.dp)),
+                                    contentScale = ContentScale.Crop,
+                                    placeholder = imagePlaceholder?.let { painterResource(it) },
+                                    error = imagePlaceholder?.let { painterResource(it) }
                                 )
+                            }
+                        } else {
+                            val fileDrawableRes = if (!entry.isDirectory && entry.name != "返回上一级") {
+                                getFileTypeDrawableRes(category)
+                            } else null
+
+                            if (fileDrawableRes != null) {
+                                Icon(painter = painterResource(fileDrawableRes), contentDescription = null, modifier = Modifier.size(36.dp), tint = Color.Unspecified)
+                            } else if (!entry.isDirectory && entry.name != "返回上一级" && category == FileCategory.APK) {
+                                FileTypeIcon(filename = entry.name, filePath = entry.path, iconSize = 36.dp)
+                            } else {
+                                val appIconBitmap = if (entry.isDirectory && entry.name != "返回上一级") {
+                                    val parentPath = File(entry.path).parent
+                                    if (parentPath != null && AppIconHelper.isAppPackageDir(parentPath, entry.name)) {
+                                        AppIconHelper.getAppIconBitmap(context, entry.name)
+                                    } else null
+                                } else null
+
+                                if (appIconBitmap != null) {
+                                    Image(painter = BitmapPainter(appIconBitmap), contentDescription = null, modifier = Modifier.size(36.dp))
+                                } else {
+                                    Icon(
+                                        imageVector = when {
+                                            entry.name == "返回上一级" -> Icons.Default.ArrowUpward
+                                            entry.isDirectory -> Icons.Default.Folder
+                                            else -> Icons.Default.InsertDriveFile
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.size(36.dp),
+                                        tint = if (isFocused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                     }
-                }
-                Text(
-                    text = entry.name,
-                    modifier = Modifier.weight(4f),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    fontSize = fileNameFontSize.sp,
-                    lineHeight = fileNameFontSize.sp,
-                    textAlign = TextAlign.Center,
-                )
-            }
-            // Bottom 3/10: date/permission (left, aligned to icon left) + size (right, aligned to filename right)
-            Row(
-                modifier = Modifier.weight(3f).fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                val label = when {
-                    entry.isDirectory -> compactDate(entry.lastModified)
-                    entry.permission.isNotEmpty() -> {
-                        if (extFlags.isNotEmpty()) "${entry.permission} $extFlags"
-                        else entry.permission
-                    }
-                    extFlags.isNotEmpty() -> extFlags
-                    else -> ""
-                }
-                Text(
-                    text = label,
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                val rightLabel = when {
-                    entry.isDirectory -> folderSize.ifEmpty { "--" }
-                    !entry.isDirectory -> compactSize(entry.size)
-                    else -> ""
-                }
-                if (rightLabel.isNotEmpty()) {
                     Text(
-                        text = rightLabel,
-                        fontSize = 11.sp,
-                        color = if (rightLabel == "✕") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                        text = entry.name,
+                        modifier = Modifier.weight(4f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = fileNameFontSize.sp,
+                        lineHeight = fileNameFontSize.sp,
+                        textAlign = TextAlign.Center,
                     )
                 }
+                Row(
+                    modifier = Modifier.weight(3f).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
+                ) {
+                    val label = when {
+                        entry.isDirectory -> compactDate(entry.lastModified)
+                        entry.permission.isNotEmpty() -> {
+                            if (extFlags.isNotEmpty()) "${entry.permission} $extFlags" else entry.permission
+                        }
+                        extFlags.isNotEmpty() -> extFlags
+                        else -> ""
+                    }
+                    Text(text = label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val rightLabel = when {
+                        entry.isDirectory -> folderSize.ifEmpty { "--" }
+                        !entry.isDirectory -> compactSize(entry.size)
+                        else -> ""
+                    }
+                    if (rightLabel.isNotEmpty()) {
+                        Text(text = rightLabel, fontSize = 11.sp, color = if (rightLabel == "✕") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                } // inner Column (weight 9f)
+                Spacer(modifier = Modifier.weight(0.5f))
             }
-            } // inner Column (weight 9f)
-            Spacer(modifier = Modifier.weight(0.5f))
+
+            if (cloudExtra != null) {
+                // 云盘模式：原内容占 9/10，进度条占 1/10
+                Column(modifier = Modifier.weight(9f)) { fileContent() }
+                Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 1.dp)) {
+                    cloudExtra()
+                }
+            } else {
+                // 普通模式
+                fileContent()
+            }
         }
     }
 }
@@ -5589,104 +5568,51 @@ private fun CloudPanelContent(
             }
         } else {
             LazyColumn(modifier = Modifier.weight(1f)) {
-                // 返回上一级卡片（与 CloudFileItem 同布局，进度条位置留空）
+                // 返回上一级
                 if (parentPath != null) {
                     item(key = "__parent__") {
-                        CloudFileItem(
-                            entry = CloudPaneController.CloudFileEntry(
+                        FileEntryRow(
+                            entry = FileEntry(
+                                path = parentPath,
                                 name = "返回上一级",
-                                relativePath = parentPath,
-                                isDirectory = true,
-                                totalSize = 0,
-                                uploadedSize = 0,
-                                uploadingSize = 0
+                                isDirectory = true
                             ),
-                            isDarkMode = isDarkMode,
-                            onClick = onNavigateUp
+                            isFocused = isFocused,
+                            onClick = onNavigateUp,
+                            onLongClick = {}
                         )
                     }
                 }
-                items(cloudState.entries, key = { it.relativePath }) { entry ->
-                    CloudFileItem(
-                        entry = entry,
-                        isDarkMode = isDarkMode,
+                items(cloudState.entries, key = { it.relativePath }) { cloudEntry ->
+                    val fileEntry = FileEntry(
+                        path = cloudEntry.relativePath,
+                        name = cloudEntry.name,
+                        isDirectory = cloudEntry.isDirectory,
+                        size = cloudEntry.totalSize,
+                        lastModified = cloudEntry.lastModified
+                    )
+                    FileEntryRow(
+                        entry = fileEntry,
+                        isFocused = isFocused,
                         onClick = {
-                            if (entry.isDirectory) {
-                                onNavigateTo(entry.relativePath)
-                            }
+                            if (cloudEntry.isDirectory) onNavigateTo(cloudEntry.relativePath)
                         },
-                        onLongClick = {
-                            onLongClick(entry)
-                        }
+                        onLongClick = { onLongClick(cloudEntry) },
+                        cloudExtra = if (cloudEntry.totalSize > 0) {
+                            {
+                                SyncStatusBar(
+                                    totalSize = cloudEntry.totalSize,
+                                    uploadedSize = cloudEntry.uploadedSize,
+                                    uploadingSize = cloudEntry.uploadingSize
+                                )
+                            }
+                        } else null
                     )
                 }
             }
         }
     }
 
-}
-
-// ==================== 云盘文件项（带进度条） ====================
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun CloudFileItem(
-    entry: CloudPaneController.CloudFileEntry,
-    isDarkMode: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit = {}
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .height(60.dp)
-            .padding(horizontal = 16.dp)
-    ) {
-        // Top: icon + filename
-        Row(modifier = Modifier.weight(7f)) {
-            Box(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    if (entry.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
-                    contentDescription = null,
-                    modifier = Modifier.size(36.dp),
-                    tint = if (entry.isDirectory) MaterialTheme.colorScheme.primary
-                           else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Text(
-                text = entry.name,
-                modifier = Modifier.weight(4f).fillMaxHeight(),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                fontSize = 12.sp,
-                lineHeight = 12.sp,
-                textAlign = TextAlign.Center,
-            )
-        }
-        // Bottom: 大小（一行）+ 进度条（独立一行）
-        Column(
-            modifier = Modifier.weight(3f).fillMaxWidth(),
-            verticalArrangement = Arrangement.Center
-        ) {
-            if (entry.totalSize > 0) {
-                Text(
-                    text = FormatUtils.formatBytes(entry.totalSize),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                SyncStatusBar(
-                    totalSize = entry.totalSize,
-                    uploadedSize = entry.uploadedSize,
-                    uploadingSize = entry.uploadingSize
-                )
-            }
-        }
-    }
 }
 
 // ==================== 同步状态进度条（三色段） ====================
