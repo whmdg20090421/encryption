@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Warning
@@ -31,7 +32,8 @@ import kotlinx.coroutines.launch
 fun HookScreen(
     onBack: () -> Unit,
     onAppClick: (String) -> Unit,
-    onUsageTimeClick: () -> Unit = {}
+    onUsageTimeClick: () -> Unit = {},
+    onMemoryUsageClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val moduleActive = remember { XposedDetector.isModuleActive() }
@@ -261,6 +263,32 @@ fun HookScreen(
                         leadingContent = {
                             Icon(
                                 Icons.Default.Timer,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+                    )
+                }
+            }
+
+            // ── 内存占用查询 ──
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                    ),
+                    onClick = onMemoryUsageClick
+                ) {
+                    ListItem(
+                        headlineContent = { Text("内存占用查询") },
+                        supportingContent = { Text("查看各应用内存占用情况") },
+                        leadingContent = {
+                            Icon(
+                                Icons.Default.Memory,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary
                             )

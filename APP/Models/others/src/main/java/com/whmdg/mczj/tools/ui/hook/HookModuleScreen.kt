@@ -2,6 +2,7 @@ package com.whmdg.mczj.tools.ui.hook
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
+import com.whmdg.mczj.tools.ui.hook.内存管理.MemoryUsageScreen
 
 @Composable
 fun HookModuleScreen(
@@ -31,7 +32,8 @@ fun HookModuleScreen(
             HookScreen(
                 onBack = { navigateBack() },
                 onAppClick = { packageName -> navigateTo(HookRoute.Detail(packageName)) },
-                onUsageTimeClick = { navigateTo(HookRoute.UsageTime) }
+                onUsageTimeClick = { navigateTo(HookRoute.UsageTime) },
+                onMemoryUsageClick = { navigateTo(HookRoute.MemoryUsage) }
             )
         }
         is HookRoute.Detail -> {
@@ -42,6 +44,9 @@ fun HookModuleScreen(
         }
         is HookRoute.UsageTime -> {
             UsageTimeScreen(onBack = { navigateBack() })
+        }
+        is HookRoute.MemoryUsage -> {
+            MemoryUsageScreen(onBack = { navigateBack() })
         }
     }
 }

@@ -4,4 +4,5 @@ sealed class HookRoute {
     object Home : HookRoute()
     data class Detail(val packageName: String) : HookRoute()
     object UsageTime : HookRoute()
+    object MemoryUsage : HookRoute()
 }
