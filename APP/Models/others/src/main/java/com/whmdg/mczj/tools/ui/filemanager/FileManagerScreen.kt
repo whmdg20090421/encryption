@@ -291,6 +291,10 @@ fun FileManagerScreen(
     var showSortSizeRefreshDialog by remember { mutableStateOf(false) }
     var unmeasuredDirs by remember { mutableStateOf(listOf<FileEntry>()) }
     var selectedEntry by remember { mutableStateOf<FileEntry?>(null) }
+    var selectedCloudEntry by remember { mutableStateOf<CloudPaneController.CloudFileEntry?>(null) }
+    var showCloudDeleteDialog by remember { mutableStateOf(false) }
+    var cloudDeleteTarget by remember { mutableStateOf<CloudPaneController.CloudFileEntry?>(null) }
+    var cloudDeleteMode by remember { mutableIntStateOf(0) } // 0=全部, 1=仅本地, 2=仅云端
     // ── 多选状态（按面板索引：0=左, 1=右） ──
     val swipeStates = listOf(remember { SwipeUiState() }, remember { SwipeUiState() })
     val sortAscLabels = mapOf(
@@ -515,14 +519,19 @@ fun FileManagerScreen(
     fun unregisterOverlay(id: String) { overlayStack.removeAll { it.id == id } }
 
     // 各弹窗注册到 overlayStack（新增弹窗在此处加一组 DisposableEffect）
-    DisposableEffect(selectedEntry != null || hideToolbarForDelete) {
-        if (selectedEntry != null) registerOverlay("toolbar") { selectedEntry = null; hideToolbarForDelete = false }
+    DisposableEffect(selectedEntry != null || selectedCloudEntry != null || hideToolbarForDelete) {
+        if (selectedEntry != null || selectedCloudEntry != null) registerOverlay("toolbar") { selectedEntry = null; selectedCloudEntry = null; hideToolbarForDelete = false }
         else unregisterOverlay("toolbar")
         onDispose {}
     }
     DisposableEffect(showDeleteDialog) {
         if (showDeleteDialog) registerOverlay("delete") { showDeleteDialog = false; hideToolbarForDelete = false }
         else unregisterOverlay("delete")
+        onDispose {}
+    }
+    DisposableEffect(showCloudDeleteDialog) {
+        if (showCloudDeleteDialog) registerOverlay("cloudDelete") { showCloudDeleteDialog = false; cloudDeleteTarget = null }
+        else unregisterOverlay("cloudDelete")
         onDispose {}
     }
     DisposableEffect(showDeleteProgress) {
@@ -1173,7 +1182,8 @@ fun FileManagerScreen(
                                         onUpload = { path -> vm.panels.cloud?.uploadFile(path) },
                                         onDelete = { path -> vm.panels.cloud?.deleteBoth(path) },
                                         onDeleteLocal = { path -> vm.panels.cloud?.deleteLocal(path) },
-                                        onDeleteCloud = { path -> vm.panels.cloud?.deleteCloud(path) }
+                                        onDeleteCloud = { path -> vm.panels.cloud?.deleteCloud(path) },
+                                        onLongClick = { entry -> selectedCloudEntry = entry }
                                     )
                                 }
                                 // 右面板（普通模式）
@@ -1802,7 +1812,7 @@ fun FileManagerScreen(
 
             // ── 长按工具栏悬浮窗（带淡入淡出） ──
             AnimatedVisibility(
-                visible = selectedEntry != null && !hideToolbarForDelete,
+                visible = (selectedEntry != null || selectedCloudEntry != null) && !hideToolbarForDelete,
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
@@ -1819,6 +1829,7 @@ fun FileManagerScreen(
                             indication = null,
                             onClick = {
                                 selectedEntry = null
+                                selectedCloudEntry = null
                                 // 清空多选状态
                                 if (vm.focusedPanel == FocusedPanel.LEFT) {
                                     vm.左.selectedPaths = emptySet(); swipeStates[0].selectFlag = 0; swipeStates[0].lastIndex = -1
@@ -1930,6 +1941,96 @@ fun FileManagerScreen(
                                             )
                                             Spacer(Modifier.width(4.dp))
                                             Text("恢复到原位置", style = MaterialTheme.typography.bodyLarge)
+                                        }
+                                    }
+                                }
+                            } else if (vm.panels.isCloudMode) {
+                                // ── 云盘模式：上传 / 删除 / 仅删除本地 / 仅删除云端 ──
+                                val cloudEntry = selectedCloudEntry
+                                if (cloudEntry != null) {
+                                    // 第一行：上传 / 删除
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    vm.panels.cloud?.uploadFile(cloudEntry.relativePath)
+                                                    selectedCloudEntry = null
+                                                }
+                                                .padding(vertical = 16.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("上传", style = MaterialTheme.typography.bodyLarge)
+                                            }
+                                        }
+                                        VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    cloudDeleteTarget = cloudEntry
+                                                    cloudDeleteMode = 0
+                                                    showCloudDeleteDialog = true
+                                                    selectedCloudEntry = null
+                                                }
+                                                .padding(vertical = 16.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("删除", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
+                                            }
+                                        }
+                                    }
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                                    // 第二行：仅删除本地 / 仅删除云端
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    cloudDeleteTarget = cloudEntry
+                                                    cloudDeleteMode = 1
+                                                    showCloudDeleteDialog = true
+                                                    selectedCloudEntry = null
+                                                }
+                                                .padding(vertical = 16.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("仅删除本地", style = MaterialTheme.typography.bodyLarge)
+                                            }
+                                        }
+                                        VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    cloudDeleteTarget = cloudEntry
+                                                    cloudDeleteMode = 2
+                                                    showCloudDeleteDialog = true
+                                                    selectedCloudEntry = null
+                                                }
+                                                .padding(vertical = 16.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Default.CloudOff, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("仅删除云端", style = MaterialTheme.typography.bodyLarge)
+                                            }
                                         }
                                     }
                                 }
@@ -2224,6 +2325,46 @@ fun FileManagerScreen(
                 }
             }
         }
+    }
+
+    // ── 云盘删除确认对话框 ──
+    if (showCloudDeleteDialog && cloudDeleteTarget != null) {
+        val target = cloudDeleteTarget!!
+        val title = when (cloudDeleteMode) {
+            0 -> "删除"
+            1 -> "仅删除本地"
+            2 -> "仅删除云端"
+            else -> "删除"
+        }
+        val message = when (cloudDeleteMode) {
+            0 -> "确定删除「${target.name}」？本地和云端文件都将被删除。"
+            1 -> "确定删除「${target.name}」的本地文件？云端文件将保留。"
+            2 -> "确定删除「${target.name}」的云端文件？本地文件将保留。"
+            else -> ""
+        }
+        AlertDialog(
+            onDismissRequest = { showCloudDeleteDialog = false; cloudDeleteTarget = null },
+            title = { Text(title) },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = {
+                    when (cloudDeleteMode) {
+                        0 -> vm.panels.cloud?.deleteBoth(target.relativePath)
+                        1 -> vm.panels.cloud?.deleteLocal(target.relativePath)
+                        2 -> vm.panels.cloud?.deleteCloud(target.relativePath)
+                    }
+                    showCloudDeleteDialog = false
+                    cloudDeleteTarget = null
+                }) {
+                    Text("确定", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCloudDeleteDialog = false; cloudDeleteTarget = null }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 
     ErrorDialog(error = vm.loadError, onDismiss = {
@@ -5398,17 +5539,11 @@ private fun CloudPanelContent(
     onUpload: (String) -> Unit = {},
     onDelete: (String) -> Unit = {},
     onDeleteLocal: (String) -> Unit = {},
-    onDeleteCloud: (String) -> Unit = {}
+    onDeleteCloud: (String) -> Unit = {},
+    onLongClick: (CloudPaneController.CloudFileEntry) -> Unit = {}
 ) {
     val isDarkMode = LocalIsDarkMode.current
     val bgColor = if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC)
-
-    // 长按菜单状态
-    var selectedEntry by remember { mutableStateOf<CloudPaneController.CloudFileEntry?>(null) }
-    // 删除确认对话框状态
-    var showDeleteDialog by remember { mutableStateOf(false) }
-    var deleteTarget by remember { mutableStateOf<CloudPaneController.CloudFileEntry?>(null) }
-    var deleteMode by remember { mutableStateOf(0) } // 0=全部, 1=仅本地, 2=仅云端
 
     Column(
         modifier = Modifier
@@ -5481,7 +5616,7 @@ private fun CloudPanelContent(
                             }
                         },
                         onLongClick = {
-                            selectedEntry = entry
+                            onLongClick(entry)
                         }
                     )
                 }
@@ -5489,166 +5624,6 @@ private fun CloudPanelContent(
         }
     }
 
-    // ── 长按弹窗 ──
-    val entry = selectedEntry
-    if (entry != null) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = { selectedEntry = null }
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth(DialogWidthFraction)
-                    .wrapContentHeight(),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .wrapContentHeight()
-                ) {
-                    // 第一行：上传 / 删除
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 左列：上传
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable {
-                                    onUpload(entry.relativePath)
-                                    selectedEntry = null
-                                }
-                                .padding(vertical = 16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("上传", style = MaterialTheme.typography.bodyLarge)
-                            }
-                        }
-                        VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
-                        // 右列：删除
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable {
-                                    deleteTarget = entry
-                                    deleteMode = 0
-                                    showDeleteDialog = true
-                                    selectedEntry = null
-                                }
-                                .padding(vertical = 16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
-                                Spacer(Modifier.width(4.dp))
-                                Text("删除", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                    }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-                    // 第二行：仅删除本地 / 仅删除云端
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 左列：仅删除本地
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable {
-                                    deleteTarget = entry
-                                    deleteMode = 1
-                                    showDeleteDialog = true
-                                    selectedEntry = null
-                                }
-                                .padding(vertical = 16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("仅删除本地", style = MaterialTheme.typography.bodyLarge)
-                            }
-                        }
-                        VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
-                        // 右列：仅删除云端
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable {
-                                    deleteTarget = entry
-                                    deleteMode = 2
-                                    showDeleteDialog = true
-                                    selectedEntry = null
-                                }
-                                .padding(vertical = 16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.CloudOff, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("仅删除云端", style = MaterialTheme.typography.bodyLarge)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ── 删除确认对话框 ──
-    if (showDeleteDialog && deleteTarget != null) {
-        val target = deleteTarget!!
-        val title = when (deleteMode) {
-            0 -> "删除"
-            1 -> "仅删除本地"
-            2 -> "仅删除云端"
-            else -> "删除"
-        }
-        val message = when (deleteMode) {
-            0 -> "确定删除「${target.name}」？本地和云端文件都将被删除。"
-            1 -> "确定删除「${target.name}」的本地文件？云端文件将保留。"
-            2 -> "确定删除「${target.name}」的云端文件？本地文件将保留。"
-            else -> ""
-        }
-        AlertDialog(
-            onDismissRequest = { showDeleteDialog = false; deleteTarget = null },
-            title = { Text(title) },
-            text = { Text(message) },
-            confirmButton = {
-                TextButton(onClick = {
-                    when (deleteMode) {
-                        0 -> onDelete(target.relativePath)
-                        1 -> onDeleteLocal(target.relativePath)
-                        2 -> onDeleteCloud(target.relativePath)
-                    }
-                    showDeleteDialog = false
-                    deleteTarget = null
-                }) {
-                    Text("确定", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false; deleteTarget = null }) {
-                    Text("取消")
-                }
-            }
-        )
-    }
 }
 
 // ==================== 云盘文件项（带进度条） ====================
@@ -5692,11 +5667,10 @@ private fun CloudFileItem(
                 textAlign = TextAlign.Center,
             )
         }
-        // Bottom: 大小 + 进度条（totalSize=0 时留空，用于"返回上一级"占位）
-        Row(
+        // Bottom: 大小（一行）+ 进度条（独立一行）
+        Column(
             modifier = Modifier.weight(3f).fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.Center
         ) {
             if (entry.totalSize > 0) {
                 Text(
@@ -5704,13 +5678,12 @@ private fun CloudFileItem(
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Box(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
-                    SyncStatusBar(
-                        totalSize = entry.totalSize,
-                        uploadedSize = entry.uploadedSize,
-                        uploadingSize = entry.uploadingSize
-                    )
-                }
+                Spacer(modifier = Modifier.height(2.dp))
+                SyncStatusBar(
+                    totalSize = entry.totalSize,
+                    uploadedSize = entry.uploadedSize,
+                    uploadingSize = entry.uploadingSize
+                )
             }
         }
     }
@@ -5724,18 +5697,21 @@ private fun SyncStatusBar(
     uploadedSize: Long,
     uploadingSize: Long
 ) {
-    val fraction = if (totalSize > 0) uploadedSize.toFloat() / totalSize else 0f
-    val uploadFraction = if (totalSize > 0) uploadingSize.toFloat() / totalSize else 0f
-    val color = when {
-        fraction >= 1f -> Color(0xFF4CAF50)   // 绿：全部完成
-        fraction > 0f || uploadFraction > 0f -> Color(0xFFFFC107) // 黄：部分上传
-        else -> Color(0xFFE57373)               // 红：未上传
-    }
-    Box(
+    val remaining = totalSize - uploadedSize - uploadingSize
+    // 任何一段占比 < 1% 时，强制显示为 1% 宽度
+    val minWeight = totalSize * 0.01f
+    val greenW = if (uploadedSize > 0) maxOf(uploadedSize.toFloat(), minWeight) else 0f
+    val yellowW = if (uploadingSize > 0) maxOf(uploadingSize.toFloat(), minWeight) else 0f
+    val redW = if (remaining > 0) maxOf(remaining.toFloat(), minWeight) else 0f
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(3.dp)
             .clip(RoundedCornerShape(1.5.dp))
-            .background(color)
-    )
+    ) {
+        if (greenW > 0f) Box(Modifier.weight(greenW).fillMaxHeight().background(Color(0xFF4CAF50)))
+        if (yellowW > 0f) Box(Modifier.weight(yellowW).fillMaxHeight().background(Color(0xFFFFC107)))
+        if (redW > 0f) Box(Modifier.weight(redW).fillMaxHeight().background(Color(0xFFE57373)))
+        if (totalSize <= 0L) Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE57373)))
+    }
 }

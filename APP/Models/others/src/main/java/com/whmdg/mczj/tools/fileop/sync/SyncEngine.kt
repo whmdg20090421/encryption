@@ -268,10 +268,12 @@ class SyncEngine(
     ) = withContext(Dispatchers.IO) {
         val localFile = File(vaultDir, relativePath.trimStart('/'))
 
-        // 边界检查：文件不存在
+        // 边界检查：文件不存在或是目录
         if (!localFile.exists() || !localFile.isFile) {
-            syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, "本地文件已删除")
-            onComplete(false, "本地文件已删除")
+            val reason = if (localFile.isDirectory) "目标是文件夹，不是文件" else "本地文件已删除"
+            CloudSyncLogger.logSync("SyncEngine", "跳过: $relativePath - $reason")
+            syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
+            onComplete(false, reason)
             return@withContext
         }
 
@@ -336,6 +338,8 @@ class SyncEngine(
             try {
                 webdavClient.uploadFile(localFile, remotePath) { bytesWritten ->
                     onProgress(bytesWritten, fileSize)
+                    // 实时写入 DB，供文件夹进度条聚合
+                    try { syncDb.updateUploadedSize("local_entries", relativePath, bytesWritten) } catch (_: Exception) {}
                 }
                 uploadSuccess = true
                 break

@@ -18,7 +18,7 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
     SQLiteOpenHelper(context, dbPath, null, DB_VERSION) {
 
     companion object {
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 2
         private const val TAG = "SyncDatabase"
 
         private val instances = mutableMapOf<String, SyncDatabase>()
@@ -49,6 +49,7 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
             CREATE TABLE local_entries (
                 path          TEXT PRIMARY KEY,
                 size          INTEGER NOT NULL,
+                uploaded_size INTEGER NOT NULL DEFAULT 0,
                 last_modified TEXT NOT NULL,
                 md5           TEXT,
                 cloud_hash    TEXT,
@@ -76,7 +77,11 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // 未来版本升级时在此处理
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE local_entries ADD COLUMN uploaded_size INTEGER NOT NULL DEFAULT 0")
+            // 已完成的文件，uploaded_size = size
+            db.execSQL("UPDATE local_entries SET uploaded_size = size WHERE status = 'COMPLETED'")
+        }
     }
 
     // ── 查询 ──
@@ -162,8 +167,16 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
         val values = ContentValues().apply {
             put("status", status.name)
             put("fail_reason", failReason)
-            if (status == SyncStatus.COMPLETED) {
-                put("last_sync_time", java.time.Instant.now().toString())
+            when (status) {
+                SyncStatus.COMPLETED -> {
+                    put("last_sync_time", java.time.Instant.now().toString())
+                    // 完成时 uploaded_size = size
+                    db.execSQL("UPDATE $table SET uploaded_size = size WHERE path = ?", arrayOf(path))
+                }
+                SyncStatus.UPLOADING -> {
+                    put("uploaded_size", 0)
+                }
+                else -> {}
             }
         }
         db.update(table, values, "path = ?", arrayOf(path))
@@ -197,6 +210,23 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
     fun updateCloudHash(table: String, path: String, cloudHash: String) {
         val db = writableDatabase
         val values = ContentValues().apply { put("cloud_hash", cloudHash) }
+        db.update(table, values, "path = ?", arrayOf(path))
+    }
+
+    /** 重置所有 UPLOADING 状态为 PENDING（中断恢复用，WebDAV 不支持断点续传） */
+    fun resetUploadingToPending(table: String) {
+        val db = writableDatabase
+        val values = ContentValues().apply {
+            put("status", SyncStatus.PENDING.name)
+            put("uploaded_size", 0)
+            put("fail_reason", null)
+        }
+        db.update(table, values, "status = ?", arrayOf(SyncStatus.UPLOADING.name))
+    }
+
+    fun updateUploadedSize(table: String, path: String, uploadedSize: Long) {
+        val db = writableDatabase
+        val values = ContentValues().apply { put("uploaded_size", uploadedSize) }
         db.update(table, values, "path = ?", arrayOf(path))
     }
 
@@ -277,9 +307,11 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
     // ── 内部工具 ──
 
     private fun cursorToRow(cursor: android.database.Cursor): SyncEntryRow {
+        val sizeIdx = cursor.getColumnIndex("uploaded_size")
         return SyncEntryRow(
             path = cursor.getString(cursor.getColumnIndexOrThrow("path")),
             size = cursor.getLong(cursor.getColumnIndexOrThrow("size")),
+            uploadedSize = if (sizeIdx >= 0) cursor.getLong(sizeIdx) else 0L,
             lastModified = cursor.getString(cursor.getColumnIndexOrThrow("last_modified")),
             md5 = cursor.getString(cursor.getColumnIndexOrThrow("md5")),
             cloudHash = cursor.getString(cursor.getColumnIndexOrThrow("cloud_hash")),
@@ -293,6 +325,7 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
         return ContentValues().apply {
             put("path", entry.path)
             put("size", entry.size)
+            put("uploaded_size", entry.uploadedSize)
             put("last_modified", entry.lastModified)
             put("md5", entry.md5)
             put("cloud_hash", entry.cloudHash)
@@ -307,6 +340,7 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
 data class SyncEntryRow(
     val path: String,
     val size: Long,
+    val uploadedSize: Long = 0,  // 已上传字节数（仅 local_entries 使用）
     val lastModified: String,    // ISO8601
     val md5: String?,            // 本地表：上传过程中异步计算，初始为 NULL；云端表：必填
     val cloudHash: String?,      // 云端返回的内部编码（唯一性）
