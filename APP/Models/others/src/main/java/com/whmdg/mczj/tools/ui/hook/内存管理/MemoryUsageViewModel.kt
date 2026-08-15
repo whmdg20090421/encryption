@@ -1,6 +1,7 @@
 package com.whmdg.mczj.tools.ui.hook.内存管理
 
 import android.app.Application
+import android.content.pm.PackageManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.whmdg.mczj.tools.security.Permission
@@ -15,6 +16,7 @@ import kotlinx.coroutines.withContext
 
 data class MemoryProcessInfo(
     val processName: String,
+    val displayName: String,
     val pssKb: Long,
     val isSystem: Boolean
 )
@@ -26,6 +28,14 @@ data class KernelMemoryBreakdown(
     val cmaUsedKb: Long,
     val pageTablesKb: Long,
     val dmaBufKb: Long,
+    val gpuKb: Long,
+    val totalKb: Long    // 来自 dumpsys "Used RAM" 行的 kernel 值
+)
+
+data class CacheInfo(
+    val buffersKb: Long,
+    val cachedKb: Long,
+    val swapCachedKb: Long,
     val totalKb: Long
 )
 
@@ -35,15 +45,15 @@ data class MemoryUsageUiState(
     val totalRamKb: Long = 0,
     val memAvailableKb: Long = 0,
     val realUsedKb: Long = 0,
-    val kernelBreakdown: KernelMemoryBreakdown? = null,
-    val fileCacheKb: Long = 0,
+    val kernelInfo: KernelMemoryBreakdown? = null,
+    val cacheInfo: CacheInfo? = null,
     val processList: List<MemoryProcessInfo> = emptyList(),
-    val queriedTotalKb: Long = 0,
     val error: String? = null
 )
 
 class MemoryUsageViewModel(application: Application) : AndroidViewModel(application) {
 
+    private val packageManager: PackageManager = application.packageManager
     private val _uiState = MutableStateFlow(MemoryUsageUiState())
     val uiState: StateFlow<MemoryUsageUiState> = _uiState.asStateFlow()
 
@@ -73,56 +83,72 @@ class MemoryUsageViewModel(application: Application) : AndroidViewModel(applicat
 
     fun loadMemoryInfo() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
-
-            try {
-                val memInfoData = withContext(Dispatchers.IO) {
-                    parseProcMeminfo()
-                }
-
-                val dumpsysResult = withContext(Dispatchers.IO) {
-                    parseDumpsysMeminfo()
-                }
-
-                // 补充 DMA-BUF 到内核 breakdown
-                val kernel = memInfoData.kernelBreakdown.copy(
-                    dmaBufKb = dumpsysResult.dmaBufTotalKb,
-                    totalKb = memInfoData.kernelBreakdown.totalKb + dumpsysResult.dmaBufTotalKb
-                )
-
-                val processPssTotal = dumpsysResult.processes.sumOf { it.pssKb }
-                val fileCache = memInfoData.fileCacheKb
-                val queriedTotal = processPssTotal + kernel.totalKb + fileCache
-
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    totalRamKb = memInfoData.totalRamKb,
-                    memAvailableKb = memInfoData.memAvailableKb,
-                    realUsedKb = memInfoData.realUsedKb,
-                    kernelBreakdown = kernel,
-                    fileCacheKb = fileCache,
-                    processList = dumpsysResult.processes,
-                    queriedTotalKb = queriedTotal,
-                    error = null
-                )
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    error = "加载失败: ${e.message}"
-                )
-            }
+            loadMemoryInfoSync()
         }
     }
 
-    private data class MemInfoResult(
-        val totalRamKb: Long,
-        val memAvailableKb: Long,
-        val realUsedKb: Long,
-        val kernelBreakdown: KernelMemoryBreakdown,
-        val fileCacheKb: Long
+    fun clearCache(onComplete: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val success = withContext(Dispatchers.IO) {
+                try {
+                    ShellExecutor.execute(Permission.ROOT, "sync && echo 3 > /proc/sys/vm/drop_caches")
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            if (success) {
+                loadMemoryInfoSync()
+            }
+            onComplete(success)
+        }
+    }
+
+    private suspend fun loadMemoryInfoSync() {
+        _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+        try {
+            val memInfoData = withContext(Dispatchers.IO) { parseProcMeminfo() }
+            val dumpsysResult = withContext(Dispatchers.IO) { parseDumpsysMeminfo() }
+
+            val kernel = KernelMemoryBreakdown(
+                sUnreclaimKb = memInfoData.sUnreclaim,
+                kernelStackKb = memInfoData.kernelStack,
+                vmallocUsedKb = memInfoData.vmallocUsed,
+                cmaUsedKb = memInfoData.cmaUsed,
+                pageTablesKb = memInfoData.pageTables,
+                dmaBufKb = dumpsysResult.dmaBufTotalKb,
+                gpuKb = dumpsysResult.gpuKb,
+                totalKb = dumpsysResult.kernelTotalKb
+            )
+
+            _uiState.value = _uiState.value.copy(
+                isLoading = false,
+                totalRamKb = memInfoData.totalRam,
+                memAvailableKb = memInfoData.memAvailable,
+                realUsedKb = memInfoData.realUsed,
+                kernelInfo = kernel,
+                cacheInfo = memInfoData.cacheInfo,
+                processList = dumpsysResult.processes,
+                error = null
+            )
+        } catch (e: Exception) {
+            _uiState.value = _uiState.value.copy(isLoading = false, error = "加载失败: ${e.message}")
+        }
+    }
+
+    private data class ProcMeminfoResult(
+        val totalRam: Long,
+        val memAvailable: Long,
+        val realUsed: Long,
+        val sUnreclaim: Long,
+        val kernelStack: Long,
+        val vmallocUsed: Long,
+        val cmaUsed: Long,
+        val pageTables: Long,
+        val cacheInfo: CacheInfo
     )
 
-    private fun parseProcMeminfo(): MemInfoResult {
+    private fun parseProcMeminfo(): ProcMeminfoResult {
         val output = ShellExecutor.execute(Permission.ROOT, "cat /proc/meminfo")
 
         val fields = mutableMapOf<String, Long>()
@@ -139,44 +165,35 @@ class MemoryUsageViewModel(application: Application) : AndroidViewModel(applicat
 
         val totalRam = fields["MemTotal"] ?: 0L
         val memAvailable = fields["MemAvailable"] ?: 0L
-        val realUsed = totalRam - memAvailable
-
-        val sUnreclaim = fields["SUnreclaim"] ?: 0L
-        val kernelStack = fields["KernelStack"] ?: 0L
-        val vmallocUsed = fields["VmallocUsed"] ?: 0L
-        val cmaTotal = fields["CmaTotal"] ?: 0L
-        val cmaFree = fields["CmaFree"] ?: 0L
-        val cmaUsed = cmaTotal - cmaFree
-        val pageTables = fields["PageTables"] ?: 0L
-
-        // DMA-BUF 在 parseDumpsysMeminfo 中获取，此处先设 0
-        val kernelTotal = sUnreclaim + kernelStack + vmallocUsed + cmaUsed + pageTables
-
         val buffers = fields["Buffers"] ?: 0L
         val cached = fields["Cached"] ?: 0L
         val swapCached = fields["SwapCached"] ?: 0L
-        val fileCache = buffers + cached + swapCached
+        val cmaTotal = fields["CmaTotal"] ?: 0L
+        val cmaFree = fields["CmaFree"] ?: 0L
 
-        return MemInfoResult(
-            totalRamKb = totalRam,
-            memAvailableKb = memAvailable,
-            realUsedKb = realUsed,
-            kernelBreakdown = KernelMemoryBreakdown(
-                sUnreclaimKb = sUnreclaim,
-                kernelStackKb = kernelStack,
-                vmallocUsedKb = vmallocUsed,
-                cmaUsedKb = cmaUsed,
-                pageTablesKb = pageTables,
-                dmaBufKb = 0L, // 在 parseDumpsysMeminfo 中补充
-                totalKb = kernelTotal
-            ),
-            fileCacheKb = fileCache
+        return ProcMeminfoResult(
+            totalRam = totalRam,
+            memAvailable = memAvailable,
+            realUsed = totalRam - memAvailable,
+            sUnreclaim = fields["SUnreclaim"] ?: 0L,
+            kernelStack = fields["KernelStack"] ?: 0L,
+            vmallocUsed = fields["VmallocUsed"] ?: 0L,
+            cmaUsed = cmaTotal - cmaFree,
+            pageTables = fields["PageTables"] ?: 0L,
+            cacheInfo = CacheInfo(
+                buffersKb = buffers,
+                cachedKb = cached,
+                swapCachedKb = swapCached,
+                totalKb = buffers + cached + swapCached
+            )
         )
     }
 
     private data class DumpsysResult(
         val processes: List<MemoryProcessInfo>,
-        val dmaBufTotalKb: Long
+        val dmaBufTotalKb: Long,
+        val gpuKb: Long,
+        val kernelTotalKb: Long
     )
 
     private fun parseDumpsysMeminfo(): DumpsysResult {
@@ -184,28 +201,38 @@ class MemoryUsageViewModel(application: Application) : AndroidViewModel(applicat
 
         val processes = mutableListOf<MemoryProcessInfo>()
         var dmaBufTotalKb = 0L
+        var gpuKb = 0L
+        var kernelTotalKb = 0L
         var inProcessSection = false
-        var inDmaBufSection = false
 
         for (line in output.lines()) {
             val trimmed = line.trim()
 
-            // 解析 Total PSS by process 段
             if (trimmed.startsWith("Total PSS by process:")) {
                 inProcessSection = true
-                inDmaBufSection = false
                 continue
             }
 
-            // 解析 DMA-BUF 段
-            if (trimmed.startsWith("DMA-BUF:") || trimmed.startsWith("Total DMA-BUF")) {
-                inDmaBufSection = true
-                inProcessSection = false
-                // 如果是 "DMA-BUF: TOTAL" 行，直接提取
-                val totalMatch = Regex("""TOTAL:\s*([\d,]+)""").find(trimmed)
-                if (totalMatch != null) {
-                    dmaBufTotalKb = totalMatch.groupValues[1].replace(",", "").toLongOrNull() ?: 0L
-                    inDmaBufSection = false
+            if (trimmed.startsWith("DMA-BUF:") && !trimmed.startsWith("DMA-BUF Heaps")) {
+                val match = Regex("""DMA-BUF:\s*([\d,]+)K""").find(trimmed)
+                if (match != null) {
+                    dmaBufTotalKb = match.groupValues[1].replace(",", "").toLongOrNull() ?: 0L
+                }
+                continue
+            }
+
+            if (trimmed.startsWith("GPU:")) {
+                val match = Regex("""GPU:\s*([\d,]+)K""").find(trimmed)
+                if (match != null) {
+                    gpuKb = match.groupValues[1].replace(",", "").toLongOrNull() ?: 0L
+                }
+                continue
+            }
+
+            if (trimmed.startsWith("Used RAM:")) {
+                val match = Regex("""([\d,]+)K kernel""").find(trimmed)
+                if (match != null) {
+                    kernelTotalKb = match.groupValues[1].replace(",", "").toLongOrNull() ?: 0L
                 }
                 continue
             }
@@ -221,9 +248,22 @@ class MemoryUsageViewModel(application: Application) : AndroidViewModel(applicat
                         val processName = match.groupValues[2]
                         val isSystem = !processName.contains(".") && !processName.contains(":")
 
+                        val displayName = if (!isSystem) {
+                            val pkgName = processName.substringBefore(":")
+                            try {
+                                val appInfo = packageManager.getApplicationInfo(pkgName, 0)
+                                packageManager.getApplicationLabel(appInfo).toString()
+                            } catch (_: PackageManager.NameNotFoundException) {
+                                processName
+                            }
+                        } else {
+                            processName
+                        }
+
                         processes.add(
                             MemoryProcessInfo(
                                 processName = processName,
+                                displayName = displayName,
                                 pssKb = pssKb,
                                 isSystem = isSystem
                             )
@@ -231,30 +271,55 @@ class MemoryUsageViewModel(application: Application) : AndroidViewModel(applicat
                     }
                 }
             }
-
-            if (inDmaBufSection) {
-                // 尝试匹配 "TOTAL: 数字" 行
-                val totalMatch = Regex("""TOTAL:\s*([\d,]+)""").find(trimmed)
-                if (totalMatch != null) {
-                    dmaBufTotalKb = totalMatch.groupValues[1].replace(",", "").toLongOrNull() ?: 0L
-                    inDmaBufSection = false
-                }
-                // 也尝试匹配 "Total: 数字 KB" 格式
-                val totalMatch2 = Regex("""Total:\s*([\d,]+)\s*KB""").find(trimmed)
-                if (totalMatch2 != null && dmaBufTotalKb == 0L) {
-                    dmaBufTotalKb = totalMatch2.groupValues[1].replace(",", "").toLongOrNull() ?: 0L
-                    inDmaBufSection = false
-                }
-            }
         }
 
         return DumpsysResult(
             processes = processes.sortedByDescending { it.pssKb },
-            dmaBufTotalKb = dmaBufTotalKb
+            dmaBufTotalKb = dmaBufTotalKb,
+            gpuKb = gpuKb,
+            kernelTotalKb = kernelTotalKb
         )
     }
 
-    fun onResume() {
-        checkRootAndLoad()
+    fun buildCopyText(): String {
+        val state = _uiState.value
+        val sb = StringBuilder()
+        sb.appendLine("=== 内存占用查询 ===")
+        sb.appendLine()
+        sb.appendLine("--- 系统总览 ---")
+        sb.appendLine("总内存: ${state.totalRamKb} KB")
+        sb.appendLine("可用: ${state.memAvailableKb} KB")
+        sb.appendLine("已用: ${state.realUsedKb} KB")
+        sb.appendLine()
+
+        sb.appendLine("--- 内核 (dumpsys kernel) ---")
+        sb.appendLine("总计: ${state.kernelInfo?.totalKb ?: 0} KB")
+        state.kernelInfo?.let {
+            sb.appendLine("  SUnreclaim: ${it.sUnreclaimKb} KB")
+            sb.appendLine("  KernelStack: ${it.kernelStackKb} KB")
+            sb.appendLine("  VmallocUsed: ${it.vmallocUsedKb} KB")
+            sb.appendLine("  CMA 已用: ${it.cmaUsedKb} KB")
+            sb.appendLine("  PageTables: ${it.pageTablesKb} KB")
+            sb.appendLine("  DMA-BUF: ${it.dmaBufKb} KB")
+            sb.appendLine("  GPU: ${it.gpuKb} KB")
+        }
+        sb.appendLine()
+
+        sb.appendLine("--- 可清理缓存 ---")
+        state.cacheInfo?.let {
+            sb.appendLine("总计: ${it.totalKb} KB")
+            sb.appendLine("  Buffers: ${it.buffersKb} KB")
+            sb.appendLine("  Cached: ${it.cachedKb} KB")
+            sb.appendLine("  SwapCached: ${it.swapCachedKb} KB")
+        }
+        sb.appendLine()
+
+        sb.appendLine("--- 进程 PSS (dumpsys meminfo) ---")
+        sb.appendLine("进程数: ${state.processList.size}")
+        state.processList.forEach {
+            sb.appendLine("  ${it.pssKb} KB  ${it.processName}  (${it.displayName})")
+        }
+
+        return sb.toString()
     }
 }
