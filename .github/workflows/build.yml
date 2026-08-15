@@ -157,7 +157,12 @@ jobs:
           KEY_ALIAS:         ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
         run: |
-          ./gradlew :APP:app:assembleRelease --build-cache --stacktrace -w
+          ./gradlew :APP:app:assembleRelease --build-cache -q > /tmp/build.log 2>&1 || {
+            echo "::error::编译失败，以下是错误日志："
+            tail -80 /tmp/build.log
+            exit 1
+          }
+          echo "编译成功"
 
       - name: Locate APK
         id: locate
