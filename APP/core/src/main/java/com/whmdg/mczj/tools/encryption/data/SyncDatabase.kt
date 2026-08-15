@@ -219,7 +219,7 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
         val values = ContentValues().apply {
             put("status", SyncStatus.PENDING.name)
             put("uploaded_size", 0)
-            put("fail_reason", null)
+            put("fail_reason", null as String?)
         }
         db.update(table, values, "status = ?", arrayOf(SyncStatus.UPLOADING.name))
     }
