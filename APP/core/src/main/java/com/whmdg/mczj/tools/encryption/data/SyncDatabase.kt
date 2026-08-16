@@ -18,7 +18,7 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
     SQLiteOpenHelper(context, dbPath, null, DB_VERSION) {
 
     companion object {
-        private const val DB_VERSION = 2
+        private const val DB_VERSION = 3
         private const val TAG = "SyncDatabase"
 
         private val instances = mutableMapOf<String, SyncDatabase>()
@@ -63,6 +63,7 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
             CREATE TABLE cloud_entries (
                 path          TEXT PRIMARY KEY,
                 size          INTEGER NOT NULL,
+                uploaded_size INTEGER NOT NULL DEFAULT 0,
                 last_modified TEXT NOT NULL,
                 md5           TEXT NOT NULL,
                 cloud_hash    TEXT,
@@ -81,6 +82,10 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
             db.execSQL("ALTER TABLE local_entries ADD COLUMN uploaded_size INTEGER NOT NULL DEFAULT 0")
             // 已完成的文件，uploaded_size = size
             db.execSQL("UPDATE local_entries SET uploaded_size = size WHERE status = 'COMPLETED'")
+        }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE cloud_entries ADD COLUMN uploaded_size INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("UPDATE cloud_entries SET uploaded_size = size WHERE status = 'COMPLETED'")
         }
     }
 

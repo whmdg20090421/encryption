@@ -7,6 +7,7 @@ import androidx.compose.runtime.setValue
 import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
 import com.whmdg.mczj.tools.encryption.data.SyncStatus
+import com.whmdg.mczj.tools.encryption.data.UploadStatus
 import com.whmdg.mczj.tools.encryption.data.VaultSyncIndex
 import com.whmdg.mczj.tools.fileop.sync.SyncEngine
 import com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
@@ -171,28 +172,22 @@ class CloudPaneController(
 
         // 标记为 QUEUED
         syncDb.updateStatus("local_entries", relativePath, SyncStatus.QUEUED)
-        refreshCurrentEntry(relativePath)
+        updateSingleEntry(relativePath)
 
         // 启动上传
         syncJob?.cancel()
         syncJob = scope.launch {
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val logFileName = "${vaultName}_upload_${timestamp}.log"
-            // 内部存储日志
             val internalLogDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
             val internalLogFile = File(internalLogDir, logFileName)
-            // 外部存储日志
             val externalLogDir = context.getExternalFilesDir(null)?.let { File(it, "Android_tools/云盘") }
             val externalLogFile = externalLogDir?.let { File(it, logFileName) }
             val engine = SyncEngine(
                 webdavClient = webdavClient,
                 vaultDir = vaultDir,
-                onProgress = { taskState ->
-                    state.syncTask = taskState
-                },
-                onFileComplete = { path, success ->
-                    refreshCurrentEntry(path)
-                },
+                onProgress = { _ -> },
+                onFileComplete = { _, _ -> },
                 logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
             engine.uploadSingleFile(
@@ -200,18 +195,31 @@ class CloudPaneController(
                 remoteBasePath = remoteBasePath,
                 syncDb = syncDb,
                 onProgress = { uploadedBytes, totalBytes ->
-                    // 进度通过 onProgress 回调更新
+                    // 更新内存中的文件进度，供 updateSingleEntry 读取
+                    val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                    currentProgress[relativePath] = SyncFileProgress(
+                        relativePath = relativePath,
+                        totalBytes = totalBytes,
+                        uploadedBytes = uploadedBytes,
+                        status = UploadStatus.UPLOADING
+                    )
+                    state.syncTask = state.syncTask.copy(fileProgress = currentProgress)
+                    updateSingleEntry(relativePath)
                 },
                 onComplete = { success, error ->
                     scope.launch {
+                        // 清理内存进度
+                        val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                        currentProgress.remove(relativePath)
+                        state.syncTask = state.syncTask.copy(fileProgress = currentProgress)
                         if (!success && error != null) {
                             android.widget.Toast.makeText(context, "上传失败: $error，请查看日志", android.widget.Toast.LENGTH_LONG).show()
                         }
-                        navigateTo(state.currentPath)
+                        updateSingleEntry(relativePath)
                     }
                 },
                 onStatusChange = {
-                    scope.launch { navigateTo(state.currentPath) }
+                    scope.launch { updateSingleEntry(relativePath) }
                 }
             )
         }
@@ -266,9 +274,16 @@ class CloudPaneController(
             val engine = SyncEngine(
                 webdavClient = webdavClient,
                 vaultDir = vaultDir,
-                onProgress = { state.syncTask = it },
+                onProgress = { _ -> },
                 onFileComplete = { _, _ -> },
                 logFiles = listOfNotNull(internalLogFile, externalLogFile)
+            )
+
+            // 更新顶部同步状态栏
+            state.syncTask = SyncTaskState(
+                phase = SyncPhase.SYNCING,
+                totalFiles = files.size,
+                totalBytes = files.sumOf { it.length() }
             )
 
             // ④ 逐个上传
@@ -283,20 +298,44 @@ class CloudPaneController(
                     relativePath = relPath,
                     remoteBasePath = remoteBasePath,
                     syncDb = syncDb,
-                    onProgress = { _, _ -> },
+                    onProgress = { uploadedBytes, totalBytes ->
+                        val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                        currentProgress[relPath] = SyncFileProgress(
+                            relativePath = relPath,
+                            totalBytes = totalBytes,
+                            uploadedBytes = uploadedBytes,
+                            status = UploadStatus.UPLOADING
+                        )
+                        state.syncTask = state.syncTask.copy(
+                            fileProgress = currentProgress,
+                            completedFiles = successCount,
+                            transferredBytes = files.take(successCount).sumOf { it.length() } + uploadedBytes
+                        )
+                        updateSingleEntry(relPath)
+                    },
                     onComplete = { success, error ->
                         if (success) successCount++ else failCount++
+                        // 清理该文件的内存进度
+                        val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                        currentProgress.remove(relPath)
+                        state.syncTask = state.syncTask.copy(
+                            fileProgress = currentProgress,
+                            completedFiles = successCount,
+                            transferredBytes = files.take(successCount).sumOf { it.length() }
+                        )
                         if (!success && error != null) {
                             com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败 [${index + 1}/${files.size}]: $relPath - $error")
                         }
+                        updateSingleEntry(relPath)
                     },
                     onStatusChange = {
-                        scope.launch { navigateTo(state.currentPath) }
+                        scope.launch { updateSingleEntry(relPath) }
                     }
                 )
             }
 
-            navigateTo(state.currentPath)
+            // 最终状态
+            state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED, completedFiles = successCount)
             val msg = "文件夹上传完成: 成功${successCount}个" + if (failCount > 0) "，失败${failCount}个" else ""
             android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
         }
@@ -577,17 +616,56 @@ class CloudPaneController(
         return FolderAggregate(totalSize, uploadedSize, uploadingSize)
     }
 
-    /** 刷新当前目录中单个条目的状态 */
-    private fun refreshCurrentEntry(relativePath: String) {
-        val parentPath = relativePath.substringBeforeLast('/', "/")
-        if (parentPath == state.currentPath || relativePath.startsWith(state.currentPath)) {
-            // 该条目在当前视图中，刷新列表
-            scope.launch {
-                val entries = withContext(Dispatchers.IO) {
-                    listLocalFiles(state.currentPath)
-                }
-                state.entries = entries
+    /** 就地更新单个条目（不重建整个列表，不显示 loading） */
+    private fun updateSingleEntry(relativePath: String) {
+        val entries = state.entries.toMutableList()
+        val idx = entries.indexOfFirst { it.relativePath == relativePath }
+        if (idx < 0) return
+
+        val old = entries[idx]
+        val newEntry = if (old.isDirectory) {
+            val agg = aggregateFolder(relativePath)
+            old.copy(totalSize = agg.totalSize, uploadedSize = agg.uploadedSize, uploadingSize = agg.uploadingSize)
+        } else {
+            val dbEntry = syncDb.getEntry("local_entries", relativePath)
+            val liveProgress = state.syncTask.fileProgress[relativePath]
+            val fileSize = old.totalSize
+            val greenSize = when {
+                dbEntry?.status == SyncStatus.COMPLETED -> fileSize
+                liveProgress != null -> liveProgress.uploadedBytes
+                (dbEntry?.uploadedSize ?: 0L) > 0 -> dbEntry!!.uploadedSize
+                else -> 0L
             }
+            val yellowSize = when {
+                dbEntry?.status == SyncStatus.COMPLETED -> 0L
+                liveProgress != null -> fileSize - liveProgress.uploadedBytes
+                else -> 0L
+            }
+            old.copy(
+                uploadedSize = greenSize,
+                uploadingSize = yellowSize,
+                syncStatus = dbEntry?.status ?: old.syncStatus
+            )
+        }
+        entries[idx] = newEntry
+        refreshParentAggregates(entries, relativePath)
+        state.entries = entries
+    }
+
+    /** 刷新父文件夹聚合进度（向上冒泡到 currentPath 的直接子文件夹） */
+    private fun refreshParentAggregates(entries: MutableList<CloudFileEntry>, changedPath: String) {
+        var parent = changedPath.substringBeforeLast('/', "/")
+        while (parent != "/" && parent != state.currentPath) {
+            val idx = entries.indexOfFirst { it.relativePath == parent && it.isDirectory }
+            if (idx >= 0) {
+                val agg = aggregateFolder(parent)
+                entries[idx] = entries[idx].copy(
+                    totalSize = agg.totalSize,
+                    uploadedSize = agg.uploadedSize,
+                    uploadingSize = agg.uploadingSize
+                )
+            }
+            parent = parent.substringBeforeLast('/', "/")
         }
     }
 
