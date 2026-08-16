@@ -20,8 +20,20 @@ import com.whmdg.mczj.tools.ui.encryption.EncryptionSettings
 import com.whmdg.mczj.tools.ui.isDebugAuth
 import com.whmdg.mczj.tools.encryption.data.UploadStatus
 import com.whmdg.mczj.tools.fileop.sync.SyncPhase
+import com.whmdg.mczj.tools.fileop.sync.SyncMode
+import com.whmdg.mczj.tools.fileop.sync.SyncTaskState
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.animation.core.InfiniteTransition
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Size
 import com.whmdg.mczj.tools.util.FileAccessLevel
 import com.whmdg.mczj.tools.auth.PasswordDialog
@@ -5524,39 +5536,14 @@ private fun CloudPanelContent(
     val isDarkMode = LocalIsDarkMode.current
     val bgColor = if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC)
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(bgColor)
             .clickable { onFocus() }
     ) {
-        // ── 同步状态栏 ──
-        val task = cloudState.syncTask
-        if (task.phase == SyncPhase.SYNCING || task.phase == SyncPhase.SCANNING) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
-            ) {
-                LinearProgressIndicator(
-                    progress = { task.overallProgress },
-                    modifier = Modifier.fillMaxWidth().height(3.dp),
-                    color = Color(0xFF00C8FF),
-                    trackColor = if (isDarkMode) Color(0xFF1E293B) else Color(0xFFE2E8F0)
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    buildString {
-                        if (task.phase == SyncPhase.SCANNING) append("扫描中...")
-                        else append("${task.currentFileName ?: ""} · ${FormatUtils.formatBytes(task.speed)}/s · ${task.completedFiles}/${task.totalFiles} 文件")
-                    },
-                    fontSize = 11.sp,
-                    color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
-                )
-            }
-        }
-
-        // ── 文件列表 ──
+        Column(modifier = Modifier.fillMaxSize()) {
+            // ── 文件列表 ──
         if (cloudState.isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
@@ -5613,6 +5600,292 @@ private fun CloudPanelContent(
         }
     }
 
+        // ── 同步弹窗 ──
+        val task = cloudState.syncTask
+        val isActive = task.phase == SyncPhase.SYNCING || task.phase == SyncPhase.SCANNING
+        if (cloudState.syncDialogVisible && isActive) {
+            SyncProgressDialog(
+                task = task,
+                onClose = { cloudState.syncDialogVisible = false },
+                onHide = { cloudState.syncDialogVisible = false }
+            )
+        }
+
+        // ── 悬浮窗（弹窗隐藏后显示） ──
+        if (!cloudState.syncDialogVisible && isActive) {
+            SyncFloatingBubble(
+                task = task,
+                onClick = { cloudState.syncDialogVisible = true }
+            )
+        }
+
+        // ── 上传确认对话框 ──
+        val confirmDialog = cloudState.uploadConfirmDialog
+        if (confirmDialog != null) {
+            UploadConfirmDialog(
+                completedCount = confirmDialog.completedCount,
+                totalCount = confirmDialog.totalCount,
+                onSkip = {
+                    confirmDialog.onComplete(false)
+                    cloudState.uploadConfirmDialog = null
+                },
+                onReUpload = {
+                    confirmDialog.onComplete(true)
+                    cloudState.uploadConfirmDialog = null
+                }
+            )
+        }
+    }
+
+}
+
+// ==================== 同步弹窗 ====================
+
+@Composable
+private fun SyncProgressDialog(
+    task: SyncTaskState,
+    onClose: () -> Unit,
+    onHide: () -> Unit
+) {
+    val isDarkMode = LocalIsDarkMode.current
+    val cardColor = if (isDarkMode) Color(0xFF1E293B) else Color.White
+    val textColor = if (isDarkMode) Color(0xFFE2E8F0) else Color(0xFF1E293B)
+    val subTextColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = cardColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                // 顶部：标题 + 按钮
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = when (task.phase) {
+                            SyncPhase.SCANNING -> "扫描中..."
+                            SyncPhase.COMPLETED -> "同步完成"
+                            else -> task.currentFileName ?: "同步中..."
+                        },
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = textColor
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        // 隐藏按钮
+                        IconButton(onClick = onHide, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.Remove,
+                                contentDescription = "隐藏",
+                                tint = subTextColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        // 关闭按钮
+                        IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "关闭",
+                                tint = subTextColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 进度文字
+                Text(
+                    text = buildString {
+                        when (task.phase) {
+                            SyncPhase.SCANNING -> append("扫描中...")
+                            else -> {
+                                append("${task.completedFiles}/${task.totalFiles} 文件")
+                                if (task.totalBytes > 0) {
+                                    val pct = (task.transferredBytes * 100 / task.totalBytes).toInt()
+                                    append(" (${pct}%)")
+                                }
+                            }
+                        }
+                    },
+                    fontSize = 13.sp,
+                    color = subTextColor
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // 进度条
+                LinearProgressIndicator(
+                    progress = { task.overallProgress },
+                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                    color = Color(0xFF3B82F6),
+                    trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
+                )
+
+                // 速度（仅上传/下载时显示）
+                if (task.phase == SyncPhase.SYNCING && task.speed > 0) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "${FormatUtils.formatBytes(task.speed)}/s",
+                        fontSize = 11.sp,
+                        color = subTextColor
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ==================== 同步悬浮窗 ====================
+
+@Composable
+private fun SyncFloatingBubble(
+    task: SyncTaskState,
+    onClick: () -> Unit
+) {
+    val isDarkMode = LocalIsDarkMode.current
+
+    // 旋转动画（仅扫描时使用）
+    val infiniteTransition = rememberInfiniteTransition(label = "scan_spin")
+    val rotation by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "rotation"
+    )
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.BottomEnd
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(end = 20.dp, bottom = 24.dp)
+                .size(56.dp)
+                .clip(CircleShape)
+                .background(if (isDarkMode) Color(0xFF1E293B) else Color.White)
+                .border(2.dp, Color(0xFF3B82F6), CircleShape)
+                .clickable { onClick() },
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                // 百分比或文件数 + 箭头
+                Text(
+                    text = buildString {
+                        when (task.phase) {
+                            SyncPhase.SCANNING -> append("${task.totalFiles}")
+                            else -> {
+                                if (task.totalBytes > 0) {
+                                    append("${(task.transferredBytes * 100 / task.totalBytes).toInt()}%")
+                                } else append("0%")
+                                // 箭头：上传 ↑ / 下载 ↓
+                                when (task.mode) {
+                                    SyncMode.LOCAL_TO_CLOUD -> append("↑")
+                                    SyncMode.CLOUD_TO_LOCAL -> append("↓")
+                                    else -> append("↑")
+                                }
+                            }
+                        }
+                    },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF3B82F6)
+                )
+
+                // 扫描时显示旋转圈
+                if (task.phase == SyncPhase.SCANNING) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Canvas(modifier = Modifier.size(12.dp)) {
+                        drawArc(
+                            color = Color(0xFF3B82F6),
+                            startAngle = rotation,
+                            sweepAngle = 270f,
+                            useCenter = false,
+                            style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==================== 上传确认对话框 ====================
+
+@Composable
+private fun UploadConfirmDialog(
+    completedCount: Int,
+    totalCount: Int,
+    onSkip: () -> Unit,
+    onReUpload: () -> Unit
+) {
+    val isDarkMode = LocalIsDarkMode.current
+    val cardColor = if (isDarkMode) Color(0xFF1E293B) else Color.White
+    val textColor = if (isDarkMode) Color(0xFFE2E8F0) else Color(0xFF1E293B)
+    val subTextColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(0.85f)
+                .padding(16.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = cardColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                Text(
+                    text = "发现已上传文件",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "共 ${totalCount} 个文件，其中 ${completedCount} 个已上传完成。如何处理？",
+                    fontSize = 13.sp,
+                    color = subTextColor,
+                    lineHeight = 18.sp
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onReUpload) {
+                        Text("全部重新上传", fontSize = 13.sp, color = Color(0xFF3B82F6))
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = onSkip,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text("跳过已上传", fontSize = 13.sp, color = Color.White)
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ==================== 同步状态进度条（三色段） ====================

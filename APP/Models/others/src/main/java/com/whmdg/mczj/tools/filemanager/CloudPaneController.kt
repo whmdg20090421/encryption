@@ -49,7 +49,17 @@ class CloudPaneController(
         var selectedPaths by mutableStateOf<Set<String>>(emptySet())
         var syncTask by mutableStateOf(SyncTaskState())
         var vaultFolderName by mutableStateOf("")
+        /** 同步弹窗是否可见（false=隐藏为悬浮窗或关闭） */
+        var syncDialogVisible by mutableStateOf(false)
+        /** 上传确认对话框（跳过已完成 / 全部重新上传） */
+        var uploadConfirmDialog by mutableStateOf<UploadConfirmState?>(null)
     }
+
+    data class UploadConfirmState(
+        val completedCount: Int,
+        val totalCount: Int,
+        val onComplete: (reUploadAll: Boolean) -> Unit
+    )
 
     /** 文件/文件夹条目（带聚合同步状态） */
     data class CloudFileEntry(
@@ -176,6 +186,7 @@ class CloudPaneController(
 
         // 启动上传
         syncJob?.cancel()
+        syncDialogVisible = true
         syncJob = scope.launch {
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val logFileName = "${vaultName}_upload_${timestamp}.log"
@@ -211,11 +222,17 @@ class CloudPaneController(
                         // 清理内存进度
                         val currentProgress = state.syncTask.fileProgress.toMutableMap()
                         currentProgress.remove(relativePath)
-                        state.syncTask = state.syncTask.copy(fileProgress = currentProgress)
+                        state.syncTask = state.syncTask.copy(
+                            phase = SyncPhase.COMPLETED,
+                            fileProgress = currentProgress,
+                            completedFiles = if (success) 1 else 0
+                        )
                         if (!success && error != null) {
                             android.widget.Toast.makeText(context, "上传失败: $error，请查看日志", android.widget.Toast.LENGTH_LONG).show()
                         }
                         updateSingleEntry(relativePath)
+                        kotlinx.coroutines.delay(1500)
+                        syncDialogVisible = false
                     }
                 },
                 onStatusChange = {
@@ -225,45 +242,105 @@ class CloudPaneController(
         }
     }
 
-    /** 上传文件夹：递归扫描 → 全部录入 QUEUED → 逐个上传 */
+    /** 上传文件夹：扫描分类 → 用户决策（跳过/重传已完成） → 逐个上传 */
     private fun uploadFolder(folderRelativePath: String) {
         scope.launch {
             val folder = File(vaultDir, folderRelativePath.trimStart('/'))
             if (!folder.exists() || !folder.isDirectory) return@launch
 
             // ① 递归扫描所有文件
-            val files = withContext(Dispatchers.IO) {
+            val allFiles = withContext(Dispatchers.IO) {
                 folder.walkTopDown()
                     .filter { it.isFile && it.name !in excludedFiles }
                     .toList()
             }
 
-            if (files.isEmpty()) {
+            if (allFiles.isEmpty()) {
                 android.widget.Toast.makeText(context, "文件夹为空", android.widget.Toast.LENGTH_SHORT).show()
                 return@launch
             }
 
-            // ② 全部录入本地表，标记为 QUEUED
-            withContext(Dispatchers.IO) {
-                for (file in files) {
+            // ② 分类：查询每个文件的 DB 状态
+            data class ClassifiedFile(val file: File, val relPath: String, val dbStatus: SyncStatus?)
+            val classified = withContext(Dispatchers.IO) {
+                allFiles.map { file ->
                     val relPath = "/" + file.relativeTo(File(vaultDir)).path.replace('\\', '/')
-                    syncDb.upsertEntry("local_entries", SyncEntryRow(
-                        path = relPath,
-                        size = file.length(),
-                        lastModified = Instant.ofEpochMilli(file.lastModified()).toString(),
-                        md5 = null,
-                        cloudHash = null,
-                        status = SyncStatus.QUEUED,
-                        lastSyncTime = null,
-                        failReason = null
-                    ))
+                    val dbEntry = syncDb.getEntry("local_entries", relPath)
+                    ClassifiedFile(file, relPath, dbEntry?.status)
                 }
             }
 
-            android.widget.Toast.makeText(context, "已录入 ${files.size} 个文件，开始上传", android.widget.Toast.LENGTH_SHORT).show()
+            // ③ 检查是否有正在上传的文件
+            if (classified.any { it.dbStatus == SyncStatus.UPLOADING }) {
+                android.widget.Toast.makeText(context, "当前有文件正在上传，请等待完成", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+
+            // ④ 分桶
+            val completedFiles = classified.filter { it.dbStatus == SyncStatus.COMPLETED }
+            val toUpload = classified.filter {
+                it.dbStatus == null || it.dbStatus == SyncStatus.PENDING ||
+                it.dbStatus == SyncStatus.QUEUED || it.dbStatus == SyncStatus.PAUSED
+            }
+
+            // ⑤ 若有已完成文件，询问用户
+            val reUploadAll = if (completedFiles.isNotEmpty()) {
+                suspendCancellableCoroutine<Boolean> { cont ->
+                    state.uploadConfirmDialog = UploadConfirmState(
+                        completedCount = completedFiles.size,
+                        totalCount = classified.size,
+                        onComplete = { reUpload -> cont.resume(reUpload) {} }
+                    )
+                }
+            } else false
+
+            // ⑥ 构建最终队列
+            val queue: List<Pair<File, String>> = if (reUploadAll) {
+                // 全部重新上传：已完成文件重置为 QUEUED
+                withContext(Dispatchers.IO) {
+                    for (cf in completedFiles) {
+                        syncDb.updateStatus("local_entries", cf.relPath, SyncStatus.QUEUED)
+                        syncDb.updateUploadedSize("local_entries", cf.relPath, 0)
+                    }
+                }
+                classified.map { it.file to it.relPath }
+            } else {
+                // 跳过已完成：仅上传未完成文件
+                toUpload.map { it.file to it.relPath }
+            }
+
+            // 将队列中未录入 DB 的文件写入
+            withContext(Dispatchers.IO) {
+                for ((file, relPath) in queue) {
+                    val existing = syncDb.getEntry("local_entries", relPath)
+                    if (existing == null) {
+                        syncDb.upsertEntry("local_entries", SyncEntryRow(
+                            path = relPath,
+                            size = file.length(),
+                            lastModified = Instant.ofEpochMilli(file.lastModified()).toString(),
+                            md5 = null,
+                            cloudHash = null,
+                            status = SyncStatus.QUEUED,
+                            lastSyncTime = null,
+                            failReason = null
+                        ))
+                    } else if (existing.status != SyncStatus.QUEUED) {
+                        syncDb.updateStatus("local_entries", relPath, SyncStatus.QUEUED)
+                    }
+                }
+            }
+
+            // ⑦ 初始加载（仅一次）
             navigateTo(state.currentPath)
 
-            // ③ 创建日志文件 + 共享 SyncEngine
+            if (queue.isEmpty()) {
+                android.widget.Toast.makeText(context, "所有文件已上传完成", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+
+            android.widget.Toast.makeText(context, "开始上传 ${queue.size} 个文件", android.widget.Toast.LENGTH_SHORT).show()
+
+            // ⑧ 创建日志文件 + SyncEngine
             val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val logFileName = "${vaultName}_batch_${timestamp}.log"
@@ -279,20 +356,23 @@ class CloudPaneController(
                 logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
 
-            // 更新顶部同步状态栏
+            // ⑨ 显示同步弹窗 + 初始化状态栏
+            syncDialogVisible = true
             state.syncTask = SyncTaskState(
                 phase = SyncPhase.SYNCING,
-                totalFiles = files.size,
-                totalBytes = files.sumOf { it.length() }
+                totalFiles = queue.size,
+                totalBytes = queue.sumOf { it.first.length() }
             )
 
-            // ④ 逐个上传
+            // ⑩ 逐个上传
             var successCount = 0
             var failCount = 0
+            var completedBytes = 0L
 
-            for ((index, file) in files.withIndex()) {
-                val relPath = "/" + file.relativeTo(File(vaultDir)).path.replace('\\', '/')
-                com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "开始上传 [${index + 1}/${files.size}]: $relPath")
+            for ((index, pair) in queue.withIndex()) {
+                val (file, relPath) = pair
+                val fileSize = file.length()
+                com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "开始上传 [${index + 1}/${queue.size}]: $relPath")
 
                 engine.uploadSingleFile(
                     relativePath = relPath,
@@ -309,22 +389,27 @@ class CloudPaneController(
                         state.syncTask = state.syncTask.copy(
                             fileProgress = currentProgress,
                             completedFiles = successCount,
-                            transferredBytes = files.take(successCount).sumOf { it.length() } + uploadedBytes
+                            transferredBytes = completedBytes + uploadedBytes
                         )
                         updateSingleEntry(relPath)
                     },
                     onComplete = { success, error ->
-                        if (success) successCount++ else failCount++
+                        if (success) {
+                            successCount++
+                            completedBytes += fileSize
+                        } else {
+                            failCount++
+                        }
                         // 清理该文件的内存进度
                         val currentProgress = state.syncTask.fileProgress.toMutableMap()
                         currentProgress.remove(relPath)
                         state.syncTask = state.syncTask.copy(
                             fileProgress = currentProgress,
                             completedFiles = successCount,
-                            transferredBytes = files.take(successCount).sumOf { it.length() }
+                            transferredBytes = completedBytes
                         )
                         if (!success && error != null) {
-                            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败 [${index + 1}/${files.size}]: $relPath - $error")
+                            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败 [${index + 1}/${queue.size}]: $relPath - $error")
                         }
                         updateSingleEntry(relPath)
                     },
@@ -334,10 +419,12 @@ class CloudPaneController(
                 )
             }
 
-            // 最终状态
+            // ⑪ 最终状态
             state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED, completedFiles = successCount)
             val msg = "文件夹上传完成: 成功${successCount}个" + if (failCount > 0) "，失败${failCount}个" else ""
             android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
+            kotlinx.coroutines.delay(1500)
+            syncDialogVisible = false
         }
     }
 
