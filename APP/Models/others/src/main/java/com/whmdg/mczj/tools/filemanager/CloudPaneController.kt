@@ -186,7 +186,7 @@ class CloudPaneController(
 
         // 启动上传
         syncJob?.cancel()
-        syncDialogVisible = true
+        state.syncDialogVisible = true
         syncJob = scope.launch {
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val logFileName = "${vaultName}_upload_${timestamp}.log"
@@ -232,7 +232,7 @@ class CloudPaneController(
                         }
                         updateSingleEntry(relativePath)
                         kotlinx.coroutines.delay(1500)
-                        syncDialogVisible = false
+                        state.syncDialogVisible = false
                     }
                 },
                 onStatusChange = {
@@ -357,7 +357,7 @@ class CloudPaneController(
             )
 
             // ⑨ 显示同步弹窗 + 初始化状态栏
-            syncDialogVisible = true
+            state.syncDialogVisible = true
             state.syncTask = SyncTaskState(
                 phase = SyncPhase.SYNCING,
                 totalFiles = queue.size,
@@ -424,7 +424,7 @@ class CloudPaneController(
             val msg = "文件夹上传完成: 成功${successCount}个" + if (failCount > 0) "，失败${failCount}个" else ""
             android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
             kotlinx.coroutines.delay(1500)
-            syncDialogVisible = false
+            state.syncDialogVisible = false
         }
     }
 
