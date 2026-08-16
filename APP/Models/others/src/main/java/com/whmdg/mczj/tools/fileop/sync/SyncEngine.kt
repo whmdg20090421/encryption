@@ -333,13 +333,20 @@ class SyncEngine(
         // ② 上传（网络错误重试1次，等待1秒）
         var uploadSuccess = false
         var lastError: String? = null
+        // 动态进度回调阈值：fileSize/50，clamp 到 16KB~128KB
+        val progressThreshold = (fileSize / 50).coerceIn(16_384L, 131_072L)
+        var lastReportedBytes = 0L
 
         for (attempt in 1..2) {
             try {
                 webdavClient.uploadFile(localFile, remotePath) { bytesWritten ->
-                    onProgress(bytesWritten, fileSize)
                     // 实时写入 DB，供文件夹进度条聚合
                     try { syncDb.updateUploadedSize("local_entries", relativePath, bytesWritten) } catch (_: Exception) {}
+                    // 按大小阈值回调 UI
+                    if (bytesWritten - lastReportedBytes >= progressThreshold || bytesWritten == fileSize) {
+                        lastReportedBytes = bytesWritten
+                        onProgress(bytesWritten, fileSize)
+                    }
                 }
                 uploadSuccess = true
                 break

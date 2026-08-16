@@ -127,6 +127,16 @@ class CloudPaneController(
         }
     }
 
+    /** 静默刷新当前目录（不设 isLoading，不闪 loading spinner） */
+    private suspend fun silentRefresh() {
+        try {
+            val entries = withContext(Dispatchers.IO) {
+                listLocalFiles(state.currentPath)
+            }
+            state.entries = entries
+        } catch (_: Exception) {}
+    }
+
     /** 返回上级目录 */
     fun goUp(): String? {
         if (state.currentPath == "/") return null
@@ -330,8 +340,8 @@ class CloudPaneController(
                 }
             }
 
-            // ⑦ 初始加载（仅一次）
-            navigateTo(state.currentPath)
+            // ⑦ 静默刷新当前目录（不闪 loading）
+            silentRefresh()
 
             if (queue.isEmpty()) {
                 android.widget.Toast.makeText(context, "所有文件已上传完成", android.widget.Toast.LENGTH_SHORT).show()

@@ -5654,12 +5654,12 @@ private fun SyncProgressDialog(
 
     Box(
         modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.BottomCenter
+        contentAlignment = Alignment.Center
     ) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 24.dp),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = cardColor),
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
