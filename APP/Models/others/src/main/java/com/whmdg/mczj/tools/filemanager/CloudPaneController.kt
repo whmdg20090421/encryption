@@ -386,16 +386,67 @@ class CloudPaneController(
                 totalBytes = queue.sumOf { it.first.length() }
             )
 
-            // ⑩ 并发动态上传
-            val successCount = java.util.concurrent.atomic.AtomicInteger(0)
-            val failCount = java.util.concurrent.atomic.AtomicInteger(0)
+            // ⑩ 并发动态上传（Channel 单写者模式，避免多线程竞态）
             val completedBytes = java.util.concurrent.atomic.AtomicLong(0)
             val activeFileBytes = java.util.concurrent.ConcurrentHashMap<String, Long>()
-            var maxConcurrency = 2  // 初始并发数
+            var maxConcurrency = 2
             var activeWorkers = 0
             var queueIndex = 0
+            var completedFilesCount = 0  // 仅更新器协程访问
+            var successCount = 0         // 仅更新器协程访问
+            var failCount = 0            // 仅更新器协程访问
 
-            // 速度监控协程：每 3 秒调整并发数
+            // 事件 Channel + 更新器协程（单线程顺序处理所有状态更新）
+            val eventChannel = kotlinx.coroutines.channels.Channel<UploadEvent>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+
+            val updaterJob = launch {
+                for (event in eventChannel) {
+                    when (event) {
+                        is UploadEvent.Progress -> {
+                            activeFileBytes[event.path] = event.uploaded
+                            val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                            currentProgress[event.path] = SyncFileProgress(
+                                relativePath = event.path,
+                                totalBytes = event.total,
+                                uploadedBytes = event.uploaded,
+                                status = UploadStatus.UPLOADING
+                            )
+                            val activeTotal = activeFileBytes.values.sum()
+                            state.syncTask = state.syncTask.copy(
+                                fileProgress = currentProgress,
+                                transferredBytes = completedBytes.get() + activeTotal
+                            )
+                            updateSingleEntry(event.path)
+                        }
+                        is UploadEvent.Complete -> {
+                            activeFileBytes.remove(event.path)
+                            completedFilesCount++
+                            if (event.success) {
+                                successCount++
+                                completedBytes.addAndGet(event.fileSize)
+                            } else {
+                                failCount++
+                            }
+                            val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                            currentProgress.remove(event.path)
+                            state.syncTask = state.syncTask.copy(
+                                fileProgress = currentProgress,
+                                completedFiles = completedFilesCount,
+                                transferredBytes = completedBytes.get()
+                            )
+                            if (!event.success && event.error != null) {
+                                com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败: ${event.path} - ${event.error}")
+                            }
+                            updateSingleEntry(event.path)
+                        }
+                        is UploadEvent.StatusChange -> {
+                            updateSingleEntry(event.path)
+                        }
+                    }
+                }
+            }
+
+            // 速度监控协程
             var lastSampleBytes = getAppUploadBytes()
             var lastSampleTime = System.currentTimeMillis()
 
@@ -418,16 +469,14 @@ class CloudPaneController(
                 }
             }
 
-            // 上传工作协程
+            // 上传工作协程（回调仅发送事件，不直接修改 state）
             val uploadJobs = mutableListOf<Job>()
 
             while (queueIndex < queue.size || activeWorkers > 0) {
-                // 等待直到有空闲并发位
                 while (activeWorkers >= maxConcurrency && queueIndex < queue.size) {
                     delay(100)
                 }
 
-                // 启动新上传（如果队列中还有文件）
                 if (queueIndex < queue.size && activeWorkers < maxConcurrency) {
                     val idx = queueIndex++
                     val (file, relPath) = queue[idx]
@@ -441,44 +490,13 @@ class CloudPaneController(
                                 remoteBasePath = remoteBasePath,
                                 syncDb = syncDb,
                                 onProgress = { uploadedBytes, totalBytes ->
-                                    activeFileBytes[relPath] = uploadedBytes
-                                    val currentProgress = state.syncTask.fileProgress.toMutableMap()
-                                    currentProgress[relPath] = SyncFileProgress(
-                                        relativePath = relPath,
-                                        totalBytes = totalBytes,
-                                        uploadedBytes = uploadedBytes,
-                                        status = UploadStatus.UPLOADING
-                                    )
-                                    val activeTotal = activeFileBytes.values.sum()
-                                    state.syncTask = state.syncTask.copy(
-                                        fileProgress = currentProgress,
-                                        completedFiles = successCount.get(),
-                                        transferredBytes = completedBytes.get() + activeTotal
-                                    )
-                                    updateSingleEntry(relPath)
+                                    eventChannel.trySend(UploadEvent.Progress(relPath, uploadedBytes, totalBytes))
                                 },
                                 onComplete = { success, error ->
-                                    activeFileBytes.remove(relPath)
-                                    if (success) {
-                                        successCount.incrementAndGet()
-                                        completedBytes.addAndGet(fileSize)
-                                    } else {
-                                        failCount.incrementAndGet()
-                                    }
-                                    val currentProgress = state.syncTask.fileProgress.toMutableMap()
-                                    currentProgress.remove(relPath)
-                                    state.syncTask = state.syncTask.copy(
-                                        fileProgress = currentProgress,
-                                        completedFiles = successCount.get(),
-                                        transferredBytes = completedBytes.get()
-                                    )
-                                    if (!success && error != null) {
-                                        com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败 [${idx + 1}/${queue.size}]: $relPath - $error")
-                                    }
-                                    updateSingleEntry(relPath)
+                                    eventChannel.trySend(UploadEvent.Complete(relPath, success, fileSize, error))
                                 },
                                 onStatusChange = {
-                                    updateSingleEntry(relPath)
+                                    eventChannel.trySend(UploadEvent.StatusChange(relPath))
                                 }
                             )
                         } finally {
@@ -488,18 +506,18 @@ class CloudPaneController(
                     uploadJobs.add(job)
                 }
 
-                // 清理已完成的 job
                 uploadJobs.removeAll { !it.isActive }
             }
 
-            monitorJob.cancel()
+            // 等待所有上传完成 → 关闭 Channel → 等更新器处理完剩余事件
             uploadJobs.forEach { it.join() }
+            eventChannel.close()
+            updaterJob.join()
+            monitorJob.cancel()
 
             // ⑪ 最终状态
-            state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED, completedFiles = successCount.get())
-            val finalSuccess = successCount.get()
-            val finalFail = failCount.get()
-            val msg = "文件夹上传完成: 成功${finalSuccess}个" + if (finalFail > 0) "，失败${finalFail}个" else ""
+            state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED, completedFiles = completedFilesCount)
+            val msg = "文件夹上传完成: 成功${successCount}个" + if (failCount > 0) "，失败${failCount}个" else ""
             android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
             kotlinx.coroutines.delay(1500)
             state.syncDialogVisible = false
@@ -906,6 +924,13 @@ class CloudPaneController(
     private fun getAppUploadBytes(): Long {
         val bytes = TrafficStats.getUidTxBytes(Process.myUid())
         return if (bytes > 0) bytes else 0L
+    }
+
+    /** 并发上传事件（通过 Channel 传递给更新器协程，避免多线程竞态） */
+    private sealed class UploadEvent {
+        data class Progress(val path: String, val uploaded: Long, val total: Long) : UploadEvent()
+        data class Complete(val path: String, val success: Boolean, val fileSize: Long, val error: String?) : UploadEvent()
+        data class StatusChange(val path: String) : UploadEvent()
     }
 
     private data class FolderAggregate(
