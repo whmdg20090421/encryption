@@ -1379,7 +1379,7 @@ fun FileManagerScreen(
                 if (cloudStateForOverlay.syncDialogVisible && overlayIsActive) {
                     SyncProgressDialog(
                         task = overlayTask,
-                        onClose = { cloudStateForOverlay.syncDialogVisible = false },
+                        onClose = { cloudStateForOverlay.onCancelUpload?.invoke() },
                         onHide = { cloudStateForOverlay.syncDialogVisible = false }
                     )
                 }
@@ -5677,7 +5677,7 @@ private fun SyncProgressDialog(
                             modifier = Modifier.size(18.dp)
                         )
                     }
-                    // 文件名（居中，右对齐使后缀位置固定）
+                    // 文件名居中
                     Text(
                         text = when (task.phase) {
                             SyncPhase.SCANNING -> "扫描中..."
@@ -5685,7 +5685,7 @@ private fun SyncProgressDialog(
                             else -> task.currentFileName ?: "同步中..."
                         },
                         modifier = Modifier.weight(1f),
-                        textAlign = TextAlign.End,
+                        textAlign = TextAlign.Center,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
                         color = textColor,

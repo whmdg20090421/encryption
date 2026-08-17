@@ -53,6 +53,8 @@ class CloudPaneController(
         var syncDialogVisible by mutableStateOf(false)
         /** 上传确认对话框（跳过已完成 / 全部重新上传） */
         var uploadConfirmDialog by mutableStateOf<UploadConfirmState?>(null)
+        /** 取消上传回调（由弹窗 ✕ 按钮调用） */
+        var onCancelUpload: (() -> Unit)? = null
     }
 
     data class UploadConfirmState(
@@ -196,6 +198,7 @@ class CloudPaneController(
 
         // 启动上传
         syncJob?.cancel()
+        state.onCancelUpload = ::cancelUpload
         state.syncDialogVisible = true
         syncJob = scope.launch {
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
@@ -367,6 +370,7 @@ class CloudPaneController(
             )
 
             // ⑨ 显示同步弹窗 + 初始化状态栏
+            state.onCancelUpload = ::cancelUpload
             state.syncDialogVisible = true
             state.syncTask = SyncTaskState(
                 phase = SyncPhase.SYNCING,
@@ -541,6 +545,25 @@ class CloudPaneController(
     fun pauseSync() {
         syncJob?.cancel()
         state.syncTask = state.syncTask.copy(phase = SyncPhase.IDLE)
+    }
+
+    /** 取消上传：停止任务，已上传的不动，未上传的重置为 PENDING */
+    fun cancelUpload() {
+        syncJob?.cancel()
+        state.syncDialogVisible = false
+        // 将 QUEUED 和 UPLOADING 状态的文件重置为 PENDING
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                val entries = syncDb.getEntriesByStatus("local_entries", SyncStatus.QUEUED) +
+                    syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
+                for (entry in entries) {
+                    syncDb.updateStatus("local_entries", entry.path, SyncStatus.PENDING)
+                    syncDb.updateUploadedSize("local_entries", entry.path, 0)
+                }
+            }
+            state.syncTask = SyncTaskState()
+            silentRefresh()
+        }
     }
 
     fun getSyncState(path: String): SyncFileProgress? {
