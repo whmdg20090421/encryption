@@ -246,7 +246,7 @@ class CloudPaneController(
                     }
                 },
                 onStatusChange = {
-                    scope.launch { updateSingleEntry(relativePath) }
+                    updateSingleEntry(relativePath)
                 }
             )
         }
@@ -424,7 +424,7 @@ class CloudPaneController(
                         updateSingleEntry(relPath)
                     },
                     onStatusChange = {
-                        scope.launch { updateSingleEntry(relPath) }
+                        updateSingleEntry(relPath)
                     }
                 )
             }
@@ -716,43 +716,51 @@ class CloudPaneController(
     /** 就地更新单个条目（不重建整个列表，不显示 loading） */
     private fun updateSingleEntry(relativePath: String) {
         val entries = state.entries.toMutableList()
-        val idx = entries.indexOfFirst { it.relativePath == relativePath }
-        if (idx < 0) return
+        var changed = false
 
-        val old = entries[idx]
-        val newEntry = if (old.isDirectory) {
-            val agg = aggregateFolder(relativePath)
-            old.copy(totalSize = agg.totalSize, uploadedSize = agg.uploadedSize, uploadingSize = agg.uploadingSize)
-        } else {
-            val dbEntry = syncDb.getEntry("local_entries", relativePath)
-            val liveProgress = state.syncTask.fileProgress[relativePath]
-            val fileSize = old.totalSize
-            val greenSize = when {
-                dbEntry?.status == SyncStatus.COMPLETED -> fileSize
-                liveProgress != null -> liveProgress.uploadedBytes
-                (dbEntry?.uploadedSize ?: 0L) > 0 -> dbEntry!!.uploadedSize
-                else -> 0L
+        // 1. 如果该条目在当前视图中，直接更新
+        val idx = entries.indexOfFirst { it.relativePath == relativePath }
+        if (idx >= 0) {
+            val old = entries[idx]
+            val newEntry = if (old.isDirectory) {
+                val agg = aggregateFolder(relativePath)
+                old.copy(totalSize = agg.totalSize, uploadedSize = agg.uploadedSize, uploadingSize = agg.uploadingSize)
+            } else {
+                val dbEntry = syncDb.getEntry("local_entries", relativePath)
+                val liveProgress = state.syncTask.fileProgress[relativePath]
+                val fileSize = old.totalSize
+                val greenSize = when {
+                    dbEntry?.status == SyncStatus.COMPLETED -> fileSize
+                    liveProgress != null -> liveProgress.uploadedBytes
+                    (dbEntry?.uploadedSize ?: 0L) > 0 -> dbEntry!!.uploadedSize
+                    else -> 0L
+                }
+                val yellowSize = when {
+                    dbEntry?.status == SyncStatus.COMPLETED -> 0L
+                    liveProgress != null -> fileSize - liveProgress.uploadedBytes
+                    else -> 0L
+                }
+                old.copy(
+                    uploadedSize = greenSize,
+                    uploadingSize = yellowSize,
+                    syncStatus = dbEntry?.status ?: old.syncStatus
+                )
             }
-            val yellowSize = when {
-                dbEntry?.status == SyncStatus.COMPLETED -> 0L
-                liveProgress != null -> fileSize - liveProgress.uploadedBytes
-                else -> 0L
-            }
-            old.copy(
-                uploadedSize = greenSize,
-                uploadingSize = yellowSize,
-                syncStatus = dbEntry?.status ?: old.syncStatus
-            )
+            entries[idx] = newEntry
+            changed = true
         }
-        entries[idx] = newEntry
-        refreshParentAggregates(entries, relativePath)
-        state.entries = entries
+
+        // 2. 向上冒泡更新所有祖先文件夹（无论文件是否在当前视图中）
+        changed = refreshParentAggregates(entries, relativePath) || changed
+
+        if (changed) state.entries = entries
     }
 
-    /** 刷新父文件夹聚合进度（向上冒泡到 currentPath 的直接子文件夹） */
-    private fun refreshParentAggregates(entries: MutableList<CloudFileEntry>, changedPath: String) {
+    /** 刷新父文件夹聚合进度（向上冒泡，更新当前视图中可见的祖先文件夹） */
+    private fun refreshParentAggregates(entries: MutableList<CloudFileEntry>, changedPath: String): Boolean {
+        var changed = false
         var parent = changedPath.substringBeforeLast('/', "/")
-        while (parent != "/" && parent != state.currentPath) {
+        while (parent.isNotEmpty()) {
             val idx = entries.indexOfFirst { it.relativePath == parent && it.isDirectory }
             if (idx >= 0) {
                 val agg = aggregateFolder(parent)
@@ -761,9 +769,13 @@ class CloudPaneController(
                     uploadedSize = agg.uploadedSize,
                     uploadingSize = agg.uploadingSize
                 )
+                changed = true
             }
-            parent = parent.substringBeforeLast('/', "/")
+            val next = parent.substringBeforeLast('/', "")
+            if (next == parent) break
+            parent = next
         }
+        return changed
     }
 
     private data class FolderAggregate(
