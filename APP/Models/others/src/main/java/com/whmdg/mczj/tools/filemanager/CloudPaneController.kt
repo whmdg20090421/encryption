@@ -1,6 +1,8 @@
 package com.whmdg.mczj.tools.ui.filemanager
 
 import android.content.Context
+import android.net.TrafficStats
+import android.os.Process
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -261,10 +263,16 @@ class CloudPaneController(
             val folder = File(vaultDir, folderRelativePath.trimStart('/'))
             if (!folder.exists() || !folder.isDirectory) return@launch
 
+            // 显示弹窗（扫描阶段：不定进度条）
+            state.onCancelUpload = ::cancelUpload
+            state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING)
+            state.syncDialogVisible = true
+
             // ① 递归扫描所有文件
             val allFiles = withContext(Dispatchers.IO) {
                 folder.walkTopDown()
                     .filter { it.isFile && it.name !in excludedFiles }
+                    .sortedWith(naturalOrderComparator(vaultDir))
                     .toList()
             }
 
@@ -378,64 +386,120 @@ class CloudPaneController(
                 totalBytes = queue.sumOf { it.first.length() }
             )
 
-            // ⑩ 逐个上传
-            var successCount = 0
-            var failCount = 0
-            var completedBytes = 0L
+            // ⑩ 并发动态上传
+            val successCount = java.util.concurrent.atomic.AtomicInteger(0)
+            val failCount = java.util.concurrent.atomic.AtomicInteger(0)
+            val completedBytes = java.util.concurrent.atomic.AtomicLong(0)
+            val activeFileBytes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+            var maxConcurrency = 2  // 初始并发数
+            var activeWorkers = 0
+            var queueIndex = 0
 
-            for ((index, pair) in queue.withIndex()) {
-                val (file, relPath) = pair
-                val fileSize = file.length()
-                com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "开始上传 [${index + 1}/${queue.size}]: $relPath")
+            // 速度监控协程：每 3 秒调整并发数
+            var lastSampleBytes = getAppUploadBytes()
+            var lastSampleTime = System.currentTimeMillis()
 
-                engine.uploadSingleFile(
-                    relativePath = relPath,
-                    remoteBasePath = remoteBasePath,
-                    syncDb = syncDb,
-                    onProgress = { uploadedBytes, totalBytes ->
-                        val currentProgress = state.syncTask.fileProgress.toMutableMap()
-                        currentProgress[relPath] = SyncFileProgress(
-                            relativePath = relPath,
-                            totalBytes = totalBytes,
-                            uploadedBytes = uploadedBytes,
-                            status = UploadStatus.UPLOADING
-                        )
-                        state.syncTask = state.syncTask.copy(
-                            fileProgress = currentProgress,
-                            completedFiles = successCount,
-                            transferredBytes = completedBytes + uploadedBytes
-                        )
-                        updateSingleEntry(relPath)
-                    },
-                    onComplete = { success, error ->
-                        if (success) {
-                            successCount++
-                            completedBytes += fileSize
-                        } else {
-                            failCount++
+            val monitorJob = launch {
+                while (isActive) {
+                    delay(3000)
+                    val nowBytes = getAppUploadBytes()
+                    val nowTime = System.currentTimeMillis()
+                    val dtSec = (nowTime - lastSampleTime) / 1000.0
+                    if (dtSec > 0) {
+                        val speedMBps = (nowBytes - lastSampleBytes) / 1_048_576.0 / dtSec
+                        val efficiency = speedMBps * 2 / maxConcurrency
+                        when {
+                            efficiency < 1.0 -> maxConcurrency = maxOf(1, maxConcurrency - 1)
+                            efficiency > 1.5 -> maxConcurrency = minOf(6, maxConcurrency + 1)
                         }
-                        // 清理该文件的内存进度
-                        val currentProgress = state.syncTask.fileProgress.toMutableMap()
-                        currentProgress.remove(relPath)
-                        state.syncTask = state.syncTask.copy(
-                            fileProgress = currentProgress,
-                            completedFiles = successCount,
-                            transferredBytes = completedBytes
-                        )
-                        if (!success && error != null) {
-                            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败 [${index + 1}/${queue.size}]: $relPath - $error")
-                        }
-                        updateSingleEntry(relPath)
-                    },
-                    onStatusChange = {
-                        updateSingleEntry(relPath)
                     }
-                )
+                    lastSampleBytes = nowBytes
+                    lastSampleTime = nowTime
+                }
             }
 
+            // 上传工作协程
+            val uploadJobs = mutableListOf<Job>()
+
+            while (queueIndex < queue.size || activeWorkers > 0) {
+                // 等待直到有空闲并发位
+                while (activeWorkers >= maxConcurrency && queueIndex < queue.size) {
+                    delay(100)
+                }
+
+                // 启动新上传（如果队列中还有文件）
+                if (queueIndex < queue.size && activeWorkers < maxConcurrency) {
+                    val idx = queueIndex++
+                    val (file, relPath) = queue[idx]
+                    val fileSize = file.length()
+                    activeWorkers++
+
+                    val job = launch {
+                        try {
+                            engine.uploadSingleFile(
+                                relativePath = relPath,
+                                remoteBasePath = remoteBasePath,
+                                syncDb = syncDb,
+                                onProgress = { uploadedBytes, totalBytes ->
+                                    activeFileBytes[relPath] = uploadedBytes
+                                    val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                                    currentProgress[relPath] = SyncFileProgress(
+                                        relativePath = relPath,
+                                        totalBytes = totalBytes,
+                                        uploadedBytes = uploadedBytes,
+                                        status = UploadStatus.UPLOADING
+                                    )
+                                    val activeTotal = activeFileBytes.values.sum()
+                                    state.syncTask = state.syncTask.copy(
+                                        fileProgress = currentProgress,
+                                        completedFiles = successCount.get(),
+                                        transferredBytes = completedBytes.get() + activeTotal
+                                    )
+                                    updateSingleEntry(relPath)
+                                },
+                                onComplete = { success, error ->
+                                    activeFileBytes.remove(relPath)
+                                    if (success) {
+                                        successCount.incrementAndGet()
+                                        completedBytes.addAndGet(fileSize)
+                                    } else {
+                                        failCount.incrementAndGet()
+                                    }
+                                    val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                                    currentProgress.remove(relPath)
+                                    state.syncTask = state.syncTask.copy(
+                                        fileProgress = currentProgress,
+                                        completedFiles = successCount.get(),
+                                        transferredBytes = completedBytes.get()
+                                    )
+                                    if (!success && error != null) {
+                                        com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败 [${idx + 1}/${queue.size}]: $relPath - $error")
+                                    }
+                                    updateSingleEntry(relPath)
+                                },
+                                onStatusChange = {
+                                    updateSingleEntry(relPath)
+                                }
+                            )
+                        } finally {
+                            activeWorkers--
+                        }
+                    }
+                    uploadJobs.add(job)
+                }
+
+                // 清理已完成的 job
+                uploadJobs.removeAll { !it.isActive }
+            }
+
+            monitorJob.cancel()
+            uploadJobs.forEach { it.join() }
+
             // ⑪ 最终状态
-            state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED, completedFiles = successCount)
-            val msg = "文件夹上传完成: 成功${successCount}个" + if (failCount > 0) "，失败${failCount}个" else ""
+            state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED, completedFiles = successCount.get())
+            val finalSuccess = successCount.get()
+            val finalFail = failCount.get()
+            val msg = "文件夹上传完成: 成功${finalSuccess}个" + if (finalFail > 0) "，失败${finalFail}个" else ""
             android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
             kotlinx.coroutines.delay(1500)
             state.syncDialogVisible = false
@@ -799,6 +863,49 @@ class CloudPaneController(
             parent = next
         }
         return changed
+    }
+
+    /** 自然排序比较器：路径按深度优先 + 数字按自然序（file2 < file10） */
+    private fun naturalOrderComparator(vaultDir: String) = Comparator<File> { a, b ->
+        val pathA = a.relativeTo(File(vaultDir)).path.replace('\\', '/')
+        val pathB = b.relativeTo(File(vaultDir)).path.replace('\\', '/')
+        naturalCompare(pathA, pathB)
+    }
+
+    private fun naturalCompare(a: String, b: String): Int {
+        var i = 0
+        var j = 0
+        while (i < a.length && j < b.length) {
+            val ca = a[i]
+            val cb = b[j]
+            if (ca.isDigit() && cb.isDigit()) {
+                // 提取连续数字，按数值比较
+                var numA = 0L
+                while (i < a.length && a[i].isDigit()) {
+                    numA = numA * 10 + (a[i] - '0')
+                    i++
+                }
+                var numB = 0L
+                while (j < b.length && b[j].isDigit()) {
+                    numB = numB * 10 + (b[j] - '0')
+                    j++
+                }
+                val cmp = numA.compareTo(numB)
+                if (cmp != 0) return cmp
+            } else {
+                val cmp = ca.compareTo(cb)
+                if (cmp != 0) return cmp
+                i++
+                j++
+            }
+        }
+        return a.length.compareTo(b.length)
+    }
+
+    /** 获取应用累计发送字节数（被动读取，不消耗流量） */
+    private fun getAppUploadBytes(): Long {
+        val bytes = TrafficStats.getUidTxBytes(Process.myUid())
+        return if (bytes > 0) bytes else 0L
     }
 
     private data class FolderAggregate(

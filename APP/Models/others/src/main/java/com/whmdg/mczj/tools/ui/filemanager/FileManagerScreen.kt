@@ -1184,8 +1184,8 @@ fun FileManagerScreen(
                                         cloudState = cloudState,
                                         isFocused = vm.focusedPanel == FocusedPanel.LEFT,
                                         onFocus = { vm.focusedPanel = FocusedPanel.LEFT },
-                                        onNavigateUp = { vm.panels.cloud?.goUp() },
-                                        onNavigateTo = { path -> vm.panels.cloud?.navigateTo(path) },
+                                        onNavigateUp = { vm.focusedPanel = FocusedPanel.LEFT; vm.panels.cloud?.goUp() },
+                                        onNavigateTo = { path -> vm.focusedPanel = FocusedPanel.LEFT; vm.panels.cloud?.navigateTo(path) },
                                         parentPath = parentPaths[0],
                                         onBack = {
                                             vm.panels.exitCloudMode()
@@ -1195,7 +1195,7 @@ fun FileManagerScreen(
                                         onDelete = { path -> vm.panels.cloud?.deleteBoth(path) },
                                         onDeleteLocal = { path -> vm.panels.cloud?.deleteLocal(path) },
                                         onDeleteCloud = { path -> vm.panels.cloud?.deleteCloud(path) },
-                                        onLongClick = { entry -> selectedCloudEntry = entry }
+                                        onLongClick = { entry -> vm.focusedPanel = FocusedPanel.LEFT; selectedCloudEntry = entry }
                                     )
                                 }
                                 // 右面板（普通模式）
@@ -5705,42 +5705,48 @@ private fun SyncProgressDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // 进度文字
-                Text(
-                    text = buildString {
-                        when (task.phase) {
-                            SyncPhase.SCANNING -> append("扫描中...")
-                            else -> {
-                                append("${task.completedFiles}/${task.totalFiles} 文件")
-                                if (task.totalBytes > 0) {
-                                    val pct = (task.transferredBytes * 100 / task.totalBytes).toInt()
-                                    append(" (${pct}%)")
-                                }
-                            }
-                        }
-                    },
-                    fontSize = 13.sp,
-                    color = subTextColor
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // 进度条
-                LinearProgressIndicator(
-                    progress = { task.overallProgress },
-                    modifier = Modifier.fillMaxWidth().height(4.dp),
-                    color = Color(0xFF3B82F6),
-                    trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
-                )
-
-                // 速度（仅上传/下载时显示）
-                if (task.phase == SyncPhase.SYNCING && task.speed > 0) {
-                    Spacer(modifier = Modifier.height(4.dp))
+                if (task.phase == SyncPhase.SCANNING) {
+                    // 扫描阶段：不定进度条（循环滚动）
                     Text(
-                        text = "${FormatUtils.formatBytes(task.speed)}/s",
-                        fontSize = 11.sp,
+                        text = "扫描中...",
+                        fontSize = 13.sp,
                         color = subTextColor
                     )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().height(4.dp),
+                        color = Color(0xFF3B82F6),
+                        trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
+                    )
+                } else {
+                    // 上传阶段：确定进度条
+                    Text(
+                        text = buildString {
+                            append("${task.completedFiles}/${task.totalFiles} 文件")
+                            if (task.totalBytes > 0) {
+                                val pct = (task.transferredBytes * 100 / task.totalBytes).toInt()
+                                append(" (${pct}%)")
+                            }
+                        },
+                        fontSize = 13.sp,
+                        color = subTextColor
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        progress = { task.overallProgress },
+                        modifier = Modifier.fillMaxWidth().height(4.dp),
+                        color = Color(0xFF3B82F6),
+                        trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
+                    )
+                    // 速度
+                    if (task.speed > 0) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "${FormatUtils.formatBytes(task.speed)}/s",
+                            fontSize = 11.sp,
+                            color = subTextColor
+                        )
+                    }
                 }
             }
         }
@@ -5902,15 +5908,29 @@ private fun SyncStatusBar(
     val greenW = if (uploadedSize > 0) maxOf(uploadedSize.toFloat(), minWeight) else 0f
     val yellowW = if (uploadingSize > 0) maxOf(uploadingSize.toFloat(), minWeight) else 0f
     val redW = if (remaining > 0) maxOf(remaining.toFloat(), minWeight) else 0f
+    val pct = if (totalSize > 0) uploadedSize * 100.0 / totalSize else 0.0
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(3.dp)
-            .clip(RoundedCornerShape(1.5.dp))
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        if (greenW > 0f) Box(Modifier.weight(greenW).fillMaxHeight().background(Color(0xFF4CAF50)))
-        if (yellowW > 0f) Box(Modifier.weight(yellowW).fillMaxHeight().background(Color(0xFFFFC107)))
-        if (redW > 0f) Box(Modifier.weight(redW).fillMaxHeight().background(Color(0xFFE57373)))
-        if (totalSize <= 0L) Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE57373)))
+        // 进度条（左侧，占剩余空间）
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .height(3.dp)
+                .clip(RoundedCornerShape(1.5.dp))
+        ) {
+            if (greenW > 0f) Box(Modifier.weight(greenW).fillMaxHeight().background(Color(0xFF4CAF50)))
+            if (yellowW > 0f) Box(Modifier.weight(yellowW).fillMaxHeight().background(Color(0xFFFFC107)))
+            if (redW > 0f) Box(Modifier.weight(redW).fillMaxHeight().background(Color(0xFFE57373)))
+            if (totalSize <= 0L) Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE57373)))
+        }
+        // 百分比（右侧）
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = "${String.format("%.1f", pct)}%",
+            fontSize = 10.sp,
+            color = Color(0xFF94A3B8)
+        )
     }
 }
