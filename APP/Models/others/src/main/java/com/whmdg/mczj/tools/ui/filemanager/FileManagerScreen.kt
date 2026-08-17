@@ -5663,41 +5663,43 @@ private fun SyncProgressDialog(
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                // 顶部：标题 + 按钮
+                // 顶部：隐藏按钮 + 文件名（右对齐，后缀位置固定） + 关闭按钮
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 隐藏按钮（左侧）
+                    IconButton(onClick = onHide, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            imageVector = Icons.Default.Remove,
+                            contentDescription = "隐藏",
+                            tint = subTextColor,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    // 文件名（居中，右对齐使后缀位置固定）
                     Text(
                         text = when (task.phase) {
                             SyncPhase.SCANNING -> "扫描中..."
                             SyncPhase.COMPLETED -> "同步完成"
                             else -> task.currentFileName ?: "同步中..."
                         },
+                        modifier = Modifier.weight(1f),
+                        textAlign = TextAlign.End,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
-                        color = textColor
+                        color = textColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        // 隐藏按钮
-                        IconButton(onClick = onHide, modifier = Modifier.size(32.dp)) {
-                            Icon(
-                                imageVector = Icons.Default.Remove,
-                                contentDescription = "隐藏",
-                                tint = subTextColor,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                        // 关闭按钮
-                        IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "关闭",
-                                tint = subTextColor,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
+                    // 关闭按钮（右侧）
+                    IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "关闭",
+                            tint = subTextColor,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
 
