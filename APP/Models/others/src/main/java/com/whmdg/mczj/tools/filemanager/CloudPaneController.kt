@@ -57,7 +57,16 @@ class CloudPaneController(
         var uploadConfirmDialog by mutableStateOf<UploadConfirmState?>(null)
         /** 取消上传回调（由弹窗 ✕ 按钮调用） */
         var onCancelUpload: (() -> Unit)? = null
+        /** 是否已完成首次初始化扫描 */
+        var isInitialized by mutableStateOf(false)
+        /** 已删除文件确认对话框 */
+        var deletedFilesDialog by mutableStateOf<DeletedFilesState?>(null)
     }
+
+    data class DeletedFilesState(
+        val deletedPaths: List<String>,
+        val onConfirm: (deleteFromCloud: Boolean) -> Unit
+    )
 
     data class UploadConfirmState(
         val completedCount: Int,
@@ -98,7 +107,7 @@ class CloudPaneController(
             return if (base.isEmpty()) "/$folder" else "$base/$folder"
         }
 
-    /** 初始化：打开 DB + 注册日志写入器 + 同步本地文件 + 列出根目录 */
+    /** 初始化：打开 DB + 注册日志写入器 + 首次扫描 + 列出根目录 */
     fun init() {
         syncDb = SyncDatabase.getInstance(context, vaultName)
         state.vaultFolderName = vaultName
@@ -108,7 +117,11 @@ class CloudPaneController(
         com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.externalWriter = { tag, message ->
             com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.log(context, tag, message)
         }
-        syncLocalFiles()
+        // 仅首次初始化时全量扫描
+        if (!state.isInitialized) {
+            syncLocalFiles()
+            state.isInitialized = true
+        }
         navigateTo("/")
     }
 
@@ -257,9 +270,9 @@ class CloudPaneController(
         }
     }
 
-    /** 上传文件夹：扫描分类 → 用户决策（跳过/重传已完成） → 逐个上传 */
+    /** 上传文件夹：对比本地文件与 DB → 用户决策 → 并发上传 */
     private fun uploadFolder(folderRelativePath: String) {
-        scope.launch {
+        scope.launch(Dispatchers.Default) {
             val folder = File(vaultDir, folderRelativePath.trimStart('/'))
             if (!folder.exists() || !folder.isDirectory) return@launch
 
@@ -268,66 +281,107 @@ class CloudPaneController(
             state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING)
             state.syncDialogVisible = true
 
-            // ① 递归扫描所有文件
-            val allFiles = withContext(Dispatchers.IO) {
+            // ① 获取本地文件列表（磁盘）
+            val localFiles = withContext(Dispatchers.IO) {
                 folder.walkTopDown()
                     .filter { it.isFile && it.name !in excludedFiles }
                     .sortedWith(naturalOrderComparator(vaultDir))
                     .toList()
             }
 
-            if (allFiles.isEmpty()) {
-                android.widget.Toast.makeText(context, "文件夹为空", android.widget.Toast.LENGTH_SHORT).show()
+            if (localFiles.isEmpty()) {
+                withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "文件夹为空", android.widget.Toast.LENGTH_SHORT).show() }
+                state.syncDialogVisible = false
                 return@launch
             }
 
-            // ② 分类：查询每个文件的 DB 状态
-            data class ClassifiedFile(val file: File, val relPath: String, val dbStatus: SyncStatus?)
-            val classified = withContext(Dispatchers.IO) {
-                allFiles.map { file ->
-                    val relPath = "/" + file.relativeTo(File(vaultDir)).path.replace('\\', '/')
-                    val dbEntry = syncDb.getEntry("local_entries", relPath)
-                    ClassifiedFile(file, relPath, dbEntry?.status)
+            // ② 获取 DB 中该文件夹下的所有条目
+            val dbEntries = withContext(Dispatchers.IO) {
+                syncDb.getEntriesByParent("local_entries", folderRelativePath)
+            }
+            val dbMap = dbEntries.associateBy { it.path }
+
+            // ③ 对比：本地有 + DB 有 = 已完成/已知；本地有 + DB 无 = 需上传；DB 有 + 本地无 = 已删除
+            val localPathSet = localFiles.map {
+                "/" + it.relativeTo(File(vaultDir)).path.replace('\\', '/')
+            }.toSet()
+
+            val completedFiles = mutableListOf<Pair<File, String>>()
+            val toUpload = mutableListOf<Pair<File, String>>()
+            val deletedPaths = mutableListOf<String>()
+
+            for (file in localFiles) {
+                val relPath = "/" + file.relativeTo(File(vaultDir)).path.replace('\\', '/')
+                val dbEntry = dbMap[relPath]
+                when {
+                    dbEntry == null -> toUpload.add(file to relPath)
+                    dbEntry.status == SyncStatus.COMPLETED -> completedFiles.add(file to relPath)
+                    dbEntry.status == SyncStatus.UPLOADING -> {
+                        // 正在上传，跳过
+                    }
+                    else -> toUpload.add(file to relPath) // PENDING/QUEUED/PAUSED
                 }
             }
 
-            // ③ 检查是否有正在上传的文件
-            if (classified.any { it.dbStatus == SyncStatus.UPLOADING }) {
-                android.widget.Toast.makeText(context, "当前有文件正在上传，请等待完成", android.widget.Toast.LENGTH_SHORT).show()
+            // DB 有但本地无 → 已本地删除
+            for (dbEntry in dbEntries) {
+                if (dbEntry.path !in localPathSet) {
+                    deletedPaths.add(dbEntry.path)
+                }
+            }
+
+            // ④ 若有已删除文件，询问用户
+            if (deletedPaths.isNotEmpty()) {
+                val deleteFromCloud = suspendCancellableCoroutine<Boolean> { cont ->
+                    state.deletedFilesDialog = DeletedFilesState(
+                        deletedPaths = deletedPaths,
+                        onConfirm = { deleteFromCloud -> cont.resume(deleteFromCloud) {} }
+                    )
+                }
+                if (deleteFromCloud) {
+                    withContext(Dispatchers.IO) {
+                        for (path in deletedPaths) {
+                            val remotePath = "$remoteBasePath/${path.trimStart('/')}"
+                            try { webdavClient.delete(remotePath) } catch (_: Exception) {}
+                            syncDb.deleteEntry("local_entries", path)
+                            syncDb.deleteEntry("cloud_entries", path)
+                        }
+                    }
+                }
+                // 选择忽略：保持 DB 不动
+            }
+
+            // ⑤ 检查是否有正在上传的文件
+            if (withContext(Dispatchers.IO) {
+                    syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING).isNotEmpty()
+                }) {
+                withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "当前有文件正在上传，请等待完成", android.widget.Toast.LENGTH_SHORT).show() }
+                state.syncDialogVisible = false
                 return@launch
             }
 
-            // ④ 分桶
-            val completedFiles = classified.filter { it.dbStatus == SyncStatus.COMPLETED }
-            val toUpload = classified.filter {
-                it.dbStatus == null || it.dbStatus == SyncStatus.PENDING ||
-                it.dbStatus == SyncStatus.QUEUED || it.dbStatus == SyncStatus.PAUSED
-            }
-
-            // ⑤ 若有已完成文件，询问用户
+            // ⑥ 询问用户：跳过已完成 or 全部重传
             val reUploadAll = if (completedFiles.isNotEmpty()) {
                 suspendCancellableCoroutine<Boolean> { cont ->
                     state.uploadConfirmDialog = UploadConfirmState(
                         completedCount = completedFiles.size,
-                        totalCount = classified.size,
+                        totalCount = localFiles.size,
                         onComplete = { reUpload -> cont.resume(reUpload) {} }
                     )
                 }
             } else false
 
-            // ⑥ 构建最终队列
+            // ⑦ 构建最终队列
             val queue: List<Pair<File, String>> = if (reUploadAll) {
-                // 全部重新上传：已完成文件重置为 QUEUED
                 withContext(Dispatchers.IO) {
-                    for (cf in completedFiles) {
-                        syncDb.updateStatus("local_entries", cf.relPath, SyncStatus.QUEUED)
-                        syncDb.updateUploadedSize("local_entries", cf.relPath, 0)
+                    for ((file, relPath) in completedFiles) {
+                        syncDb.updateStatus("local_entries", relPath, SyncStatus.QUEUED)
+                        syncDb.updateUploadedSize("local_entries", relPath, 0)
                     }
                 }
-                classified.map { it.file to it.relPath }
+                completedFiles + toUpload
             } else {
-                // 跳过已完成：仅上传未完成文件
-                toUpload.map { it.file to it.relPath }
+                toUpload
             }
 
             // 将队列中未录入 DB 的文件写入
@@ -355,11 +409,11 @@ class CloudPaneController(
             silentRefresh()
 
             if (queue.isEmpty()) {
-                android.widget.Toast.makeText(context, "所有文件已上传完成", android.widget.Toast.LENGTH_SHORT).show()
+                withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "所有文件已上传完成", android.widget.Toast.LENGTH_SHORT).show() }
                 return@launch
             }
 
-            android.widget.Toast.makeText(context, "开始上传 ${queue.size} 个文件", android.widget.Toast.LENGTH_SHORT).show()
+            withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "开始上传 ${queue.size} 个文件", android.widget.Toast.LENGTH_SHORT).show() }
 
             // ⑧ 创建日志文件 + SyncEngine
             val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
@@ -518,7 +572,7 @@ class CloudPaneController(
             // ⑪ 最终状态
             state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED, completedFiles = completedFilesCount)
             val msg = "文件夹上传完成: 成功${successCount}个" + if (failCount > 0) "，失败${failCount}个" else ""
-            android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show()
+            withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show() }
             kotlinx.coroutines.delay(1500)
             state.syncDialogVisible = false
         }

@@ -1404,6 +1404,20 @@ fun FileManagerScreen(
                         }
                     )
                 }
+                val deletedDialog = cloudStateForOverlay.deletedFilesDialog
+                if (deletedDialog != null) {
+                    DeletedFilesDialog(
+                        deletedCount = deletedDialog.deletedPaths.size,
+                        onIgnore = {
+                            deletedDialog.onConfirm(false)
+                            cloudStateForOverlay.deletedFilesDialog = null
+                        },
+                        onDeleteCloud = {
+                            deletedDialog.onConfirm(true)
+                            cloudStateForOverlay.deletedFilesDialog = null
+                        }
+                    )
+                }
             }
 
             // ── 历史记录面板（从底部滑入，占屏幕一半高度） ──
@@ -5887,6 +5901,67 @@ private fun UploadConfirmDialog(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         Text("跳过已上传", fontSize = 13.sp, color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==================== 已删除文件确认对话框 ====================
+
+@Composable
+private fun DeletedFilesDialog(
+    deletedCount: Int,
+    onIgnore: () -> Unit,
+    onDeleteCloud: () -> Unit
+) {
+    val isDarkMode = LocalIsDarkMode.current
+    val cardColor = if (isDarkMode) Color(0xFF1E293B) else Color.White
+    val textColor = if (isDarkMode) Color(0xFFE2E8F0) else Color(0xFF1E293B)
+    val subTextColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(0.85f),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = cardColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                Text(
+                    text = "发现已删除文件",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "有 ${deletedCount} 个文件在本地已删除，但云端仍有备份。如何处理？",
+                    fontSize = 13.sp,
+                    color = subTextColor,
+                    lineHeight = 18.sp
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onDeleteCloud) {
+                        Text("删除云端文件", fontSize = 13.sp, color = Color(0xFFEF4444))
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = onIgnore,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text("忽略", fontSize = 13.sp, color = Color.White)
                     }
                 }
             }
