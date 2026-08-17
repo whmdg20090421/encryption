@@ -1371,6 +1371,41 @@ fun FileManagerScreen(
                 }
             }
 
+            // ── 云盘同步弹窗 + 悬浮窗（在 FileManagerScreen 层级，可跨面板） ──
+            val cloudStateForOverlay = vm.panels.cloud?.state
+            if (cloudStateForOverlay != null) {
+                val overlayTask = cloudStateForOverlay.syncTask
+                val overlayIsActive = overlayTask.phase == SyncPhase.SYNCING || overlayTask.phase == SyncPhase.SCANNING
+                if (cloudStateForOverlay.syncDialogVisible && overlayIsActive) {
+                    SyncProgressDialog(
+                        task = overlayTask,
+                        onClose = { cloudStateForOverlay.syncDialogVisible = false },
+                        onHide = { cloudStateForOverlay.syncDialogVisible = false }
+                    )
+                }
+                if (!cloudStateForOverlay.syncDialogVisible && overlayIsActive) {
+                    SyncFloatingBubble(
+                        task = overlayTask,
+                        onClick = { cloudStateForOverlay.syncDialogVisible = true }
+                    )
+                }
+                val overlayConfirm = cloudStateForOverlay.uploadConfirmDialog
+                if (overlayConfirm != null) {
+                    UploadConfirmDialog(
+                        completedCount = overlayConfirm.completedCount,
+                        totalCount = overlayConfirm.totalCount,
+                        onSkip = {
+                            overlayConfirm.onComplete(false)
+                            cloudStateForOverlay.uploadConfirmDialog = null
+                        },
+                        onReUpload = {
+                            overlayConfirm.onComplete(true)
+                            cloudStateForOverlay.uploadConfirmDialog = null
+                        }
+                    )
+                }
+            }
+
             // ── 历史记录面板（从底部滑入，占屏幕一半高度） ──
             if (showHistoryPanel) {
                 BackHandler { showHistoryPanel = false }
@@ -5599,43 +5634,7 @@ private fun CloudPanelContent(
             }
         }
     }
-
-        // ── 同步弹窗 ──
-        val task = cloudState.syncTask
-        val isActive = task.phase == SyncPhase.SYNCING || task.phase == SyncPhase.SCANNING
-        if (cloudState.syncDialogVisible && isActive) {
-            SyncProgressDialog(
-                task = task,
-                onClose = { cloudState.syncDialogVisible = false },
-                onHide = { cloudState.syncDialogVisible = false }
-            )
-        }
-
-        // ── 悬浮窗（弹窗隐藏后显示） ──
-        if (!cloudState.syncDialogVisible && isActive) {
-            SyncFloatingBubble(
-                task = task,
-                onClick = { cloudState.syncDialogVisible = true }
-            )
-        }
-
-        // ── 上传确认对话框 ──
-        val confirmDialog = cloudState.uploadConfirmDialog
-        if (confirmDialog != null) {
-            UploadConfirmDialog(
-                completedCount = confirmDialog.completedCount,
-                totalCount = confirmDialog.totalCount,
-                onSkip = {
-                    confirmDialog.onComplete(false)
-                    cloudState.uploadConfirmDialog = null
-                },
-                onReUpload = {
-                    confirmDialog.onComplete(true)
-                    cloudState.uploadConfirmDialog = null
-                }
-            )
-        }
-    }
+}
 
 }
 
@@ -5658,8 +5657,7 @@ private fun SyncProgressDialog(
     ) {
         Card(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp),
+                .fillMaxWidth(0.8f),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = cardColor),
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
