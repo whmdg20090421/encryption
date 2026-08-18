@@ -269,6 +269,12 @@ fun CloudSyncScreen(
             } else {
                 // 同步列表
                 var showConfirmDialog by remember { mutableStateOf<CloudSyncItem?>(null) }
+                var concurrencyTargetId by remember { mutableStateOf<String?>(null) }
+                val currentConcurrency = remember {
+                    context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
+                        .getInt("max_concurrency", 3)
+                }
+
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 8.dp)
@@ -276,9 +282,23 @@ fun CloudSyncScreen(
                     items(syncItems, key = { it.id }) { item ->
                         CloudSyncCard(
                             item = item,
-                            onClick = { showConfirmDialog = item }
+                            onClick = { showConfirmDialog = item },
+                            onConcurrencyChange = { concurrencyTargetId = it }
                         )
                     }
+                }
+
+                // 并发数滑动条对话框
+                if (concurrencyTargetId != null) {
+                    ConcurrencySliderDialog(
+                        currentValue = currentConcurrency,
+                        onConfirm = { value ->
+                            context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
+                                .edit().putInt("max_concurrency", value).apply()
+                            concurrencyTargetId = null
+                        },
+                        onDismiss = { concurrencyTargetId = null }
+                    )
                 }
 
                 // 确认进入云盘模式弹窗
@@ -634,7 +654,8 @@ fun extractPathFromUrl(url: String): String {
 @Composable
 private fun CloudSyncCard(
     item: CloudSyncItem,
-    onClick: () -> Unit = {}
+    onClick: () -> Unit = {},
+    onConcurrencyChange: ((Int) -> Unit)? = null
 ) {
     val isDarkMode = LocalIsDarkMode.current
     val glowEnabled = true
@@ -740,6 +761,27 @@ private fun CloudSyncCard(
                                 color = if (isDarkMode) Color(0x8C00C8FF) else Color(0x8C00838F)
                             )
                         }
+                        // 设置按钮
+                        var showMenu by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(onClick = { showMenu = true }, modifier = Modifier.size(32.dp)) {
+                                Icon(
+                                    Icons.Default.Settings,
+                                    contentDescription = "设置",
+                                    tint = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("并发数调整") },
+                                    onClick = {
+                                        showMenu = false
+                                        onConcurrencyChange?.invoke(item.id)
+                                    }
+                                )
+                            }
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
@@ -827,5 +869,83 @@ private fun CloudInfoRow(label: String, value: String, isDarkMode: Boolean) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+    }
+}
+
+// ── 并发数滑动条对话框 ──
+
+@Composable
+private fun ConcurrencySliderDialog(
+    currentValue: Int,
+    onConfirm: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isDarkMode = LocalIsDarkMode.current
+    val cardColor = if (isDarkMode) Color(0xFF1E293B) else Color.White
+    val textColor = if (isDarkMode) Color(0xFFE2E8F0) else Color(0xFF1E293B)
+    val subTextColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+
+    var sliderValue by remember { mutableFloatStateOf(currentValue.toFloat()) }
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(0.85f),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = cardColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                Text(
+                    text = "并发数调整",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "同时上传文件数量：${sliderValue.toInt()}",
+                    fontSize = 14.sp,
+                    color = subTextColor
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Slider(
+                    value = sliderValue,
+                    onValueChange = { sliderValue = it },
+                    valueRange = 1f..10f,
+                    steps = 8,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color(0xFF3B82F6),
+                        activeTrackColor = Color(0xFF3B82F6)
+                    )
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("1", fontSize = 11.sp, color = subTextColor)
+                    Text("10", fontSize = 11.sp, color = subTextColor)
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text("取消", color = subTextColor)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = { onConfirm(sliderValue.toInt()) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("确认", color = Color.White)
+                    }
+                }
+            }
+        }
     }
 }

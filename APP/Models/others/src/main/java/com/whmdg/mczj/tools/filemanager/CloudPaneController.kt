@@ -1,8 +1,6 @@
 package com.whmdg.mczj.tools.ui.filemanager
 
 import android.content.Context
-import android.net.TrafficStats
-import android.os.Process
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -295,42 +293,61 @@ class CloudPaneController(
                 return@launch
             }
 
-            // ② 获取 DB 中该文件夹下的所有条目
-            val dbEntries = withContext(Dispatchers.IO) {
-                syncDb.getEntriesByParent("local_entries", folderRelativePath)
-            }
-            val dbMap = dbEntries.associateBy { it.path }
-
-            // ③ 对比：本地有 + DB 有 = 已完成/已知；本地有 + DB 无 = 需上传；DB 有 + 本地无 = 已删除
+            // ② 本地文件树
             val localPathSet = localFiles.map {
                 "/" + it.relativeTo(File(vaultDir)).path.replace('\\', '/')
             }.toSet()
 
+            // ③ DB 中该文件夹下已上传（COMPLETED）的文件树
+            val prefix = if (folderRelativePath.endsWith("/")) folderRelativePath else "$folderRelativePath/"
+            val completedDbEntries = withContext(Dispatchers.IO) {
+                syncDb.getEntriesByStatus("local_entries", SyncStatus.COMPLETED)
+                    .filter { it.path.startsWith(prefix) || it.path == folderRelativePath }
+            }
+
+            // ④ 前置校验：本地与 DB 已上传文件的大小/时间戳一致性检查
+            val localFileMap = localFiles.associateBy {
+                "/" + it.relativeTo(File(vaultDir)).path.replace('\\', '/')
+            }
+            val validCompletedPaths = mutableSetOf<String>()
+            withContext(Dispatchers.IO) {
+                for (dbEntry in completedDbEntries) {
+                    val localFile = localFileMap[dbEntry.path]
+                    if (localFile != null) {
+                        val currentSize = localFile.length()
+                        val currentLastModified = Instant.ofEpochMilli(localFile.lastModified()).toString()
+                        if (dbEntry.size == currentSize && dbEntry.lastModified == currentLastModified) {
+                            validCompletedPaths.add(dbEntry.path)
+                        } else {
+                            // 大小或时间戳不一致 → 重置为 PENDING
+                            syncDb.updateStatus("local_entries", dbEntry.path, SyncStatus.PENDING)
+                        }
+                    }
+                    // 本地不存在的不在这里处理，后面删除检测会处理
+                }
+            }
+
+            // ⑤ 对比：双方都有=跳过，本地有DB无=需上传，DB有本地无=已删除
             val completedFiles = mutableListOf<Pair<File, String>>()
             val toUpload = mutableListOf<Pair<File, String>>()
             val deletedPaths = mutableListOf<String>()
 
             for (file in localFiles) {
                 val relPath = "/" + file.relativeTo(File(vaultDir)).path.replace('\\', '/')
-                val dbEntry = dbMap[relPath]
-                when {
-                    dbEntry == null -> toUpload.add(file to relPath)
-                    dbEntry.status == SyncStatus.COMPLETED -> completedFiles.add(file to relPath)
-                    dbEntry.status == SyncStatus.UPLOADING -> {
-                        // 正在上传，跳过
-                    }
-                    else -> toUpload.add(file to relPath) // PENDING/QUEUED/PAUSED
+                if (relPath in validCompletedPaths) {
+                    completedFiles.add(file to relPath)
+                } else {
+                    toUpload.add(file to relPath)
                 }
             }
 
-            // DB 有但本地无 → 已本地删除
-            for (dbEntry in dbEntries) {
+            for (dbEntry in completedDbEntries) {
                 if (dbEntry.path !in localPathSet) {
                     deletedPaths.add(dbEntry.path)
                 }
             }
 
-            // ④ 若有已删除文件，询问用户
+            // ⑥ 若有已删除文件，询问用户
             if (deletedPaths.isNotEmpty()) {
                 val deleteFromCloud = suspendCancellableCoroutine<Boolean> { cont ->
                     state.deletedFilesDialog = DeletedFilesState(
@@ -351,7 +368,7 @@ class CloudPaneController(
                 // 选择忽略：保持 DB 不动
             }
 
-            // ⑤ 检查是否有正在上传的文件
+            // ⑦ 检查是否有正在上传的文件
             if (withContext(Dispatchers.IO) {
                     syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING).isNotEmpty()
                 }) {
@@ -360,7 +377,7 @@ class CloudPaneController(
                 return@launch
             }
 
-            // ⑥ 询问用户：跳过已完成 or 全部重传
+            // ⑧ 询问用户：跳过已完成 or 全部重传
             val reUploadAll = if (completedFiles.isNotEmpty()) {
                 suspendCancellableCoroutine<Boolean> { cont ->
                     state.uploadConfirmDialog = UploadConfirmState(
@@ -371,7 +388,7 @@ class CloudPaneController(
                 }
             } else false
 
-            // ⑦ 构建最终队列
+            // ⑨ 构建最终队列
             val queue: List<Pair<File, String>> = if (reUploadAll) {
                 withContext(Dispatchers.IO) {
                     for ((file, relPath) in completedFiles) {
@@ -384,7 +401,7 @@ class CloudPaneController(
                 toUpload
             }
 
-            // 将队列中未录入 DB 的文件写入
+            // ⑩ 将队列中未录入 DB 的文件写入
             withContext(Dispatchers.IO) {
                 for ((file, relPath) in queue) {
                     val existing = syncDb.getEntry("local_entries", relPath)
@@ -405,17 +422,18 @@ class CloudPaneController(
                 }
             }
 
-            // ⑦ 静默刷新当前目录（不闪 loading）
+            // ⑪ 静默刷新当前目录（不闪 loading）
             silentRefresh()
 
             if (queue.isEmpty()) {
+                state.syncDialogVisible = false
                 withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "所有文件已上传完成", android.widget.Toast.LENGTH_SHORT).show() }
                 return@launch
             }
 
             withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "开始上传 ${queue.size} 个文件", android.widget.Toast.LENGTH_SHORT).show() }
 
-            // ⑧ 创建日志文件 + SyncEngine
+            // ⑫ 创建日志文件 + SyncEngine
             val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val logFileName = "${vaultName}_batch_${timestamp}.log"
@@ -431,8 +449,9 @@ class CloudPaneController(
                 logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
 
-            // ⑨ 显示同步弹窗 + 初始化状态栏
-            var maxConcurrency = 2
+            // ⑬ 显示同步弹窗 + 初始化状态栏
+            val maxConcurrency = context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
+                .getInt("max_concurrency", 3)
             state.onCancelUpload = ::cancelUpload
             state.syncDialogVisible = true
             state.syncTask = SyncTaskState(
@@ -442,7 +461,7 @@ class CloudPaneController(
                 concurrency = maxConcurrency
             )
 
-            // ⑩ 并发动态上传（Channel 单写者模式，避免多线程竞态）
+            // ⑭ 并发动态上传（Channel 单写者模式，避免多线程竞态）
             val completedBytes = java.util.concurrent.atomic.AtomicLong(0)
             val activeFileBytes = java.util.concurrent.ConcurrentHashMap<String, Long>()
             var activeWorkers = 0
@@ -503,29 +522,6 @@ class CloudPaneController(
                 }
             }
 
-            // 速度监控协程
-            var lastSampleBytes = getAppUploadBytes()
-            var lastSampleTime = System.currentTimeMillis()
-
-            val monitorJob = launch {
-                while (isActive) {
-                    delay(3000)
-                    val nowBytes = getAppUploadBytes()
-                    val nowTime = System.currentTimeMillis()
-                    val dtSec = (nowTime - lastSampleTime) / 1000.0
-                    if (dtSec > 0) {
-                        val speedMBps = (nowBytes - lastSampleBytes) / 1_048_576.0 / dtSec
-                        val efficiency = speedMBps * 2 / maxConcurrency
-                        when {
-                            efficiency < 1.0 -> maxConcurrency = maxOf(1, maxConcurrency - 1)
-                            efficiency > 1.5 -> maxConcurrency = minOf(6, maxConcurrency + 1)
-                        }
-                    }
-                    lastSampleBytes = nowBytes
-                    lastSampleTime = nowTime
-                }
-            }
-
             // 上传工作协程（回调仅发送事件，不直接修改 state）
             val uploadJobs = mutableListOf<Job>()
 
@@ -570,14 +566,13 @@ class CloudPaneController(
             uploadJobs.forEach { it.join() }
             eventChannel.close()
             updaterJob.join()
-            monitorJob.cancel()
 
-            // ⑪ 最终状态
+            // ⑮ 最终状态
             state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED, completedFiles = completedFilesCount)
             val msg = "文件夹上传完成: 成功${successCount}个" + if (failCount > 0) "，失败${failCount}个" else ""
             withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show() }
 
-            // ⑫ 更新云盘卡片数据（云端大小、文件数、同步时间）
+            // ⑯ 更新云盘卡片数据（云端大小、文件数、同步时间）
             withContext(Dispatchers.IO) {
                 val cloudSize = syncDb.getSyncedSize("cloud_entries")
                 val cloudCounts = syncDb.getStatusCounts("cloud_entries")
@@ -991,12 +986,6 @@ class CloudPaneController(
             }
         }
         return a.length.compareTo(b.length)
-    }
-
-    /** 获取应用累计发送字节数（被动读取，不消耗流量） */
-    private fun getAppUploadBytes(): Long {
-        val bytes = TrafficStats.getUidTxBytes(Process.myUid())
-        return if (bytes > 0) bytes else 0L
     }
 
     /** 并发上传事件（通过 Channel 传递给更新器协程，避免多线程竞态） */
