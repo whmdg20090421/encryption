@@ -274,8 +274,10 @@ class CloudPaneController(
             val folder = File(vaultDir, folderRelativePath.trimStart('/'))
             if (!folder.exists() || !folder.isDirectory) return@launch
 
-            // 弹窗延迟到队列确认非空后再显示
+            // 显示弹窗（扫描阶段：不定进度条）
             state.onCancelUpload = ::cancelUpload
+            state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING)
+            state.syncDialogVisible = true
 
             // ① 获取本地文件列表（磁盘）
             val localFiles = withContext(Dispatchers.IO) {
@@ -420,19 +422,18 @@ class CloudPaneController(
                 }
             }
 
-            // ⑪ 静默刷新当前目录（不闪 loading）
-            silentRefresh()
-
             if (queue.isEmpty()) {
-                state.syncTask = SyncTaskState()
-                state.syncDialogVisible = false
+                // 完全关闭弹窗（与上传完成同样的关闭方式）
+                state.syncTask = SyncTaskState(phase = SyncPhase.COMPLETED)
+                silentRefresh()
                 withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "所有文件已上传完成", android.widget.Toast.LENGTH_SHORT).show() }
+                kotlinx.coroutines.delay(1500)
+                state.syncDialogVisible = false
                 return@launch
             }
 
-            // 队列非空，显示弹窗
-            state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING)
-            state.syncDialogVisible = true
+            // ⑪ 静默刷新当前目录（不闪 loading）
+            silentRefresh()
 
             withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "开始上传 ${queue.size} 个文件", android.widget.Toast.LENGTH_SHORT).show() }
 
@@ -452,9 +453,11 @@ class CloudPaneController(
                 logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
 
-            // ⑬ 切换到上传阶段
+            // ⑬ 显示同步弹窗 + 初始化状态栏
             val maxConcurrency = context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
                 .getInt("max_concurrency", 3)
+            state.onCancelUpload = ::cancelUpload
+            state.syncDialogVisible = true
             state.syncTask = SyncTaskState(
                 phase = SyncPhase.SYNCING,
                 totalFiles = queue.size,
