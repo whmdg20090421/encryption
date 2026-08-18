@@ -437,7 +437,33 @@ class CloudPaneController(
 
             withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "开始上传 ${queue.size} 个文件", android.widget.Toast.LENGTH_SHORT).show() }
 
-            // ⑫ 创建日志文件 + SyncEngine
+            // ⑫ 预计算文件夹聚合值（避免上传过程中 O(n²) 全量遍历）
+            val folderTotalSize = mutableMapOf<String, Long>()
+            for ((file, relPath) in queue) {
+                val fileSize = file.length()
+                var parent = relPath.substringBeforeLast('/', "/")
+                while (parent.isNotEmpty()) {
+                    folderTotalSize[parent] = (folderTotalSize[parent] ?: 0L) + fileSize
+                    val next = parent.substringBeforeLast('/', "")
+                    if (next == parent) break
+                    parent = next
+                }
+            }
+            // 将预计算的 totalSize 写入当前视图中的文件夹条目
+            withContext(Dispatchers.Main) {
+                val entries = state.entries.toMutableList()
+                var changed = false
+                for ((folderPath, totalSize) in folderTotalSize) {
+                    val idx = entries.indexOfFirst { it.relativePath == folderPath && it.isDirectory }
+                    if (idx >= 0) {
+                        entries[idx] = entries[idx].copy(totalSize = totalSize)
+                        changed = true
+                    }
+                }
+                if (changed) state.entries = entries
+            }
+
+            // ⑬ 创建日志文件 + SyncEngine
             val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val logFileName = "${vaultName}_batch_${timestamp}.log"
@@ -479,49 +505,68 @@ class CloudPaneController(
 
             val updaterJob = launch {
                 for (event in eventChannel) {
-                    when (event) {
-                        is UploadEvent.Progress -> {
-                            activeFileBytes[event.path] = event.uploaded
-                            val currentProgress = state.syncTask.fileProgress.toMutableMap()
-                            currentProgress[event.path] = SyncFileProgress(
-                                relativePath = event.path,
-                                totalBytes = event.total,
-                                uploadedBytes = event.uploaded,
-                                status = UploadStatus.UPLOADING
-                            )
-                            val activeTotal = activeFileBytes.values.sum()
-                            state.syncTask = state.syncTask.copy(
-                                fileProgress = currentProgress,
-                                transferredBytes = completedBytes.get() + activeTotal,
-                                concurrency = maxConcurrency
-                            )
-                            updateSingleEntry(event.path)
-                        }
-                        is UploadEvent.Complete -> {
-                            activeFileBytes.remove(event.path)
-                            completedFilesCount++
-                            if (event.success) {
-                                successCount++
-                                completedBytes.addAndGet(event.fileSize)
-                            } else {
-                                failCount++
+                    try {
+                        when (event) {
+                            is UploadEvent.Progress -> {
+                                val oldUploaded = activeFileBytes[event.path] ?: 0L
+                                val delta = event.uploaded - oldUploaded
+                                activeFileBytes[event.path] = event.uploaded
+                                val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                                currentProgress[event.path] = SyncFileProgress(
+                                    relativePath = event.path,
+                                    totalBytes = event.total,
+                                    uploadedBytes = event.uploaded,
+                                    status = UploadStatus.UPLOADING
+                                )
+                                val activeTotal = activeFileBytes.values.sum()
+                                state.syncTask = state.syncTask.copy(
+                                    fileProgress = currentProgress,
+                                    transferredBytes = completedBytes.get() + activeTotal,
+                                    concurrency = maxConcurrency
+                                )
+                                // 增量更新父文件夹（不遍历）
+                                if (delta > 0) updateFolderAggregates(event.path, addGreen = delta, addYellow = -delta)
+                                // 只更新文件自身进度条（不触发 aggregateFolder）
+                                updateFileProgressOnly(event.path)
                             }
-                            val currentProgress = state.syncTask.fileProgress.toMutableMap()
-                            currentProgress.remove(event.path)
-                            state.syncTask = state.syncTask.copy(
-                                fileProgress = currentProgress,
-                                completedFiles = completedFilesCount,
-                                transferredBytes = completedBytes.get(),
-                                concurrency = maxConcurrency
-                            )
-                            if (!event.success && event.error != null) {
-                                com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败: ${event.path} - ${event.error}")
+                            is UploadEvent.Complete -> {
+                                val oldUploaded = activeFileBytes[event.path] ?: 0L
+                                val remaining = event.fileSize - oldUploaded
+                                activeFileBytes.remove(event.path)
+                                completedFilesCount++
+                                if (event.success) {
+                                    successCount++
+                                    completedBytes.addAndGet(event.fileSize)
+                                } else {
+                                    failCount++
+                                }
+                                val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                                currentProgress.remove(event.path)
+                                state.syncTask = state.syncTask.copy(
+                                    fileProgress = currentProgress,
+                                    completedFiles = completedFilesCount,
+                                    transferredBytes = completedBytes.get(),
+                                    concurrency = maxConcurrency
+                                )
+                                if (!event.success && event.error != null) {
+                                    com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败: ${event.path} - ${event.error}")
+                                }
+                                // 增量更新父文件夹（余量从黄色移到绿色）
+                                if (event.success && remaining > 0) updateFolderAggregates(event.path, addGreen = remaining, addYellow = -remaining)
+                                // 完整更新文件状态（含 DB 读取）
+                                updateSingleEntry(event.path)
                             }
-                            updateSingleEntry(event.path)
+                            is UploadEvent.StatusChange -> {
+                                // 文件开始上传：设置文件夹的黄色进度条
+                                val fileEntry = state.entries.find { it.relativePath == event.path }
+                                if (fileEntry != null) {
+                                    updateFolderAggregates(event.path, addYellow = fileEntry.totalSize)
+                                }
+                                updateSingleEntry(event.path)
+                            }
                         }
-                        is UploadEvent.StatusChange -> {
-                            updateSingleEntry(event.path)
-                        }
+                    } catch (e: Exception) {
+                        com.whmdg.mczj.tools.util.DiagnosticLog.log("SyncUpdater", "事件处理异常: ${e.message}")
                     }
                 }
             }
@@ -890,6 +935,39 @@ class CloudPaneController(
         return FolderAggregate(totalSize, uploadedSize, uploadingSize)
     }
 
+    /** 只更新文件自身的进度条（不触发父文件夹聚合，用于 Progress 事件高频调用） */
+    private fun updateFileProgressOnly(relativePath: String) {
+        val entries = state.entries
+        val idx = entries.indexOfFirst { it.relativePath == relativePath }
+        if (idx < 0) return
+
+        val old = entries[idx]
+        if (old.isDirectory) return  // 文件夹不处理
+
+        val dbEntry = syncDb.getEntry("local_entries", relativePath)
+        val liveProgress = state.syncTask.fileProgress[relativePath]
+        val fileSize = old.totalSize
+        val greenSize = when {
+            dbEntry?.status == SyncStatus.COMPLETED -> fileSize
+            liveProgress != null -> liveProgress.uploadedBytes
+            (dbEntry?.uploadedSize ?: 0L) > 0 -> dbEntry!!.uploadedSize
+            else -> 0L
+        }
+        val yellowSize = when {
+            dbEntry?.status == SyncStatus.COMPLETED -> 0L
+            liveProgress != null -> fileSize - liveProgress.uploadedBytes
+            else -> 0L
+        }
+        val newEntry = old.copy(
+            uploadedSize = greenSize,
+            uploadingSize = yellowSize,
+            syncStatus = dbEntry?.status ?: old.syncStatus
+        )
+        val newEntries = entries.toMutableList()
+        newEntries[idx] = newEntry
+        state.entries = newEntries
+    }
+
     /** 就地更新单个条目（不重建整个列表，不显示 loading） */
     private fun updateSingleEntry(relativePath: String) {
         val entries = state.entries.toMutableList()
@@ -953,6 +1031,30 @@ class CloudPaneController(
             parent = next
         }
         return changed
+    }
+
+    /** 增量更新父文件夹聚合值（O(深度)，不遍历文件）
+     *  @param addGreen 绿色增加量（已上传字节）
+     *  @param addYellow 黄色增加量（正在上传字节，负数表示减少）
+     */
+    private fun updateFolderAggregates(changedPath: String, addGreen: Long = 0, addYellow: Long = 0) {
+        var parent = changedPath.substringBeforeLast('/', "/")
+        while (parent.isNotEmpty()) {
+            val entries = state.entries
+            val idx = entries.indexOfFirst { it.relativePath == parent && it.isDirectory }
+            if (idx >= 0) {
+                val old = entries[idx]
+                val newEntries = entries.toMutableList()
+                newEntries[idx] = old.copy(
+                    uploadedSize = (old.uploadedSize + addGreen).coerceAtLeast(0L),
+                    uploadingSize = (old.uploadingSize + addYellow).coerceAtLeast(0L)
+                )
+                state.entries = newEntries
+            }
+            val next = parent.substringBeforeLast('/', "")
+            if (next == parent) break
+            parent = next
+        }
     }
 
     /** 自然排序比较器：路径按深度优先 + 数字按自然序（file2 < file10） */
