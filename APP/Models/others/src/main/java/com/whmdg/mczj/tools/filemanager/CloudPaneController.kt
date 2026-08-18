@@ -432,6 +432,7 @@ class CloudPaneController(
             )
 
             // ⑨ 显示同步弹窗 + 初始化状态栏
+            var maxConcurrency = 2
             state.onCancelUpload = ::cancelUpload
             state.syncDialogVisible = true
             state.syncTask = SyncTaskState(
@@ -444,7 +445,6 @@ class CloudPaneController(
             // ⑩ 并发动态上传（Channel 单写者模式，避免多线程竞态）
             val completedBytes = java.util.concurrent.atomic.AtomicLong(0)
             val activeFileBytes = java.util.concurrent.ConcurrentHashMap<String, Long>()
-            var maxConcurrency = 2
             var activeWorkers = 0
             var queueIndex = 0
             var completedFilesCount = 0  // 仅更新器协程访问
