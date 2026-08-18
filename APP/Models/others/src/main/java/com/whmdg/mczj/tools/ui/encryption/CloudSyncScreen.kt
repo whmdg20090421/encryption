@@ -49,6 +49,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -271,6 +272,8 @@ fun CloudSyncScreen(
                 // 同步列表
                 var showConfirmDialog by remember { mutableStateOf<CloudSyncItem?>(null) }
                 var showConcurrencyDialog by remember { mutableStateOf(false) }
+                var showDiffDialog by remember { mutableStateOf(false) }
+                var diffResult by remember { mutableStateOf<Int?>(null) }
                 val currentConcurrency = remember {
                     context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
                         .getInt("max_concurrency", 3)
@@ -284,7 +287,8 @@ fun CloudSyncScreen(
                         CloudSyncCard(
                             item = item,
                             onClick = { showConfirmDialog = item },
-                            onConcurrencyChange = { showConcurrencyDialog = true }
+                            onConcurrencyChange = { showConcurrencyDialog = true },
+                            onDiffRefresh = { showDiffDialog = true }
                         )
                     }
                 }
@@ -299,6 +303,38 @@ fun CloudSyncScreen(
                             showConcurrencyDialog = false
                         },
                         onDismiss = { showConcurrencyDialog = false }
+                    )
+                }
+
+                // 差异文件扫描对话框
+                if (showDiffDialog) {
+                    val vaultItem = syncItems.firstOrNull { it.type == "保险箱" }
+                    val vaultRecord = vaultItem?.let { vaultService.getVault(it.vaultId) }
+                    DiffScanDialog(
+                        context = context,
+                        vaultDir = vaultRecord?.relativePath ?: "",
+                        vaultName = vaultItem?.vaultName ?: "",
+                        onComplete = { count ->
+                            showDiffDialog = false
+                            diffResult = count
+                        }
+                    )
+                }
+
+                // 差异结果对话框
+                if (diffResult != null) {
+                    DiffResultDialog(
+                        diffCount = diffResult!!,
+                        onConfirm = {
+                            // 更新卡片
+                            val vaultId = syncItems.firstOrNull { it.type == "保险箱" }?.vaultId ?: 0
+                            val idx = syncItems.indexOfFirst { it.id == "vault_$vaultId" }
+                            if (idx >= 0) {
+                                syncItems[idx] = syncItems[idx].copy(diffFileCount = diffResult!!)
+                                CloudSyncStore.save(context, syncItems.toList())
+                            }
+                            diffResult = null
+                        }
                     )
                 }
 
@@ -656,7 +692,8 @@ fun extractPathFromUrl(url: String): String {
 private fun CloudSyncCard(
     item: CloudSyncItem,
     onClick: () -> Unit = {},
-    onConcurrencyChange: (() -> Unit)? = null
+    onConcurrencyChange: (() -> Unit)? = null,
+    onDiffRefresh: (() -> Unit)? = null
 ) {
     val isDarkMode = LocalIsDarkMode.current
     val glowEnabled = true
@@ -779,6 +816,13 @@ private fun CloudSyncCard(
                                     onClick = {
                                         showMenu = false
                                         onConcurrencyChange?.invoke()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("刷新差异文件") },
+                                    onClick = {
+                                        showMenu = false
+                                        onDiffRefresh?.invoke()
                                     }
                                 )
                             }
@@ -940,6 +984,172 @@ private fun ConcurrencySliderDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = { onConfirm(sliderValue.toInt()) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("确认", color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── 差异文件扫描对话框 ──
+
+@Composable
+private fun DiffScanDialog(
+    context: Context,
+    vaultDir: String,
+    vaultName: String,
+    onComplete: (Int) -> Unit
+) {
+    val isDarkMode = LocalIsDarkMode.current
+    val cardColor = if (isDarkMode) Color(0xFF1E293B) else Color.White
+    val textColor = if (isDarkMode) Color(0xFFE2E8F0) else Color(0xFF1E293B)
+    val subTextColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+
+    var localProgress by remember { mutableFloatStateOf(0f) }
+    var dbProgress by remember { mutableFloatStateOf(0f) }
+    var compareProgress by remember { mutableFloatStateOf(0f) }
+    var localDone by remember { mutableStateOf(false) }
+    var dbDone by remember { mutableStateOf(false) }
+
+    // 异步扫描
+    LaunchedEffect(Unit) {
+        val vaultDirFile = java.io.File(vaultDir)
+        val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vaultName)
+
+        // 并行扫描本地和DB
+        val localDeferred = kotlinx.coroutines.async(Dispatchers.IO) {
+            val files = mutableListOf<String>()
+            if (vaultDirFile.exists()) {
+                vaultDirFile.walkTopDown().filter { it.isFile }.forEach { file ->
+                    val relPath = "/" + file.relativeTo(vaultDirFile).path.replace('\\', '/')
+                    files.add(relPath)
+                    localProgress = 0.5f // 简化进度
+                }
+            }
+            localProgress = 1f
+            localDone = true
+            files.toSet()
+        }
+
+        val dbDeferred = kotlinx.coroutines.async(Dispatchers.IO) {
+            val entries = syncDb.getEntriesByStatus("local_entries", com.whmdg.mczj.tools.encryption.data.SyncStatus.COMPLETED)
+            dbProgress = 1f
+            dbDone = true
+            entries.map { it.path }.toSet()
+        }
+
+        val localSet = localDeferred.await()
+        val dbSet = dbDeferred.await()
+
+        // 对比差异
+        compareProgress = 0.5f
+        val diffCount = (localSet union dbSet).size - (localSet intersect dbSet).size
+        compareProgress = 1f
+
+        onComplete(diffCount)
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(0.85f),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = cardColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                Text(
+                    text = "扫描差异文件",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // 扫描本地
+                Text("扫描本地文件", fontSize = 13.sp, color = subTextColor)
+                Spacer(modifier = Modifier.height(4.dp))
+                LinearProgressIndicator(
+                    progress = { localProgress },
+                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                    color = Color(0xFF3B82F6),
+                    trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 扫描DB
+                Text("扫描已上传记录", fontSize = 13.sp, color = subTextColor)
+                Spacer(modifier = Modifier.height(4.dp))
+                LinearProgressIndicator(
+                    progress = { dbProgress },
+                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                    color = Color(0xFF3B82F6),
+                    trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 对比差异
+                Text("对比差异", fontSize = 13.sp, color = subTextColor)
+                Spacer(modifier = Modifier.height(4.dp))
+                LinearProgressIndicator(
+                    progress = { compareProgress },
+                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                    color = Color(0xFF3B82F6),
+                    trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
+                )
+            }
+        }
+    }
+}
+
+// ── 差异结果对话框 ──
+
+@Composable
+private fun DiffResultDialog(
+    diffCount: Int,
+    onConfirm: () -> Unit
+) {
+    val isDarkMode = LocalIsDarkMode.current
+    val cardColor = if (isDarkMode) Color(0xFF1E293B) else Color.White
+    val textColor = if (isDarkMode) Color(0xFFE2E8F0) else Color(0xFF1E293B)
+    val subTextColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(0.85f),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = cardColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                Text(
+                    text = "差异扫描完成",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "差异文件：${diffCount} 个",
+                    fontSize = 14.sp,
+                    color = subTextColor
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Button(
+                        onClick = onConfirm,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
                         shape = RoundedCornerShape(8.dp)
                     ) {

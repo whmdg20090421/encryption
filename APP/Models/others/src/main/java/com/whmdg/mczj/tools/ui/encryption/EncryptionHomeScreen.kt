@@ -147,13 +147,7 @@ fun EncryptionHomeScreen(
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                         }
                     },
-                    actions = {
-                        if (subTab == 0) {
-                            IconButton(onClick = { folderPicker.launch(null) }) {
-                                Icon(Icons.Default.ArrowUpward, contentDescription = "导入保险箱")
-                            }
-                        }
-                    }
+                    actions = {}
                 )
             },
             bottomBar = {
