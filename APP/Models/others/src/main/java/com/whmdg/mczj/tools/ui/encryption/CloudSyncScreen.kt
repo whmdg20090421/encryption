@@ -1020,37 +1020,39 @@ private fun DiffScanDialog(
         val vaultDirFile = java.io.File(vaultDir)
         val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vaultName)
 
-        // 并行扫描本地和DB
-        val localDeferred = kotlinx.coroutines.async(Dispatchers.IO) {
-            val files = mutableListOf<String>()
-            if (vaultDirFile.exists()) {
-                vaultDirFile.walkTopDown().filter { it.isFile }.forEach { file ->
-                    val relPath = "/" + file.relativeTo(vaultDirFile).path.replace('\\', '/')
-                    files.add(relPath)
-                    localProgress = 0.5f // 简化进度
+        kotlinx.coroutines.coroutineScope {
+            // 并行扫描本地和DB
+            val localDeferred = kotlinx.coroutines.async(Dispatchers.IO) {
+                val files = mutableListOf<String>()
+                if (vaultDirFile.exists()) {
+                    vaultDirFile.walkTopDown().filter { it.isFile }.forEach { file ->
+                        val relPath = "/" + file.relativeTo(vaultDirFile).path.replace('\\', '/')
+                        files.add(relPath)
+                        localProgress = 0.5f
+                    }
                 }
+                localProgress = 1f
+                localDone = true
+                files.toSet()
             }
-            localProgress = 1f
-            localDone = true
-            files.toSet()
+
+            val dbDeferred = kotlinx.coroutines.async(Dispatchers.IO) {
+                val entries = syncDb.getEntriesByStatus("local_entries", com.whmdg.mczj.tools.encryption.data.SyncStatus.COMPLETED)
+                dbProgress = 1f
+                dbDone = true
+                entries.map { it.path }.toSet()
+            }
+
+            val localSet = localDeferred.await()
+            val dbSet = dbDeferred.await()
+
+            // 对比差异
+            compareProgress = 0.5f
+            val diffCount = (localSet union dbSet).size - (localSet intersect dbSet).size
+            compareProgress = 1f
+
+            onComplete(diffCount)
         }
-
-        val dbDeferred = kotlinx.coroutines.async(Dispatchers.IO) {
-            val entries = syncDb.getEntriesByStatus("local_entries", com.whmdg.mczj.tools.encryption.data.SyncStatus.COMPLETED)
-            dbProgress = 1f
-            dbDone = true
-            entries.map { it.path }.toSet()
-        }
-
-        val localSet = localDeferred.await()
-        val dbSet = dbDeferred.await()
-
-        // 对比差异
-        compareProgress = 0.5f
-        val diffCount = (localSet union dbSet).size - (localSet intersect dbSet).size
-        compareProgress = 1f
-
-        onComplete(diffCount)
     }
 
     Box(
