@@ -437,7 +437,8 @@ class CloudPaneController(
             state.syncTask = SyncTaskState(
                 phase = SyncPhase.SYNCING,
                 totalFiles = queue.size,
-                totalBytes = queue.sumOf { it.first.length() }
+                totalBytes = queue.sumOf { it.first.length() },
+                concurrency = maxConcurrency
             )
 
             // ⑩ 并发动态上传（Channel 单写者模式，避免多线程竞态）
@@ -468,7 +469,8 @@ class CloudPaneController(
                             val activeTotal = activeFileBytes.values.sum()
                             state.syncTask = state.syncTask.copy(
                                 fileProgress = currentProgress,
-                                transferredBytes = completedBytes.get() + activeTotal
+                                transferredBytes = completedBytes.get() + activeTotal,
+                                concurrency = maxConcurrency
                             )
                             updateSingleEntry(event.path)
                         }
@@ -486,7 +488,8 @@ class CloudPaneController(
                             state.syncTask = state.syncTask.copy(
                                 fileProgress = currentProgress,
                                 completedFiles = completedFilesCount,
-                                transferredBytes = completedBytes.get()
+                                transferredBytes = completedBytes.get(),
+                                concurrency = maxConcurrency
                             )
                             if (!event.success && event.error != null) {
                                 com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败: ${event.path} - ${event.error}")
@@ -573,6 +576,22 @@ class CloudPaneController(
             state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED, completedFiles = completedFilesCount)
             val msg = "文件夹上传完成: 成功${successCount}个" + if (failCount > 0) "，失败${failCount}个" else ""
             withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show() }
+
+            // ⑫ 更新云盘卡片数据（云端大小、文件数、同步时间）
+            withContext(Dispatchers.IO) {
+                val cloudSize = syncDb.getSyncedSize("cloud_entries")
+                val cloudCounts = syncDb.getStatusCounts("cloud_entries")
+                val cloudFileCount = cloudCounts[SyncStatus.COMPLETED] ?: 0
+                val now = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+                com.whmdg.mczj.tools.ui.encryption.CloudSyncStore.update(context, "vault_$vaultId") { item ->
+                    item.copy(
+                        cloudSize = cloudSize,
+                        cloudFileCount = cloudFileCount,
+                        lastSyncTime = now
+                    )
+                }
+            }
+
             kotlinx.coroutines.delay(1500)
             state.syncDialogVisible = false
         }

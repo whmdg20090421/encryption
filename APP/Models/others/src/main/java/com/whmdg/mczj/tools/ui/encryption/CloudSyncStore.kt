@@ -79,4 +79,14 @@ object CloudSyncStore {
         val items = load(context).filter { it.id != id }
         save(context, items)
     }
+
+    /** 更新指定同步项（按 id 匹配） */
+    fun update(context: Context, id: String, transform: (CloudSyncItem) -> CloudSyncItem) {
+        val items = load(context).toMutableList()
+        val idx = items.indexOfFirst { it.id == id }
+        if (idx >= 0) {
+            items[idx] = transform(items[idx])
+            save(context, items)
+        }
+    }
 }

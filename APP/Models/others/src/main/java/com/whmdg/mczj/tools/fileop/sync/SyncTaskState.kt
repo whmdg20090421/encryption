@@ -39,6 +39,7 @@ data class SyncTaskState(
     val totalBytes: Long = 0,
     val transferredBytes: Long = 0,
     val speed: Long = 0,                   // bytes/sec
+    val concurrency: Int = 0,              // 当前并发数
     val fileProgress: Map<String, SyncFileProgress> = emptyMap()
 ) {
     val overallProgress: Float

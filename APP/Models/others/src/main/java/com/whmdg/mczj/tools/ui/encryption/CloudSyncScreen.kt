@@ -100,14 +100,26 @@ fun CloudSyncScreen(
     var showSettingsDialog by remember { mutableStateOf(false) }
     var confirmError by remember { mutableStateOf<Throwable?>(null) }
 
-    // 从持久化存储加载同步项 + 检测 WebDAV 连接状态
+    // 从持久化存储加载同步项 + 刷新保险箱大小 + 检测 WebDAV 连接状态
     LaunchedEffect(Unit) {
         val saved = CloudSyncStore.load(context)
         if (saved.isNotEmpty()) {
+            // 刷新保险箱类型的本地大小和文件数
+            val refreshed = saved.map { item ->
+                if (item.type == "保险箱" && item.vaultId > 0) {
+                    val vault = vaultService.getVault(item.vaultId)
+                    if (vault != null) item.copy(
+                        vaultSize = vault.storageSize,
+                        localFileCount = vault.fileCount
+                    ) else item
+                } else item
+            }
             syncItems.clear()
-            syncItems.addAll(saved)
-            processedVaultIds.addAll(saved.filter { it.id.startsWith("vault_") }
+            syncItems.addAll(refreshed)
+            processedVaultIds.addAll(refreshed.filter { it.id.startsWith("vault_") }
                 .map { it.id.removePrefix("vault_").toIntOrNull() ?: 0 })
+            // 有变化则持久化
+            if (refreshed != saved) CloudSyncStore.save(context, refreshed)
         }
         // 检测 WebDAV 连接状态
         val configs = WebDavServerStore.getAll(context)

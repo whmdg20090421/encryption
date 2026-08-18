@@ -1163,10 +1163,12 @@ fun FileManagerScreen(
                     val currentFontSize = vm.fileNameFontSize  // ponytail: 在 Layout 外读取，使状态变化触发重组
                     val isCloudMode = vm.panels.isCloudMode
                     val isCloudLoading = vm.panels.isCloudLoading
+                    // cloudMode 参数为 true 但 isCloudMode 尚未设置时，也显示加载中
+                    val showCloudLoading = (isCloudLoading || cloudMode) && !isCloudMode
                     Layout(
                         modifier = Modifier.fillMaxSize(),
                         content = {
-                            if (isCloudLoading && !isCloudMode) {
+                            if (showCloudLoading) {
                                 // 云盘初始化中：左位置显示加载圈
                                 Box(
                                     modifier = Modifier.fillMaxSize(),
@@ -5733,31 +5735,41 @@ private fun SyncProgressDialog(
                         trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
                     )
                 } else {
-                    // 上传阶段：确定进度条
-                    Text(
-                        text = buildString {
-                            append("${task.completedFiles}/${task.totalFiles} 文件")
-                            if (task.totalBytes > 0) {
-                                val pct = (task.transferredBytes * 100 / task.totalBytes).toInt()
-                                append(" (${pct}%)")
-                            }
-                        },
-                        fontSize = 13.sp,
-                        color = subTextColor
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    LinearProgressIndicator(
-                        progress = { task.overallProgress },
-                        modifier = Modifier.fillMaxWidth().height(4.dp),
-                        color = Color(0xFF3B82F6),
-                        trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
-                    )
-                    // 速度
-                    if (task.speed > 0) {
-                        Spacer(modifier = Modifier.height(4.dp))
+                    // 第一行：左侧文件数（并发数）  右侧大小（速度）
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
                         Text(
-                            text = "${FormatUtils.formatBytes(task.speed)}/s",
-                            fontSize = 11.sp,
+                            text = "${task.completedFiles}/${task.totalFiles} (并发；${task.concurrency})",
+                            fontSize = 13.sp,
+                            color = subTextColor
+                        )
+                        Text(
+                            text = buildString {
+                                append("${FormatUtils.formatBytes(task.transferredBytes)}/${FormatUtils.formatBytes(task.totalBytes)}")
+                                if (task.speed > 0) append(" (${FormatUtils.formatBytes(task.speed)}/s)")
+                            },
+                            fontSize = 13.sp,
+                            color = subTextColor
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    // 第二行：进度条 + 右侧百分比
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { task.overallProgress },
+                            modifier = Modifier.weight(1f).height(4.dp),
+                            color = Color(0xFF3B82F6),
+                            trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "${String.format("%.1f", task.overallProgress * 100)}%",
+                            fontSize = 10.sp,
                             color = subTextColor
                         )
                     }
