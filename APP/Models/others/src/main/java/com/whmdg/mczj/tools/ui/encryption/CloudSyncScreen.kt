@@ -39,6 +39,7 @@ import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.components.glowEffect
 import com.whmdg.mczj.tools.util.FormatUtils
+import android.content.Context
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.platform.LocalContext
@@ -269,7 +270,7 @@ fun CloudSyncScreen(
             } else {
                 // 同步列表
                 var showConfirmDialog by remember { mutableStateOf<CloudSyncItem?>(null) }
-                var concurrencyTargetId by remember { mutableStateOf<String?>(null) }
+                var showConcurrencyDialog by remember { mutableStateOf(false) }
                 val currentConcurrency = remember {
                     context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
                         .getInt("max_concurrency", 3)
@@ -283,21 +284,21 @@ fun CloudSyncScreen(
                         CloudSyncCard(
                             item = item,
                             onClick = { showConfirmDialog = item },
-                            onConcurrencyChange = { concurrencyTargetId = it }
+                            onConcurrencyChange = { showConcurrencyDialog = true }
                         )
                     }
                 }
 
                 // 并发数滑动条对话框
-                if (concurrencyTargetId != null) {
+                if (showConcurrencyDialog) {
                     ConcurrencySliderDialog(
                         currentValue = currentConcurrency,
                         onConfirm = { value ->
                             context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
                                 .edit().putInt("max_concurrency", value).apply()
-                            concurrencyTargetId = null
+                            showConcurrencyDialog = false
                         },
-                        onDismiss = { concurrencyTargetId = null }
+                        onDismiss = { showConcurrencyDialog = false }
                     )
                 }
 
@@ -655,7 +656,7 @@ fun extractPathFromUrl(url: String): String {
 private fun CloudSyncCard(
     item: CloudSyncItem,
     onClick: () -> Unit = {},
-    onConcurrencyChange: ((Int) -> Unit)? = null
+    onConcurrencyChange: (() -> Unit)? = null
 ) {
     val isDarkMode = LocalIsDarkMode.current
     val glowEnabled = true
@@ -777,7 +778,7 @@ private fun CloudSyncCard(
                                     text = { Text("并发数调整") },
                                     onClick = {
                                         showMenu = false
-                                        onConcurrencyChange?.invoke(item.id)
+                                        onConcurrencyChange?.invoke()
                                     }
                                 )
                             }
