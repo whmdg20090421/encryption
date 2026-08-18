@@ -1022,7 +1022,7 @@ private fun DiffScanDialog(
 
         kotlinx.coroutines.coroutineScope {
             // 并行扫描本地和DB
-            val localDeferred = kotlinx.coroutines.async(Dispatchers.IO) {
+            val localDeferred = async(Dispatchers.IO) {
                 val files = mutableListOf<String>()
                 if (vaultDirFile.exists()) {
                     vaultDirFile.walkTopDown().filter { it.isFile }.forEach { file ->
@@ -1036,7 +1036,7 @@ private fun DiffScanDialog(
                 files.toSet()
             }
 
-            val dbDeferred = kotlinx.coroutines.async(Dispatchers.IO) {
+            val dbDeferred = async(Dispatchers.IO) {
                 val entries = syncDb.getEntriesByStatus("local_entries", com.whmdg.mczj.tools.encryption.data.SyncStatus.COMPLETED)
                 dbProgress = 1f
                 dbDone = true
