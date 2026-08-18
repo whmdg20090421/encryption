@@ -274,10 +274,8 @@ class CloudPaneController(
             val folder = File(vaultDir, folderRelativePath.trimStart('/'))
             if (!folder.exists() || !folder.isDirectory) return@launch
 
-            // 显示弹窗（扫描阶段：不定进度条）
+            // 弹窗延迟到队列确认非空后再显示
             state.onCancelUpload = ::cancelUpload
-            state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING)
-            state.syncDialogVisible = true
 
             // ① 获取本地文件列表（磁盘）
             val localFiles = withContext(Dispatchers.IO) {
@@ -426,10 +424,15 @@ class CloudPaneController(
             silentRefresh()
 
             if (queue.isEmpty()) {
+                state.syncTask = SyncTaskState()
                 state.syncDialogVisible = false
                 withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "所有文件已上传完成", android.widget.Toast.LENGTH_SHORT).show() }
                 return@launch
             }
+
+            // 队列非空，显示弹窗
+            state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING)
+            state.syncDialogVisible = true
 
             withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "开始上传 ${queue.size} 个文件", android.widget.Toast.LENGTH_SHORT).show() }
 
@@ -449,11 +452,9 @@ class CloudPaneController(
                 logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
 
-            // ⑬ 显示同步弹窗 + 初始化状态栏
+            // ⑬ 切换到上传阶段
             val maxConcurrency = context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
                 .getInt("max_concurrency", 3)
-            state.onCancelUpload = ::cancelUpload
-            state.syncDialogVisible = true
             state.syncTask = SyncTaskState(
                 phase = SyncPhase.SYNCING,
                 totalFiles = queue.size,
