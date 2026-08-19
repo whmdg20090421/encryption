@@ -1,12 +1,15 @@
 package com.whmdg.mczj.tools.fileop
 
 import android.content.Context
+import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
+import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.encryption.services.CryptoService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -246,6 +249,8 @@ class CopyJob(
         val totalSize = sources.sumOf { File(it).walkTopDown().filter { f -> f.isFile }.sumOf { f -> f.length() } }
         var doneBytes = 0L
         var doneFiles = 0
+        // 保险箱目录大小累加器（绝对路径 → 累加大小）
+        val folderSizeAccumulator = mutableMapOf<String, Long>()
 
         manager.updateProgress(FileOpProgress(
             phase = "正在加密",
@@ -262,14 +267,38 @@ class CopyJob(
             val subDir = if (ctx.targetSubDir.isEmpty()) "" else ctx.targetSubDir
             if (srcFile.isDirectory) {
                 val dirSubDir = if (subDir.isEmpty()) srcFile.name else "$subDir/${srcFile.name}"
-                encryptDirToVault(srcFile, dirSubDir, ctx.targetSession, totalSize, doneBytes, doneFiles)
+                encryptDirToVault(srcFile, dirSubDir, ctx.targetSession, totalSize, doneBytes, doneFiles, folderSizeAccumulator)
                 doneBytes += srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+                // MOVE：整个目录加密完成后立即删除源目录
+                if (purpose == CopyPurpose.MOVE) {
+                    srcFile.deleteRecursively()
+                }
             } else {
                 currentStep = "加密: ${srcFile.name}"
-                val encrypted = CryptoService.encryptIntoVault(context, ctx.targetSession, srcFile, subDir)
+                val fileDoneBytes = doneBytes
+                val encrypted = CryptoService.encryptIntoVault(
+                    context, ctx.targetSession, srcFile, subDir,
+                    onProgress = { encryptedBytes, _ ->
+                        manager.updateProgress(FileOpProgress(
+                            phase = "正在加密",
+                            currentBytes = fileDoneBytes + encryptedBytes,
+                            totalBytes = totalSize,
+                            currentFileName = srcFile.name,
+                            fileIndex = doneFiles,
+                            fileCount = sources.size
+                        ))
+                    },
+                    cancelFlag = cancelFlag
+                )
                 vaultBytesAdded.addAndGet(encrypted.length())
                 vaultFilesAdded.incrementAndGet()
                 doneBytes += srcFile.length()
+                // 累加保险箱目录大小
+                accumulateFolderSize(folderSizeAccumulator, encrypted, ctx.targetSession.vaultDir, srcFile.length())
+                // MOVE：单文件加密完成后立即删除源文件
+                if (purpose == CopyPurpose.MOVE) {
+                    srcFile.delete()
+                }
             }
             doneFiles++
             manager.updateProgress(FileOpProgress(
@@ -283,12 +312,8 @@ class CopyJob(
             if (isGracefulCancelled()) break
         }
 
-        if (purpose == CopyPurpose.MOVE) {
-            for (src in sources) {
-                throwIfCancelled()
-                File(src).deleteRecursively()
-            }
-        }
+        // 写入 FolderSizeDb
+        saveFolderSizes(ctx.targetSession.vaultDir, folderSizeAccumulator)
     }
 
     private fun encryptDirToVault(
@@ -297,7 +322,8 @@ class CopyJob(
         session: VaultSession,
         totalSize: Long,
         baseBytes: Long,
-        baseFiles: Int
+        baseFiles: Int,
+        folderSizeAccumulator: MutableMap<String, Long>
     ) {
         val files = dir.walkTopDown().filter { it.isFile }.toList()
         var doneBytes = 0L
@@ -308,19 +334,51 @@ class CopyJob(
                 if (relPath.isEmpty()) parentSubDir else "$parentSubDir/$relPath"
             }
             currentStep = "加密: ${file.name}"
-            val encrypted = CryptoService.encryptIntoVault(context, session, file, fileSubDir)
+            val fileDoneBytes = doneBytes
+            val encrypted = CryptoService.encryptIntoVault(
+                context, session, file, fileSubDir,
+                onProgress = { encryptedBytes, _ ->
+                    manager.updateProgress(FileOpProgress(
+                        phase = "正在加密",
+                        currentBytes = baseBytes + fileDoneBytes + encryptedBytes,
+                        totalBytes = totalSize,
+                        currentFileName = file.name,
+                        fileIndex = baseFiles,
+                        fileCount = sources.size
+                    ))
+                },
+                cancelFlag = cancelFlag
+            )
             vaultBytesAdded.addAndGet(encrypted.length())
             vaultFilesAdded.incrementAndGet()
             doneBytes += file.length()
-            manager.updateProgress(FileOpProgress(
-                phase = "正在加密",
-                currentBytes = baseBytes + doneBytes,
-                totalBytes = totalSize,
-                currentFileName = file.name,
-                fileIndex = baseFiles,
-                fileCount = sources.size
-            ))
+            // 累加保险箱目录大小
+            accumulateFolderSize(folderSizeAccumulator, encrypted, session.vaultDir, file.length())
         }
+    }
+
+    /** 累加加密文件的大小到保险箱目录及其所有祖先目录 */
+    private fun accumulateFolderSize(
+        accumulator: MutableMap<String, Long>,
+        encryptedFile: File,
+        vaultDir: File,
+        fileSize: Long
+    ) {
+        var dir = encryptedFile.parentFile
+        while (dir != null && dir.absolutePath.startsWith(vaultDir.absolutePath)) {
+            accumulator[dir.absolutePath] = (accumulator[dir.absolutePath] ?: 0L) + fileSize
+            dir = dir.parentFile
+        }
+    }
+
+    /** 将累加的目录大小写入 FolderSizeDb */
+    private fun saveFolderSizes(vaultDir: File, accumulator: Map<String, Long>) {
+        if (accumulator.isEmpty()) return
+        val db = FolderSizeDb.load(vaultDir)
+        for ((path, size) in accumulator) {
+            db.put(path, FolderSizeInfo(size, System.currentTimeMillis()))
+        }
+        db.save(vaultDir)
     }
 
     // ═══════════════════════════════════════════════════════

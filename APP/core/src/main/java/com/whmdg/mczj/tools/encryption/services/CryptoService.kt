@@ -5,6 +5,7 @@ import com.whmdg.mczj.tools.encryption.core.FileCodec
 import com.whmdg.mczj.tools.encryption.core.FileConstants
 import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 把外部文件加密"进"保险箱，或把箱内文件解密"出"到指定目录。
@@ -20,7 +21,8 @@ object CryptoService {
         srcFile: File,
         subDir: String = "",
         overwrite: Boolean = false,
-        onProgress: (Long, Long) -> Unit = { _, _ -> }
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+        cancelFlag: AtomicBoolean? = null
     ): File {
         val origName = srcFile.name
         val outName: String
@@ -54,7 +56,8 @@ object CryptoService {
             dek = session.dek,
             encryptMetadata = session.record.encryptMetadata,
             customEncryption = session.record.customEncryption,
-            onProgress = onProgress
+            onProgress = onProgress,
+            cancelFlag = cancelFlag
         )
         return outFile
     }
