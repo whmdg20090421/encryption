@@ -4,6 +4,7 @@ import android.content.Context
 import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.security.ShellExecutor
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 文件访问抽象层：屏蔽普通/Shizuku/Root 三种通道差异。
@@ -16,8 +17,8 @@ import java.io.File
 interface FileAccessor {
     fun listChildren(path: String): List<DirEntry>?
     fun statMtime(path: String): Long?
-    /** 执行 shell 命令，返回 (stdout, stderr, exitCode)。NormalAccessor 返回失败。 */
-    fun exec(command: String): Triple<String, String, Int>
+    /** 执行 shell 命令，返回 (stdout, stderr, exitCode)。cancelFlag 为 true 时中断执行。 */
+    fun exec(command: String, cancelFlag: AtomicBoolean? = null): Triple<String, String, Int>
 
     companion object {
         fun create(level: FileAccessLevel, context: Context): FileAccessor = when (level) {
@@ -29,7 +30,7 @@ interface FileAccessor {
 }
 
 private class NormalAccessor : FileAccessor {
-    override fun exec(command: String): Triple<String, String, Int> = Triple("", "无 shell 权限", 1)
+    override fun exec(command: String, cancelFlag: AtomicBoolean?): Triple<String, String, Int> = Triple("", "无 shell 权限", 1)
 
     override fun listChildren(path: String): List<DirEntry>? {
         val dir = File(path)
@@ -59,11 +60,17 @@ private class ShellAccessor(
     private val useRoot: Boolean
 ) : FileAccessor {
 
-    override fun exec(command: String): Triple<String, String, Int> {
+    override fun exec(command: String, cancelFlag: AtomicBoolean?): Triple<String, String, Int> {
         val perm = if (useRoot) Permission.ROOT else Permission.ADB
         return try {
-            val stdout = ShellExecutor.execute(perm, command, debug = true)
-            Triple(stdout, "", 0)
+            if (cancelFlag != null) {
+                val sb = StringBuilder()
+                ShellExecutor.executeWithStdout(perm, command, { line -> sb.appendLine(line) }, cancelFlag)
+                Triple(sb.toString(), "", 0)
+            } else {
+                val stdout = ShellExecutor.execute(perm, command, debug = true)
+                Triple(stdout, "", 0)
+            }
         } catch (e: com.whmdg.mczj.tools.security.ShellException) {
             Triple("", "${e.message}\n${e.stderr}", e.exitCode)
         } catch (e: Exception) {

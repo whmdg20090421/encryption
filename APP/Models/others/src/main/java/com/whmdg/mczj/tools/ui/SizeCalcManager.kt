@@ -11,6 +11,7 @@ import com.whmdg.mczj.tools.util.FormatUtils.formatBytes
 import com.whmdg.mczj.tools.util.SizeTreeNode
 import kotlinx.coroutines.delay
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 文件夹大小统计进度管理（全局单例）。
@@ -66,13 +67,16 @@ object SizeCalcManager {
     var cancelRequested = false
         private set
 
+    /** 供 ShellExecutor 使用的取消标志（与 cancelRequested 同步） */
+    val cancelFlag = AtomicBoolean(false)
+
     /** 当前正在计算的 db 引用，用于手动保存 */
     private var currentDb: FolderSizeDb? = null
     private var saveDir: File? = null
     /** 丢弃回调（由 FileManagerViewModel 注册，用于重载 DB） */
     private var onDiscard: (() -> Unit)? = null
 
-    fun requestCancel() { cancelRequested = true }
+    fun requestCancel() { cancelRequested = true; cancelFlag.set(true) }
 
     /** 用户点击"保存"：将当前已计算的结果持久化 */
     fun save() { currentDb?.save(saveDir ?: return) }
@@ -102,7 +106,7 @@ object SizeCalcManager {
         this.onDiscard = onDiscard
         progress = 0f; currentFolder = ""
         scannedCount = 0; totalCount = 0
-        cancelRequested = false; loadError = null
+        cancelRequested = false; cancelFlag.set(false); loadError = null
         completedSize = -1L
         completedTree = null
         binderCooldownSeconds = 0
@@ -135,7 +139,7 @@ object SizeCalcManager {
         isCalculating = false
         progress = 0f; currentFolder = ""
         scannedCount = 0; totalCount = 0
-        cancelRequested = false; currentDb = null; saveDir = null; onDiscard = null
+        cancelRequested = false; cancelFlag.set(false); currentDb = null; saveDir = null; onDiscard = null
         binderCooldownSeconds = 0
         completedSize = size
         completedTree = tree

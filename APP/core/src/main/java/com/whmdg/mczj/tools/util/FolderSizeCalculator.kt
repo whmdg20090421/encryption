@@ -3,6 +3,7 @@ package com.whmdg.mczj.tools.util
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import kotlinx.coroutines.delay
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** 大小统计树形节点（文件或目录）。 */
 data class SizeTreeNode(
@@ -38,11 +39,13 @@ suspend fun calculateFolderSize(
     onScanned: (count: Int, currentFolder: String) -> Unit,
     onProgress: (processed: Int, total: Int, currentFolder: String) -> Unit,
     isCancelled: () -> Boolean,
-    onBinderCooldown: (suspend (secondsLeft: Int) -> Unit)? = null
+    onBinderCooldown: (suspend (secondsLeft: Int) -> Unit)? = null,
+    cancelFlag: AtomicBoolean? = null
 ): SizeCalcResult {
     // ── 0. 统计总目录数（用于进度条） ──
     val escaped = SevenZipCommand.escape(rootPath)
-    val (countOut, _, countExit) = accessor.exec("find $escaped -type d | wc -l")
+    val (countOut, countErr, countExit) = accessor.exec("find $escaped -type d | wc -l", cancelFlag)
+    if (isCancelled()) return SizeCalcResult.Cancelled
     val totalDirs = countOut.trim().toIntOrNull()?.coerceAtLeast(0) ?: 0
     onTotal(totalDirs)
 
@@ -70,11 +73,13 @@ suspend fun calculateFolderSize(
         val listChildrenElapsed = System.currentTimeMillis() - listChildrenStart
         if (listChildrenElapsed > 300 && onBinderCooldown != null) {
             for (sec in 5 downTo 1) {
+                if (isCancelled()) { result = SizeCalcResult.Cancelled; break }
                 onBinderCooldown(sec)
                 delay(1000)
             }
             onBinderCooldown(0)
         }
+        if (result != null) break
         if (list == null) { result = SizeCalcResult.PermissionDenied(dir); break }
         children[dir] = list
         scanned++

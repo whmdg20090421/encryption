@@ -5636,6 +5636,9 @@ private fun CloudPanelContent(
                             if (cloudEntry.isDirectory) onNavigateTo(cloudEntry.relativePath)
                         },
                         onLongClick = { onLongClick(cloudEntry) },
+                        folderSize = if (cloudEntry.isDirectory && cloudEntry.totalSize > 0) {
+                            compactSize(cloudEntry.totalSize)
+                        } else "",
                         cloudExtra = if (cloudEntry.totalSize > 0) {
                             {
                                 SyncStatusBar(

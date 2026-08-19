@@ -3063,6 +3063,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     onScanned = { count, folder -> SizeCalcManager.onScanned(count, folder) },
                     onProgress = { p, t, f -> SizeCalcManager.onProgress(p, t, f) },
                     isCancelled = { SizeCalcManager.cancelRequested },
+                    cancelFlag = SizeCalcManager.cancelFlag,
                     onBinderCooldown = { sec -> SizeCalcManager.onBinderCooldown(sec) }
                 )
             } catch (e: Throwable) {
