@@ -527,6 +527,8 @@ class CloudPaneController(
                 var speedLastBytes = 0L
                 var speedLastTime = System.currentTimeMillis()
                 var currentSpeed = 0L
+                // 进度回退检测：记录上次 transferredBytes
+                var lastTransferredBytes = 0L
 
                 for (event in eventChannel) {
                     if (!isActive) break
@@ -545,6 +547,75 @@ class CloudPaneController(
                                 )
                                 val activeTotal = activeFileBytes.values.sum()
                                 val transferred = completedBytes.get() + activeTotal
+                                // 进度回退检测
+                                if (transferred < lastTransferredBytes) {
+                                    val prevPct = if (state.syncTask.totalBytes > 0) lastTransferredBytes * 100.0 / state.syncTask.totalBytes else 0.0
+                                    val currPct = if (state.syncTask.totalBytes > 0) transferred * 100.0 / state.syncTask.totalBytes else 0.0
+                                    val diagInfo = buildString {
+                                        appendLine("=== 进度回退检测报告 ===")
+                                        appendLine("时间: ${java.time.LocalDateTime.now()}")
+                                        appendLine("触发: transferred($transferred) < lastTransferredBytes($lastTransferredBytes)")
+                                        appendLine("回退量: ${lastTransferredBytes - transferred} bytes")
+                                        appendLine()
+                                        appendLine("--- 百分比 ---")
+                                        appendLine("上次: ${String.format("%.4f", prevPct)}%")
+                                        appendLine("本次: ${String.format("%.4f", currPct)}%")
+                                        appendLine("百分比回退: ${String.format("%.4f", prevPct - currPct)}%")
+                                        appendLine()
+                                        appendLine("--- 事件详情 ---")
+                                        appendLine("事件类型: Progress")
+                                        appendLine("event.path=${event.path}")
+                                        appendLine("event.uploaded=${event.uploaded}")
+                                        appendLine("event.total=${event.total}")
+                                        appendLine("oldUploaded=$oldUploaded")
+                                        appendLine("delta=$delta")
+                                        appendLine()
+                                        appendLine("--- 内部状态 ---")
+                                        appendLine("completedBytes=${completedBytes.get()}")
+                                        appendLine("completedFilesCount=$completedFilesCount")
+                                        appendLine("successCount=$successCount")
+                                        appendLine("failCount=$failCount")
+                                        appendLine("activeTotal=$activeTotal")
+                                        appendLine("activeFileBytes(${activeFileBytes.size}个):")
+                                        activeFileBytes.forEach { (k, v) -> appendLine("  $k = $v") }
+                                        appendLine()
+                                        appendLine("--- state.syncTask 快照 ---")
+                                        appendLine("phase=${state.syncTask.phase}")
+                                        appendLine("totalFiles=${state.syncTask.totalFiles}")
+                                        appendLine("totalBytes=${state.syncTask.totalBytes}")
+                                        appendLine("transferredBytes=${state.syncTask.transferredBytes}")
+                                        appendLine("overallProgress=${state.syncTask.overallProgress}")
+                                        appendLine("speed=${state.syncTask.speed}")
+                                        appendLine("concurrency=${state.syncTask.concurrency}")
+                                        appendLine("fileProgress(${state.syncTask.fileProgress.size}个):")
+                                        state.syncTask.fileProgress.forEach { (k, v) ->
+                                            appendLine("  $k: uploaded=${v.uploadedBytes}/${v.totalBytes} status=${v.status}")
+                                        }
+                                        appendLine()
+                                        appendLine("--- queue 状态 ---")
+                                        appendLine("queueIndex=$queueIndex, queue.size=${queue.size}")
+                                        appendLine("activeWorkers=$activeWorkers")
+                                        appendLine("maxConcurrency=$maxConcurrency")
+                                        appendLine()
+                                        appendLine("--- 速度计算 ---")
+                                        appendLine("speedLastBytes=$speedLastBytes")
+                                        appendLine("speedLastTime=$speedLastTime")
+                                        appendLine("currentSpeed=$currentSpeed")
+                                        appendLine()
+                                        appendLine("--- 调用栈 ---")
+                                        Thread.currentThread().stackTrace.take(25).forEach { appendLine("  $it") }
+                                    }
+                                    try {
+                                        val diagDir = com.whmdg.mczj.tools.AppDataPaths.diagnostics(context)
+                                        diagDir.mkdirs()
+                                        val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
+                                        java.io.File(diagDir, "progress_regression_$ts.log").writeText(diagInfo)
+                                    } catch (_: Exception) {}
+                                    android.widget.Toast.makeText(context, "检测到进度异常回退，已强制中断以保护数据安全", android.widget.Toast.LENGTH_LONG).show()
+                                    syncJob?.cancel()
+                                    return@launch
+                                }
+                                lastTransferredBytes = transferred
                                 // 速度计算
                                 val now = System.currentTimeMillis()
                                 if (now - speedLastTime >= 1000) {
@@ -576,10 +647,80 @@ class CloudPaneController(
                                 }
                                 val currentProgress = state.syncTask.fileProgress.toMutableMap()
                                 currentProgress.remove(event.path)
+                                val transferred = completedBytes.get() + activeFileBytes.values.sum()
+                                // 进度回退检测
+                                if (transferred < lastTransferredBytes) {
+                                    val prevPct = if (state.syncTask.totalBytes > 0) lastTransferredBytes * 100.0 / state.syncTask.totalBytes else 0.0
+                                    val currPct = if (state.syncTask.totalBytes > 0) transferred * 100.0 / state.syncTask.totalBytes else 0.0
+                                    val diagInfo = buildString {
+                                        appendLine("=== 进度回退检测报告 ===")
+                                        appendLine("时间: ${java.time.LocalDateTime.now()}")
+                                        appendLine("触发: transferred($transferred) < lastTransferredBytes($lastTransferredBytes)")
+                                        appendLine("回退量: ${lastTransferredBytes - transferred} bytes")
+                                        appendLine()
+                                        appendLine("--- 百分比 ---")
+                                        appendLine("上次: ${String.format("%.4f", prevPct)}%")
+                                        appendLine("本次: ${String.format("%.4f", currPct)}%")
+                                        appendLine("百分比回退: ${String.format("%.4f", prevPct - currPct)}%")
+                                        appendLine()
+                                        appendLine("--- 事件详情 ---")
+                                        appendLine("事件类型: Complete")
+                                        appendLine("event.path=${event.path}")
+                                        appendLine("event.success=${event.success}")
+                                        appendLine("event.fileSize=${event.fileSize}")
+                                        appendLine("event.error=${event.error}")
+                                        appendLine("oldUploaded=$oldUploaded")
+                                        appendLine("remaining=$remaining")
+                                        appendLine()
+                                        appendLine("--- 内部状态 ---")
+                                        appendLine("completedBytes=${completedBytes.get()}")
+                                        appendLine("completedFilesCount=$completedFilesCount")
+                                        appendLine("successCount=$successCount")
+                                        appendLine("failCount=$failCount")
+                                        appendLine("activeFileBytes(${activeFileBytes.size}个):")
+                                        activeFileBytes.forEach { (k, v) -> appendLine("  $k = $v") }
+                                        appendLine()
+                                        appendLine("--- state.syncTask 快照 ---")
+                                        appendLine("phase=${state.syncTask.phase}")
+                                        appendLine("totalFiles=${state.syncTask.totalFiles}")
+                                        appendLine("totalBytes=${state.syncTask.totalBytes}")
+                                        appendLine("transferredBytes=${state.syncTask.transferredBytes}")
+                                        appendLine("overallProgress=${state.syncTask.overallProgress}")
+                                        appendLine("speed=${state.syncTask.speed}")
+                                        appendLine("concurrency=${state.syncTask.concurrency}")
+                                        appendLine("fileProgress(${state.syncTask.fileProgress.size}个):")
+                                        state.syncTask.fileProgress.forEach { (k, v) ->
+                                            appendLine("  $k: uploaded=${v.uploadedBytes}/${v.totalBytes} status=${v.status}")
+                                        }
+                                        appendLine()
+                                        appendLine("--- queue 状态 ---")
+                                        appendLine("queueIndex=$queueIndex, queue.size=${queue.size}")
+                                        appendLine("activeWorkers=$activeWorkers")
+                                        appendLine("maxConcurrency=$maxConcurrency")
+                                        appendLine()
+                                        appendLine("--- 速度计算 ---")
+                                        appendLine("speedLastBytes=$speedLastBytes")
+                                        appendLine("speedLastTime=$speedLastTime")
+                                        appendLine("currentSpeed=$currentSpeed")
+                                        appendLine()
+                                        appendLine("--- 调用栈 ---")
+                                        Thread.currentThread().stackTrace.take(25).forEach { appendLine("  $it") }
+                                    }
+                                    try {
+                                        val diagDir = com.whmdg.mczj.tools.AppDataPaths.diagnostics(context)
+                                        diagDir.mkdirs()
+                                        val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
+                                        java.io.File(diagDir, "progress_regression_$ts.log").writeText(diagInfo)
+                                    } catch (_: Exception) {}
+                                    android.widget.Toast.makeText(context, "检测到进度异常回退，已强制中断以保护数据安全", android.widget.Toast.LENGTH_LONG).show()
+                                    syncJob?.cancel()
+                                    return@launch
+                                }
+                                lastTransferredBytes = transferred
                                 state.syncTask = state.syncTask.copy(
                                     fileProgress = currentProgress,
                                     completedFiles = completedFilesCount,
-                                    transferredBytes = completedBytes.get(),
+                                    transferredBytes = transferred,
                                     speed = currentSpeed,
                                     concurrency = maxConcurrency
                                 )

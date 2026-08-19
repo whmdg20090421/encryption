@@ -6005,10 +6005,10 @@ private fun SyncStatusBar(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 进度条（90%）
+        // 进度条（自适应剩余空间）
         Row(
             modifier = Modifier
-                .weight(0.9f)
+                .weight(1f)
                 .height(3.dp)
                 .clip(RoundedCornerShape(1.5.dp))
         ) {
@@ -6017,10 +6017,10 @@ private fun SyncStatusBar(
             if (redW > 0f) Box(Modifier.weight(redW).fillMaxHeight().background(Color(0xFFE57373)))
             if (totalSize <= 0L) Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE57373)))
         }
-        // 百分比（10%）
+        // 百分比（自适应宽度）
         Text(
             text = "${String.format("%.1f", pct)}%",
-            modifier = Modifier.weight(0.1f).padding(start = 4.dp),
+            modifier = Modifier.padding(start = 4.dp),
             fontSize = 10.sp,
             color = Color(0xFF94A3B8),
             maxLines = 1
