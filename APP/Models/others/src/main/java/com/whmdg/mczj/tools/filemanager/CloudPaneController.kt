@@ -523,6 +523,11 @@ class CloudPaneController(
             val eventChannel = kotlinx.coroutines.channels.Channel<UploadEvent>(kotlinx.coroutines.channels.Channel.UNLIMITED)
 
             val updaterJob = launch {
+                // 速度计算：每秒采样一次吞吐量
+                var speedLastBytes = 0L
+                var speedLastTime = System.currentTimeMillis()
+                var currentSpeed = 0L
+
                 for (event in eventChannel) {
                     if (!isActive) break
                     try {
@@ -539,9 +544,18 @@ class CloudPaneController(
                                     status = UploadStatus.UPLOADING
                                 )
                                 val activeTotal = activeFileBytes.values.sum()
+                                val transferred = completedBytes.get() + activeTotal
+                                // 速度计算
+                                val now = System.currentTimeMillis()
+                                if (now - speedLastTime >= 1000) {
+                                    currentSpeed = (transferred - speedLastBytes) * 1000 / (now - speedLastTime)
+                                    speedLastBytes = transferred
+                                    speedLastTime = now
+                                }
                                 state.syncTask = state.syncTask.copy(
                                     fileProgress = currentProgress,
-                                    transferredBytes = completedBytes.get() + activeTotal,
+                                    transferredBytes = transferred,
+                                    speed = currentSpeed,
                                     concurrency = maxConcurrency
                                 )
                                 // 增量更新父文件夹（不遍历）
@@ -566,6 +580,7 @@ class CloudPaneController(
                                     fileProgress = currentProgress,
                                     completedFiles = completedFilesCount,
                                     transferredBytes = completedBytes.get(),
+                                    speed = currentSpeed,
                                     concurrency = maxConcurrency
                                 )
                                 if (!event.success && event.error != null) {

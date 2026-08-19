@@ -149,7 +149,10 @@ class CopyJob(
                 }
             }
         } catch (e: Exception) {
-            errorToShow = e
+            // InterruptedIOException + cancelFlag=true 表示用户取消，不作为错误处理
+            if (!(e is InterruptedIOException && cancelFlag.get())) {
+                errorToShow = e
+            }
         } finally {
             // 清除线程中断标志，确保后续清理代码能正常执行 shell 命令
             Thread.interrupted()
