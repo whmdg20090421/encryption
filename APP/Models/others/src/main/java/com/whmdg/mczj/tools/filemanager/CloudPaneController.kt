@@ -270,7 +270,26 @@ class CloudPaneController(
 
     /** 上传文件夹：对比本地文件与 DB → 用户决策 → 并发上传 */
     private fun uploadFolder(folderRelativePath: String) {
-        scope.launch(Dispatchers.Default) {
+        // 冗余措施：先终止旧上传协程（如果还在运行）
+        val oldJob = syncJob
+        syncJob = null
+
+        syncJob = scope.launch(Dispatchers.Default) {
+            // 等待旧协程真正终止
+            if (oldJob != null && oldJob.isActive) {
+                oldJob.cancel()
+                oldJob.join()
+                // 清理旧任务残留的 DB 状态
+                withContext(Dispatchers.IO) {
+                    val entries = syncDb.getEntriesByStatus("local_entries", SyncStatus.QUEUED) +
+                        syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
+                    for (entry in entries) {
+                        syncDb.updateStatus("local_entries", entry.path, SyncStatus.PENDING)
+                        syncDb.updateUploadedSize("local_entries", entry.path, 0)
+                    }
+                }
+            }
+
             val folder = File(vaultDir, folderRelativePath.trimStart('/'))
             if (!folder.exists() || !folder.isDirectory) return@launch
 
@@ -505,6 +524,7 @@ class CloudPaneController(
 
             val updaterJob = launch {
                 for (event in eventChannel) {
+                    if (!isActive) break
                     try {
                         when (event) {
                             is UploadEvent.Progress -> {
@@ -746,12 +766,16 @@ class CloudPaneController(
         state.syncTask = state.syncTask.copy(phase = SyncPhase.IDLE)
     }
 
-    /** 取消上传：停止任务，已上传的不动，未上传的重置为 PENDING */
+    /** 取消上传：停止任务，自检确认终止后弹 Toast，已上传的不动，未上传的重置为 PENDING */
     fun cancelUpload() {
-        syncJob?.cancel()
         state.syncDialogVisible = false
-        // 将 QUEUED 和 UPLOADING 状态的文件重置为 PENDING
+        val job = syncJob
+        syncJob = null
         scope.launch {
+            // 1. 取消旧协程并等待其真正终止
+            job?.cancel()
+            job?.join()
+            // 2. 清理 DB 中残留的 UPLOADING/QUEUED 状态
             withContext(Dispatchers.IO) {
                 val entries = syncDb.getEntriesByStatus("local_entries", SyncStatus.QUEUED) +
                     syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
@@ -762,6 +786,10 @@ class CloudPaneController(
             }
             state.syncTask = SyncTaskState()
             silentRefresh()
+            // 3. 自检确认已终止
+            if (job == null || !job.isActive) {
+                android.widget.Toast.makeText(context, "上传任务已终止", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
