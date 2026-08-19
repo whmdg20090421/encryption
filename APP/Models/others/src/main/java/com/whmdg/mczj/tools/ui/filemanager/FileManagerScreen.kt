@@ -5090,7 +5090,7 @@ private fun FileEntryRow(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(if (cloudExtra != null) Modifier.height(60.dp) else Modifier.heightIn(min = 60.dp))
+                .then(if (cloudExtra != null) Modifier.height(72.dp) else Modifier.heightIn(min = 60.dp))
                 .offset { IntOffset(swipeOffset.value.roundToInt(), 0) }
                 .pointerInput(Unit) {
                     awaitEachGesture {
@@ -5261,10 +5261,12 @@ private fun FileEntryRow(
             }
 
             if (cloudExtra != null) {
-                // 云盘模式：原内容占 9/10，进度条占 1/10
-                Column(modifier = Modifier.weight(9f)) { fileContent() }
-                Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 1.dp)) {
-                    cloudExtra()
+                // 云盘模式：文件信息 + 全宽进度条
+                Column(modifier = Modifier.weight(1f)) {
+                    fileContent()
+                    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 1.dp)) {
+                        cloudExtra()
+                    }
                 }
             } else {
                 // 普通模式
@@ -6003,10 +6005,10 @@ private fun SyncStatusBar(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 进度条（左侧，占剩余空间）
+        // 进度条（90%）
         Row(
             modifier = Modifier
-                .weight(1f)
+                .weight(0.9f)
                 .height(3.dp)
                 .clip(RoundedCornerShape(1.5.dp))
         ) {
@@ -6015,12 +6017,13 @@ private fun SyncStatusBar(
             if (redW > 0f) Box(Modifier.weight(redW).fillMaxHeight().background(Color(0xFFE57373)))
             if (totalSize <= 0L) Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE57373)))
         }
-        // 百分比（右侧）
-        Spacer(modifier = Modifier.width(6.dp))
+        // 百分比（10%）
         Text(
             text = "${String.format("%.1f", pct)}%",
+            modifier = Modifier.weight(0.1f).padding(start = 4.dp),
             fontSize = 10.sp,
-            color = Color(0xFF94A3B8)
+            color = Color(0xFF94A3B8),
+            maxLines = 1
         )
     }
 }

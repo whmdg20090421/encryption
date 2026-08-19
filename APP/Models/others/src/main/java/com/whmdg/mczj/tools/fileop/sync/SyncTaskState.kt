@@ -26,7 +26,7 @@ data class SyncFileProgress(
     val status: UploadStatus
 ) {
     val progress: Float
-        get() = if (totalBytes > 0) uploadedBytes.toFloat() / totalBytes else 0f
+        get() = if (totalBytes > 0) (uploadedBytes.toDouble() / totalBytes).toFloat() else 0f
 }
 
 /** 整体同步任务状态（运行时，不持久化） */
@@ -43,5 +43,5 @@ data class SyncTaskState(
     val fileProgress: Map<String, SyncFileProgress> = emptyMap()
 ) {
     val overallProgress: Float
-        get() = if (totalBytes > 0) transferredBytes.toFloat() / totalBytes else 0f
+        get() = if (totalBytes > 0) (transferredBytes.toDouble() / totalBytes).toFloat() else 0f
 }
