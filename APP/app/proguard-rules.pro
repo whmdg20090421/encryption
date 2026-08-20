@@ -34,3 +34,11 @@
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
+
+# ── Xposed / YukiHookAPI（运行时才存在的类） ──
+-dontwarn android.app.AndroidAppHelper
+-dontwarn android.content.res.XModuleResources
+-dontwarn android.content.res.XResForwarder
+-dontwarn com.highcapable.yukihookapi.**
+-dontwarn de.robv.android.xposed.**
+-dontwarn org.lsposed.**
