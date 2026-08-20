@@ -474,6 +474,10 @@ fun FileManagerScreen(
         FileOperationManager.setRefreshCallback {
             vm.refreshBoth()
         }
+        // 注册文件夹大小变更回调（局部刷新）
+        FileOperationManager.setFolderSizeChangedCallback { sizes ->
+            vm.updateFolderSizesAndRefresh(sizes)
+        }
     }
 
     // ── 处理滚动位置恢复（绑定跳转+渲染） ──

@@ -43,14 +43,25 @@ object FileOperationManager {
 
     // ── 刷新回调 ──
     private var _onRefreshNeeded: (() -> Unit)? = null
+    private var _onFolderSizeChanged: ((Map<String, Long>) -> Unit)? = null
 
     /** 设置操作完成后的刷新回调（由 FileManagerScreen 注册） */
     fun setRefreshCallback(callback: (() -> Unit)?) {
         _onRefreshNeeded = callback
     }
 
+    /** 设置文件夹大小变更回调（局部刷新 FolderSizeDb） */
+    fun setFolderSizeChangedCallback(callback: ((Map<String, Long>) -> Unit)?) {
+        _onFolderSizeChanged = callback
+    }
+
     fun notifyRefreshNeeded() {
         _onRefreshNeeded?.invoke()
+    }
+
+    /** 通知文件夹大小变更，仅更新受影响路径 */
+    fun notifyFolderSizeChanged(sizes: Map<String, Long>) {
+        _onFolderSizeChanged?.invoke(sizes)
     }
 
     // ── 保险箱存储用量变更回调 ──

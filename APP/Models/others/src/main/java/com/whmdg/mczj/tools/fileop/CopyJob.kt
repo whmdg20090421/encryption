@@ -384,6 +384,8 @@ class CopyJob(
             db.put(path, FolderSizeInfo(size, System.currentTimeMillis()))
         }
         db.save(saveDir)
+        // 通知 UI 局部刷新 FolderSizeDb
+        manager.notifyFolderSizeChanged(accumulator)
     }
 
     // ═══════════════════════════════════════════════════════

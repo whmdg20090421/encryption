@@ -1,13 +1,16 @@
 package com.whmdg.mczj.tools.ui.filemanager
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.ui.theme.DialogWidthFraction
 import com.whmdg.mczj.tools.fileop.FileOperationManager
 import com.whmdg.mczj.tools.util.FormatUtils
@@ -161,7 +164,9 @@ internal fun DeleteConfirmDialog(
     onConfirm: (recycleBinEnabled: Boolean) -> Unit
 ) {
     if (!show) return
-    var recycleBinEnabled by remember { mutableStateOf(true) }
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_FILE_MANAGER, android.content.Context.MODE_PRIVATE) }
+    var recycleBinEnabled by remember { mutableStateOf(prefs.getBoolean("delete_to_recycle_bin", true)) }
     StandardDialog(
         onDismissRequest = onDismiss,
         title = { Text("删除") },
@@ -172,7 +177,10 @@ internal fun DeleteConfirmDialog(
                 Spacer(Modifier.height(12.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(start = 4.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { recycleBinEnabled = !recycleBinEnabled }
+                        .padding(start = 4.dp)
                 ) {
                     Checkbox(
                         checked = recycleBinEnabled,
@@ -183,7 +191,10 @@ internal fun DeleteConfirmDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(recycleBinEnabled) }) { Text("确定") }
+            TextButton(onClick = {
+                prefs.edit().putBoolean("delete_to_recycle_bin", recycleBinEnabled).apply()
+                onConfirm(recycleBinEnabled)
+            }) { Text("确定") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("取消") }
