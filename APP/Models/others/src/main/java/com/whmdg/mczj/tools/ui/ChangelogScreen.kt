@@ -29,6 +29,32 @@ data class ChangelogVersion(
 
 private val CHANGELOG = listOf(
     ChangelogVersion(
+        version = "V4.2",
+        date = "2026-08-20",
+        items = listOf(
+            // ── 云盘同步 · 上传体验 ──
+            "WebDAV 上传进度同步直连：消除 Pipe 缓冲，改为 OkHttp 同步 execute + RequestBody.writeTo 直接回调，进度条每 128KB 刷新",
+            "上传速度实时显示：1 秒采样计算，进度条全宽垂直布局，百分比文本自适应宽度",
+            "进度回退检测机制：异常时抓取完整诊断信息（百分比/字节/内部状态/调用栈），强制中断保护数据安全",
+            "上传取消真正终止协程：取消后已上传不动，未上传和上传一半的重置为 PENDING",
+            "大小统计取消按钮生效：find | wc -l 改为可中断的 executeWithStdout，传递 cancelFlag",
+            "云盘目录显示真实大小：FileEntryRow 传入 folderSize 参数，消除 \"--\" 显示",
+            "并发上传优化：DB 实时写入 + Channel 单写者模式 + 进度增量计算解决 O(n²) 性能问题",
+            "弹窗交互改进：延迟到队列确认非空后显示，关闭按钮改为取消上传任务，居中布局优化",
+            "上传前置校验：大小/时间戳对比跳过未变化文件，并发数手动设置 1~10",
+            // ── 保险箱导入 ──
+            "保险箱导入字节级进度：FileCodec 每 chunk（1MB）回调，进度条平滑更新不再卡顿",
+            "MOVE 操作逐文件加密+删除：取消时最多丢失当前文件，已处理文件完成闭环",
+            "导入后自动写入 FolderSizeDb：保险箱目录直接显示文件夹大小，无需手动触发大小统计",
+            "FolderSizeDb 存储统一至应用私有目录：不再污染保险箱根目录",
+            // ── 体积优化 ──
+            "移除 RP-Hub 模块（临时）：保留入口，点击显示「暂时移除」，用户数据完整保留",
+            "resConfigs 限定中文+英文：resources.arsc 减约 1MB",
+            "启用 R8 最低压缩：isMinifyEnabled + isShrinkResources，proguard 保留所有类，仅裁剪未使用资源",
+            "APK 体积 28MB → 25MB（-11%）"
+        )
+    ),
+    ChangelogVersion(
         version = "V4.1",
         date = "2026-08-11",
         items = listOf(
