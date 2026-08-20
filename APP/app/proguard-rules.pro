@@ -1,8 +1,5 @@
-# ── 全局保留：不混淆、不裁剪，仅配合 shrinkResources 移除未使用资源 ──
+# ── R8 代码裁剪（不混淆） ──
 -dontobfuscate
--keep class ** { *; }
--keepclassmembers class ** { *; }
--keepattributes *
 
 # ── JNI native methods ──
 -keepclasseswithmembernames class com.whmdg.mczj.tools.auth.NativeAuth {
@@ -22,18 +19,18 @@
 -keepattributes *Annotation*, InnerClasses, Signature
 -keepclassmembers @kotlinx.serialization.Serializable class * { *; }
 
-# ── BouncyCastle ──
--keep class org.bouncycastle.** { *; }
--dontwarn org.bouncycastle.**
-
-# ── Shizuku ──
--keep class moe.shizuku.** { *; }
--dontwarn moe.shizuku.**
+# ── Xposed 模块入口（运行时反射调用） ──
+-keep class com.whmdg.mczj.tools.xposed.模块入口 { *; }
+-keep class com.whmdg.mczj.tools.xposed.** { *; }
 
 # ── WebView JS interface ──
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
 }
+
+# ── 运行时反射的类 ──
+-keep class com.whmdg.mczj.tools.encryption.data.** { *; }
+-keep class com.whmdg.mczj.tools.fileop.sync.** { *; }
 
 # ── Xposed / YukiHookAPI / libxposed（运行时才存在的类） ──
 -dontwarn android.app.AndroidAppHelper
@@ -48,3 +45,9 @@
 -dontwarn org.lsposed.**
 -dontwarn java.lang.reflect.AnnotatedType
 -dontwarn kotlin.Cloneable*
+
+# ── BouncyCastle（保留加密算法，裁剪未使用的） ──
+-dontwarn org.bouncycastle.**
+
+# ── Shizuku ──
+-dontwarn moe.shizuku.**
