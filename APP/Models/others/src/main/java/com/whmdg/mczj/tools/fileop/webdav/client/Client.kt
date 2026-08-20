@@ -95,7 +95,7 @@ object Client {
     @Throws(DavException::class)
     fun makeFile(path: WebDavClientPath) {
         try {
-            put(path).close()
+            put(path, 0L, ByteArray(0).inputStream(), {}).use {}
         } catch (e: IOException) {
             throw e.toDavException()
         }
