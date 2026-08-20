@@ -2,6 +2,12 @@ name: Build arm64-v8a Release APK
 
 on:
   workflow_dispatch:
+    inputs:
+      compact:
+        description: '启用 R8 代码缩减（压缩编译）'
+        required: false
+        default: 'false'
+        type: boolean
 
 jobs:
   build:
@@ -158,7 +164,14 @@ jobs:
           KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
           GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g
         run: |
-          ./gradlew :APP:app:assembleRelease --build-cache -q > /tmp/build.log 2>&1 || {
+          COMPACT_FLAG=""
+          if [ "${{ inputs.compact }}" = "true" ]; then
+            COMPACT_FLAG="-Pcompact=true"
+            echo "压缩编译模式：R8 代码缩减已启用"
+          else
+            echo "普通编译模式：R8 仅裁剪资源"
+          fi
+          ./gradlew :APP:app:assembleRelease --build-cache $COMPACT_FLAG -q > /tmp/build.log 2>&1 || {
             echo "::error::编译失败，以下是错误日志："
             tail -80 /tmp/build.log
             exit 1

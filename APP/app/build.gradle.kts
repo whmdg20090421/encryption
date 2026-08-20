@@ -43,7 +43,9 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            val isCompact = project.hasProperty("compact")
+            val proguardFile = if (isCompact) "proguard-compact.pro" else "proguard-rules.pro"
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), proguardFile)
             val envOk = System.getenv("KEYSTORE_PASSWORD")?.isNotEmpty() == true &&
                         System.getenv("KEY_ALIAS")?.isNotEmpty() == true
             signingConfig = if (envOk) signingConfigs.getByName("release")
