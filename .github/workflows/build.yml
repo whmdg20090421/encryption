@@ -156,6 +156,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS:         ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD:      ${{ secrets.KEY_PASSWORD }}
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g
         run: |
           ./gradlew :APP:app:assembleRelease --build-cache -q > /tmp/build.log 2>&1 || {
             echo "::error::编译失败，以下是错误日志："
