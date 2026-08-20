@@ -35,10 +35,16 @@
     @android.webkit.JavascriptInterface <methods>;
 }
 
-# ── Xposed / YukiHookAPI（运行时才存在的类） ──
+# ── Xposed / YukiHookAPI / libxposed（运行时才存在的类） ──
 -dontwarn android.app.AndroidAppHelper
+-dontwarn android.content.res.XResources
 -dontwarn android.content.res.XModuleResources
 -dontwarn android.content.res.XResForwarder
 -dontwarn com.highcapable.yukihookapi.**
+-dontwarn com.highcapable.kavaref.**
 -dontwarn de.robv.android.xposed.**
+-dontwarn io.github.libxposed.**
+-dontwarn io.github.rosemoe.**
 -dontwarn org.lsposed.**
+-dontwarn java.lang.reflect.AnnotatedType
+-dontwarn kotlin.Cloneable*
