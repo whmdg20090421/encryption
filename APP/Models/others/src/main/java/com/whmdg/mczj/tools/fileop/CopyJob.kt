@@ -1,6 +1,7 @@
 package com.whmdg.mczj.tools.fileop
 
 import android.content.Context
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.encryption.services.CryptoService
@@ -374,14 +375,15 @@ class CopyJob(
         }
     }
 
-    /** 将累加的目录大小写入 FolderSizeDb */
+    /** 将累加的目录大小写入 FolderSizeDb（存储在应用私有目录，不污染保险箱） */
     private fun saveFolderSizes(vaultDir: File, accumulator: Map<String, Long>) {
         if (accumulator.isEmpty()) return
-        val db = FolderSizeDb.load(vaultDir)
+        val saveDir = AppDataPaths.fileManager(context)
+        val db = FolderSizeDb.load(saveDir)
         for ((path, size) in accumulator) {
             db.put(path, FolderSizeInfo(size, System.currentTimeMillis()))
         }
-        db.save(vaultDir)
+        db.save(saveDir)
     }
 
     // ═══════════════════════════════════════════════════════

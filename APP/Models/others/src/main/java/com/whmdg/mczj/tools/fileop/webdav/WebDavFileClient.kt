@@ -89,19 +89,15 @@ class WebDavFileClient(private val config: WebDavServerConfig) {
 
     /**
      * Upload a local file to a remote path.
+     * onProgress 接收每次写入的增量字节数（由 RequestBody.writeTo 直接回调）。
      */
     fun uploadFile(localFile: File, remotePath: String, onProgress: (Long) -> Unit) {
         val p = path(remotePath)
-        val output = Client.put(p)
-        output.use { dst ->
-            localFile.inputStream().use { src ->
-                val buffer = ByteArray(8192)
-                var total = 0L
-                var read: Int
-                while (src.read(buffer).also { read = it } != -1) {
-                    dst.write(buffer, 0, read)
-                    total += read
-                    onProgress(total)
+        localFile.inputStream().use { inputStream ->
+            val response = Client.put(p, localFile.length(), inputStream, onProgress)
+            response.use {
+                if (!it.isSuccessful) {
+                    throw IOException("上传失败: ${it.code} ${it.message}")
                 }
             }
         }

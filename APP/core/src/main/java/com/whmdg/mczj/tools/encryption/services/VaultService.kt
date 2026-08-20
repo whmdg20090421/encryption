@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import androidx.compose.runtime.mutableStateListOf
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.auth.Feature
 import com.whmdg.mczj.tools.auth.SecurityEnforcer
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
@@ -510,12 +511,13 @@ class VaultService(private val context: Context) {
      * @return folder 的最终大小
      */
     fun refreshFolderSize(vaultDir: File, relativePath: String): Long {
-        val db = FolderSizeDb.load(vaultDir)
+        val saveDir = AppDataPaths.fileManager(context)
+        val db = FolderSizeDb.load(saveDir)
         val targetDir = if (relativePath.isEmpty()) vaultDir else File(vaultDir, relativePath)
 
         if (!targetDir.exists() || !targetDir.isDirectory) {
             db.removeDescendants(relativePath)
-            db.save(vaultDir)
+            db.save(saveDir)
             return 0L
         }
 
@@ -553,7 +555,7 @@ class VaultService(private val context: Context) {
         val targetSize = calcFolderDirectSize(db, vaultDir, relativePath)
         db.put(relativePath, FolderSizeInfo(targetSize, targetMtime))
 
-        db.save(vaultDir)
+        db.save(saveDir)
         return targetSize
     }
 

@@ -339,13 +339,15 @@ class SyncEngine(
 
         for (attempt in 1..2) {
             try {
-                webdavClient.uploadFile(localFile, remotePath) { bytesWritten ->
+                var totalWritten = 0L
+                webdavClient.uploadFile(localFile, remotePath) { delta ->
+                    totalWritten += delta
                     // 实时写入 DB，供文件夹进度条聚合
-                    try { syncDb.updateUploadedSize("local_entries", relativePath, bytesWritten) } catch (_: Exception) {}
+                    try { syncDb.updateUploadedSize("local_entries", relativePath, totalWritten) } catch (_: Exception) {}
                     // 按大小阈值回调 UI
-                    if (bytesWritten - lastReportedBytes >= progressThreshold || bytesWritten == fileSize) {
-                        lastReportedBytes = bytesWritten
-                        onProgress(bytesWritten, fileSize)
+                    if (totalWritten - lastReportedBytes >= progressThreshold || totalWritten == fileSize) {
+                        lastReportedBytes = totalWritten
+                        onProgress(totalWritten, fileSize)
                     }
                 }
                 uploadSuccess = true

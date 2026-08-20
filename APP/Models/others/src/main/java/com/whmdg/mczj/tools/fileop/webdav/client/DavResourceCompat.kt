@@ -9,8 +9,6 @@ import at.bitfire.dav4jvm.DavResource
 import at.bitfire.dav4jvm.QuotedStringUtils
 import at.bitfire.dav4jvm.ResponseCallback
 import at.bitfire.dav4jvm.exception.DavException
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.Headers
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
@@ -18,14 +16,10 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.Response
 import okio.BufferedSink
-import okio.Pipe
-import okio.buffer
 import java.io.IOException
 import java.io.InputStream
-import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.nio.ByteBuffer
-import java.util.concurrent.CountDownLatch
 
 @Throws(DavException::class, IOException::class)
 fun DavResource.getCompat(accept: String, headers: Headers?): InputStream =
@@ -56,20 +50,30 @@ fun DavResource.getRangeCompat(
         }
         .body!!.byteStream()
 
-// This doesn't follow redirects since the request body is one-shot anyway.
+// 同步 PUT：RequestBody.writeTo() 在调用线程执行，无 Pipe、无异步、无缓冲。
+// onProgress 接收每次写入的增量字节数。
 @Throws(DavException::class, IOException::class)
 fun DavResource.putCompat(
+    contentLength: Long,
+    inputStream: InputStream,
+    onProgress: (Long) -> Unit,
     ifETag: String? = null,
     ifScheduleTag: String? = null,
     ifNoneMatch: Boolean = false,
     headers: Map<String, String> = emptyMap(),
-): OutputStream {
-    val pipe = Pipe(DEFAULT_BUFFER_SIZE.toLong())
+): Response {
     val body = object : RequestBody() {
         override fun contentType(): MediaType? = null
+        override fun contentLength(): Long = contentLength
         override fun isOneShot() = true
         override fun writeTo(sink: BufferedSink) {
-            sink.writeAll(pipe.source)
+            val buf = ByteArray(UPLOAD_BUFFER_SIZE)
+            while (true) {
+                val n = inputStream.read(buf)
+                if (n == -1) break
+                sink.write(buf, 0, n)
+                onProgress(n.toLong())
+            }
         }
     }
     val builder = Request.Builder().put(body).url(location)
@@ -85,36 +89,10 @@ fun DavResource.putCompat(
     for ((key, value) in headers) {
         builder.header(key, value)
     }
-    var exceptionRef: IOException? = null
-    var responseRef: Response? = null
-    val callbackLatch = CountDownLatch(1)
-    httpClient.newCall(builder.build()).enqueue(
-        object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                exceptionRef = e
-                callbackLatch.countDown()
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                responseRef = response
-                callbackLatch.countDown()
-            }
-        }
-    )
-    val delegateStream = pipe.sink.buffer().outputStream()
-    return object : OutputStream() {
-        override fun write(b: Int) = delegateStream.write(b)
-        override fun write(b: ByteArray) = delegateStream.write(b)
-        override fun write(b: ByteArray, off: Int, len: Int) = delegateStream.write(b, off, len)
-        override fun flush() = delegateStream.flush()
-        override fun close() {
-            delegateStream.close()
-            callbackLatch.await()
-            exceptionRef?.let { throw it }
-            checkStatus(responseRef!!)
-        }
-    }
+    return httpClient.newCall(builder.build()).execute()
 }
+
+private const val UPLOAD_BUFFER_SIZE = 128 * 1024
 
 enum class PatchSupport {
     NONE,

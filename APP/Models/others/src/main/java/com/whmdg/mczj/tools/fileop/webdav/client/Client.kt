@@ -25,7 +25,6 @@ import at.bitfire.dav4jvm.property.webdav.GetLastModified
 import at.bitfire.dav4jvm.property.webdav.ResourceType
 import java.io.IOException
 import java.io.InputStream
-import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.time.Instant
 import java.util.Collections
@@ -216,9 +215,15 @@ object Client {
     }
 
     @Throws(DavException::class)
-    fun put(path: WebDavClientPath): OutputStream =
+    fun put(
+        path: WebDavClientPath,
+        contentLength: Long,
+        inputStream: InputStream,
+        onProgress: (Long) -> Unit
+    ): OkHttpResponse =
         try {
-            DavResource(getClient(path.authority), path.url).putCompat()
+            DavResource(getClient(path.authority), path.url)
+                .putCompat(contentLength, inputStream, onProgress)
         } catch (e: IOException) {
             throw e.toDavException()
         }
