@@ -102,7 +102,6 @@ import com.whmdg.mczj.tools.fileop.FileOperationManager
 import com.whmdg.mczj.tools.ui.encryption.EncryptionModuleScreen
 import com.whmdg.mczj.tools.ui.filemanager.FileManagerModuleScreen
 import com.whmdg.mczj.tools.ui.download.DownloaderModuleScreen
-import com.whmdg.mczj.tools.ui.rphub.RpHubModuleScreen
 import com.whmdg.mczj.tools.ui.diary.DiaryModuleScreen
 import com.whmdg.mczj.tools.ui.wifi.WifiModuleScreen
 import com.whmdg.mczj.tools.ui.hook.HookModuleScreen
@@ -302,9 +301,23 @@ fun MainAppContainer() {
             )
         }
         is Screen.RpHub -> {
-            RpHubModuleScreen(
-                onBack = { navigateBack() }
-            )
+            // RP-Hub 临时移除，显示占位界面
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text("RP-Hub") },
+                        navigationIcon = {
+                            IconButton(onClick = { navigateBack() }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                            }
+                        }
+                    )
+                }
+            ) { padding ->
+                Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                    Text("RP-Hub 功能暂时移除，后续版本将恢复。", style = MaterialTheme.typography.bodyLarge)
+                }
+            }
         }
         is Screen.Diary -> {
             DiaryModuleScreen(

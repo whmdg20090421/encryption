@@ -135,7 +135,7 @@ val MODULE_REGISTRY: Map<ModuleId, ModuleEntry> = mapOf(
     ModuleId.APP_PERMISSIONS to ModuleEntry("应用权限管理", "查看和管理应用权限", Icons.Default.Security, Feature.APP_PERMISSIONS, Screen.AppPermissions),
     ModuleId.BATCH_DOWNLOADER to ModuleEntry("批量下载器", "FA 图片批量下载等工具", Icons.Default.Download, Feature.BATCH_DOWNLOADER, Screen.BatchDownloader),
     ModuleId.SECURITY to ModuleEntry("安全", "权限设置与特殊权限管理", Icons.Default.Lock, Feature.SECURITY_SETTINGS, Screen.Security),
-    ModuleId.RP_HUB to ModuleEntry("RP-Hub", "本地角色扮演对话工具", Icons.Default.SmartToy, Feature.RP_HUB, Screen.RpHub),
+    ModuleId.RP_HUB to ModuleEntry("RP-Hub", "本地角色扮演对话工具（临时移除）", Icons.Default.SmartToy, Feature.RP_HUB, Screen.RpHub),
     ModuleId.WIFI to ModuleEntry("WiFi", "WiFi 网络扫描与分析", Icons.Default.Wifi, Feature.WIFI, Screen.Wifi),
     ModuleId.DIARY to ModuleEntry("日记", "记录每日心情与想法", Icons.Default.Edit, Feature.DIARY, Screen.Diary),
     ModuleId.ACCOUNTING to ModuleEntry("记账本", "日常收支记录", Icons.Default.AccountBalance, Feature.ACCOUNTING, Screen.Accounting),

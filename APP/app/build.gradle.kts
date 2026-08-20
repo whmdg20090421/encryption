@@ -26,6 +26,8 @@ android {
         versionName = "4.1.%d".format(ts)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        resourceConfigurations += listOf("zh", "en")
     }
 
     signingConfigs {
@@ -39,9 +41,9 @@ android {
 
     buildTypes {
         release {
-            // isMinifyEnabled = true      // R8 字节码优化太慢，暂不启用
-            // isShrinkResources = true    // 需要配合 isMinifyEnabled，暂不启用
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro")
             val envOk = System.getenv("KEYSTORE_PASSWORD")?.isNotEmpty() == true &&
                         System.getenv("KEY_ALIAS")?.isNotEmpty() == true
             signingConfig = if (envOk) signingConfigs.getByName("release")

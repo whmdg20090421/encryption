@@ -16,8 +16,7 @@ import java.io.File
  * ├── 文件管理器/     ← file_manager_prefs / 缓存等
  * ├── 加密模块/       ← vault 相关
  * ├── 安全设置/       ← 权限 / root 引擎等
- * ├── 批量下载器/
- * └── RP-Hub/
+ * └── 批量下载器/
  * ```
  *
  * SharedPreferences 虽由 Android 系统管理（internal shared_prefs/），
@@ -69,7 +68,7 @@ object AppDataPaths {
         return dir
     }
 
-    /** RP-Hub 模块目录（WebView 实际数据位于 app_webview-app/） */
+    /** RP-Hub 模块目录（临时移除，后续恢复） */
     fun rpHub(context: Context): File {
         val dir = File(root(context), "RP-Hub")
         if (!dir.exists()) dir.mkdirs()
@@ -127,7 +126,7 @@ object AppDataPaths {
 
     /**
      * WebView 数据目录（由 setDataDirectorySuffix("app") 决定）。
-     * 包含：RP-Hub IndexedDB/localStorage、FA 登录 Cookie 等。
+     * 包含：FA 登录 Cookie 等。
      */
     fun webViewData(context: Context): File {
         return File(context.filesDir.parentFile, "app_webview-app")
@@ -157,7 +156,7 @@ object AppDataPaths {
     /** 批量下载器 SharedPreferences */
     const val PREFS_BATCH_DOWNLOADER = "batch_downloader_prefs"
 
-    /** RP-Hub SharedPreferences */
+    /** RP-Hub SharedPreferences（临时移除，后续恢复） */
     const val PREFS_RP_HUB = "rp_hub_prefs"
 
     /** 主题设置 SharedPreferences */
