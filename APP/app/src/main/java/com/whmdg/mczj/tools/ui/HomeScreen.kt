@@ -302,19 +302,17 @@ fun MainAppContainer() {
         }
         is Screen.RpHub -> {
             // RP-Hub 临时移除，显示占位界面
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = { Text("RP-Hub") },
-                        navigationIcon = {
-                            IconButton(onClick = { navigateBack() }) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                            }
-                        }
-                    )
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { navigateBack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                    Text("RP-Hub", style = MaterialTheme.typography.titleLarge)
                 }
-            ) { padding ->
-                Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("RP-Hub 功能暂时移除，后续版本将恢复。", style = MaterialTheme.typography.bodyLarge)
                 }
             }
