@@ -2294,8 +2294,9 @@ class PanelCoordinator(
     /** 局部更新 FolderSizeDb 中受影响路径的大小，然后刷新两个面板 */
     fun updateFolderSizesAndRefresh(sizes: Map<String, Long>) {
         val now = System.currentTimeMillis()
+        val db = folderSizeDb()
         for ((path, size) in sizes) {
-            folderSizeDb.put(path, com.whmdg.mczj.tools.encryption.data.FolderSizeInfo(size, now))
+            db.put(path, com.whmdg.mczj.tools.encryption.data.FolderSizeInfo(size, now))
         }
         refreshBoth()
     }
