@@ -333,9 +333,6 @@ class SyncEngine(
         // ② 上传（网络错误重试1次，等待1秒）
         var uploadSuccess = false
         var lastError: String? = null
-        // 动态进度回调阈值：fileSize/50，clamp 到 16KB~128KB
-        val progressThreshold = (fileSize / 50).coerceIn(16_384L, 131_072L)
-        var lastReportedBytes = 0L
 
         for (attempt in 1..2) {
             try {
@@ -344,11 +341,8 @@ class SyncEngine(
                     totalWritten += delta
                     // 实时写入 DB，供文件夹进度条聚合
                     try { syncDb.updateUploadedSize("local_entries", relativePath, totalWritten) } catch (_: Exception) {}
-                    // 按大小阈值回调 UI
-                    if (totalWritten - lastReportedBytes >= progressThreshold || totalWritten == fileSize) {
-                        lastReportedBytes = totalWritten
-                        onProgress(totalWritten, fileSize)
-                    }
+                    // 每 128KB 直接回调（UI 节流由 CloudPaneController 处理）
+                    onProgress(totalWritten, fileSize)
                 }
                 uploadSuccess = true
                 break
