@@ -102,6 +102,14 @@ fun CloudSyncScreen(
     var showSettingsDialog by remember { mutableStateOf(false) }
     var confirmError by remember { mutableStateOf<Throwable?>(null) }
 
+    // 异常恢复弹窗状态
+    var showRecoveryDialog by remember { mutableStateOf(false) }
+    var showRecoveryProgress by remember { mutableStateOf(false) }
+    var recoveryVaultId by remember { mutableStateOf(0) }
+    var recoveryVaultName by remember { mutableStateOf("") }
+    var recoveryVaultDir by remember { mutableStateOf("") }
+    var recoveryConfig by remember { mutableStateOf<com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig?>(null) }
+
     // 从持久化存储加载同步项 + 刷新保险箱大小 + 检测 WebDAV 连接状态
     LaunchedEffect(Unit) {
         val saved = CloudSyncStore.load(context)
@@ -361,12 +369,78 @@ fun CloudSyncScreen(
                                 val vaultDir = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
                                     context, vaultRecord.location, vaultRecord.relativePath
                                 ).absolutePath
-                                onNavigateToFileManager(config, vaultDir, item.vaultId, item.vaultName)
+
+                                // 检查 lock 文件
+                                val lockFile = com.whmdg.mczj.tools.AppDataPaths.syncLock(context, item.vaultId)
+                                if (lockFile.exists()) {
+                                    // 存在 lock，弹出异常恢复弹窗
+                                    recoveryVaultId = item.vaultId
+                                    recoveryVaultName = item.vaultName
+                                    recoveryVaultDir = vaultDir
+                                    recoveryConfig = config
+                                    showRecoveryDialog = true
+                                } else {
+                                    onNavigateToFileManager(config, vaultDir, item.vaultId, item.vaultName)
+                                }
                             }) { Text("确认") }
                         },
                         dismissButton = {
                             TextButton(onClick = { showConfirmDialog = null }) { Text("取消") }
                         }
+                    )
+                }
+
+                // 异常恢复确认弹窗
+                if (showRecoveryDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showRecoveryDialog = false },
+                        title = { Text("异常退出检测") },
+                        text = { Text("检测到上次上传异常退出，云端列表可能未更新。是否同步云端列表？") },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                showRecoveryDialog = false
+                                showRecoveryProgress = true
+                                scope.launch {
+                                    val controller = com.whmdg.mczj.tools.filemanager.CloudPaneController(
+                                        context = context,
+                                        scope = scope,
+                                        webdavConfig = recoveryConfig!!,
+                                        vaultDir = recoveryVaultDir,
+                                        vaultId = recoveryVaultId,
+                                        vaultName = recoveryVaultName
+                                    )
+                                    val dbUploaded = controller.uploadCloudDb()
+                                    com.whmdg.mczj.tools.AppDataPaths.syncLock(context, recoveryVaultId).delete()
+                                    controller.dispose()
+                                    showRecoveryProgress = false
+                                    onNavigateToFileManager(recoveryConfig!!, recoveryVaultDir, recoveryVaultId, recoveryVaultName)
+                                }
+                            }) { Text("同步") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                showRecoveryDialog = false
+                                com.whmdg.mczj.tools.AppDataPaths.syncLock(context, recoveryVaultId).delete()
+                                onNavigateToFileManager(recoveryConfig!!, recoveryVaultDir, recoveryVaultId, recoveryVaultName)
+                            }) { Text("跳过") }
+                        }
+                    )
+                }
+
+                // 恢复进度弹窗
+                if (showRecoveryProgress) {
+                    AlertDialog(
+                        onDismissRequest = {},
+                        title = { Text("同步中") },
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                Spacer(Modifier.width(12.dp))
+                                Text("正在同步云端列表...")
+                            }
+                        },
+                        confirmButton = {},
+                        dismissButton = {}
                     )
                 }
 

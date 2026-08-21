@@ -293,6 +293,10 @@ class CloudPaneController(
             val folder = File(vaultDir, folderRelativePath.trimStart('/'))
             if (!folder.exists() || !folder.isDirectory) return@launch
 
+            // 创建上传锁
+            val lockFile = com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId)
+            lockFile.writeText("""{"vaultId":$vaultId,"vaultName":"$vaultName","startTime":"${java.time.LocalDateTime.now()}","status":"uploading"}""")
+
             // 显示弹窗（扫描阶段：不定进度条）
             state.onCancelUpload = ::cancelUpload
             state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING)
@@ -812,6 +816,13 @@ class CloudPaneController(
                 }
             }
 
+            // ⑰ 上传 cloud.db 到云端元数据目录
+            state.syncTask = state.syncTask.copy(phase = SyncPhase.SYNCING, currentFileName = "正在同步云端列表...")
+            val dbUploaded = uploadCloudDb()
+            if (dbUploaded) {
+                com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
+            }
+
             kotlinx.coroutines.delay(1500)
             state.syncDialogVisible = false
         }
@@ -922,7 +933,7 @@ class CloudPaneController(
         state.syncTask = state.syncTask.copy(phase = SyncPhase.IDLE)
     }
 
-    /** 取消上传：停止任务，自检确认终止后弹 Toast，已上传的不动，未上传的重置为 PENDING */
+    /** 取消上传：停止任务，上传 cloud.db，清理锁，已上传的不动，未上传的重置为 PENDING */
     fun cancelUpload() {
         state.syncDialogVisible = false
         val job = syncJob
@@ -931,7 +942,16 @@ class CloudPaneController(
             // 1. 取消旧协程并等待其真正终止
             job?.cancel()
             job?.join()
-            // 2. 清理 DB 中残留的 UPLOADING/QUEUED 状态
+
+            // 2. 上传 cloud.db（已上传的文件已在DB中更新）
+            state.syncDialogVisible = true
+            state.syncTask = SyncTaskState(phase = SyncPhase.SYNCING, currentFileName = "正在同步云端列表...")
+            val dbUploaded = uploadCloudDb()
+            if (dbUploaded) {
+                com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
+            }
+
+            // 3. 清理 DB 中残留的 UPLOADING/QUEUED 状态
             withContext(Dispatchers.IO) {
                 val entries = syncDb.getEntriesByStatus("local_entries", SyncStatus.QUEUED) +
                     syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
@@ -941,8 +961,9 @@ class CloudPaneController(
                 }
             }
             state.syncTask = SyncTaskState()
+            state.syncDialogVisible = false
             silentRefresh()
-            // 3. 自检确认已终止
+            // 4. 自检确认已终止
             if (job == null || !job.isActive) {
                 android.widget.Toast.makeText(context, "上传任务已终止", android.widget.Toast.LENGTH_SHORT).show()
             }
@@ -951,6 +972,39 @@ class CloudPaneController(
 
     fun getSyncState(path: String): SyncFileProgress? {
         return state.syncTask.fileProgress[path]
+    }
+
+    /** 压缩并上传 cloud.db 到 .sync_meta/。成功返回 true，失败返回 false。 */
+    suspend fun uploadCloudDb(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val dbFile = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/$vaultName/vault_sync.db")
+            if (!dbFile.exists()) return@withContext false
+
+            val zipFile = File(context.cacheDir, "${vaultName}_vault_sync.db.7z")
+            try {
+                val binary = com.whmdg.mczj.tools.util.BinaryExtractor.ensureExtracted(context)
+                val esc = com.whmdg.mczj.tools.util.SevenZipCommand::escape
+                val cmd = "${esc(binary)} a ${esc(zipFile.absolutePath)} ${esc(dbFile.absolutePath)} -mx=9 -pmczj -mhe=on"
+                com.whmdg.mczj.tools.security.ShellExecutor.execute(com.whmdg.mczj.tools.security.AndroidPermissionLevel.MAX, cmd)
+
+                val metaDir = "${remoteBasePath}/.sync_meta"
+                try { webdavClient.mkdir(metaDir) } catch (_: Exception) {}
+
+                val remotePath = "$metaDir/${vaultName}_vault_sync.db.7z"
+                webdavClient.uploadFile(zipFile, remotePath) { _ -> }
+
+                val exists = webdavClient.exists(remotePath)
+                if (!exists) {
+                    CloudSyncLogger.logSync("CloudPane", "cloud.db 上传验证失败")
+                }
+                exists
+            } finally {
+                zipFile.delete()
+            }
+        } catch (e: Exception) {
+            CloudSyncLogger.logSync("CloudPane", "cloud.db 上传失败: ${e.message}")
+            false
+        }
     }
 
     fun refresh() {

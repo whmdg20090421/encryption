@@ -82,6 +82,11 @@ object AppDataPaths {
         return dir
     }
 
+    /** 云盘同步锁文件（标记上传状态，异常退出时残留） */
+    fun syncLock(context: Context, vaultId: Int): File {
+        return File(cloudSync(context), "vault_$vaultId.lock")
+    }
+
     /** 日记模块目录 */
     fun diary(context: Context): File {
         val dir = File(root(context), "日记")
