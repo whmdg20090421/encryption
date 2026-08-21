@@ -984,8 +984,8 @@ class CloudPaneController(
             try {
                 val binary = com.whmdg.mczj.tools.util.BinaryExtractor.ensureExtracted(context)
                 val esc = com.whmdg.mczj.tools.util.SevenZipCommand::escape
-                val cmd = "${esc(binary)} a ${esc(zipFile.absolutePath)} ${esc(dbFile.absolutePath)} -mx=9 -pmczj -mhe=on"
-                com.whmdg.mczj.tools.security.ShellExecutor.execute(com.whmdg.mczj.tools.security.AndroidPermissionLevel.MAX, cmd)
+                val cmd = "${esc(binary.absolutePath)} a ${esc(zipFile.absolutePath)} ${esc(dbFile.absolutePath)} -mx=9 -pmczj -mhe=on"
+                com.whmdg.mczj.tools.security.ShellExecutor.execute(com.whmdg.mczj.tools.security.Permission.MAX, cmd)
 
                 val metaDir = "${remoteBasePath}/.sync_meta"
                 try { webdavClient.mkdir(metaDir) } catch (_: Exception) {}
@@ -995,14 +995,14 @@ class CloudPaneController(
 
                 val exists = webdavClient.exists(remotePath)
                 if (!exists) {
-                    CloudSyncLogger.logSync("CloudPane", "cloud.db 上传验证失败")
+                    com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "cloud.db 上传验证失败")
                 }
                 exists
             } finally {
                 zipFile.delete()
             }
         } catch (e: Exception) {
-            CloudSyncLogger.logSync("CloudPane", "cloud.db 上传失败: ${e.message}")
+            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "cloud.db 上传失败: ${e.message}")
             false
         }
     }

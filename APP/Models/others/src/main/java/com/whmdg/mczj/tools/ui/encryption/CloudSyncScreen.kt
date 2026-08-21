@@ -401,7 +401,7 @@ fun CloudSyncScreen(
                                 showRecoveryDialog = false
                                 showRecoveryProgress = true
                                 scope.launch {
-                                    val controller = com.whmdg.mczj.tools.filemanager.CloudPaneController(
+                                    val controller = com.whmdg.mczj.tools.ui.filemanager.CloudPaneController(
                                         context = context,
                                         scope = scope,
                                         webdavConfig = recoveryConfig!!,
