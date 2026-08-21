@@ -1107,9 +1107,15 @@ class CloudPaneController(
                 when (dbEntry?.status) {
                     SyncStatus.COMPLETED -> uploadedSize += fileSize
                     SyncStatus.UPLOADING -> {
-                        val done = liveProgress?.uploadedBytes ?: dbUploaded
-                        uploadedSize += done
-                        uploadingSize += (fileSize - done)
+                        val isSyncActive = state.syncTask.phase == SyncPhase.SYNCING || state.syncTask.phase == SyncPhase.SCANNING
+                        if (isSyncActive) {
+                            val done = liveProgress?.uploadedBytes ?: dbUploaded
+                            uploadedSize += done
+                            uploadingSize += (fileSize - done)
+                        } else {
+                            // 没有活跃上传任务，重置为待上传
+                            syncDb.updateStatus("local_entries", childPath, SyncStatus.PENDING)
+                        }
                     }
                     else -> {} // PENDING / QUEUED / PAUSED → 不计入
                 }

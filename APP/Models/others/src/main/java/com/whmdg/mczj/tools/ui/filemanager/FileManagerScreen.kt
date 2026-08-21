@@ -328,6 +328,8 @@ fun FileManagerScreen(
     var showDeleteDialog by remember { mutableStateOf(false) }
     var hideToolbarForDelete by remember { mutableStateOf(false) }
     var showDeleteProgress by remember { mutableStateOf(false) }
+    // ── 云盘退出确认对话框（上传中退出时弹出） ──
+    var showCloudExitConfirm by remember { mutableStateOf(false) }
     // ── 复制/移动确认对话框 ──
     var showCopyMoveConfirmDialog by remember { mutableStateOf(false) }
     var copyMoveConfirmIsCopy by remember { mutableStateOf(true) }
@@ -626,12 +628,23 @@ fun FileManagerScreen(
         onDispose {}
     }
 
-    // 返回手势：栈顶弹窗 → 关闭，压缩包 → 回上一级或退出，WebDAV → 回上一级或退出，回收站 → 回上一级或退出，子目录 → 回上一级，根目录 → 退出
+    // 返回手势：栈顶弹窗 → 关闭，云盘 → 回上一级或退出，压缩包 → 回上一级或退出，回收站 → 回上一级或退出，子目录 → 回上一级，根目录 → 退出
     BackHandler {
         if (overlayStack.isNotEmpty()) {
             val top = overlayStack.last()
             top.cleanup()
             unregisterOverlay(top.id)
+            return@BackHandler
+        }
+        // 云盘模式：优先处理云盘导航
+        if (vm.panels.isCloudMode) {
+            val cloud = vm.panels.cloud
+            if (cloud != null && cloud.state.currentPath != "/") {
+                cloud.goUp()
+            } else {
+                vm.panels.exitCloudMode()
+                onBack()
+            }
             return@BackHandler
         }
         if (!saveScrollAndGoUp()) {
@@ -683,8 +696,17 @@ fun FileManagerScreen(
                     },
                 actions = {
                     IconButton(onClick = {
-                        if (vm.isVaultMode) vm.exitVaultMode()
-                        onBack()
+                        // 云盘模式下有上传任务时，弹出确认
+                        val cloud = vm.panels.cloud
+                        val isCloudUploading = vm.panels.isCloudMode && cloud?.state?.syncTask?.let {
+                            it.phase == SyncPhase.SYNCING || it.phase == SyncPhase.SCANNING
+                        } == true
+                        if (isCloudUploading) {
+                            showCloudExitConfirm = true
+                        } else {
+                            if (vm.isVaultMode) vm.exitVaultMode()
+                            onBack()
+                        }
                     }) {
                         Icon(Icons.Default.Home, contentDescription = "返回主页")
                     }
@@ -928,7 +950,10 @@ fun FileManagerScreen(
                             modifier = Modifier.weight(1f),
                             contentAlignment = Alignment.Center
                         ) {
-                            val canGoUp = if (vm.isInArchiveMode) {
+                            val canGoUp = if (vm.panels.isCloudMode) {
+                                val cloudPath = vm.panels.cloud?.state?.currentPath ?: "/"
+                                cloudPath != "/"
+                            } else if (vm.isInArchiveMode) {
                                 !vm.isAtArchiveRoot()
                             } else if (vm.recycleBinPanel == vm.focusedPanel) {
                                 !vm.isAtRecycleBinRoot
@@ -947,7 +972,13 @@ fun FileManagerScreen(
                             }
 
                             IconButton(
-                                onClick = { saveScrollAndGoUp() },
+                                onClick = {
+                                    if (vm.panels.isCloudMode) {
+                                        vm.panels.cloud?.goUp()
+                                    } else {
+                                        saveScrollAndGoUp()
+                                    }
+                                },
                                 enabled = canGoUp
                             ) {
                                 Icon(Icons.Default.ArrowUpward, contentDescription = "返回上一级")
@@ -1147,20 +1178,27 @@ fun FileManagerScreen(
                         }
                     }
                 } else {
-                    // 按面板索引计算父路径
+                    // 按面板索引计算父路径（云盘模式使用云盘面板的 currentPath）
+                    val cloudCurrentPath = vm.panels.cloud?.state?.currentPath
                     val parentPaths = FocusedPanel.entries.map { side ->
-                        val panel = vm.panels[side.panelId].state
-                        computeParentPath(
-                            currentPath = panel.path,
-                            isInArchiveMode = panel.isInArchiveMode,
-                            isAtArchiveRoot = { vm.isAtArchiveRoot() },
-                            isRecycleBinPanel = vm.recycleBinPanel == side,
-                            isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
-                            recycleBinPath = panel.recycleBinPath,
-                            isRootEngine = vm.isRootEngine,
-                            isVaultMode = vm.isVaultMode,
-                            vaultRootPath = vm.vaultSession?.vaultDir?.absolutePath
-                        )
+                        if (side == FocusedPanel.LEFT && vm.panels.isCloudMode && cloudCurrentPath != null) {
+                            // 云盘模式：基于云盘面板的 currentPath 计算
+                            if (cloudCurrentPath == "/") null
+                            else cloudCurrentPath.substringBeforeLast('/', "").ifEmpty { "/" }
+                        } else {
+                            val panel = vm.panels[side.panelId].state
+                            computeParentPath(
+                                currentPath = panel.path,
+                                isInArchiveMode = panel.isInArchiveMode,
+                                isAtArchiveRoot = { vm.isAtArchiveRoot() },
+                                isRecycleBinPanel = vm.recycleBinPanel == side,
+                                isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
+                                recycleBinPath = panel.recycleBinPath,
+                                isRootEngine = vm.isRootEngine,
+                                isVaultMode = vm.isVaultMode,
+                                vaultRootPath = vm.vaultSession?.vaultDir?.absolutePath
+                            )
+                        }
                     }
 
                     val activePanel = vm.currentPanel
@@ -1194,8 +1232,16 @@ fun FileManagerScreen(
                                         onNavigateTo = { path -> vm.focusedPanel = FocusedPanel.LEFT; vm.panels.cloud?.navigateTo(path) },
                                         parentPath = parentPaths[0],
                                         onBack = {
-                                            vm.panels.exitCloudMode()
-                                            onBack()
+                                            val cloud = vm.panels.cloud
+                                            val isUploading = cloud?.state?.syncTask?.let {
+                                                it.phase == SyncPhase.SYNCING || it.phase == SyncPhase.SCANNING
+                                            } == true
+                                            if (isUploading) {
+                                                showCloudExitConfirm = true
+                                            } else {
+                                                vm.panels.exitCloudMode()
+                                                onBack()
+                                            }
                                         },
                                         onUpload = { path -> vm.panels.cloud?.uploadFile(path) },
                                         onDelete = { path -> vm.panels.cloud?.deleteBoth(path) },
@@ -2906,6 +2952,26 @@ fun FileManagerScreen(
             vm.refreshBoth()
         }
     )
+
+    // ── 云盘退出确认对话框（上传中退出时弹出） ──
+    if (showCloudExitConfirm) {
+        StandardDialog(
+            onDismissRequest = { showCloudExitConfirm = false },
+            title = { Text("上传中") },
+            text = { Text("上传任务正在进行中，返回后将终止上传。确定返回？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showCloudExitConfirm = false
+                    vm.panels.cloud?.cancelUpload()
+                    vm.panels.exitCloudMode()
+                    onBack()
+                }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCloudExitConfirm = false }) { Text("取消") }
+            }
+        )
+    }
 
     // ── 复制/移动确认对话框 ──
     CopyMoveConfirmDialog(
