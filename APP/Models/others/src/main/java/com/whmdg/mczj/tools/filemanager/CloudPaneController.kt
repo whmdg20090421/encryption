@@ -223,7 +223,7 @@ class CloudPaneController(
         syncJob = scope.launch {
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val logFileName = "${vaultName}_upload_${timestamp}.log"
-            val internalLogDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
+            val internalLogDir = com.whmdg.mczj.tools.AppDataPaths.cloudSyncLogs(context)
             val internalLogFile = File(internalLogDir, logFileName)
             val externalLogDir = context.getExternalFilesDir(null)?.let { File(it, "Android_tools/云盘") }
             val externalLogFile = externalLogDir?.let { File(it, logFileName) }
@@ -241,7 +241,7 @@ class CloudPaneController(
             val anomalyThreshold = 128 * 1024L  // 128KB
             var anomalyCount = 0
             var lastUiTransferredBytes = 0L
-            val anomalyLogFile = File(com.whmdg.mczj.tools.AppDataPaths.diagnostics(context), "progress_anomaly_${vaultName}_${timestamp}.log")
+            val anomalyLogFile = File(com.whmdg.mczj.tools.AppDataPaths.cloudSyncAnomalies(context), "${vaultName}_anomaly_${timestamp}.log")
             val anomalyTerminated = java.util.concurrent.atomic.AtomicBoolean(false)
             engine.uploadSingleFile(
                 relativePath = relativePath,
@@ -291,11 +291,8 @@ class CloudPaneController(
                             } catch (_: Exception) {}
                             if (anomalyCount >= 5) {
                                 anomalyTerminated.set(true)
-                                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                    android.widget.Toast.makeText(context, "检测到本次上传异常，已自动终止，为了保护数据安全", android.widget.Toast.LENGTH_LONG).show()
-                                }
                                 state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
-                                syncJob?.cancel()
+                                forceTerminate()
                             }
                         }
                         lastUiTransferredBytes = uploadedBytes
@@ -553,7 +550,7 @@ class CloudPaneController(
             }
 
             // ⑬ 创建日志文件 + SyncEngine
-            val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
+            val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSyncLogs(context)
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val logFileName = "${vaultName}_batch_${timestamp}.log"
             val internalLogFile = File(logDir, logFileName)
@@ -604,11 +601,11 @@ class CloudPaneController(
                 var lastUiUpdateTime = 0L
                 // 累积 delta（节流期间合并多个 Progress 事件的增量）
                 val pendingDeltas = java.util.concurrent.ConcurrentHashMap<String, Long>()
-                // 进度异常检测器
-                val anomalyThreshold = 128 * 1024L  // 128KB
+                // 进度异常检测器（阈值按并发数缩放）
+                val anomalyThreshold = 128 * 1024L * maxConcurrency  // 128KB × 并发数
                 var anomalyCount = 0
                 var lastUiTransferredBytes = 0L
-                val anomalyLogFile = File(com.whmdg.mczj.tools.AppDataPaths.diagnostics(context), "progress_anomaly_${vaultName}_${timestamp}.log")
+                val anomalyLogFile = File(com.whmdg.mczj.tools.AppDataPaths.cloudSyncAnomalies(context), "${vaultName}_anomaly_${timestamp}.log")
 
                 for (event in eventChannel) {
                     if (!isActive) break
@@ -681,15 +678,12 @@ class CloudPaneController(
                                         Thread.currentThread().stackTrace.take(25).forEach { appendLine("  $it") }
                                     }
                                     try {
-                                        val diagDir = com.whmdg.mczj.tools.AppDataPaths.diagnostics(context)
-                                        diagDir.mkdirs()
+                                        val regDir = com.whmdg.mczj.tools.AppDataPaths.cloudSyncRegressions(context)
                                         val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
-                                        java.io.File(diagDir, "progress_regression_$ts.log").writeText(diagInfo)
+                                        java.io.File(regDir, "${vaultName}_regression_$ts.log").writeText(diagInfo)
                                     } catch (_: Exception) {}
-                                    android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                        android.widget.Toast.makeText(context, "检测到进度异常回退，已强制中断以保护数据安全", android.widget.Toast.LENGTH_LONG).show()
-                                    }
-                                    syncJob?.cancel()
+                                    state.anomalyDialogMessage = "检测到进度异常回退（transferred 从 ${lastTransferredBytes} 降至 $transferred），已自动终止上传以保护数据安全。"
+                                    forceTerminate()
                                     return@launch
                                 }
                                 lastTransferredBytes = transferred
@@ -742,17 +736,15 @@ class CloudPaneController(
                                                 appendLine("上次UI transferredBytes: $lastUiTransferredBytes")
                                                 appendLine("本次UI transferredBytes: $transferred")
                                                 appendLine("totalBytes: ${state.syncTask.totalBytes}")
-                                                appendLine("anomalyThreshold: $anomalyThreshold")
+                                                appendLine("anomalyThreshold: $anomalyThreshold (128KB × $maxConcurrency)")
+                                                appendLine("活跃文件数: ${activeFileBytes.size}")
                                                 appendLine("活跃文件: ${activeFileBytes.keys.joinToString()}")
                                                 appendLine()
                                             })
                                         } catch (_: Exception) {}
                                         if (anomalyCount >= 5) {
-                                            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                                android.widget.Toast.makeText(context, "检测到本次上传异常，已自动终止，为了保护数据安全", android.widget.Toast.LENGTH_LONG).show()
-                                            }
                                             state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
-                                            syncJob?.cancel()
+                                            forceTerminate()
                                             return@launch
                                         }
                                     }
@@ -835,15 +827,12 @@ class CloudPaneController(
                                         Thread.currentThread().stackTrace.take(25).forEach { appendLine("  $it") }
                                     }
                                     try {
-                                        val diagDir = com.whmdg.mczj.tools.AppDataPaths.diagnostics(context)
-                                        diagDir.mkdirs()
+                                        val regDir = com.whmdg.mczj.tools.AppDataPaths.cloudSyncRegressions(context)
                                         val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
-                                        java.io.File(diagDir, "progress_regression_$ts.log").writeText(diagInfo)
+                                        java.io.File(regDir, "${vaultName}_regression_$ts.log").writeText(diagInfo)
                                     } catch (_: Exception) {}
-                                    android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                        android.widget.Toast.makeText(context, "检测到进度异常回退，已强制中断以保护数据安全", android.widget.Toast.LENGTH_LONG).show()
-                                    }
-                                    syncJob?.cancel()
+                                    state.anomalyDialogMessage = "检测到进度异常回退（transferred 从 ${lastTransferredBytes} 降至 $transferred），已自动终止上传以保护数据安全。"
+                                    forceTerminate()
                                     return@launch
                                 }
                                 lastTransferredBytes = transferred
@@ -1027,7 +1016,7 @@ class CloudPaneController(
         syncJob = scope.launch {
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val logFileName = "${vaultName}_batch_${timestamp}.log"
-            val internalLogDir = com.whmdg.mczj.tools.AppDataPaths.cloudSync(context)
+            val internalLogDir = com.whmdg.mczj.tools.AppDataPaths.cloudSyncLogs(context)
             val internalLogFile = File(internalLogDir, logFileName)
             val externalLogDir = context.getExternalFilesDir(null)?.let { File(it, "Android_tools/云盘") }
             val externalLogFile = externalLogDir?.let { File(it, logFileName) }
@@ -1093,6 +1082,25 @@ class CloudPaneController(
             if (job == null || !job.isActive) {
                 android.widget.Toast.makeText(context, "上传任务已终止", android.widget.Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    /** 强制终止：立即杀死上传协程，关闭所有弹窗，重置状态，不上传 cloud.db */
+    fun forceTerminate() {
+        syncJob?.cancel()
+        syncJob = null
+        state.syncDialogVisible = false
+        state.anomalyDialogMessage = null
+        state.syncTask = SyncTaskState()
+        scope.launch(Dispatchers.IO) {
+            val entries = syncDb.getEntriesByStatus("local_entries", SyncStatus.QUEUED) +
+                syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
+            for (entry in entries) {
+                syncDb.updateStatus("local_entries", entry.path, SyncStatus.PENDING)
+                syncDb.updateUploadedSize("local_entries", entry.path, 0)
+            }
+            try { com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete() } catch (_: Exception) {}
+            silentRefresh()
         }
     }
 

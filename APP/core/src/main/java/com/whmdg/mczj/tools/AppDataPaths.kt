@@ -82,9 +82,37 @@ object AppDataPaths {
         return dir
     }
 
+    /** 云盘锁文件目录 */
+    fun cloudSyncLocks(context: Context): File {
+        val dir = File(cloudSync(context), "锁文件")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 云盘上传日志目录 */
+    fun cloudSyncLogs(context: Context): File {
+        val dir = File(cloudSync(context), "上传日志")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 云盘进度异常日志目录 */
+    fun cloudSyncAnomalies(context: Context): File {
+        val dir = File(cloudSync(context), "进度异常")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 云盘进度回退日志目录 */
+    fun cloudSyncRegressions(context: Context): File {
+        val dir = File(cloudSync(context), "进度回退")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     /** 云盘同步锁文件（标记上传状态，异常退出时残留） */
     fun syncLock(context: Context, vaultId: Int): File {
-        return File(cloudSync(context), "vault_$vaultId.lock")
+        return File(cloudSyncLocks(context), "vault_$vaultId.lock")
     }
 
     /** 日记模块目录 */
