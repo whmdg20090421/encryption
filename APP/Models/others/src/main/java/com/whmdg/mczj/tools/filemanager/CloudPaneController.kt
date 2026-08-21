@@ -234,8 +234,6 @@ class CloudPaneController(
                 onFileComplete = { _, _ -> },
                 logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
-            // UI 节流：最多每 100ms 更新一次 state（避免 Compose recomposition 过载）
-            var lastUiUpdateTime = 0L
             val localFileProgress = java.util.concurrent.ConcurrentHashMap<String, SyncFileProgress>()
             // 进度异常检测器
             val anomalyThreshold = 128 * 1024L  // 128KB
@@ -249,6 +247,8 @@ class CloudPaneController(
                 syncDb = syncDb,
                 onProgress = { uploadedBytes, totalBytes ->
                     if (anomalyTerminated.get()) return@uploadSingleFile
+                    val now = System.currentTimeMillis()
+                    val uiDelta = uploadedBytes - lastUiTransferredBytes
                     // 始终记录到本地 map（供 updateSingleEntry 读取）
                     localFileProgress[relativePath] = SyncFileProgress(
                         relativePath = relativePath,
@@ -256,47 +256,53 @@ class CloudPaneController(
                         uploadedBytes = uploadedBytes,
                         status = UploadStatus.UPLOADING
                     )
-                    // 按时间节流：每 100ms 才触发一次 UI 更新
-                    val now = System.currentTimeMillis()
-                    if (now - lastUiUpdateTime >= 100) {
-                        lastUiUpdateTime = now
-                        val currentProgress = state.syncTask.fileProgress.toMutableMap()
-                        currentProgress[relativePath] = localFileProgress[relativePath]!!
-                        state.syncTask = state.syncTask.copy(
-                            fileProgress = currentProgress,
-                            transferredBytes = uploadedBytes
-                        )
-                        updateSingleEntry(relativePath)
-                        // 进度异常检测：UI 增量 > 128KB
-                        val uiDelta = uploadedBytes - lastUiTransferredBytes
-                        if (uiDelta > anomalyThreshold && lastUiTransferredBytes > 0) {
-                            anomalyCount++
-                            val deltaKB = uiDelta / 1024
-                            val deltaStr = if (deltaKB >= 1024) "${String.format("%.1f", uiDelta / 1048576.0)}MB" else "${deltaKB}KB"
-                            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                android.widget.Toast.makeText(context, "检测到第${anomalyCount}次数据异常，数据异常为增加了$deltaStr", android.widget.Toast.LENGTH_LONG).show()
-                            }
-                            try {
-                                anomalyLogFile.appendText(buildString {
-                                    appendLine("=== 第${anomalyCount}次进度异常 ===")
-                                    appendLine("时间: ${java.time.LocalDateTime.now()}")
-                                    appendLine("文件: $relativePath")
-                                    appendLine("UI增量: ${uiDelta} bytes ($deltaStr)")
-                                    appendLine("上次UI transferredBytes: $lastUiTransferredBytes")
-                                    appendLine("本次UI transferredBytes: $uploadedBytes")
-                                    appendLine("totalBytes: $totalBytes")
-                                    appendLine("anomalyThreshold: $anomalyThreshold")
-                                    appendLine()
-                                })
-                            } catch (_: Exception) {}
-                            if (anomalyCount >= 5) {
-                                anomalyTerminated.set(true)
-                                state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
-                                forceTerminate()
-                            }
+                    // 每次回调直接更新 state，由 Compose 渲染机制自行节流
+                    val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                    currentProgress[relativePath] = localFileProgress[relativePath]!!
+                    state.syncTask = state.syncTask.copy(
+                        fileProgress = currentProgress,
+                        transferredBytes = uploadedBytes
+                    )
+                    updateSingleEntry(relativePath)
+                    // 进度异常检测：单次回调增量 > 128KB
+                    if (uiDelta > anomalyThreshold && lastUiTransferredBytes > 0) {
+                        anomalyCount++
+                        val deltaKB = uiDelta / 1024
+                        val deltaStr = if (deltaKB >= 1024) "${String.format("%.1f", uiDelta / 1048576.0)}MB" else "${deltaKB}KB"
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            android.widget.Toast.makeText(context, "检测到第${anomalyCount}次数据异常，数据异常为增加了$deltaStr", android.widget.Toast.LENGTH_LONG).show()
                         }
-                        lastUiTransferredBytes = uploadedBytes
+                        try {
+                            anomalyLogFile.appendText(buildString {
+                                appendLine("=== 第${anomalyCount}次进度异常（单文件上传）===")
+                                appendLine("时间: ${java.time.LocalDateTime.now()}")
+                                appendLine("文件: $relativePath")
+                                appendLine()
+                                appendLine("--- 渲染器帧对比 ---")
+                                appendLine("上次渲染 transferredBytes: $lastUiTransferredBytes")
+                                appendLine("本次渲染 transferredBytes: $uploadedBytes")
+                                appendLine("帧增量: ${uiDelta} bytes ($deltaStr)")
+                                appendLine("anomalyThreshold: $anomalyThreshold")
+                                appendLine()
+                                appendLine("--- 诊断 ---")
+                                val singleChunkOversize = uiDelta > anomalyThreshold
+                                appendLine("单次回调是否超限: $singleChunkOversize")
+                                if (singleChunkOversize) {
+                                    appendLine("结论: 单次 onProgress 回调 delta=${deltaStr}，远超 128KB chunk 限制")
+                                    appendLine("原因: OkHttp BufferedSink 缓冲合并了多次 sink.write，或网络层返回了超大块数据")
+                                } else {
+                                    appendLine("结论: 多次回调累积未刷新，刷新频率不足")
+                                }
+                                appendLine()
+                            })
+                        } catch (_: Exception) {}
+                        if (anomalyCount >= 5) {
+                            anomalyTerminated.set(true)
+                            state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
+                            forceTerminate()
+                        }
                     }
+                    lastUiTransferredBytes = uploadedBytes
                 },
                 onComplete = { success, error ->
                     scope.launch {
@@ -597,10 +603,6 @@ class CloudPaneController(
                 var currentSpeed = 0L
                 // 进度回退检测：记录上次 transferredBytes
                 var lastTransferredBytes = 0L
-                // UI 节流：最多每 100ms 更新一次 state（避免 Compose recomposition 过载）
-                var lastUiUpdateTime = 0L
-                // 累积 delta（节流期间合并多个 Progress 事件的增量）
-                val pendingDeltas = java.util.concurrent.ConcurrentHashMap<String, Long>()
                 // 进度异常检测器（按单文件增量检测，128KB 阈值）
                 val anomalyThreshold = 128 * 1024L
                 var anomalyCount = 0
@@ -615,8 +617,6 @@ class CloudPaneController(
                                 val oldUploaded = activeFileBytes[event.path] ?: 0L
                                 val delta = event.uploaded - oldUploaded
                                 activeFileBytes[event.path] = event.uploaded
-                                // 累积 delta（节流期间合并）
-                                if (delta > 0) pendingDeltas[event.path] = (pendingDeltas[event.path] ?: 0L) + delta
                                 val activeTotal = activeFileBytes.values.sum()
                                 val transferred = completedBytes.get() + activeTotal
                                 // 进度回退检测
@@ -694,69 +694,83 @@ class CloudPaneController(
                                     speedLastBytes = transferred
                                     speedLastTime = now
                                 }
-                                // 按时间节流：每 100ms 才触发一次 UI 更新
-                                if (now - lastUiUpdateTime >= 100) {
-                                    lastUiUpdateTime = now
-                                    // 从 activeFileBytes 构建最新进度 map（避免读 stale state）
-                                    val currentProgress = activeFileBytes.mapValues { (path, uploaded) ->
-                                        SyncFileProgress(
-                                            relativePath = path,
-                                            totalBytes = fileSizes[path] ?: uploaded,
-                                            uploadedBytes = uploaded,
-                                            status = UploadStatus.UPLOADING
-                                        )
-                                    }
-                                    state.syncTask = state.syncTask.copy(
-                                        fileProgress = currentProgress,
-                                        transferredBytes = transferred,
-                                        speed = currentSpeed,
-                                        concurrency = maxConcurrency
+                                // 每次回调直接更新 state，由 Compose 渲染机制自行节流
+                                val currentProgress = activeFileBytes.mapValues { (path, uploaded) ->
+                                    SyncFileProgress(
+                                        relativePath = path,
+                                        totalBytes = fileSizes[path] ?: uploaded,
+                                        uploadedBytes = uploaded,
+                                        status = UploadStatus.UPLOADING
                                     )
-                                    // 增量更新父文件夹（使用累积 delta）
-                                    for ((path, accDelta) in pendingDeltas) {
-                                        updateFolderAggregates(path, addGreen = accDelta, addYellow = -accDelta)
-                                    }
-                                    pendingDeltas.clear()
-                                    // 只更新文件自身进度条（不触发 aggregateFolder）
-                                    updateFileProgressOnly(event.path)
-                                    // 进度异常检测：单文件 UI 增量 > 128KB
-                                    for ((path, uploaded) in activeFileBytes) {
-                                        val prev = lastUiFileBytes[path]
-                                        if (prev != null && uploaded - prev > anomalyThreshold) {
-                                            anomalyCount++
-                                            val uiDelta = uploaded - prev
-                                            val deltaKB = uiDelta / 1024
-                                            val deltaStr = if (deltaKB >= 1024) "${String.format("%.1f", uiDelta / 1048576.0)}MB" else "${deltaKB}KB"
-                                            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                                android.widget.Toast.makeText(context, "检测到第${anomalyCount}次数据异常，数据异常为增加了$deltaStr", android.widget.Toast.LENGTH_LONG).show()
-                                            }
-                                            try {
-                                                anomalyLogFile.appendText(buildString {
-                                                    appendLine("=== 第${anomalyCount}次进度异常 ===")
-                                                    appendLine("时间: ${java.time.LocalDateTime.now()}")
-                                                    appendLine("文件: $path")
-                                                    appendLine("单文件UI增量: ${uiDelta} bytes ($deltaStr)")
-                                                    appendLine("上次UI: ${prev} bytes")
-                                                    appendLine("本次UI: ${uploaded} bytes")
-                                                    appendLine("anomalyThreshold: $anomalyThreshold")
-                                                    appendLine()
-                                                })
-                                            } catch (_: Exception) {}
-                                            if (anomalyCount >= 5) {
-                                                state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
-                                                forceTerminate()
-                                                return@launch
-                                            }
+                                }
+                                state.syncTask = state.syncTask.copy(
+                                    fileProgress = currentProgress,
+                                    transferredBytes = transferred,
+                                    speed = currentSpeed,
+                                    concurrency = maxConcurrency
+                                )
+                                // 增量更新父文件夹（使用本次单次 delta）
+                                if (delta > 0) updateFolderAggregates(event.path, addGreen = delta, addYellow = -delta)
+                                // 只更新文件自身进度条（不触发 aggregateFolder）
+                                updateFileProgressOnly(event.path)
+                                // 进度异常检测：单文件渲染帧增量 > 128KB
+                                for ((path, uploaded) in activeFileBytes) {
+                                    val prev = lastUiFileBytes[path]
+                                    if (prev != null && uploaded - prev > anomalyThreshold) {
+                                        anomalyCount++
+                                        val uiDelta = uploaded - prev
+                                        val deltaKB = uiDelta / 1024
+                                        val deltaStr = if (deltaKB >= 1024) "${String.format("%.1f", uiDelta / 1048576.0)}MB" else "${deltaKB}KB"
+                                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                            android.widget.Toast.makeText(context, "检测到第${anomalyCount}次数据异常，数据异常为增加了$deltaStr", android.widget.Toast.LENGTH_LONG).show()
                                         }
-                                        lastUiFileBytes[path] = uploaded
+                                        try {
+                                            anomalyLogFile.appendText(buildString {
+                                                appendLine("=== 第${anomalyCount}次进度异常（并发上传）===")
+                                                appendLine("时间: ${java.time.LocalDateTime.now()}")
+                                                appendLine()
+                                                appendLine("--- 渲染器帧对比 ---")
+                                                appendLine("上次渲染各文件状态:")
+                                                lastUiFileBytes.forEach { (k, v) -> appendLine("  $k = $v bytes") }
+                                                appendLine("本次渲染各文件状态:")
+                                                activeFileBytes.forEach { (k, v) -> appendLine("  $k = $v bytes") }
+                                                appendLine()
+                                                appendLine("--- 逐文件增量 ---")
+                                                activeFileBytes.forEach { (k, v) ->
+                                                    val p = lastUiFileBytes[k]
+                                                    val d = if (p != null) v - p else 0L
+                                                    val dStr = if (d >= 1024 * 1024) "${String.format("%.2f", d / 1048576.0)}MB" else "${d / 1024}KB"
+                                                    val flag = if (p != null && d > anomalyThreshold) " ⚠️ 超限" else ""
+                                                    appendLine("  $k: +${dStr}$flag")
+                                                }
+                                                appendLine()
+                                                appendLine("--- 诊断 ---")
+                                                appendLine("触发文件: $path")
+                                                appendLine("帧增量: ${uiDelta} bytes ($deltaStr)")
+                                                appendLine("anomalyThreshold: $anomalyThreshold")
+                                                appendLine("本次回调 event.delta: $delta bytes")
+                                                val singleChunkOversize = delta > anomalyThreshold
+                                                appendLine("单次回调是否超限(>128KB): $singleChunkOversize")
+                                                if (singleChunkOversize) {
+                                                    appendLine("结论: 单次 onProgress 回调 delta=${delta / 1024}KB，远超 128KB chunk 限制")
+                                                    appendLine("原因: OkHttp BufferedSink 缓冲合并了多次 sink.write，或网络层返回了超大块数据")
+                                                } else {
+                                                    appendLine("结论: 多次回调累积未刷新，刷新频率不足")
+                                                }
+                                                appendLine()
+                                            })
+                                        } catch (_: Exception) {}
+                                        if (anomalyCount >= 5) {
+                                            state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
+                                            forceTerminate()
+                                            return@launch
+                                        }
                                     }
+                                    lastUiFileBytes[path] = uploaded
                                 }
                             }
                             is UploadEvent.Complete -> {
                                 val oldUploaded = activeFileBytes[event.path] ?: 0L
-                                // 先刷新该文件的累积 delta 到 UI
-                                val accDelta = pendingDeltas.remove(event.path) ?: 0L
-                                if (accDelta > 0) updateFolderAggregates(event.path, addGreen = accDelta, addYellow = -accDelta)
                                 val remaining = event.fileSize - oldUploaded
                                 activeFileBytes.remove(event.path)
                                 completedFilesCount++
@@ -1051,23 +1065,24 @@ class CloudPaneController(
 
     /** 取消上传：停止任务，上传 cloud.db，清理锁，已上传的不动，未上传的重置为 PENDING */
     fun cancelUpload() {
-        state.syncDialogVisible = false
         val job = syncJob
         syncJob = null
         scope.launch {
-            // 1. 取消旧协程并等待其真正终止
+            // 1. 弹窗切换为不定进度条，提示正在取消
+            state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING, currentFileName = "正在取消上传连接...")
+            // 2. 取消旧协程并等待其真正终止
             job?.cancel()
             job?.join()
 
-            // 2. 上传 cloud.db（已上传的文件已在DB中更新）
-            state.syncDialogVisible = true
-            state.syncTask = SyncTaskState(phase = SyncPhase.SYNCING, currentFileName = "正在同步云端列表...")
+            // 3. 上传 cloud.db（已上传的文件已在DB中更新）
+            state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING, currentFileName = "正在保存云端数据...")
             val dbUploaded = uploadCloudDb()
             if (dbUploaded) {
                 com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
             }
 
-            // 3. 清理 DB 中残留的 UPLOADING/QUEUED 状态
+            // 4. 清理 DB 中残留的 UPLOADING/QUEUED 状态
+            state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING, currentFileName = "正在清理上传队列...")
             withContext(Dispatchers.IO) {
                 val entries = syncDb.getEntriesByStatus("local_entries", SyncStatus.QUEUED) +
                     syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
@@ -1076,13 +1091,11 @@ class CloudPaneController(
                     syncDb.updateUploadedSize("local_entries", entry.path, 0)
                 }
             }
+            // 5. 关闭弹窗，重置状态
             state.syncTask = SyncTaskState()
             state.syncDialogVisible = false
             silentRefresh()
-            // 4. 自检确认已终止
-            if (job == null || !job.isActive) {
-                android.widget.Toast.makeText(context, "上传任务已终止", android.widget.Toast.LENGTH_SHORT).show()
-            }
+            android.widget.Toast.makeText(context, "上传任务已终止", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 
