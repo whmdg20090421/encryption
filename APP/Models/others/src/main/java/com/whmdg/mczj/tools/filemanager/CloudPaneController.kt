@@ -59,6 +59,8 @@ class CloudPaneController(
         var isInitialized by mutableStateOf(false)
         /** 已删除文件确认对话框 */
         var deletedFilesDialog by mutableStateOf<DeletedFilesState?>(null)
+        /** 进度异常弹窗（为 null 时隐藏） */
+        var anomalyDialogMessage by mutableStateOf<String?>(null)
     }
 
     data class DeletedFilesState(
@@ -235,6 +237,11 @@ class CloudPaneController(
             // UI 节流：最多每 100ms 更新一次 state（避免 Compose recomposition 过载）
             var lastUiUpdateTime = 0L
             val localFileProgress = java.util.concurrent.ConcurrentHashMap<String, SyncFileProgress>()
+            // 进度异常检测器
+            val anomalyThreshold = 128 * 1024L  // 128KB
+            var anomalyCount = 0
+            var lastUiTransferredBytes = 0L
+            val anomalyLogFile = File(com.whmdg.mczj.tools.AppDataPaths.diagnostics(context), "progress_anomaly_${vaultName}_${timestamp}.log")
             engine.uploadSingleFile(
                 relativePath = relativePath,
                 remoteBasePath = remoteBasePath,
@@ -258,6 +265,34 @@ class CloudPaneController(
                             transferredBytes = uploadedBytes
                         )
                         updateSingleEntry(relativePath)
+                        // 进度异常检测：UI 增量 > 128KB
+                        val uiDelta = uploadedBytes - lastUiTransferredBytes
+                        if (uiDelta > anomalyThreshold && lastUiTransferredBytes > 0) {
+                            anomalyCount++
+                            val deltaKB = uiDelta / 1024
+                            val deltaStr = if (deltaKB >= 1024) "${String.format("%.1f", uiDelta / 1048576.0)}MB" else "${deltaKB}KB"
+                            android.widget.Toast.makeText(context, "检测到第${anomalyCount}次数据异常，数据异常为增加了$deltaStr", android.widget.Toast.LENGTH_LONG).show()
+                            try {
+                                anomalyLogFile.appendText(buildString {
+                                    appendLine("=== 第${anomalyCount}次进度异常 ===")
+                                    appendLine("时间: ${java.time.LocalDateTime.now()}")
+                                    appendLine("文件: $relativePath")
+                                    appendLine("UI增量: ${uiDelta} bytes ($deltaStr)")
+                                    appendLine("上次UI transferredBytes: $lastUiTransferredBytes")
+                                    appendLine("本次UI transferredBytes: $uploadedBytes")
+                                    appendLine("totalBytes: $totalBytes")
+                                    appendLine("anomalyThreshold: $anomalyThreshold")
+                                    appendLine()
+                                })
+                            } catch (_: Exception) {}
+                            if (anomalyCount >= 5) {
+                                android.widget.Toast.makeText(context, "检测到本次上传异常，已自动终止，为了保护数据安全", android.widget.Toast.LENGTH_LONG).show()
+                                state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
+                                syncJob?.cancel()
+                                return@uploadFile
+                            }
+                        }
+                        lastUiTransferredBytes = uploadedBytes
                     }
                 },
                 onComplete = { success, error ->
@@ -563,6 +598,11 @@ class CloudPaneController(
                 var lastUiUpdateTime = 0L
                 // 累积 delta（节流期间合并多个 Progress 事件的增量）
                 val pendingDeltas = java.util.concurrent.ConcurrentHashMap<String, Long>()
+                // 进度异常检测器
+                val anomalyThreshold = 128 * 1024L  // 128KB
+                var anomalyCount = 0
+                var lastUiTransferredBytes = 0L
+                val anomalyLogFile = File(com.whmdg.mczj.tools.AppDataPaths.diagnostics(context), "progress_anomaly_${vaultName}_${timestamp}.log")
 
                 for (event in eventChannel) {
                     if (!isActive) break
@@ -677,6 +717,34 @@ class CloudPaneController(
                                     pendingDeltas.clear()
                                     // 只更新文件自身进度条（不触发 aggregateFolder）
                                     updateFileProgressOnly(event.path)
+                                    // 进度异常检测：UI 增量 > 128KB
+                                    val uiDelta = transferred - lastUiTransferredBytes
+                                    if (uiDelta > anomalyThreshold && lastUiTransferredBytes > 0) {
+                                        anomalyCount++
+                                        val deltaKB = uiDelta / 1024
+                                        val deltaStr = if (deltaKB >= 1024) "${String.format("%.1f", uiDelta / 1048576.0)}MB" else "${deltaKB}KB"
+                                        android.widget.Toast.makeText(context, "检测到第${anomalyCount}次数据异常，数据异常为增加了$deltaStr", android.widget.Toast.LENGTH_LONG).show()
+                                        try {
+                                            anomalyLogFile.appendText(buildString {
+                                                appendLine("=== 第${anomalyCount}次进度异常 ===")
+                                                appendLine("时间: ${java.time.LocalDateTime.now()}")
+                                                appendLine("UI增量: ${uiDelta} bytes ($deltaStr)")
+                                                appendLine("上次UI transferredBytes: $lastUiTransferredBytes")
+                                                appendLine("本次UI transferredBytes: $transferred")
+                                                appendLine("totalBytes: ${state.syncTask.totalBytes}")
+                                                appendLine("anomalyThreshold: $anomalyThreshold")
+                                                appendLine("活跃文件: ${activeFileBytes.keys.joinToString()}")
+                                                appendLine()
+                                            })
+                                        } catch (_: Exception) {}
+                                        if (anomalyCount >= 5) {
+                                            android.widget.Toast.makeText(context, "检测到本次上传异常，已自动终止，为了保护数据安全", android.widget.Toast.LENGTH_LONG).show()
+                                            state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
+                                            syncJob?.cancel()
+                                            return@launch
+                                        }
+                                    }
+                                    lastUiTransferredBytes = transferred
                                 }
                             }
                             is UploadEvent.Complete -> {
@@ -1054,6 +1122,18 @@ class CloudPaneController(
     fun refresh() {
         syncLocalFiles()
         navigateTo(state.currentPath)
+    }
+
+    /** 异常终止后重置 QUEUED/UPLOADING 为 PENDING */
+    fun resetUploadingEntries() {
+        scope.launch(Dispatchers.IO) {
+            val entries = syncDb.getEntriesByStatus("local_entries", SyncStatus.QUEUED) +
+                syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
+            for (entry in entries) {
+                syncDb.updateStatus("local_entries", entry.path, SyncStatus.PENDING)
+                syncDb.updateUploadedSize("local_entries", entry.path, 0)
+            }
+        }
     }
 
     fun dispose() {

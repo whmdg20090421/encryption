@@ -1470,6 +1470,24 @@ fun FileManagerScreen(
                         }
                     )
                 }
+                // 进度异常弹窗
+                val anomalyMsg = cloudStateForOverlay.anomalyDialogMessage
+                if (anomalyMsg != null) {
+                    StandardDialog(
+                        onDismissRequest = {
+                            cloudStateForOverlay.anomalyDialogMessage = null
+                            vm.panels.cloud?.resetUploadingEntries()
+                        },
+                        title = { Text("上传异常终止") },
+                        text = { Text(anomalyMsg) },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                cloudStateForOverlay.anomalyDialogMessage = null
+                                vm.panels.cloud?.resetUploadingEntries()
+                            }) { Text("知道了") }
+                        }
+                    )
+                }
             }
 
             // ── 历史记录面板（从底部滑入，占屏幕一半高度） ──
