@@ -273,7 +273,9 @@ class CloudPaneController(
                             anomalyCount++
                             val deltaKB = uiDelta / 1024
                             val deltaStr = if (deltaKB >= 1024) "${String.format("%.1f", uiDelta / 1048576.0)}MB" else "${deltaKB}KB"
-                            android.widget.Toast.makeText(context, "检测到第${anomalyCount}次数据异常，数据异常为增加了$deltaStr", android.widget.Toast.LENGTH_LONG).show()
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                android.widget.Toast.makeText(context, "检测到第${anomalyCount}次数据异常，数据异常为增加了$deltaStr", android.widget.Toast.LENGTH_LONG).show()
+                            }
                             try {
                                 anomalyLogFile.appendText(buildString {
                                     appendLine("=== 第${anomalyCount}次进度异常 ===")
@@ -289,7 +291,9 @@ class CloudPaneController(
                             } catch (_: Exception) {}
                             if (anomalyCount >= 5) {
                                 anomalyTerminated.set(true)
-                                android.widget.Toast.makeText(context, "检测到本次上传异常，已自动终止，为了保护数据安全", android.widget.Toast.LENGTH_LONG).show()
+                                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                    android.widget.Toast.makeText(context, "检测到本次上传异常，已自动终止，为了保护数据安全", android.widget.Toast.LENGTH_LONG).show()
+                                }
                                 state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
                                 syncJob?.cancel()
                             }
@@ -682,7 +686,9 @@ class CloudPaneController(
                                         val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
                                         java.io.File(diagDir, "progress_regression_$ts.log").writeText(diagInfo)
                                     } catch (_: Exception) {}
-                                    android.widget.Toast.makeText(context, "检测到进度异常回退，已强制中断以保护数据安全", android.widget.Toast.LENGTH_LONG).show()
+                                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                        android.widget.Toast.makeText(context, "检测到进度异常回退，已强制中断以保护数据安全", android.widget.Toast.LENGTH_LONG).show()
+                                    }
                                     syncJob?.cancel()
                                     return@launch
                                 }
@@ -725,7 +731,9 @@ class CloudPaneController(
                                         anomalyCount++
                                         val deltaKB = uiDelta / 1024
                                         val deltaStr = if (deltaKB >= 1024) "${String.format("%.1f", uiDelta / 1048576.0)}MB" else "${deltaKB}KB"
-                                        android.widget.Toast.makeText(context, "检测到第${anomalyCount}次数据异常，数据异常为增加了$deltaStr", android.widget.Toast.LENGTH_LONG).show()
+                                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                            android.widget.Toast.makeText(context, "检测到第${anomalyCount}次数据异常，数据异常为增加了$deltaStr", android.widget.Toast.LENGTH_LONG).show()
+                                        }
                                         try {
                                             anomalyLogFile.appendText(buildString {
                                                 appendLine("=== 第${anomalyCount}次进度异常 ===")
@@ -740,7 +748,9 @@ class CloudPaneController(
                                             })
                                         } catch (_: Exception) {}
                                         if (anomalyCount >= 5) {
-                                            android.widget.Toast.makeText(context, "检测到本次上传异常，已自动终止，为了保护数据安全", android.widget.Toast.LENGTH_LONG).show()
+                                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                                android.widget.Toast.makeText(context, "检测到本次上传异常，已自动终止，为了保护数据安全", android.widget.Toast.LENGTH_LONG).show()
+                                            }
                                             state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
                                             syncJob?.cancel()
                                             return@launch
@@ -830,7 +840,9 @@ class CloudPaneController(
                                         val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
                                         java.io.File(diagDir, "progress_regression_$ts.log").writeText(diagInfo)
                                     } catch (_: Exception) {}
-                                    android.widget.Toast.makeText(context, "检测到进度异常回退，已强制中断以保护数据安全", android.widget.Toast.LENGTH_LONG).show()
+                                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                        android.widget.Toast.makeText(context, "检测到进度异常回退，已强制中断以保护数据安全", android.widget.Toast.LENGTH_LONG).show()
+                                    }
                                     syncJob?.cancel()
                                     return@launch
                                 }
