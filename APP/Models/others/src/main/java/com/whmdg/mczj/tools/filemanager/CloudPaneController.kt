@@ -209,9 +209,14 @@ class CloudPaneController(
         syncDb.updateStatus("local_entries", relativePath, SyncStatus.QUEUED)
         updateSingleEntry(relativePath)
 
+        // 创建上传锁
+        val lockFile = com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId)
+        lockFile.writeText("""{"vaultId":$vaultId,"vaultName":"$vaultName","startTime":"${java.time.LocalDateTime.now()}","status":"uploading"}""")
+
         // 启动上传
         syncJob?.cancel()
         state.onCancelUpload = ::cancelUpload
+        state.syncTask = SyncTaskState(phase = SyncPhase.SYNCING, totalFiles = 1, totalBytes = localFile.length())
         state.syncDialogVisible = true
         syncJob = scope.launch {
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
@@ -227,21 +232,33 @@ class CloudPaneController(
                 onFileComplete = { _, _ -> },
                 logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
+            // UI 节流：最多每 100ms 更新一次 state（避免 Compose recomposition 过载）
+            var lastUiUpdateTime = 0L
+            val localFileProgress = java.util.concurrent.ConcurrentHashMap<String, SyncFileProgress>()
             engine.uploadSingleFile(
                 relativePath = relativePath,
                 remoteBasePath = remoteBasePath,
                 syncDb = syncDb,
                 onProgress = { uploadedBytes, totalBytes ->
-                    // 更新内存中的文件进度，供 updateSingleEntry 读取
-                    val currentProgress = state.syncTask.fileProgress.toMutableMap()
-                    currentProgress[relativePath] = SyncFileProgress(
+                    // 始终记录到本地 map（供 updateSingleEntry 读取）
+                    localFileProgress[relativePath] = SyncFileProgress(
                         relativePath = relativePath,
                         totalBytes = totalBytes,
                         uploadedBytes = uploadedBytes,
                         status = UploadStatus.UPLOADING
                     )
-                    state.syncTask = state.syncTask.copy(fileProgress = currentProgress)
-                    updateSingleEntry(relativePath)
+                    // 按时间节流：每 100ms 才触发一次 UI 更新
+                    val now = System.currentTimeMillis()
+                    if (now - lastUiUpdateTime >= 100) {
+                        lastUiUpdateTime = now
+                        val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                        currentProgress[relativePath] = localFileProgress[relativePath]!!
+                        state.syncTask = state.syncTask.copy(
+                            fileProgress = currentProgress,
+                            transferredBytes = uploadedBytes
+                        )
+                        updateSingleEntry(relativePath)
+                    }
                 },
                 onComplete = { success, error ->
                     scope.launch {
@@ -249,7 +266,6 @@ class CloudPaneController(
                         val currentProgress = state.syncTask.fileProgress.toMutableMap()
                         currentProgress.remove(relativePath)
                         state.syncTask = state.syncTask.copy(
-                            phase = SyncPhase.COMPLETED,
                             fileProgress = currentProgress,
                             completedFiles = if (success) 1 else 0
                         )
@@ -257,6 +273,15 @@ class CloudPaneController(
                             android.widget.Toast.makeText(context, "上传失败: $error，请查看日志", android.widget.Toast.LENGTH_LONG).show()
                         }
                         updateSingleEntry(relativePath)
+
+                        // 上传 cloud.db + 删除 lock
+                        state.syncTask = state.syncTask.copy(phase = SyncPhase.SYNCING, currentFileName = "正在同步云端列表...")
+                        val dbUploaded = uploadCloudDb()
+                        if (dbUploaded) {
+                            com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
+                        }
+
+                        state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED)
                         kotlinx.coroutines.delay(1500)
                         state.syncDialogVisible = false
                     }
@@ -517,6 +542,7 @@ class CloudPaneController(
             // ⑭ 并发动态上传（Channel 单写者模式，避免多线程竞态）
             val completedBytes = java.util.concurrent.atomic.AtomicLong(0)
             val activeFileBytes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+            val fileSizes = queue.associate { (file, path) -> path to file.length() }
             var activeWorkers = 0
             var queueIndex = 0
             var completedFilesCount = 0  // 仅更新器协程访问
@@ -533,6 +559,10 @@ class CloudPaneController(
                 var currentSpeed = 0L
                 // 进度回退检测：记录上次 transferredBytes
                 var lastTransferredBytes = 0L
+                // UI 节流：最多每 100ms 更新一次 state（避免 Compose recomposition 过载）
+                var lastUiUpdateTime = 0L
+                // 累积 delta（节流期间合并多个 Progress 事件的增量）
+                val pendingDeltas = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
                 for (event in eventChannel) {
                     if (!isActive) break
@@ -542,13 +572,8 @@ class CloudPaneController(
                                 val oldUploaded = activeFileBytes[event.path] ?: 0L
                                 val delta = event.uploaded - oldUploaded
                                 activeFileBytes[event.path] = event.uploaded
-                                val currentProgress = state.syncTask.fileProgress.toMutableMap()
-                                currentProgress[event.path] = SyncFileProgress(
-                                    relativePath = event.path,
-                                    totalBytes = event.total,
-                                    uploadedBytes = event.uploaded,
-                                    status = UploadStatus.UPLOADING
-                                )
+                                // 累积 delta（节流期间合并）
+                                if (delta > 0) pendingDeltas[event.path] = (pendingDeltas[event.path] ?: 0L) + delta
                                 val activeTotal = activeFileBytes.values.sum()
                                 val transferred = completedBytes.get() + activeTotal
                                 // 进度回退检测
@@ -627,19 +652,38 @@ class CloudPaneController(
                                     speedLastBytes = transferred
                                     speedLastTime = now
                                 }
-                                state.syncTask = state.syncTask.copy(
-                                    fileProgress = currentProgress,
-                                    transferredBytes = transferred,
-                                    speed = currentSpeed,
-                                    concurrency = maxConcurrency
-                                )
-                                // 增量更新父文件夹（不遍历）
-                                if (delta > 0) updateFolderAggregates(event.path, addGreen = delta, addYellow = -delta)
-                                // 只更新文件自身进度条（不触发 aggregateFolder）
-                                updateFileProgressOnly(event.path)
+                                // 按时间节流：每 100ms 才触发一次 UI 更新
+                                if (now - lastUiUpdateTime >= 100) {
+                                    lastUiUpdateTime = now
+                                    // 从 activeFileBytes 构建最新进度 map（避免读 stale state）
+                                    val currentProgress = activeFileBytes.mapValues { (path, uploaded) ->
+                                        SyncFileProgress(
+                                            relativePath = path,
+                                            totalBytes = fileSizes[path] ?: uploaded,
+                                            uploadedBytes = uploaded,
+                                            status = UploadStatus.UPLOADING
+                                        )
+                                    }
+                                    state.syncTask = state.syncTask.copy(
+                                        fileProgress = currentProgress,
+                                        transferredBytes = transferred,
+                                        speed = currentSpeed,
+                                        concurrency = maxConcurrency
+                                    )
+                                    // 增量更新父文件夹（使用累积 delta）
+                                    for ((path, accDelta) in pendingDeltas) {
+                                        updateFolderAggregates(path, addGreen = accDelta, addYellow = -accDelta)
+                                    }
+                                    pendingDeltas.clear()
+                                    // 只更新文件自身进度条（不触发 aggregateFolder）
+                                    updateFileProgressOnly(event.path)
+                                }
                             }
                             is UploadEvent.Complete -> {
                                 val oldUploaded = activeFileBytes[event.path] ?: 0L
+                                // 先刷新该文件的累积 delta 到 UI
+                                val accDelta = pendingDeltas.remove(event.path) ?: 0L
+                                if (accDelta > 0) updateFolderAggregates(event.path, addGreen = accDelta, addYellow = -accDelta)
                                 val remaining = event.fileSize - oldUploaded
                                 activeFileBytes.remove(event.path)
                                 completedFilesCount++
