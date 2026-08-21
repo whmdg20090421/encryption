@@ -242,11 +242,13 @@ class CloudPaneController(
             var anomalyCount = 0
             var lastUiTransferredBytes = 0L
             val anomalyLogFile = File(com.whmdg.mczj.tools.AppDataPaths.diagnostics(context), "progress_anomaly_${vaultName}_${timestamp}.log")
+            val anomalyTerminated = java.util.concurrent.atomic.AtomicBoolean(false)
             engine.uploadSingleFile(
                 relativePath = relativePath,
                 remoteBasePath = remoteBasePath,
                 syncDb = syncDb,
                 onProgress = { uploadedBytes, totalBytes ->
+                    if (anomalyTerminated.get()) return@uploadSingleFile
                     // 始终记录到本地 map（供 updateSingleEntry 读取）
                     localFileProgress[relativePath] = SyncFileProgress(
                         relativePath = relativePath,
@@ -286,10 +288,10 @@ class CloudPaneController(
                                 })
                             } catch (_: Exception) {}
                             if (anomalyCount >= 5) {
+                                anomalyTerminated.set(true)
                                 android.widget.Toast.makeText(context, "检测到本次上传异常，已自动终止，为了保护数据安全", android.widget.Toast.LENGTH_LONG).show()
                                 state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
                                 syncJob?.cancel()
-                                return@uploadFile
                             }
                         }
                         lastUiTransferredBytes = uploadedBytes
