@@ -141,6 +141,8 @@ object TomatoDownloader {
 
     /**
      * 初始化数据目录配置（首次启动时）。
+     * 预先写入 config.yml，设置 save_path 为 downloads 子目录，
+     * 避免 Rust 程序扫描整个数据目录。
      */
     private fun initConfigIfNeeded(dataDir: File) {
         val configFile = File(dataDir, "config.yml")
@@ -150,11 +152,19 @@ object TomatoDownloader {
 
         Log.i(TAG, "首次启动，初始化配置目录")
 
-        // 创建必要的子目录
-        File(dataDir, "logs").mkdirs()
-        File(dataDir, "downloads").mkdirs()
+        // 创建下载子目录
+        val downloadsDir = File(dataDir, "downloads")
+        downloadsDir.mkdirs()
 
-        // config.yml 会由 Rust 程序自动创建
+        // 写入初始配置，指定下载保存路径
+        val configContent = """
+            |# 番茄小说下载器配置
+            |save_path: ${downloadsDir.absolutePath}
+        """.trimMargin()
+
+        configFile.writeText(configContent)
+        Log.i(TAG, "已创建配置文件: ${configFile.absolutePath}")
+        Log.i(TAG, "下载目录: ${downloadsDir.absolutePath}")
     }
 
     /**
