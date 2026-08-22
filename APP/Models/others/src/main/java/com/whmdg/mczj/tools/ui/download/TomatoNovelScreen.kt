@@ -117,11 +117,23 @@ fun TomatoNovelScreen(
                         factory = { ctx ->
                             WebView(ctx).apply {
                                 webView = this
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                settings.allowFileAccess = true
-                                settings.allowContentAccess = true
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    databaseEnabled = true
+                                    allowFileAccess = true
+                                    allowContentAccess = true
+                                    useWideViewPort = true
+                                    loadWithOverviewMode = true
+                                    setSupportZoom(true)
+                                    builtInZoomControls = true
+                                    displayZoomControls = false
+                                    // 允许弹窗自动调整大小
+                                    javaScriptCanOpenWindowsAutomatically = true
+                                    setSupportMultipleWindows(false)
+                                }
                                 webViewClient = WebViewClient()
+                                webChromeClient = android.webkit.WebChromeClient()
                                 loadUrl(TomatoDownloader.getServerUrl())
                             }
                         },
