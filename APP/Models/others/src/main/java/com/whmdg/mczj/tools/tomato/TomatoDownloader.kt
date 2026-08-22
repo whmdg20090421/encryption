@@ -36,28 +36,17 @@ object TomatoDownloader {
 
     /**
      * 获取二进制文件路径。
-     * 优先从 AppDataPaths.tomatoNovelTndBinary() 获取，
-     * 如果不存在则从 nativeLibraryDir 复制。
+     * 直接使用 nativeLibraryDir 中的文件（系统解压位置，有正确的 SELinux 上下文）。
      */
     fun getBinaryFile(context: Context): File {
-        val binaryDir = AppDataPaths.tomatoNovelTndBinary(context)
-        val binaryFile = File(binaryDir, BINARY_NAME)
+        val nativeLibDir = context.applicationInfo.nativeLibraryDir
+            ?: throw IllegalStateException("nativeLibraryDir 为 null，请重新安装应用")
+        val binaryFile = File(nativeLibDir, BINARY_NAME)
 
         if (!binaryFile.exists()) {
-            // 首次运行，从 nativeLibraryDir 复制
-            val nativeLibDir = context.applicationInfo.nativeLibraryDir
-                ?: throw IllegalStateException("nativeLibraryDir 为 null")
-            val srcFile = File(nativeLibDir, BINARY_NAME)
-
-            if (!srcFile.exists()) {
-                throw IllegalStateException(
-                    "TND 二进制缺失（路径=${srcFile.absolutePath}），请重新安装应用"
-                )
-            }
-
-            Log.i(TAG, "复制二进制到数据目录: ${srcFile.absolutePath} -> ${binaryFile.absolutePath}")
-            srcFile.copyTo(binaryFile, overwrite = true)
-            binaryFile.setExecutable(true, false)
+            throw IllegalStateException(
+                "TND 二进制缺失（路径=${binaryFile.absolutePath}），请重新安装应用"
+            )
         }
 
         return binaryFile
