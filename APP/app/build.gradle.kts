@@ -226,12 +226,8 @@ android {
 
     packaging {
         jniLibs {
-            // 启用压缩，减小 APK 体积（首次启动需解压）
-            useLegacyPackaging = false
-        }
-        resources {
-            // 压缩 resources.arsc
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // 使用旧版打包，压缩 .so 文件减小 APK 体积
+            useLegacyPackaging = true
         }
     }
 
