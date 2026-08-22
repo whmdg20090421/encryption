@@ -89,8 +89,7 @@ object TomatoDownloader {
                     "--data-dir", dataDir.absolutePath
                 ).apply {
                     redirectErrorStream(true)
-                    // 不设置 directory()，让 Rust 程序使用默认工作目录
-                    // save_path 会在 config.yml 中由 Rust 程序自动配置
+                    directory(dataDir)
                     environment()["HOME"] = dataDir.absolutePath
                     environment()["TMPDIR"] = context.cacheDir.absolutePath
                 }
@@ -142,12 +141,25 @@ object TomatoDownloader {
 
     /**
      * 初始化数据目录（首次启动时）。
-     * 仅创建数据根目录，其他由 Rust 程序自己管理。
+     * 创建数据根目录，并预先配置 save_path 指向 downloads 子目录，
+     * 避免 Rust 程序把整个数据目录当作下载目录。
      */
     private fun initDataDir(dataDir: File) {
         if (!dataDir.exists()) {
             dataDir.mkdirs()
             Log.i(TAG, "创建数据目录: ${dataDir.absolutePath}")
+        }
+
+        // 首次启动时预写 config.yml，设置 save_path
+        val configFile = File(dataDir, "config.yml")
+        if (!configFile.exists()) {
+            val downloadsDir = File(dataDir, "downloads")
+            downloadsDir.mkdirs()
+
+            val configContent = """save_path: ${downloadsDir.absolutePath}
+"""
+            configFile.writeText(configContent)
+            Log.i(TAG, "预写配置: save_path=${downloadsDir.absolutePath}")
         }
     }
 
