@@ -5,15 +5,17 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.whmdg.mczj.tools.tomato.TomatoDownloader
 
 /**
@@ -26,18 +28,36 @@ private enum class TomatoPageState {
 }
 
 /**
- * 番茄小说下载器页面
+ * 番茄小说下载器页面（全屏沉浸模式）
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TomatoNovelScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
     var pageState by remember { mutableStateOf(TomatoPageState.LOADING) }
     var errorMessage by remember { mutableStateOf("") }
     var showExitDialog by remember { mutableStateOf(false) }
     var webView by remember { mutableStateOf<WebView?>(null) }
+
+    // 进入全屏沉浸模式
+    DisposableEffect(Unit) {
+        val window = (context as? android.app.Activity)?.window ?: return@DisposableEffect onDispose {}
+        val controller = WindowInsetsControllerCompat(window, view)
+        // 隐藏系统栏
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        // 内容延伸到系统栏区域
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+
+        onDispose {
+            // 退出时恢复系统栏
+            controller.show(WindowInsetsCompat.Type.systemBars())
+            WindowCompat.setDecorFitsSystemWindows(window, true)
+        }
+    }
 
     // 启动服务器
     LaunchedEffect(Unit) {
@@ -56,8 +76,8 @@ fun TomatoNovelScreen(
         )
     }
 
-    // 拦截系统返回键
-    BackHandler {
+    // 拦截返回手势：弹窗已显示时不响应，否则显示弹窗
+    BackHandler(enabled = !showExitDialog) {
         showExitDialog = true
     }
 
@@ -74,110 +94,86 @@ fun TomatoNovelScreen(
         )
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("番茄小说下载器") },
-                navigationIcon = {
-                    IconButton(onClick = { showExitDialog = true }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            )
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            when (pageState) {
-                TomatoPageState.LOADING -> {
-                    // 加载中状态
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        CircularProgressIndicator()
-                        Spacer(Modifier.height(16.dp))
-                        Text(
-                            text = "正在启动下载服务...",
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                    }
-                }
-
-                TomatoPageState.READY -> {
-                    // WebView
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                webView = this
-                                settings.apply {
-                                    javaScriptEnabled = true
-                                    domStorageEnabled = true
-                                    databaseEnabled = true
-                                    allowFileAccess = true
-                                    allowContentAccess = true
-                                    useWideViewPort = true
-                                    loadWithOverviewMode = true
-                                    setSupportZoom(true)
-                                    builtInZoomControls = true
-                                    displayZoomControls = false
-                                    // 允许弹窗自动调整大小
-                                    javaScriptCanOpenWindowsAutomatically = true
-                                    setSupportMultipleWindows(false)
-                                }
-                                webViewClient = WebViewClient()
-                                webChromeClient = android.webkit.WebChromeClient()
-                                loadUrl(TomatoDownloader.getServerUrl())
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
+    // 全屏内容（无 Scaffold/TopAppBar）
+    Box(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        when (pageState) {
+            TomatoPageState.LOADING -> {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = "正在启动下载服务...",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
+            }
 
-                TomatoPageState.ERROR -> {
-                    // 错误状态
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = "启动失败",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = errorMessage,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(16.dp))
-                        Button(onClick = {
-                            pageState = TomatoPageState.LOADING
-                            TomatoDownloader.startServer(
-                                context = context,
-                                onReady = { pageState = TomatoPageState.READY },
-                                onError = { errorCode, message ->
-                                    pageState = TomatoPageState.ERROR
-                                    errorMessage = when (errorCode) {
-                                        "PORT_IN_USE" -> "端口被占用：$message"
-                                        else -> "启动失败：$message"
-                                    }
-                                }
+            TomatoPageState.READY -> {
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            webView = this
+                            layoutParams = android.view.ViewGroup.LayoutParams(
+                                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                android.view.ViewGroup.LayoutParams.MATCH_PARENT
                             )
-                        }) {
-                            Text("重试")
+                            settings.apply {
+                                javaScriptEnabled = true
+                                domStorageEnabled = true
+                                databaseEnabled = true
+                                allowFileAccess = true
+                                allowContentAccess = true
+                            }
+                            webViewClient = WebViewClient()
+                            loadUrl(TomatoDownloader.getServerUrl())
                         }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            TomatoPageState.ERROR -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = "启动失败",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Button(onClick = {
+                        pageState = TomatoPageState.LOADING
+                        TomatoDownloader.startServer(
+                            context = context,
+                            onReady = { pageState = TomatoPageState.READY },
+                            onError = { errorCode, message ->
+                                pageState = TomatoPageState.ERROR
+                                errorMessage = when (errorCode) {
+                                    "PORT_IN_USE" -> "端口被占用：$message"
+                                    else -> "启动失败：$message"
+                                }
+                            }
+                        )
+                    }) {
+                        Text("重试")
                     }
                 }
             }
