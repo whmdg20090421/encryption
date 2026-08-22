@@ -77,8 +77,8 @@ object TomatoDownloader {
 
                 val dataDir = AppDataPaths.tomatoNovelTndData(context)
 
-                // 首次启动时初始化配置
-                initConfigIfNeeded(dataDir)
+                // 首次启动时创建数据目录
+                initDataDir(dataDir)
 
                 Log.i(TAG, "启动 TND 服务器: ${binary.absolutePath}")
                 Log.i(TAG, "数据目录: ${dataDir.absolutePath}")
@@ -89,7 +89,8 @@ object TomatoDownloader {
                     "--data-dir", dataDir.absolutePath
                 ).apply {
                     redirectErrorStream(true)
-                    directory(dataDir)
+                    // 不设置 directory()，让 Rust 程序使用默认工作目录
+                    // save_path 会在 config.yml 中由 Rust 程序自动配置
                     environment()["HOME"] = dataDir.absolutePath
                     environment()["TMPDIR"] = context.cacheDir.absolutePath
                 }
@@ -140,31 +141,14 @@ object TomatoDownloader {
     }
 
     /**
-     * 初始化数据目录配置（首次启动时）。
-     * 预先写入 config.yml，设置 save_path 为 downloads 子目录，
-     * 避免 Rust 程序扫描整个数据目录。
+     * 初始化数据目录（首次启动时）。
+     * 仅创建数据根目录，其他由 Rust 程序自己管理。
      */
-    private fun initConfigIfNeeded(dataDir: File) {
-        val configFile = File(dataDir, "config.yml")
-        if (configFile.exists()) {
-            return // 已有配置，跳过
+    private fun initDataDir(dataDir: File) {
+        if (!dataDir.exists()) {
+            dataDir.mkdirs()
+            Log.i(TAG, "创建数据目录: ${dataDir.absolutePath}")
         }
-
-        Log.i(TAG, "首次启动，初始化配置目录")
-
-        // 创建下载子目录
-        val downloadsDir = File(dataDir, "downloads")
-        downloadsDir.mkdirs()
-
-        // 写入初始配置，指定下载保存路径
-        val configContent = """
-            |# 番茄小说下载器配置
-            |save_path: ${downloadsDir.absolutePath}
-        """.trimMargin()
-
-        configFile.writeText(configContent)
-        Log.i(TAG, "已创建配置文件: ${configFile.absolutePath}")
-        Log.i(TAG, "下载目录: ${downloadsDir.absolutePath}")
     }
 
     /**
