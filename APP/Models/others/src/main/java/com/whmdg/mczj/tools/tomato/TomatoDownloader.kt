@@ -4,7 +4,9 @@ import android.content.Context
 import android.util.Log
 import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
+import java.io.InterruptedIOException
 import java.net.HttpURLConnection
+import java.net.ServerSocket
 import java.net.URL
 
 /**
@@ -35,6 +37,18 @@ object TomatoDownloader {
     fun getServerUrl(): String = SERVER_URL
 
     /**
+     * 检查端口是否被占用。
+     * @return true 如果端口可用，false 如果被占用
+     */
+    fun isPortAvailable(port: Int): Boolean {
+        return try {
+            ServerSocket(port).use { true }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
      * 获取二进制文件路径。
      * 直接使用 nativeLibraryDir 中的文件（系统解压位置，有正确的 SELinux 上下文）。
      */
@@ -57,16 +71,23 @@ object TomatoDownloader {
      *
      * @param context Android Context
      * @param onReady 服务器就绪后的回调（在后台线程调用）
-     * @param onError 启动失败的回调（在后台线程调用）
+     * @param onError 启动失败的回调（在后台线程调用），errorCode: "PORT_IN_USE" | "STARTUP_FAILED"
      */
     fun startServer(
         context: Context,
         onReady: () -> Unit,
-        onError: (Exception) -> Unit
+        onError: (errorCode: String, message: String) -> Unit
     ) {
         if (serverProcess != null) {
             Log.w(TAG, "服务器已在运行中")
             onReady()
+            return
+        }
+
+        // 检查端口是否被占用
+        if (!isPortAvailable(SERVER_PORT)) {
+            Log.w(TAG, "端口 $SERVER_PORT 已被占用")
+            onError("PORT_IN_USE", "端口 $SERVER_PORT 已被占用，请检查是否有其他程序在使用")
             return
         }
 
@@ -96,10 +117,16 @@ object TomatoDownloader {
 
                 serverProcess = pb.start()
 
-                // 记录服务器输出
+                // 记录服务器输出（忽略 InterruptedIOException）
                 Thread({
-                    serverProcess?.inputStream?.bufferedReader()?.useLines { lines ->
-                        lines.forEach { Log.d(TAG, "[TND] $it") }
+                    try {
+                        serverProcess?.inputStream?.bufferedReader()?.useLines { lines ->
+                            lines.forEach { Log.d(TAG, "[TND] $it") }
+                        }
+                    } catch (_: InterruptedIOException) {
+                        // 退出时正常行为，忽略
+                    } catch (e: Exception) {
+                        Log.w(TAG, "读取 TND 输出时出错", e)
                     }
                 }, "tnd-stdout").apply { isDaemon = true }.start()
 
@@ -114,7 +141,7 @@ object TomatoDownloader {
                 Log.e(TAG, "启动 TND 服务器失败", e)
                 serverProcess?.destroy()
                 serverProcess = null
-                onError(e)
+                onError("STARTUP_FAILED", e.message ?: "未知错误")
             }
         }, "tnd-launcher").apply { isDaemon = true }.start()
     }

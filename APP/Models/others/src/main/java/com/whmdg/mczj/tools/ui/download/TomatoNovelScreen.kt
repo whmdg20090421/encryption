@@ -46,9 +46,12 @@ fun TomatoNovelScreen(
             onReady = {
                 pageState = TomatoPageState.READY
             },
-            onError = { e ->
+            onError = { errorCode, message ->
                 pageState = TomatoPageState.ERROR
-                errorMessage = e.message ?: "未知错误"
+                errorMessage = when (errorCode) {
+                    "PORT_IN_USE" -> "端口被占用：$message"
+                    else -> "启动失败：$message"
+                }
             }
         )
     }
@@ -152,9 +155,12 @@ fun TomatoNovelScreen(
                             TomatoDownloader.startServer(
                                 context = context,
                                 onReady = { pageState = TomatoPageState.READY },
-                                onError = { e ->
+                                onError = { errorCode, message ->
                                     pageState = TomatoPageState.ERROR
-                                    errorMessage = e.message ?: "未知错误"
+                                    errorMessage = when (errorCode) {
+                                        "PORT_IN_USE" -> "端口被占用：$message"
+                                        else -> "启动失败：$message"
+                                    }
                                 }
                             )
                         }) {

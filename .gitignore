@@ -22,3 +22,4 @@ artifact.zip
 AUTH_SYSTEM_REVIEW.md
 *.apk
 tmp/
+应用安装包（apk 请放这里面）/数据.zip
