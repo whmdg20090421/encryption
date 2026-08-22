@@ -37,6 +37,7 @@ fun DownloaderModuleScreen(
                     when (screen) {
                         is Screen.FADownloader -> navigateTo(DownloaderRoute.FADownloader)
                         is Screen.DeviantDownloader -> navigateTo(DownloaderRoute.DeviantDownloader)
+                        is Screen.TomatoNovelDownloader -> navigateTo(DownloaderRoute.TomatoNovel)
                     }
                 }
             )
@@ -63,6 +64,11 @@ fun DownloaderModuleScreen(
             DeviantLoginScreen(
                 onBack = { navigateBack() },
                 onLoginSuccess = { _ -> navigateBack() }
+            )
+        }
+        is DownloaderRoute.TomatoNovel -> {
+            TomatoNovelScreen(
+                onBack = { navigateBack() }
             )
         }
     }

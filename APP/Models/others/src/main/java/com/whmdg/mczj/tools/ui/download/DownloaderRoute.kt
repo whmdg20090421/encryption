@@ -6,4 +6,5 @@ sealed class DownloaderRoute {
     object FALogin : DownloaderRoute()
     object DeviantDownloader : DownloaderRoute()
     object DeviantLogin : DownloaderRoute()
+    object TomatoNovel : DownloaderRoute()
 }

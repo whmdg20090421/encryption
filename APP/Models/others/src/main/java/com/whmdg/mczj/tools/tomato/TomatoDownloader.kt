@@ -1,0 +1,192 @@
+package com.whmdg.mczj.tools.tomato
+
+import android.content.Context
+import android.util.Log
+import com.whmdg.mczj.tools.AppDataPaths
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+
+/**
+ * 番茄小说下载器（TND）管理。
+ *
+ * 职责：
+ * - 管理 Rust 二进制文件的存放与执行
+ * - 启动/停止 Web 服务器进程
+ * - 首次启动时初始化数据目录
+ */
+object TomatoDownloader {
+    private const val TAG = "TomatoDownloader"
+    private const val BINARY_NAME = "libtnd.so"
+    private const val SERVER_HOST = "127.0.0.1"
+    private const val SERVER_PORT = 18423
+    private const val SERVER_URL = "http://$SERVER_HOST:$SERVER_PORT"
+    private const val STARTUP_TIMEOUT_MS = 30_000L
+    private const val POLL_INTERVAL_MS = 300L
+
+    /** 当前运行的服务器进程 */
+    private var serverProcess: Process? = null
+
+    /** 服务器是否已启动 */
+    val isRunning: Boolean
+        get() = serverProcess != null
+
+    /** 获取服务器 URL */
+    fun getServerUrl(): String = SERVER_URL
+
+    /**
+     * 获取二进制文件路径。
+     * 优先从 AppDataPaths.tomatoNovelTndBinary() 获取，
+     * 如果不存在则从 nativeLibraryDir 复制。
+     */
+    fun getBinaryFile(context: Context): File {
+        val binaryDir = AppDataPaths.tomatoNovelTndBinary(context)
+        val binaryFile = File(binaryDir, BINARY_NAME)
+
+        if (!binaryFile.exists()) {
+            // 首次运行，从 nativeLibraryDir 复制
+            val nativeLibDir = context.applicationInfo.nativeLibraryDir
+                ?: throw IllegalStateException("nativeLibraryDir 为 null")
+            val srcFile = File(nativeLibDir, BINARY_NAME)
+
+            if (!srcFile.exists()) {
+                throw IllegalStateException(
+                    "TND 二进制缺失（路径=${srcFile.absolutePath}），请重新安装应用"
+                )
+            }
+
+            Log.i(TAG, "复制二进制到数据目录: ${srcFile.absolutePath} -> ${binaryFile.absolutePath}")
+            srcFile.copyTo(binaryFile, overwrite = true)
+            binaryFile.setExecutable(true, false)
+        }
+
+        return binaryFile
+    }
+
+    /**
+     * 启动 Web 服务器。
+     *
+     * @param context Android Context
+     * @param onReady 服务器就绪后的回调（在后台线程调用）
+     * @param onError 启动失败的回调（在后台线程调用）
+     */
+    fun startServer(
+        context: Context,
+        onReady: () -> Unit,
+        onError: (Exception) -> Unit
+    ) {
+        if (serverProcess != null) {
+            Log.w(TAG, "服务器已在运行中")
+            onReady()
+            return
+        }
+
+        Thread({
+            try {
+                val binary = getBinaryFile(context)
+                binary.setExecutable(true, false)
+
+                val dataDir = AppDataPaths.tomatoNovelTndData(context)
+
+                // 首次启动时初始化配置
+                initConfigIfNeeded(dataDir)
+
+                Log.i(TAG, "启动 TND 服务器: ${binary.absolutePath}")
+                Log.i(TAG, "数据目录: ${dataDir.absolutePath}")
+
+                val pb = ProcessBuilder(
+                    binary.absolutePath,
+                    "--server",
+                    "--data-dir", dataDir.absolutePath
+                ).apply {
+                    redirectErrorStream(true)
+                    directory(dataDir)
+                    environment()["HOME"] = dataDir.absolutePath
+                    environment()["TMPDIR"] = context.cacheDir.absolutePath
+                }
+
+                serverProcess = pb.start()
+
+                // 记录服务器输出
+                Thread({
+                    serverProcess?.inputStream?.bufferedReader()?.useLines { lines ->
+                        lines.forEach { Log.d(TAG, "[TND] $it") }
+                    }
+                }, "tnd-stdout").apply { isDaemon = true }.start()
+
+                // 等待服务器就绪
+                if (waitForServer(SERVER_URL, STARTUP_TIMEOUT_MS)) {
+                    Log.i(TAG, "TND 服务器已就绪")
+                    onReady()
+                } else {
+                    throw RuntimeException("服务器未在 ${STARTUP_TIMEOUT_MS / 1000} 秒内启动")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "启动 TND 服务器失败", e)
+                serverProcess?.destroy()
+                serverProcess = null
+                onError(e)
+            }
+        }, "tnd-launcher").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * 停止 Web 服务器。
+     */
+    fun stopServer() {
+        val process = serverProcess ?: return
+        Log.i(TAG, "停止 TND 服务器")
+
+        try {
+            process.destroy()
+            // 等待进程退出
+            if (!process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "停止服务器时出错", e)
+        } finally {
+            serverProcess = null
+        }
+    }
+
+    /**
+     * 初始化数据目录配置（首次启动时）。
+     */
+    private fun initConfigIfNeeded(dataDir: File) {
+        val configFile = File(dataDir, "config.yml")
+        if (configFile.exists()) {
+            return // 已有配置，跳过
+        }
+
+        Log.i(TAG, "首次启动，初始化配置目录")
+
+        // 创建必要的子目录
+        File(dataDir, "logs").mkdirs()
+        File(dataDir, "downloads").mkdirs()
+
+        // config.yml 会由 Rust 程序自动创建
+    }
+
+    /**
+     * 等待服务器就绪。
+     */
+    private fun waitForServer(url: String, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                val c = (URL(url).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 500
+                    readTimeout = 500
+                    requestMethod = "GET"
+                }
+                val code = c.responseCode
+                c.disconnect()
+                if (code in 200..499) return true
+            } catch (_: Exception) {
+            }
+            Thread.sleep(POLL_INTERVAL_MS)
+        }
+        return false
+    }
+}

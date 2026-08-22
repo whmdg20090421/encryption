@@ -86,6 +86,7 @@ open class Screen {
     object FALogin : Screen()
     object DeviantDownloader : Screen()
     object DeviantLogin : Screen()
+    object TomatoNovelDownloader : Screen()
 
     // 安全模块子页面
     object PermissionSettings : Screen()

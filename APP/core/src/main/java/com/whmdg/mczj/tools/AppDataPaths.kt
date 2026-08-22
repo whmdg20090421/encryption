@@ -122,6 +122,43 @@ object AppDataPaths {
         return dir
     }
 
+    // ── 下载器模块 ──
+
+    /** 下载器根目录 */
+    fun downloads(context: Context): File {
+        val dir = File(root(context), "下载")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 番茄小说下载器目录 */
+    fun tomatoNovel(context: Context): File {
+        val dir = File(downloads(context), "番茄小说")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 番茄小说 TND 目录（Tomato Novel Downloader） */
+    fun tomatoNovelTnd(context: Context): File {
+        val dir = File(tomatoNovel(context), "TND")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 番茄小说 TND 本体目录（存放 Rust 二进制文件） */
+    fun tomatoNovelTndBinary(context: Context): File {
+        val dir = File(tomatoNovelTnd(context), "本体")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 番茄小说 TND 数据目录（作为 --data-dir，存放配置和下载的小说） */
+    fun tomatoNovelTndData(context: Context): File {
+        val dir = File(tomatoNovelTnd(context), "数据")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     /** 记账本模块目录 */
     fun accounting(context: Context): File {
         val dir = File(root(context), "记账本")

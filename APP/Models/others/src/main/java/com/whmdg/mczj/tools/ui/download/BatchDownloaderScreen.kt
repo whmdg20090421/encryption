@@ -7,7 +7,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -23,6 +23,19 @@ fun BatchDownloaderScreen(
     onBack: () -> Unit,
     onNavigate: (Screen) -> Unit
 ) {
+    var showTomatoEnterDialog by remember { mutableStateOf(false) }
+
+    // 番茄小说下载器进入确认弹窗
+    if (showTomatoEnterDialog) {
+        TomatoEnterDialog(
+            onDismiss = { showTomatoEnterDialog = false },
+            onConfirm = {
+                showTomatoEnterDialog = false
+                onNavigate(Screen.TomatoNovelDownloader)
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -58,6 +71,12 @@ fun BatchDownloaderScreen(
                     subtitle = "DeviantArt 作品批量下载",
                     icon = Icons.Default.Brush,
                     onClick = { onNavigate(Screen.DeviantDownloader) }
+                )
+                CompactSettingsItem(
+                    title = "番茄小说下载器",
+                    subtitle = "番茄小说章节批量下载",
+                    icon = Icons.Default.MenuBook,
+                    onClick = { showTomatoEnterDialog = true }
                 )
             }
 
