@@ -1485,7 +1485,7 @@ fun FileManagerScreen(
             }
 
             // ── 云端同步检查弹窗（进入云盘模式时） ──
-            if (vm.cloudSyncDialogVisible) {
+            if (vm.panels.cloudSyncDialogVisible) {
                 StandardDialog(
                     onDismissRequest = {},
                     title = { Text("正在与云端信息同步") },
@@ -1493,7 +1493,7 @@ fun FileManagerScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             CircularProgressIndicator(modifier = Modifier.size(24.dp))
                             Spacer(Modifier.width(12.dp))
-                            Text(vm.cloudSyncPhase, fontSize = 14.sp)
+                            Text(vm.panels.cloudSyncPhase, fontSize = 14.sp)
                         }
                     },
                     confirmButton = {},
@@ -1502,8 +1502,8 @@ fun FileManagerScreen(
             }
 
             // ── 云端差异确认弹窗 ──
-            if (vm.cloudDiffDialogVisible) {
-                val diffFiles = vm.cloudDiffFiles
+            if (vm.panels.cloudDiffDialogVisible) {
+                val diffFiles = vm.panels.cloudDiffFiles
                 StandardDialog(
                     onDismissRequest = {},
                     title = { Text("云端文件已更新") },
@@ -1522,17 +1522,17 @@ fun FileManagerScreen(
                         }
                     },
                     confirmButton = {
-                        TextButton(onClick = { vm.onCloudDiffChoice(true) }) { Text("下载覆盖") }
+                        TextButton(onClick = { vm.panels.onCloudDiffChoice(true) }) { Text("下载覆盖") }
                     },
                     dismissButton = {
-                        TextButton(onClick = { vm.onCloudDiffChoice(false) }) { Text("取消") }
+                        TextButton(onClick = { vm.panels.onCloudDiffChoice(false) }) { Text("取消") }
                     }
                 )
             }
 
             // ── 云端文件下载进度弹窗 ──
-            if (vm.cloudDownloadDialogVisible) {
-                val progress = vm.cloudDownloadProgress
+            if (vm.panels.cloudDownloadDialogVisible) {
+                val progress = vm.panels.cloudDownloadProgress
                 StandardDialog(
                     onDismissRequest = {},
                     title = { Text("正在下载云端文件") },

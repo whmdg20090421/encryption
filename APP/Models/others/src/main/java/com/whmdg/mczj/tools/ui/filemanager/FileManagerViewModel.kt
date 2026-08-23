@@ -2234,7 +2234,8 @@ class PanelCoordinator(
     val left: FilePaneController,
     val right: FilePaneController,
     private val context: Context,
-    private val getFocusedPanel: () -> FocusedPanel
+    private val getFocusedPanel: () -> FocusedPanel,
+    private val folderSizeDb: () -> FolderSizeDb
 ) {
     init {
         // 注入回调：Controller 内部进入压缩包模式时，由 Coordinator 保存会话缓存
@@ -2582,7 +2583,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 面板协调者（唯一知道两个面板存在的角色） ──
     val panels: PanelCoordinator by lazy {
-        PanelCoordinator(controllerLeft, controllerRight, getApplication()) { focusedPanel }
+        PanelCoordinator(controllerLeft, controllerRight, getApplication(), { focusedPanel }, folderSizeDb)
     }
 
     // ── 面板状态引用（向后兼容：UI 通过 vm.左/vm.右 访问） ──

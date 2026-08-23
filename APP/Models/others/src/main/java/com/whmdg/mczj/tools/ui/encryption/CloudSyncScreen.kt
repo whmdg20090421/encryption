@@ -407,7 +407,8 @@ fun CloudSyncScreen(
                                         webdavConfig = recoveryConfig!!,
                                         vaultDir = recoveryVaultDir,
                                         vaultId = recoveryVaultId,
-                                        vaultName = recoveryVaultName
+                                        vaultName = recoveryVaultName,
+                                        folderSizeDb = { com.whmdg.mczj.tools.encryption.data.FolderSizeDb() }
                                     )
                                     val dbUploaded = controller.uploadCloudDb()
                                     com.whmdg.mczj.tools.AppDataPaths.syncLock(context, recoveryVaultId).delete()

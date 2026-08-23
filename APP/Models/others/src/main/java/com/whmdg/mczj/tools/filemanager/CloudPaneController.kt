@@ -1227,7 +1227,7 @@ class CloudPaneController(
                 val remoteEntries = remoteDb.getAllEntries("cloud_entries")
                 for (entry in remoteEntries) {
                     val localEntry = syncDb.getEntry("cloud_entries", entry.path)
-                    if (localEntry == null || entry.lastSyncTime > localEntry.lastSyncTime) {
+                    if (localEntry == null || entry.lastSyncTime > (localEntry.lastSyncTime ?: "")) {
                         syncDb.upsertEntry("cloud_entries", entry)
                     }
                 }
@@ -1636,25 +1636,7 @@ class CloudPaneController(
     /** 自然排序比较器：文件夹优先，然后按名称自然排序（数字按数值比较） */
     private fun naturalOrderComparator(): Comparator<CloudFileEntry> {
         return compareBy<CloudFileEntry> { !it.isDirectory }
-            .thenBy { naturalSortKey(it.name) }
-    }
-
-    /** 生成自然排序键：将字符串拆分为文本和数字部分 */
-    private fun naturalSortKey(name: String): List<Any> {
-        val key = mutableListOf<Any>()
-        var i = 0
-        while (i < name.length) {
-            if (name[i].isDigit()) {
-                val start = i
-                while (i < name.length && name[i].isDigit()) i++
-                key.add(name.substring(start, i).toLongOrNull() ?: 0L)
-            } else {
-                val start = i
-                while (i < name.length && !name[i].isDigit()) i++
-                key.add(name.substring(start, i).lowercase())
-            }
-        }
-        return key
+            .thenComparator { a, b -> naturalCompare(a.name, b.name) }
     }
 
     /** 只更新文件自身的进度条（不触发父文件夹聚合，用于 Progress 事件高频调用） */
