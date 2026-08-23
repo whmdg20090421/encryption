@@ -1510,7 +1510,7 @@ class CloudPaneController(
         return entries.sortedWith(naturalOrderComparator())
     }
 
-    /** 只统计直接子文件的同步状态（不递归子文件夹） */
+    /** 递归统计子树中所有文件的同步状态 */
     private fun aggregateDirectChildren(relativePath: String): FolderAggregate {
         val dir = File(vaultDir, relativePath.trimStart('/'))
         if (!dir.exists() || !dir.isDirectory) return FolderAggregate()
@@ -1520,23 +1520,30 @@ class CloudPaneController(
         var uploadingSize = 0L
 
         for (file in children) {
-            if (file.isDirectory || file.name in excludedFiles) continue
+            if (file.name in excludedFiles) continue
             val childPath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
-            val dbEntry = syncDb.getEntry("local_entries", childPath)
-            val fileSize = file.length()
-            val liveProgress = state.syncTask.fileProgress[childPath]
-            val dbUploaded = dbEntry?.uploadedSize ?: 0L
-            when (dbEntry?.status) {
-                SyncStatus.COMPLETED -> uploadedSize += fileSize
-                SyncStatus.UPLOADING -> {
-                    val isSyncActive = state.syncTask.phase == SyncPhase.SYNCING || state.syncTask.phase == SyncPhase.SCANNING
-                    if (isSyncActive) {
-                        val done = liveProgress?.uploadedBytes ?: dbUploaded
-                        uploadedSize += done
-                        uploadingSize += (fileSize - done)
+
+            if (file.isDirectory) {
+                val childAgg = aggregateDirectChildren(childPath)
+                uploadedSize += childAgg.uploadedSize
+                uploadingSize += childAgg.uploadingSize
+            } else {
+                val dbEntry = syncDb.getEntry("local_entries", childPath)
+                val fileSize = file.length()
+                val liveProgress = state.syncTask.fileProgress[childPath]
+                val dbUploaded = dbEntry?.uploadedSize ?: 0L
+                when (dbEntry?.status) {
+                    SyncStatus.COMPLETED -> uploadedSize += fileSize
+                    SyncStatus.UPLOADING -> {
+                        val isSyncActive = state.syncTask.phase == SyncPhase.SYNCING || state.syncTask.phase == SyncPhase.SCANNING
+                        if (isSyncActive) {
+                            val done = liveProgress?.uploadedBytes ?: dbUploaded
+                            uploadedSize += done
+                            uploadingSize += (fileSize - done)
+                        }
                     }
+                    else -> {}
                 }
-                else -> {}
             }
         }
 
