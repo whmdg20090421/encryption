@@ -1484,6 +1484,86 @@ fun FileManagerScreen(
                 }
             }
 
+            // ── 云端同步检查弹窗（进入云盘模式时） ──
+            if (vm.cloudSyncDialogVisible) {
+                StandardDialog(
+                    onDismissRequest = {},
+                    title = { Text("正在与云端信息同步") },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Text(vm.cloudSyncPhase, fontSize = 14.sp)
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {}
+                )
+            }
+
+            // ── 云端差异确认弹窗 ──
+            if (vm.cloudDiffDialogVisible) {
+                val diffFiles = vm.cloudDiffFiles
+                StandardDialog(
+                    onDismissRequest = {},
+                    title = { Text("云端文件已更新") },
+                    text = {
+                        Column {
+                            Text("以下文件在云端被其他设备更新：")
+                            Spacer(modifier = Modifier.height(8.dp))
+                            diffFiles.take(10).forEach { file ->
+                                Text("• ${file.path.substringAfterLast('/')}", fontSize = 13.sp)
+                            }
+                            if (diffFiles.size > 10) {
+                                Text("...及其他 ${diffFiles.size - 10} 个文件", fontSize = 13.sp, color = Color(0xFF94A3B8))
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("是否下载覆盖本地文件？")
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { vm.onCloudDiffChoice(true) }) { Text("下载覆盖") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { vm.onCloudDiffChoice(false) }) { Text("取消") }
+                    }
+                )
+            }
+
+            // ── 云端文件下载进度弹窗 ──
+            if (vm.cloudDownloadDialogVisible) {
+                val progress = vm.cloudDownloadProgress
+                StandardDialog(
+                    onDismissRequest = {},
+                    title = { Text("正在下载云端文件") },
+                    text = {
+                        Column {
+                            if (progress != null) {
+                                Text("${progress.currentFile}/${progress.totalFiles} ${progress.fileName}", fontSize = 14.sp)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                LinearProgressIndicator(
+                                    progress = { if (progress.totalBytes > 0) progress.downloadedBytes.toFloat() / progress.totalBytes else 0f },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    "${com.whmdg.mczj.tools.util.FormatUtils.formatBytes(progress.downloadedBytes)}/${com.whmdg.mczj.tools.util.FormatUtils.formatBytes(progress.totalBytes)}",
+                                    fontSize = 12.sp, color = Color(0xFF94A3B8)
+                                )
+                            } else {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                    Spacer(Modifier.width(12.dp))
+                                    Text("准备下载...", fontSize = 14.sp)
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {}
+                )
+            }
+
             // ── 历史记录面板（从底部滑入，占屏幕一半高度） ──
             if (showHistoryPanel) {
                 BackHandler { showHistoryPanel = false }
@@ -2072,6 +2152,7 @@ fun FileManagerScreen(
                             } else if (vm.panels.isCloudMode) {
                                 // ── 云盘模式：上传 / 删除 / 仅删除本地 / 仅删除云端 ──
                                 val cloudEntry = selectedCloudEntry
+                                val uploadDisabled = cloudStateForOverlay?.uploadDisabled == true
                                 if (cloudEntry != null) {
                                     // 第一行：上传 / 删除
                                     Row(
@@ -2081,17 +2162,26 @@ fun FileManagerScreen(
                                         Box(
                                             modifier = Modifier
                                                 .weight(1f)
-                                                .clickable {
+                                                .then(if (!uploadDisabled) Modifier.clickable {
                                                     vm.panels.cloud?.uploadFile(cloudEntry.relativePath)
                                                     selectedCloudEntry = null
-                                                }
+                                                } else Modifier)
                                                 .padding(vertical = 16.dp),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Icon(
+                                                    Icons.Default.CloudUpload,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp),
+                                                    tint = if (uploadDisabled) Color.Gray else MaterialTheme.colorScheme.onSurface
+                                                )
                                                 Spacer(Modifier.width(4.dp))
-                                                Text("上传", style = MaterialTheme.typography.bodyLarge)
+                                                Text(
+                                                    "上传",
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    color = if (uploadDisabled) Color.Gray else MaterialTheme.colorScheme.onSurface
+                                                )
                                             }
                                         }
                                         VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))

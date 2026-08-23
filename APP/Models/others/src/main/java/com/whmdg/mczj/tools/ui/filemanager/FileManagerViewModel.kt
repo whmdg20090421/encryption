@@ -2388,6 +2388,21 @@ class PanelCoordinator(
     private var savedLeftScrollIndex: Int = 0
     private var savedLeftScrollOffset: Int = 0
 
+    // 云端同步 UI 状态
+    var cloudSyncDialogVisible by mutableStateOf(false)
+        private set
+    var cloudSyncPhase by mutableStateOf("")
+        private set
+    var cloudDiffDialogVisible by mutableStateOf(false)
+        private set
+    var cloudDiffFiles by mutableStateOf<List<CloudPaneController.ChangedFile>>(emptyList())
+        private set
+    var cloudDownloadDialogVisible by mutableStateOf(false)
+        private set
+    var cloudDownloadProgress by mutableStateOf<CloudPaneController.DownloadProgress?>(null)
+        private set
+    private var cloudDiffContinuation: kotlinx.coroutines.CancellableContinuation<Boolean>? = null
+
     /** 进入云盘模式：挂起左面板，激活云盘面板 */
     suspend fun enterCloudMode(
         webdavConfig: WebDavServerConfig,
@@ -2411,9 +2426,46 @@ class PanelCoordinator(
             vaultName = vaultName
         )
         controller.init()
+
+        // 云端 db 同步检查
+        cloudSyncDialogVisible = true
+        cloudSyncPhase = "正在下载云端数据库..."
+        val diffResult = controller.downloadAndCompareCloudDb { phase ->
+            cloudSyncPhase = phase
+        }
+        cloudSyncDialogVisible = false
+
+        if (diffResult.changedFiles.isNotEmpty()) {
+            // 发现差异，弹窗让用户选择
+            cloudDiffFiles = diffResult.changedFiles
+            cloudDiffDialogVisible = true
+            val userChoice = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
+                cloudDiffContinuation = cont
+            }
+            cloudDiffDialogVisible = false
+
+            if (userChoice) {
+                // 下载被更新的文件
+                cloudDownloadDialogVisible = true
+                controller.downloadChangedFiles(diffResult.changedFiles) { progress ->
+                    cloudDownloadProgress = progress
+                }
+                cloudDownloadDialogVisible = false
+                cloudDownloadProgress = null
+            } else {
+                controller.state.uploadDisabled = true
+            }
+        }
+
         cloud = controller
         isCloudMode = true
         isCloudLoading = false
+    }
+
+    /** 用户在差异弹窗中做出选择 */
+    fun onCloudDiffChoice(accept: Boolean) {
+        cloudDiffContinuation?.resume(accept) {}
+        cloudDiffContinuation = null
     }
 
     /** 退出云盘模式：释放云盘面板，恢复左面板 */

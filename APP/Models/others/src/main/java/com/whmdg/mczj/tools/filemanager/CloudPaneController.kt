@@ -61,6 +61,8 @@ class CloudPaneController(
         var deletedFilesDialog by mutableStateOf<DeletedFilesState?>(null)
         /** 进度异常弹窗（为 null 时隐藏） */
         var anomalyDialogMessage by mutableStateOf<String?>(null)
+        /** 上传功能是否被禁用（用户取消下载覆盖时设置） */
+        var uploadDisabled by mutableStateOf(false)
     }
 
     data class DeletedFilesState(
@@ -1239,6 +1241,122 @@ class CloudPaneController(
         } finally {
             zipFile.delete()
             File(context.cacheDir, "cloud_db_merge_${vaultName}").deleteRecursively()
+        }
+    }
+
+    /** 云端 db 差异检测结果 */
+    data class CloudDiffResult(val changedFiles: List<ChangedFile>)
+
+    /** 被其他设备更新的文件 */
+    data class ChangedFile(
+        val path: String,
+        val localSize: Long,
+        val cloudSize: Long,
+        val localLastModified: Long,
+        val cloudLastModified: Long
+    )
+
+    /** 下载进度 */
+    data class DownloadProgress(
+        val currentFile: Int,
+        val totalFiles: Int,
+        val fileName: String,
+        val downloadedBytes: Long,
+        val totalBytes: Long
+    )
+
+    /** 下载云端 db 并与本地对比，返回被其他设备更新的文件列表 */
+    suspend fun downloadAndCompareCloudDb(
+        onPhaseChange: (String) -> Unit = {}
+    ): CloudDiffResult = withContext(Dispatchers.IO) {
+        val remotePath = "${remoteBasePath}/.sync_meta/${vaultName}_vault_sync.db.7z"
+        val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_remote.db.7z")
+        try {
+            onPhaseChange("正在下载云端数据库...")
+            webdavClient.downloadFile(remotePath, zipFile) { _ -> }
+
+            onPhaseChange("正在解压数据库...")
+            val extractDir = File(context.cacheDir, "cloud_db_diff_${vaultName}")
+            extractDir.mkdirs()
+            val binary = com.whmdg.mczj.tools.util.BinaryExtractor.ensureExtracted(context)
+            val esc = com.whmdg.mczj.tools.util.SevenZipCommand::escape
+            val cmd = "${esc(binary.absolutePath)} x ${esc(zipFile.absolutePath)} -o${esc(extractDir.absolutePath)} -pmczj -y"
+            com.whmdg.mczj.tools.security.ShellExecutor.execute(com.whmdg.mczj.tools.security.Permission.MAX, cmd)
+
+            onPhaseChange("正在对比文件差异...")
+            val remoteDbFile = File(extractDir, "vault_sync.db")
+            val changedFiles = mutableListOf<ChangedFile>()
+            if (remoteDbFile.exists()) {
+                val remoteDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, "${vaultName}_diff")
+                val remoteEntries = remoteDb.getAllEntries("cloud_entries")
+                for (entry in remoteEntries) {
+                    val localEntry = syncDb.getEntry("cloud_entries", entry.path)
+                    if (localEntry != null) {
+                        if (localEntry.size != entry.size || localEntry.lastModified != entry.lastModified) {
+                            // 本地文件存在时才需要下载覆盖
+                            val localFile = File(vaultDir, entry.path.trimStart('/'))
+                            if (localFile.exists()) {
+                                changedFiles.add(ChangedFile(
+                                    path = entry.path,
+                                    localSize = localEntry.size,
+                                    cloudSize = entry.size,
+                                    localLastModified = 0L,
+                                    cloudLastModified = 0L
+                                ))
+                            }
+                        }
+                    }
+                    // 合并到本地 cloud_entries
+                    if (localEntry == null || entry.lastSyncTime > (localEntry.lastSyncTime ?: "")) {
+                        syncDb.upsertEntry("cloud_entries", entry)
+                    }
+                }
+            }
+
+            // 更新本地元数据
+            val remoteMeta = webdavClient.getFileMetadata(remotePath)
+            if (remoteMeta != null) {
+                saveCloudDbMeta(remoteMeta.size, remoteMeta.lastModified)
+            }
+
+            CloudDiffResult(changedFiles)
+        } catch (e: Exception) {
+            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "云端 db 对比失败: ${e.message}")
+            CloudDiffResult(emptyList())
+        } finally {
+            zipFile.delete()
+            File(context.cacheDir, "cloud_db_diff_${vaultName}").deleteRecursively()
+        }
+    }
+
+    /** 下载被其他设备更新的文件，覆盖本地 */
+    suspend fun downloadChangedFiles(
+        files: List<ChangedFile>,
+        onProgress: (DownloadProgress) -> Unit
+    ) = withContext(Dispatchers.IO) {
+        val totalBytes = files.sumOf { it.cloudSize }
+        var downloadedBytes = 0L
+        for ((index, file) in files.withIndex()) {
+            val fileName = file.path.substringAfterLast('/')
+            onProgress(DownloadProgress(index + 1, files.size, fileName, downloadedBytes, totalBytes))
+            val remotePath = "${remoteBasePath}/${file.path.trimStart('/')}"
+            val localFile = File(vaultDir, file.path.trimStart('/'))
+            localFile.parentFile?.mkdirs()
+            webdavClient.downloadFile(remotePath, localFile) { delta ->
+                downloadedBytes += delta
+                onProgress(DownloadProgress(index + 1, files.size, fileName, downloadedBytes, totalBytes))
+            }
+            // 更新 local_entries
+            syncDb.upsertEntry("local_entries", com.whmdg.mczj.tools.encryption.data.SyncEntryRow(
+                path = file.path,
+                size = localFile.length(),
+                lastModified = java.time.Instant.ofEpochMilli(localFile.lastModified()).toString(),
+                md5 = null,
+                cloudHash = null,
+                status = com.whmdg.mczj.tools.encryption.data.SyncStatus.COMPLETED,
+                lastSyncTime = java.time.Instant.now().toString(),
+                failReason = null
+            ))
         }
     }
 
