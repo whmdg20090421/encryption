@@ -221,6 +221,9 @@ class CloudPaneController(
         state.syncTask = SyncTaskState(phase = SyncPhase.SYNCING, totalFiles = 1, totalBytes = localFile.length())
         state.syncDialogVisible = true
         syncJob = scope.launch {
+            // 上传前检查云端 db 是否被其他设备更新
+            syncCloudDbBeforeUpload()
+
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val logFileName = "${vaultName}_upload_${timestamp}.log"
             val internalLogDir = com.whmdg.mczj.tools.AppDataPaths.cloudSyncLogs(context)
@@ -361,6 +364,9 @@ class CloudPaneController(
 
             val folder = File(vaultDir, folderRelativePath.trimStart('/'))
             if (!folder.exists() || !folder.isDirectory) return@launch
+
+            // 上传前检查云端 db 是否被其他设备更新
+            syncCloudDbBeforeUpload()
 
             // 创建上传锁
             val lockFile = com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId)
@@ -1145,6 +1151,13 @@ class CloudPaneController(
                 if (!exists) {
                     com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "cloud.db 上传验证失败")
                 }
+                // 保存远程元数据（用于下次上传前检测是否被其他设备更新）
+                if (exists) {
+                    val remoteMeta = webdavClient.getFileMetadata(remotePath)
+                    if (remoteMeta != null) {
+                        saveCloudDbMeta(remoteMeta.size, remoteMeta.lastModified)
+                    }
+                }
                 exists
             } finally {
                 zipFile.delete()
@@ -1152,6 +1165,80 @@ class CloudPaneController(
         } catch (e: Exception) {
             com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "cloud.db 上传失败: ${e.message}")
             false
+        }
+    }
+
+    /** 保存云端 db 元数据到本地 */
+    private fun saveCloudDbMeta(size: Long, lastModified: Long) {
+        try {
+            val metaFile = File(com.whmdg.mczj.tools.AppDataPaths.cloudDbMeta(context), "${vaultName}_meta.json")
+            metaFile.writeText("""{"size":$size,"lastModified":$lastModified}""")
+        } catch (_: Exception) {}
+    }
+
+    /** 检查云端 db 是否与本地记录一致。一致返回 true，不一致或无记录返回 false。 */
+    private suspend fun isCloudDbConsistent(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val metaFile = File(com.whmdg.mczj.tools.AppDataPaths.cloudDbMeta(context), "${vaultName}_meta.json")
+            if (!metaFile.exists()) return@withContext false
+
+            val localMeta = org.json.JSONObject(metaFile.readText())
+            val localSize = localMeta.getLong("size")
+            val localLastModified = localMeta.getLong("lastModified")
+
+            val remotePath = "${remoteBasePath}/.sync_meta/${vaultName}_vault_sync.db.7z"
+            val remoteMeta = webdavClient.getFileMetadata(remotePath) ?: return@withContext false
+
+            remoteMeta.size == localSize && remoteMeta.lastModified == localLastModified
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** 上传前检查云端 db 是否被其他设备更新，若是则下载合并 */
+    suspend fun syncCloudDbBeforeUpload() = withContext(Dispatchers.IO) {
+        if (isCloudDbConsistent()) return@withContext
+
+        // 云端 db 被更新过，下载并合并
+        val remotePath = "${remoteBasePath}/.sync_meta/${vaultName}_vault_sync.db.7z"
+        val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_remote.db.7z")
+        try {
+            webdavClient.downloadFile(remotePath, zipFile) { _ -> }
+
+            // 解压
+            val extractDir = File(context.cacheDir, "cloud_db_merge_${vaultName}")
+            extractDir.mkdirs()
+            val binary = com.whmdg.mczj.tools.util.BinaryExtractor.ensureExtracted(context)
+            val esc = com.whmdg.mczj.tools.util.SevenZipCommand::escape
+            val cmd = "${esc(binary.absolutePath)} x ${esc(zipFile.absolutePath)} -o${esc(extractDir.absolutePath)} -pmczj -y"
+            com.whmdg.mczj.tools.security.ShellExecutor.execute(com.whmdg.mczj.tools.security.Permission.MAX, cmd)
+
+            // 读取远程 db 的 cloud_entries，合并到本地
+            val remoteDbFile = File(extractDir, "vault_sync.db")
+            if (remoteDbFile.exists()) {
+                val remoteDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, "${vaultName}_remote")
+                // 远程 db 的 cloud_entries 合并到本地 cloud_entries
+                val remoteEntries = remoteDb.getAllEntries("cloud_entries")
+                for (entry in remoteEntries) {
+                    val localEntry = syncDb.getEntry("cloud_entries", entry.path)
+                    if (localEntry == null || entry.lastSyncTime > localEntry.lastSyncTime) {
+                        syncDb.upsertEntry("cloud_entries", entry)
+                    }
+                }
+            }
+
+            // 更新本地元数据
+            val remoteMeta = webdavClient.getFileMetadata(remotePath)
+            if (remoteMeta != null) {
+                saveCloudDbMeta(remoteMeta.size, remoteMeta.lastModified)
+            }
+
+            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "云端 db 已合并")
+        } catch (e: Exception) {
+            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "云端 db 合并失败: ${e.message}")
+        } finally {
+            zipFile.delete()
+            File(context.cacheDir, "cloud_db_merge_${vaultName}").deleteRecursively()
         }
     }
 

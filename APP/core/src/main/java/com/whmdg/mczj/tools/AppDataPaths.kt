@@ -115,6 +115,13 @@ object AppDataPaths {
         return File(cloudSyncLocks(context), "vault_$vaultId.lock")
     }
 
+    /** 云盘 db 元数据目录（记录上次上传 db 后的远程 size/lastModified） */
+    fun cloudDbMeta(context: Context): File {
+        val dir = File(cloudSync(context), "db元数据")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     /** 日记模块目录 */
     fun diary(context: Context): File {
         val dir = File(root(context), "日记")

@@ -136,6 +136,24 @@ class WebDavFileClient(private val config: WebDavServerConfig) {
         }
     }
 
+    /** 获取单个文件的元数据（size + lastModified），不存在返回 null */
+    fun getFileMetadata(remotePath: String): WebDavFileInfo? {
+        return try {
+            val p = path(remotePath)
+            val response = Client.findProperties(p, false)
+            val name = p.url.pathSegments.lastOrNull { it.isNotEmpty() } ?: return null
+            WebDavFileInfo(
+                name = name,
+                remotePath = remotePath,
+                isDirectory = response.isDirectory,
+                size = response.size,
+                lastModified = response.lastModifiedTime?.toEpochMilli() ?: 0L
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /**
      * Test connection by listing the root directory.
      * Throws IOException on failure.
