@@ -272,7 +272,9 @@ class CloudPaneController(
                         fileProgress = currentProgress,
                         transferredBytes = uploadedBytes
                     )
-                    updateSingleEntry(relativePath)
+                    updateFileProgressOnly(relativePath)
+                    // 异步冒泡父文件夹三色进度条（不阻塞进度回调）
+                    scope.launch(Dispatchers.IO) { updateSingleEntry(relativePath) }
                     // 进度异常检测：单次回调增量 > 128KB
                     if (uiDelta > anomalyThreshold && lastUiTransferredBytes > 0) {
                         anomalyCount++
