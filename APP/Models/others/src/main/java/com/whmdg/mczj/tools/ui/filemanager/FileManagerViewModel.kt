@@ -2423,7 +2423,8 @@ class PanelCoordinator(
             webdavConfig = webdavConfig,
             vaultDir = vaultDir,
             vaultId = vaultId,
-            vaultName = vaultName
+            vaultName = vaultName,
+            folderSizeDb = { folderSizeDb }
         )
         controller.init()
 

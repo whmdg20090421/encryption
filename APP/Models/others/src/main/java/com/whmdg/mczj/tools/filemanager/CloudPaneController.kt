@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
 import com.whmdg.mczj.tools.encryption.data.SyncStatus
@@ -33,7 +34,8 @@ class CloudPaneController(
     private val webdavConfig: WebDavServerConfig,
     private val vaultDir: String,
     private val vaultId: Int,
-    private val vaultName: String
+    private val vaultName: String,
+    private val folderSizeDb: () -> FolderSizeDb
 ) {
     val state = CloudPanelState()
     private val webdavClient = WebDavFileClient(webdavConfig)
@@ -89,7 +91,9 @@ class CloudPaneController(
         val uploadingSize: Long,
         val lastModified: Long = 0,
         /** 文件的单个同步状态（文件夹为 null，用聚合字段代替） */
-        val syncStatus: SyncStatus? = null
+        val syncStatus: SyncStatus? = null,
+        /** 仅存在于云端，本地无对应文件（纯内存标识，不持久化） */
+        val isCloudOnly: Boolean = false
     )
 
     /** 排除的系统文件 */
@@ -1435,8 +1439,9 @@ class CloudPaneController(
     }
 
     /**
-     * 列出本地保险箱目录，自底向上聚合文件夹同步状态。
-     * 返回的列表已排序：文件夹在前，文件在后。
+     * 列出本地保险箱目录，合并云端-only 条目。
+     * 文件夹大小从 FolderSizeDb 缓存读取，同步状态只统计直接子文件。
+     * 返回的列表已排序：文件夹在前，文件在后，自然排序。
      */
     private fun listLocalFiles(relativePath: String): List<CloudFileEntry> {
         val dir = File(vaultDir, relativePath.trimStart('/'))
@@ -1444,21 +1449,25 @@ class CloudPaneController(
 
         val children = dir.listFiles() ?: return emptyList()
         val entries = mutableListOf<CloudFileEntry>()
+        val localNames = mutableSetOf<String>()
 
         for (file in children) {
             if (file.name in excludedFiles) continue
+            localNames.add(file.name)
             val childRelativePath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
 
             if (file.isDirectory) {
-                // 递归聚合文件夹状态
-                val agg = aggregateFolder(childRelativePath)
+                // 文件夹大小从 FolderSizeDb 缓存读取
+                val folderSize = folderSizeDb().get(childRelativePath)?.size ?: 0L
+                // 同步状态：只统计直接子文件
+                val syncAgg = aggregateDirectChildren(childRelativePath)
                 entries.add(CloudFileEntry(
                     name = file.name,
                     relativePath = childRelativePath,
                     isDirectory = true,
-                    totalSize = agg.totalSize,
-                    uploadedSize = agg.uploadedSize,
-                    uploadingSize = agg.uploadingSize,
+                    totalSize = folderSize,
+                    uploadedSize = syncAgg.uploadedSize,
+                    uploadingSize = syncAgg.uploadingSize,
                     lastModified = file.lastModified()
                 ))
             } else {
@@ -1494,54 +1503,158 @@ class CloudPaneController(
             }
         }
 
-        return entries.sortedWith(compareBy<CloudFileEntry> { !it.isDirectory }.thenBy { it.name })
+        // 合并云端-only 条目：cloud_entries 中有但本地没有的
+        mergeCloudOnlyEntries(relativePath, localNames, entries)
+
+        return entries.sortedWith(naturalOrderComparator())
     }
 
-    /** 递归聚合文件夹下所有文件的同步状态 */
-    private fun aggregateFolder(relativePath: String): FolderAggregate {
+    /** 只统计直接子文件的同步状态（不递归子文件夹） */
+    private fun aggregateDirectChildren(relativePath: String): FolderAggregate {
         val dir = File(vaultDir, relativePath.trimStart('/'))
         if (!dir.exists() || !dir.isDirectory) return FolderAggregate()
 
         val children = dir.listFiles() ?: return FolderAggregate()
-        var totalSize = 0L
         var uploadedSize = 0L
         var uploadingSize = 0L
 
         for (file in children) {
-            if (file.name in excludedFiles) continue
-
-            if (file.isDirectory) {
-                val childPath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
-                val childAgg = aggregateFolder(childPath)
-                totalSize += childAgg.totalSize
-                uploadedSize += childAgg.uploadedSize
-                uploadingSize += childAgg.uploadingSize
-            } else {
-                val fileSize = file.length()
-                totalSize += fileSize
-                val childPath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
-                val dbEntry = syncDb.getEntry("local_entries", childPath)
-                val liveProgress = state.syncTask.fileProgress[childPath]
-                val dbUploaded = dbEntry?.uploadedSize ?: 0L
-                when (dbEntry?.status) {
-                    SyncStatus.COMPLETED -> uploadedSize += fileSize
-                    SyncStatus.UPLOADING -> {
-                        val isSyncActive = state.syncTask.phase == SyncPhase.SYNCING || state.syncTask.phase == SyncPhase.SCANNING
-                        if (isSyncActive) {
-                            val done = liveProgress?.uploadedBytes ?: dbUploaded
-                            uploadedSize += done
-                            uploadingSize += (fileSize - done)
-                        } else {
-                            // 没有活跃上传任务，重置为待上传
-                            syncDb.updateStatus("local_entries", childPath, SyncStatus.PENDING)
-                        }
+            if (file.isDirectory || file.name in excludedFiles) continue
+            val childPath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
+            val dbEntry = syncDb.getEntry("local_entries", childPath)
+            val fileSize = file.length()
+            val liveProgress = state.syncTask.fileProgress[childPath]
+            val dbUploaded = dbEntry?.uploadedSize ?: 0L
+            when (dbEntry?.status) {
+                SyncStatus.COMPLETED -> uploadedSize += fileSize
+                SyncStatus.UPLOADING -> {
+                    val isSyncActive = state.syncTask.phase == SyncPhase.SYNCING || state.syncTask.phase == SyncPhase.SCANNING
+                    if (isSyncActive) {
+                        val done = liveProgress?.uploadedBytes ?: dbUploaded
+                        uploadedSize += done
+                        uploadingSize += (fileSize - done)
                     }
-                    else -> {} // PENDING / QUEUED / PAUSED → 不计入
                 }
+                else -> {}
             }
         }
 
-        return FolderAggregate(totalSize, uploadedSize, uploadingSize)
+        return FolderAggregate(0L, uploadedSize, uploadingSize)
+    }
+
+    /**
+     * 从 cloud_entries 中查找当前目录下云端-only 的文件和文件夹，
+     * 合并到 entries 列表中。
+     */
+    private fun mergeCloudOnlyEntries(
+        relativePath: String,
+        localNames: Set<String>,
+        entries: MutableList<CloudFileEntry>
+    ) {
+        val cloudChildren = syncDb.getEntriesByParent("cloud_entries", relativePath)
+        if (cloudChildren.isEmpty()) return
+
+        val prefix = if (relativePath.endsWith("/")) relativePath else "$relativePath/"
+
+        // 收集直接子级的云端文件和推断的云端文件夹
+        val cloudDirectFiles = mutableMapOf<String, SyncEntryRow>()
+        val cloudInferredDirs = mutableSetOf<String>()
+
+        for (entry in cloudChildren) {
+            val remainder = entry.path.removePrefix(prefix)
+            if (remainder.isEmpty()) continue
+            val slashIdx = remainder.indexOf('/')
+            if (slashIdx < 0) {
+                // 直接子级文件
+                cloudDirectFiles[remainder] = entry
+            } else {
+                // 子级文件夹（从路径推断）
+                cloudInferredDirs.add(remainder.substring(0, slashIdx))
+            }
+        }
+
+        // 添加云端-only 文件
+        for ((name, cloudEntry) in cloudDirectFiles) {
+            if (name in localNames) continue
+            val childRelativePath = if (relativePath == "/") "/$name" else "$relativePath/$name"
+            entries.add(CloudFileEntry(
+                name = name,
+                relativePath = childRelativePath,
+                isDirectory = false,
+                totalSize = cloudEntry.size,
+                uploadedSize = cloudEntry.size,  // 云端文件视为已上传
+                uploadingSize = 0,
+                lastModified = parseCloudLastModified(cloudEntry.lastModified),
+                syncStatus = SyncStatus.COMPLETED,
+                isCloudOnly = true
+            ))
+        }
+
+        // 添加云端-only 文件夹
+        for (dirName in cloudInferredDirs) {
+            if (dirName in localNames) continue
+            val childRelativePath = if (relativePath == "/") "/$dirName" else "$relativePath/$dirName"
+            val dirSize = aggregateCloudFolderSize(childRelativePath)
+            entries.add(CloudFileEntry(
+                name = dirName,
+                relativePath = childRelativePath,
+                isDirectory = true,
+                totalSize = dirSize,
+                uploadedSize = dirSize,  // 云端文件夹视为已上传
+                uploadingSize = 0,
+                lastModified = 0,
+                isCloudOnly = true
+            ))
+        }
+    }
+
+    /** 递归聚合云端文件夹下所有文件的总大小 */
+    private fun aggregateCloudFolderSize(relativePath: String): Long {
+        val cloudChildren = syncDb.getEntriesByParent("cloud_entries", relativePath)
+        val prefix = if (relativePath.endsWith("/")) relativePath else "$relativePath/"
+        var totalSize = 0L
+        for (entry in cloudChildren) {
+            val remainder = entry.path.removePrefix(prefix)
+            if (remainder.isEmpty()) continue
+            // 只累加直接文件（不含子文件夹的文件，getEntriesByParent 已返回所有子孙）
+            if ('/' !in remainder) {
+                totalSize += entry.size
+            }
+        }
+        return totalSize
+    }
+
+    /** 解析云端 lastModified 字符串为 epoch millis */
+    private fun parseCloudLastModified(lastModified: String): Long {
+        return try {
+            java.time.Instant.parse(lastModified).toEpochMilli()
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    /** 自然排序比较器：文件夹优先，然后按名称自然排序（数字按数值比较） */
+    private fun naturalOrderComparator(): Comparator<CloudFileEntry> {
+        return compareBy<CloudFileEntry> { !it.isDirectory }
+            .thenBy { naturalSortKey(it.name) }
+    }
+
+    /** 生成自然排序键：将字符串拆分为文本和数字部分 */
+    private fun naturalSortKey(name: String): List<Any> {
+        val key = mutableListOf<Any>()
+        var i = 0
+        while (i < name.length) {
+            if (name[i].isDigit()) {
+                val start = i
+                while (i < name.length && name[i].isDigit()) i++
+                key.add(name.substring(start, i).toLongOrNull() ?: 0L)
+            } else {
+                val start = i
+                while (i < name.length && !name[i].isDigit()) i++
+                key.add(name.substring(start, i).lowercase())
+            }
+        }
+        return key
     }
 
     /** 只更新文件自身的进度条（不触发父文件夹聚合，用于 Progress 事件高频调用） */
@@ -1587,8 +1700,9 @@ class CloudPaneController(
         if (idx >= 0) {
             val old = entries[idx]
             val newEntry = if (old.isDirectory) {
-                val agg = aggregateFolder(relativePath)
-                old.copy(totalSize = agg.totalSize, uploadedSize = agg.uploadedSize, uploadingSize = agg.uploadingSize)
+                val folderSize = folderSizeDb().get(relativePath)?.size ?: old.totalSize
+                val syncAgg = aggregateDirectChildren(relativePath)
+                old.copy(totalSize = folderSize, uploadedSize = syncAgg.uploadedSize, uploadingSize = syncAgg.uploadingSize)
             } else {
                 val dbEntry = syncDb.getEntry("local_entries", relativePath)
                 val liveProgress = state.syncTask.fileProgress[relativePath]
@@ -1627,11 +1741,12 @@ class CloudPaneController(
         while (parent.isNotEmpty()) {
             val idx = entries.indexOfFirst { it.relativePath == parent && it.isDirectory }
             if (idx >= 0) {
-                val agg = aggregateFolder(parent)
+                val folderSize = folderSizeDb().get(parent)?.size ?: entries[idx].totalSize
+                val syncAgg = aggregateDirectChildren(parent)
                 entries[idx] = entries[idx].copy(
-                    totalSize = agg.totalSize,
-                    uploadedSize = agg.uploadedSize,
-                    uploadingSize = agg.uploadingSize
+                    totalSize = folderSize,
+                    uploadedSize = syncAgg.uploadedSize,
+                    uploadingSize = syncAgg.uploadingSize
                 )
                 changed = true
             }
