@@ -1113,12 +1113,11 @@ class CloudPaneController(
         }
     }
 
-    /** 强制终止：立即杀死上传协程，关闭所有弹窗，重置状态，不上传 cloud.db */
+    /** 强制终止：立即杀死上传协程，关闭进度弹窗，重置状态，不上传 cloud.db */
     fun forceTerminate() {
         syncJob?.cancel()
         syncJob = null
         state.syncDialogVisible = false
-        state.anomalyDialogMessage = null
         state.syncTask = SyncTaskState()
         scope.launch(Dispatchers.IO) {
             val entries = syncDb.getEntriesByStatus("local_entries", SyncStatus.QUEUED) +

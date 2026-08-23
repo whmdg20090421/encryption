@@ -1474,11 +1474,11 @@ fun FileManagerScreen(
                 val anomalyMsg = cloudStateForOverlay.anomalyDialogMessage
                 if (anomalyMsg != null) {
                     StandardDialog(
-                        onDismissRequest = { vm.panels.cloud?.forceTerminate() },
+                        onDismissRequest = { cloudStateForOverlay.anomalyDialogMessage = null },
                         title = { Text("上传异常终止") },
                         text = { Text(anomalyMsg) },
                         confirmButton = {
-                            TextButton(onClick = { vm.panels.cloud?.forceTerminate() }) { Text("知道了") }
+                            TextButton(onClick = { cloudStateForOverlay.anomalyDialogMessage = null }) { Text("知道了") }
                         }
                     )
                 }
