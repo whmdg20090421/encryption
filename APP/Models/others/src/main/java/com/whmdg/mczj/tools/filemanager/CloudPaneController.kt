@@ -1227,7 +1227,7 @@ class CloudPaneController(
                 val remoteEntries = remoteDb.getAllEntries("cloud_entries")
                 for (entry in remoteEntries) {
                     val localEntry = syncDb.getEntry("cloud_entries", entry.path)
-                    if (localEntry == null || entry.lastSyncTime > (localEntry.lastSyncTime ?: "")) {
+                    if (localEntry == null || (entry.lastSyncTime ?: "") > (localEntry.lastSyncTime ?: "")) {
                         syncDb.upsertEntry("cloud_entries", entry)
                     }
                 }
@@ -1311,7 +1311,7 @@ class CloudPaneController(
                         }
                     }
                     // 合并到本地 cloud_entries
-                    if (localEntry == null || entry.lastSyncTime > (localEntry.lastSyncTime ?: "")) {
+                    if (localEntry == null || (entry.lastSyncTime ?: "") > (localEntry.lastSyncTime ?: "")) {
                         syncDb.upsertEntry("cloud_entries", entry)
                     }
                 }

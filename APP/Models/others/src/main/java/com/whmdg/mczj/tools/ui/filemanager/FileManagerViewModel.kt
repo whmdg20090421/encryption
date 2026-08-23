@@ -2425,7 +2425,7 @@ class PanelCoordinator(
             vaultDir = vaultDir,
             vaultId = vaultId,
             vaultName = vaultName,
-            folderSizeDb = { folderSizeDb }
+            folderSizeDb = folderSizeDb
         )
         controller.init()
 
@@ -2583,7 +2583,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 面板协调者（唯一知道两个面板存在的角色） ──
     val panels: PanelCoordinator by lazy {
-        PanelCoordinator(controllerLeft, controllerRight, getApplication(), { focusedPanel }, folderSizeDb)
+        PanelCoordinator(controllerLeft, controllerRight, getApplication(), { focusedPanel }, { folderSizeDb })
     }
 
     // ── 面板状态引用（向后兼容：UI 通过 vm.左/vm.右 访问） ──
