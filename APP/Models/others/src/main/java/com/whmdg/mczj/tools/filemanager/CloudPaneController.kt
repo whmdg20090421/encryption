@@ -337,7 +337,6 @@ class CloudPaneController(
                         }
 
                         state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED)
-                        kotlinx.coroutines.delay(1500)
                         state.syncDialogVisible = false
                     }
                 },
@@ -533,7 +532,6 @@ class CloudPaneController(
                 state.syncTask = SyncTaskState(phase = SyncPhase.COMPLETED)
                 silentRefresh()
                 withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "所有文件已上传完成", android.widget.Toast.LENGTH_SHORT).show() }
-                kotlinx.coroutines.delay(1500)
                 state.syncDialogVisible = false
                 return@launch
             }
@@ -966,8 +964,6 @@ class CloudPaneController(
             if (dbUploaded) {
                 com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
             }
-
-            kotlinx.coroutines.delay(1500)
             state.syncDialogVisible = false
         }
     }
