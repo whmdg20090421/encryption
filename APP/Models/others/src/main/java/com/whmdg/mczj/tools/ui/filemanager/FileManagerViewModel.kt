@@ -2427,9 +2427,8 @@ class PanelCoordinator(
             vaultName = vaultName,
             folderSizeDb = folderSizeDb
         )
-        controller.init()
 
-        // 云端 db 同步检查
+        // 云端 db 同步检查（必须在 init 之前，否则用户先看到文件列表再看到弹窗）
         cloudSyncDialogVisible = true
         cloudSyncPhase = "正在下载云端数据库..."
         val diffResult = controller.downloadAndCompareCloudDb { phase ->
@@ -2459,6 +2458,8 @@ class PanelCoordinator(
             }
         }
 
+        // 同步检查完成后再初始化面板（加载文件列表）
+        controller.init()
         cloud = controller
         isCloudMode = true
         isCloudLoading = false

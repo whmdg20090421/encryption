@@ -1458,7 +1458,7 @@ class CloudPaneController(
 
             if (file.isDirectory) {
                 // 文件夹大小从 FolderSizeDb 缓存读取
-                val folderSize = folderSizeDb().get(childRelativePath)?.size ?: 0L
+                val folderSize = folderSizeDb().get(File(vaultDir, childRelativePath.trimStart('/')).absolutePath)?.size ?: 0L
                 // 同步状态：只统计直接子文件
                 val syncAgg = aggregateDirectChildren(childRelativePath)
                 entries.add(CloudFileEntry(
@@ -1682,7 +1682,7 @@ class CloudPaneController(
         if (idx >= 0) {
             val old = entries[idx]
             val newEntry = if (old.isDirectory) {
-                val folderSize = folderSizeDb().get(relativePath)?.size ?: old.totalSize
+                val folderSize = folderSizeDb().get(File(vaultDir, relativePath.trimStart('/')).absolutePath)?.size ?: old.totalSize
                 val syncAgg = aggregateDirectChildren(relativePath)
                 old.copy(totalSize = folderSize, uploadedSize = syncAgg.uploadedSize, uploadingSize = syncAgg.uploadingSize)
             } else {
@@ -1723,7 +1723,7 @@ class CloudPaneController(
         while (parent.isNotEmpty()) {
             val idx = entries.indexOfFirst { it.relativePath == parent && it.isDirectory }
             if (idx >= 0) {
-                val folderSize = folderSizeDb().get(parent)?.size ?: entries[idx].totalSize
+                val folderSize = folderSizeDb().get(File(vaultDir, parent.trimStart('/')).absolutePath)?.size ?: entries[idx].totalSize
                 val syncAgg = aggregateDirectChildren(parent)
                 entries[idx] = entries[idx].copy(
                     totalSize = folderSize,
