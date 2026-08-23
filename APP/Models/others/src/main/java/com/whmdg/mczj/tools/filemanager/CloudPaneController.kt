@@ -331,6 +331,7 @@ class CloudPaneController(
 
                         // 上传 cloud.db + 删除 lock
                         state.syncTask = state.syncTask.copy(phase = SyncPhase.SYNCING, currentFileName = "正在同步云端列表...")
+                        kotlinx.coroutines.yield()  // 让出主线程，让 Compose 渲染"正在同步云端列表..."
                         val dbUploaded = uploadCloudDb()
                         if (dbUploaded) {
                             com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
@@ -960,6 +961,7 @@ class CloudPaneController(
 
             // ⑰ 上传 cloud.db 到云端元数据目录
             state.syncTask = state.syncTask.copy(phase = SyncPhase.SYNCING, currentFileName = "正在同步云端列表...")
+            kotlinx.coroutines.yield()  // 让出主线程，让 Compose 渲染"正在同步云端列表..."
             val dbUploaded = uploadCloudDb()
             if (dbUploaded) {
                 com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
