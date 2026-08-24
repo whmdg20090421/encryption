@@ -942,8 +942,7 @@ class CloudPaneController(
             eventChannel.close()
             updaterJob.join()
 
-            // ⑮ 最终状态
-            state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED, completedFiles = completedFilesCount)
+            // ⑮ Toast 提示
             val msg = "文件夹上传完成: 成功${successCount}个" + if (failCount > 0) "，失败${failCount}个" else ""
             withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show() }
 
@@ -962,8 +961,8 @@ class CloudPaneController(
                 }
             }
 
-            // ⑰ 上传 cloud.db 到云端元数据目录
-            state.syncTask = state.syncTask.copy(phase = SyncPhase.SYNCING, currentFileName = "正在同步云端列表...")
+            // ⑰ 上传 cloud.db 到云端元数据目录（phase 保持 SYNCING，不切换为 COMPLETED）
+            state.syncTask = state.syncTask.copy(phase = SyncPhase.SYNCING, currentFileName = "正在同步云端列表...", completedFiles = completedFilesCount)
             kotlinx.coroutines.yield()  // 让出主线程，让 Compose 渲染"正在同步云端列表..."
             val dbUploaded = uploadCloudDb()
             if (dbUploaded) {
