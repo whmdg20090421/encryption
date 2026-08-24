@@ -380,8 +380,9 @@ class CopyJob(
         if (accumulator.isEmpty()) return
         val saveDir = AppDataPaths.fileManager(context)
         val db = FolderSizeDb.load(saveDir)
-        for ((path, size) in accumulator) {
-            db.put(path, FolderSizeInfo(size, System.currentTimeMillis()))
+        for ((path, delta) in accumulator) {
+            val existing = db.get(path)?.size ?: 0L
+            db.put(path, FolderSizeInfo(existing + delta, System.currentTimeMillis()))
         }
         db.save(saveDir)
         // 通知 UI 局部刷新 FolderSizeDb

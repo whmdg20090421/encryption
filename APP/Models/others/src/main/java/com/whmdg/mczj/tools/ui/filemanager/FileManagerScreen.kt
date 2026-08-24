@@ -259,7 +259,7 @@ fun FileManagerScreen(
     // 云盘模式初始化
     LaunchedEffect(cloudMode) {
         if (cloudMode && webdavConfig != null && cloudVaultDir != null) {
-            vm.panels.enterCloudMode(webdavConfig, cloudVaultDir, cloudVaultId, cloudVaultName)
+            vm.panels.enterCloudMode(webdavConfig, cloudVaultDir, cloudVaultId, cloudVaultName, vm::recalculateFolderSize)
         }
     }
 
@@ -1482,6 +1482,35 @@ fun FileManagerScreen(
                         }
                     )
                 }
+            }
+
+            // ── 文件夹大小异常弹窗（>100% 时自动触发） ──
+            val sizeAnomalyPaths = vm.panels.cloud?.state?.sizeAnomalyPaths
+            if (sizeAnomalyPaths != null && sizeAnomalyPaths.isNotEmpty()) {
+                StandardDialog(
+                    onDismissRequest = {},
+                    title = { Text("检测到数据异常") },
+                    text = {
+                        Column {
+                            Text("以下文件夹大小缓存异常，正在重新计算：", fontSize = 14.sp)
+                            Spacer(Modifier.height(8.dp))
+                            sizeAnomalyPaths.take(5).forEach { path ->
+                                Text("• ${path.substringAfterLast('/')}", fontSize = 13.sp, color = Color(0xFF94A3B8))
+                            }
+                            if (sizeAnomalyPaths.size > 5) {
+                                Text("...及其他 ${sizeAnomalyPaths.size - 5} 个文件夹", fontSize = 13.sp, color = Color(0xFF94A3B8))
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text("正在重新计算文件大小...", fontSize = 13.sp)
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {}
+                )
             }
 
             // ── 云端同步检查弹窗（进入云盘模式时） ──

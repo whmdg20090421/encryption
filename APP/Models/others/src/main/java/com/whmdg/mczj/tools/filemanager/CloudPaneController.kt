@@ -35,7 +35,8 @@ class CloudPaneController(
     private val vaultDir: String,
     private val vaultId: Int,
     private val vaultName: String,
-    private val folderSizeDb: () -> FolderSizeDb
+    private val folderSizeDb: () -> FolderSizeDb,
+    private val recalculateFolderSize: suspend (String) -> Unit
 ) {
     val state = CloudPanelState()
     private val webdavClient = WebDavFileClient(webdavConfig)
@@ -65,6 +66,8 @@ class CloudPaneController(
         var anomalyDialogMessage by mutableStateOf<String?>(null)
         /** 上传功能是否被禁用（用户取消下载覆盖时设置） */
         var uploadDisabled by mutableStateOf(false)
+        /** 文件夹大小异常：需要重新计算的路径集合 */
+        var sizeAnomalyPaths by mutableStateOf<Set<String>>(emptySet())
     }
 
     data class DeletedFilesState(
@@ -1449,6 +1452,7 @@ class CloudPaneController(
         val children = dir.listFiles() ?: return emptyList()
         val entries = mutableListOf<CloudFileEntry>()
         val localNames = mutableSetOf<String>()
+        val anomalyPaths = mutableSetOf<String>()
 
         for (file in children) {
             if (file.name in excludedFiles) continue
@@ -1458,8 +1462,12 @@ class CloudPaneController(
             if (file.isDirectory) {
                 // 文件夹大小从 FolderSizeDb 缓存读取
                 val folderSize = folderSizeDb().get(File(vaultDir, childRelativePath.trimStart('/')).absolutePath)?.size ?: 0L
-                // 同步状态：只统计直接子文件
+                // 同步状态：递归统计子树
                 val syncAgg = aggregateDirectChildren(childRelativePath)
+                // 检测异常：uploadedSize > totalSize 说明 FolderSizeDb 缓存过时
+                if (folderSize > 0 && syncAgg.uploadedSize > folderSize) {
+                    anomalyPaths.add(childRelativePath)
+                }
                 entries.add(CloudFileEntry(
                     name = file.name,
                     relativePath = childRelativePath,
@@ -1504,6 +1512,22 @@ class CloudPaneController(
 
         // 合并云端-only 条目：cloud_entries 中有但本地没有的
         mergeCloudOnlyEntries(relativePath, localNames, entries)
+
+        // 检测到文件夹大小异常时，异步触发重新计算
+        if (anomalyPaths.isNotEmpty()) {
+            state.sizeAnomalyPaths = anomalyPaths
+            scope.launch(Dispatchers.IO) {
+                for (path in anomalyPaths) {
+                    val absolutePath = File(vaultDir, path.trimStart('/')).absolutePath
+                    recalculateFolderSize(absolutePath)
+                }
+                // 重新计算完成后刷新列表
+                withContext(Dispatchers.Main) {
+                    state.sizeAnomalyPaths = emptySet()
+                    navigateTo(state.currentPath)
+                }
+            }
+        }
 
         return entries.sortedWith(naturalOrderComparator())
     }
