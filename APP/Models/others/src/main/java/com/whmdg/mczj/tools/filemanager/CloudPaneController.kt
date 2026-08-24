@@ -228,7 +228,7 @@ class CloudPaneController(
         syncJob?.cancel()
         state.onCancelUpload = ::cancelUpload
         state.syncTask = SyncTaskState(phase = SyncPhase.SYNCING, totalFiles = 1, totalBytes = localFile.length())
-        state.syncDialogVisible = true
+        openProgressDialog()
         syncJob = scope.launch {
             // 上传前检查云端 db 是否被其他设备更新
             syncCloudDbBeforeUpload()
@@ -340,8 +340,7 @@ class CloudPaneController(
                             com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
                         }
 
-                        state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED)
-                        state.syncDialogVisible = false
+                        closeProgressDialog()
                     }
                 },
                 onStatusChange = {
@@ -386,7 +385,7 @@ class CloudPaneController(
             // 显示弹窗（扫描阶段：不定进度条）
             state.onCancelUpload = ::cancelUpload
             state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING)
-            state.syncDialogVisible = true
+            openProgressDialog()
 
             // ① 获取本地文件列表（磁盘）
             val localFiles = withContext(Dispatchers.IO) {
@@ -398,7 +397,7 @@ class CloudPaneController(
 
             if (localFiles.isEmpty()) {
                 withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "文件夹为空", android.widget.Toast.LENGTH_SHORT).show() }
-                state.syncDialogVisible = false
+                closeProgressDialog()
                 return@launch
             }
 
@@ -482,7 +481,7 @@ class CloudPaneController(
                     syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING).isNotEmpty()
                 }) {
                 withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "当前有文件正在上传，请等待完成", android.widget.Toast.LENGTH_SHORT).show() }
-                state.syncDialogVisible = false
+                closeProgressDialog()
                 return@launch
             }
 
@@ -533,10 +532,9 @@ class CloudPaneController(
 
             if (queue.isEmpty()) {
                 // 完全关闭弹窗（与上传完成同样的关闭方式）
-                state.syncTask = SyncTaskState(phase = SyncPhase.COMPLETED)
                 silentRefresh()
                 withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "所有文件已上传完成", android.widget.Toast.LENGTH_SHORT).show() }
-                state.syncDialogVisible = false
+                closeProgressDialog()
                 return@launch
             }
 
@@ -591,13 +589,13 @@ class CloudPaneController(
             val maxConcurrency = context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
                 .getInt("max_concurrency", 3)
             state.onCancelUpload = ::cancelUpload
-            state.syncDialogVisible = true
             state.syncTask = SyncTaskState(
                 phase = SyncPhase.SYNCING,
                 totalFiles = queue.size,
                 totalBytes = queue.sumOf { it.first.length() },
                 concurrency = maxConcurrency
             )
+            openProgressDialog()
 
             // ⑭ 并发动态上传（Channel 单写者模式，避免多线程竞态）
             val completedBytes = java.util.concurrent.atomic.AtomicLong(0)
@@ -968,7 +966,7 @@ class CloudPaneController(
             if (dbUploaded) {
                 com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
             }
-            state.syncDialogVisible = false
+            closeProgressDialog()
         }
     }
 
@@ -1077,6 +1075,30 @@ class CloudPaneController(
         state.syncTask = state.syncTask.copy(phase = SyncPhase.IDLE)
     }
 
+    // ── 进度弹窗控制 ──
+    // 注意：open/show 只控制 syncDialogVisible，phase 由调用方在之前设置
+
+    /** 打开进度弹窗（首次显示，调用前需先设置 phase） */
+    fun openProgressDialog() {
+        state.syncDialogVisible = true
+    }
+
+    /** 关闭进度弹窗（弹窗和悬浮窗都消失，phase 设为 COMPLETED） */
+    fun closeProgressDialog() {
+        state.syncDialogVisible = false
+        state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED)
+    }
+
+    /** 隐藏进度弹窗（弹窗消失，保留悬浮窗，phase 不变） */
+    fun hideProgressDialog() {
+        state.syncDialogVisible = false
+    }
+
+    /** 显示进度弹窗（从悬浮窗恢复为弹窗，phase 不变） */
+    fun showProgressDialog() {
+        state.syncDialogVisible = true
+    }
+
     /** 取消上传：停止任务，上传 cloud.db，清理锁，已上传的不动，未上传的重置为 PENDING */
     fun cancelUpload() {
         val job = syncJob
@@ -1106,8 +1128,7 @@ class CloudPaneController(
                 }
             }
             // 5. 关闭弹窗，重置状态
-            state.syncTask = SyncTaskState()
-            state.syncDialogVisible = false
+            closeProgressDialog()
             silentRefresh()
             android.widget.Toast.makeText(context, "上传任务已终止", android.widget.Toast.LENGTH_SHORT).show()
         }
@@ -1117,8 +1138,7 @@ class CloudPaneController(
     fun forceTerminate() {
         syncJob?.cancel()
         syncJob = null
-        state.syncDialogVisible = false
-        state.syncTask = SyncTaskState()
+        closeProgressDialog()
         scope.launch(Dispatchers.IO) {
             val entries = syncDb.getEntriesByStatus("local_entries", SyncStatus.QUEUED) +
                 syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
