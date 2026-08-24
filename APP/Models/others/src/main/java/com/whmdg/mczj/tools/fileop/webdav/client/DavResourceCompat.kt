@@ -67,11 +67,14 @@ fun DavResource.putCompat(
         override fun contentLength(): Long = contentLength
         override fun isOneShot() = true
         override fun writeTo(sink: BufferedSink) {
+            sink.flush()  // 刷新缓冲区，确保直接写网络
+            val out = sink.outputStream()
             val buf = ByteArray(UPLOAD_BUFFER_SIZE)
             while (true) {
                 val n = inputStream.read(buf)
                 if (n == -1) break
-                sink.write(buf, 0, n)
+                out.write(buf, 0, n)
+                out.flush()  // 每128KB立即发送到网络
                 onProgress(n.toLong())
             }
         }
