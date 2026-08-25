@@ -1513,6 +1513,38 @@ fun FileManagerScreen(
                 )
             }
 
+            // ── cloud.db 同步弹窗（上传完成后） ──
+            val cloudDbState = vm.panels.cloud?.state?.cloudDbSyncState
+            if (cloudDbState != null) {
+                StandardDialog(
+                    onDismissRequest = {},
+                    title = { Text(if (cloudDbState.isError) "同步失败" else "正在向云端同步") },
+                    text = {
+                        Column {
+                            if (cloudDbState.isError) {
+                                Text("上传失败：${cloudDbState.errorMessage}", fontSize = 14.sp)
+                            } else {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(cloudDbState.phase, fontSize = 14.sp)
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        if (cloudDbState.isError) {
+                            TextButton(onClick = { cloudDbState.onRetry() }) { Text("重试") }
+                        }
+                    },
+                    dismissButton = {
+                        if (cloudDbState.isError) {
+                            TextButton(onClick = { cloudDbState.onConfirm() }) { Text("确认") }
+                        }
+                    }
+                )
+            }
+
             // ── 云端同步检查弹窗（进入云盘模式时） ──
             if (vm.panels.cloudSyncDialogVisible) {
                 StandardDialog(

@@ -68,7 +68,18 @@ class CloudPaneController(
         var uploadDisabled by mutableStateOf(false)
         /** 文件夹大小异常：需要重新计算的路径集合 */
         var sizeAnomalyPaths by mutableStateOf<Set<String>>(emptySet())
+        /** cloud.db 同步弹窗状态（null=隐藏） */
+        var cloudDbSyncState by mutableStateOf<CloudDbSyncState?>(null)
     }
+
+    /** cloud.db 同步弹窗状态 */
+    data class CloudDbSyncState(
+        val phase: String = "正在加密",  // "正在加密" / "正在上传" / "正在验证"
+        val isError: Boolean = false,
+        val errorMessage: String = "",
+        val onRetry: () -> Unit = {},
+        val onConfirm: () -> Unit = {}
+    )
 
     data class DeletedFilesState(
         val deletedPaths: List<String>,
@@ -332,15 +343,11 @@ class CloudPaneController(
                         }
                         updateSingleEntry(relativePath)
 
-                        // 上传 cloud.db + 删除 lock
-                        state.syncTask = state.syncTask.copy(phase = SyncPhase.SYNCING, currentFileName = "正在同步云端列表...")
-                        kotlinx.coroutines.yield()  // 让出主线程，让 Compose 渲染"正在同步云端列表..."
-                        val dbUploaded = uploadCloudDb()
-                        if (dbUploaded) {
-                            com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
-                        }
-
+                        // 关闭进度弹窗，上传 cloud.db（自带弹窗）
                         closeProgressDialog()
+                        uploadCloudDbWithUI()
+                        // 无论成功失败都删除锁文件
+                        com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
                     }
                 },
                 onStatusChange = {
@@ -959,14 +966,11 @@ class CloudPaneController(
                 }
             }
 
-            // ⑰ 上传 cloud.db 到云端元数据目录（phase 保持 SYNCING，不切换为 COMPLETED）
-            state.syncTask = state.syncTask.copy(phase = SyncPhase.SYNCING, currentFileName = "正在同步云端列表...", completedFiles = completedFilesCount)
-            kotlinx.coroutines.yield()  // 让出主线程，让 Compose 渲染"正在同步云端列表..."
-            val dbUploaded = uploadCloudDb()
-            if (dbUploaded) {
-                com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
-            }
+            // ⑰ 关闭进度弹窗，上传 cloud.db（自带弹窗）
             closeProgressDialog()
+            uploadCloudDbWithUI()
+            // 无论成功失败都删除锁文件
+            com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
         }
     }
 
@@ -1110,15 +1114,13 @@ class CloudPaneController(
             job?.cancel()
             job?.join()
 
-            // 3. 上传 cloud.db（已上传的文件已在DB中更新）
-            state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING, currentFileName = "正在保存云端数据...")
-            val dbUploaded = uploadCloudDb()
-            if (dbUploaded) {
-                com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
-            }
+            // 3. 关闭进度弹窗，上传 cloud.db（自带弹窗）
+            closeProgressDialog()
+            uploadCloudDbWithUI()
+            // 无论成功失败都删除锁文件
+            com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
 
             // 4. 清理 DB 中残留的 UPLOADING/QUEUED 状态
-            state.syncTask = SyncTaskState(phase = SyncPhase.SCANNING, currentFileName = "正在清理上传队列...")
             withContext(Dispatchers.IO) {
                 val entries = syncDb.getEntriesByStatus("local_entries", SyncStatus.QUEUED) +
                     syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
@@ -1127,8 +1129,6 @@ class CloudPaneController(
                     syncDb.updateUploadedSize("local_entries", entry.path, 0)
                 }
             }
-            // 5. 关闭弹窗，重置状态
-            closeProgressDialog()
             silentRefresh()
             android.widget.Toast.makeText(context, "上传任务已终止", android.widget.Toast.LENGTH_SHORT).show()
         }
@@ -1156,6 +1156,95 @@ class CloudPaneController(
     }
 
     /** 压缩并上传 cloud.db 到 .sync_meta/。成功返回 true，失败返回 false。 */
+    /**
+     * 上传 cloud.db 到云端，带 UI 弹窗反馈。
+     * 成功：关闭弹窗，删除锁文件。
+     * 失败：弹窗显示错误原因 + 重试/确认按钮，锁文件由调用方删除。
+     * @return true=成功，false=失败（用户点确认或重试后仍失败）
+     */
+    suspend fun uploadCloudDbWithUI(): Boolean {
+        // 显示同步弹窗
+        state.cloudDbSyncState = CloudDbSyncState(phase = "正在加密")
+
+        val result = withContext(Dispatchers.IO) {
+            try {
+                val dbFile = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/$vaultName/vault_sync.db")
+                if (!dbFile.exists()) return@withContext CloudDbResult.Failure("数据库文件不存在")
+
+                val zipFile = File(context.cacheDir, "${vaultName}_vault_sync.db.7z")
+                try {
+                    val binary = com.whmdg.mczj.tools.util.BinaryExtractor.ensureExtracted(context)
+                    val esc = com.whmdg.mczj.tools.util.SevenZipCommand::escape
+                    val cmd = "${esc(binary.absolutePath)} a ${esc(zipFile.absolutePath)} ${esc(dbFile.absolutePath)} -mx=9 -pmczj -mhe=on"
+                    com.whmdg.mczj.tools.security.ShellExecutor.execute(com.whmdg.mczj.tools.security.Permission.MAX, cmd)
+
+                    // 切换状态：正在上传
+                    withContext(Dispatchers.Main) {
+                        state.cloudDbSyncState = state.cloudDbSyncState?.copy(phase = "正在上传")
+                    }
+
+                    val metaDir = "${remoteBasePath}/.sync_meta"
+                    try { webdavClient.mkdir(metaDir) } catch (_: Exception) {}
+
+                    val remotePath = "$metaDir/${vaultName}_vault_sync.db.7z"
+                    webdavClient.uploadFile(zipFile, remotePath) { _ -> }
+
+                    // 切换状态：正在验证
+                    withContext(Dispatchers.Main) {
+                        state.cloudDbSyncState = state.cloudDbSyncState?.copy(phase = "正在验证")
+                    }
+
+                    val exists = webdavClient.exists(remotePath)
+                    if (!exists) {
+                        return@withContext CloudDbResult.Failure("云端文件验证失败")
+                    }
+                    // 保存远程元数据
+                    val remoteMeta = webdavClient.getFileMetadata(remotePath)
+                    if (remoteMeta != null) {
+                        saveCloudDbMeta(remoteMeta.size, remoteMeta.lastModified)
+                    }
+                    CloudDbResult.Success
+                } finally {
+                    zipFile.delete()
+                }
+            } catch (e: Exception) {
+                CloudDbResult.Failure(e.message ?: "未知错误")
+            }
+        }
+
+        return when (result) {
+            is CloudDbResult.Success -> {
+                state.cloudDbSyncState = null
+                true
+            }
+            is CloudDbResult.Failure -> {
+                // 显示错误弹窗，等待用户选择重试或确认
+                val userChoice = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
+                    state.cloudDbSyncState = CloudDbSyncState(
+                        phase = "上传失败",
+                        isError = true,
+                        errorMessage = result.message,
+                        onRetry = { cont.resume(true) {} },
+                        onConfirm = { cont.resume(false) {} }
+                    )
+                }
+                state.cloudDbSyncState = null
+                if (userChoice) {
+                    // 重试
+                    uploadCloudDbWithUI()
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    private sealed class CloudDbResult {
+        object Success : CloudDbResult()
+        data class Failure(val message: String) : CloudDbResult()
+    }
+
+    /** 上传 cloud.db（无 UI，用于恢复场景） */
     suspend fun uploadCloudDb(): Boolean = withContext(Dispatchers.IO) {
         try {
             val dbFile = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/$vaultName/vault_sync.db")
@@ -1175,10 +1264,6 @@ class CloudPaneController(
                 webdavClient.uploadFile(zipFile, remotePath) { _ -> }
 
                 val exists = webdavClient.exists(remotePath)
-                if (!exists) {
-                    com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "cloud.db 上传验证失败")
-                }
-                // 保存远程元数据（用于下次上传前检测是否被其他设备更新）
                 if (exists) {
                     val remoteMeta = webdavClient.getFileMetadata(remotePath)
                     if (remoteMeta != null) {
