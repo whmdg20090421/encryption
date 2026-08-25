@@ -39,13 +39,17 @@ class OcrLifecycleObserver(private val context: Context) : DefaultLifecycleObser
         isAppInForeground = false
         // 应用切到后台：取消待隐藏，延迟显示悬浮窗
         cancelPendingHide()
-        if (!BillOcrConfig.isEnabled(context)) return
-
-        if (com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isAccessibilityEnabled(context)) {
-            pendingShow = Runnable {
-                OcrFloatingWindow.show(context)
-            }.also { handler.postDelayed(it, DELAY_MS) }
-        }
+        // 数据库查询移到 IO 线程，避免首次打开数据库时阻塞主线程导致 ANR
+        Thread {
+            if (!BillOcrConfig.isEnabled(context)) return@Thread
+            handler.post {
+                if (!isAppInForeground && com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isAccessibilityEnabled(context)) {
+                    pendingShow = Runnable {
+                        OcrFloatingWindow.show(context)
+                    }.also { handler.postDelayed(it, DELAY_MS) }
+                }
+            }
+        }.start()
     }
 
     private fun cancelPendingShow() {
