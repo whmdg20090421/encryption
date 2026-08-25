@@ -287,61 +287,62 @@ fun CloudSyncScreen(
                         .getInt("max_concurrency", 3)
                 }
 
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(vertical = 8.dp)
-                ) {
-                    items(syncItems, key = { it.id }) { item ->
-                        CloudSyncCard(
-                            item = item,
-                            onClick = { showConfirmDialog = item },
-                            onConcurrencyChange = { showConcurrencyDialog = true },
-                            onDiffRefresh = { showDiffDialog = true }
+                Box(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(vertical = 8.dp)
+                    ) {
+                        items(syncItems, key = { it.id }) { item ->
+                            CloudSyncCard(
+                                item = item,
+                                onClick = { showConfirmDialog = item },
+                                onConcurrencyChange = { showConcurrencyDialog = true },
+                                onDiffRefresh = { showDiffDialog = true }
+                            )
+                        }
+                    }
+
+                    // 并发数滑动条对话框
+                    if (showConcurrencyDialog) {
+                        ConcurrencySliderDialog(
+                            currentValue = currentConcurrency,
+                            onConfirm = { value ->
+                                context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
+                                    .edit().putInt("max_concurrency", value).apply()
+                                showConcurrencyDialog = false
+                            },
+                            onDismiss = { showConcurrencyDialog = false }
                         )
                     }
-                }
 
-                // 并发数滑动条对话框
-                if (showConcurrencyDialog) {
-                    ConcurrencySliderDialog(
-                        currentValue = currentConcurrency,
-                        onConfirm = { value ->
-                            context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
-                                .edit().putInt("max_concurrency", value).apply()
-                            showConcurrencyDialog = false
-                        },
-                        onDismiss = { showConcurrencyDialog = false }
-                    )
-                }
-
-                // 差异文件扫描对话框
-                if (showDiffDialog) {
-                    val vaultItem = syncItems.firstOrNull { it.type == "保险箱" }
-                    val vaultRecord = vaultItem?.let { vaultService.getVault(it.vaultId) }
-                    DiffScanDialog(
-                        context = context,
-                        vaultDir = vaultRecord?.relativePath ?: "",
-                        vaultName = vaultItem?.vaultName ?: "",
-                        onComplete = { count ->
-                            showDiffDialog = false
-                            diffResult = count
-                        }
-                    )
-                }
-
-                // 差异结果对话框
-                if (diffResult != null) {
-                    DiffResultDialog(
-                        diffCount = diffResult!!,
-                        onConfirm = {
-                            // 更新卡片
-                            val vaultId = syncItems.firstOrNull { it.type == "保险箱" }?.vaultId ?: 0
-                            val idx = syncItems.indexOfFirst { it.id == "vault_$vaultId" }
-                            if (idx >= 0) {
-                                syncItems[idx] = syncItems[idx].copy(diffFileCount = diffResult!!)
-                                CloudSyncStore.save(context, syncItems.toList())
+                    // 差异文件扫描对话框
+                    if (showDiffDialog) {
+                        val vaultItem = syncItems.firstOrNull { it.type == "保险箱" }
+                        val vaultRecord = vaultItem?.let { vaultService.getVault(it.vaultId) }
+                        DiffScanDialog(
+                            context = context,
+                            vaultDir = vaultRecord?.relativePath ?: "",
+                            vaultName = vaultItem?.vaultName ?: "",
+                            onComplete = { count ->
+                                showDiffDialog = false
+                                diffResult = count
                             }
-                            diffResult = null
+                        )
+                    }
+
+                    // 差异结果对话框
+                    if (diffResult != null) {
+                        DiffResultDialog(
+                            diffCount = diffResult!!,
+                            onConfirm = {
+                                // 更新卡片
+                                val vaultId = syncItems.firstOrNull { it.type == "保险箱" }?.vaultId ?: 0
+                                val idx = syncItems.indexOfFirst { it.id == "vault_$vaultId" }
+                                if (idx >= 0) {
+                                    syncItems[idx] = syncItems[idx].copy(diffFileCount = diffResult!!)
+                                    CloudSyncStore.save(context, syncItems.toList())
+                                }
+                                diffResult = null
                         }
                     )
                 }
@@ -453,6 +454,7 @@ fun CloudSyncScreen(
                 )
             }
         }
+    }
 
         // 右下角可展开 FAB
         val fabScale by animateFloatAsState(
