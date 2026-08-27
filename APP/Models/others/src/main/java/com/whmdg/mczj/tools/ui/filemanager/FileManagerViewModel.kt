@@ -1737,7 +1737,8 @@ class FilePaneController(
     fun enterArchiveMode(session: ArchiveBrowser.ArchiveSession) {
         val panel = state
         panel.entries = session.currentEntries
-        panel.path = session.currentPath
+        // panel.path 保持为压缩包文件路径（如 A/1.zip），不设为压缩包内部路径
+        // 标题栏从 archiveSession.currentPath 读取，不依赖 panel.path
         panel.archiveSession = session
         panel.isInArchiveMode = true
         onArchiveSessionEntered?.invoke(session)
@@ -1752,9 +1753,9 @@ class FilePaneController(
             panel.loadError = RuntimeException("无法进入压缩包子目录: ${entry.name}")
             return
         }
+        // 压缩包内导航：只更新 session 和 entries，不改 panel.path
         panel.archiveSession = newSession
         panel.entries = newSession.currentEntries
-        panel.path = newSession.currentPath
     }
 
     /** 压缩包内返回上一级，返回 false 表示已在根目录（状态更新，缓存由 Coordinator 处理） */
@@ -1767,9 +1768,10 @@ class FilePaneController(
             exitArchive()
             return true
         }
+        // 压缩包内导航：只更新 session 和 entries，不改 panel.path
+        // panel.path 保持为压缩包文件路径，避免后续 loadDirectory 用错误路径执行 ls
         panel.archiveSession = newSession
         panel.entries = newSession.currentEntries
-        panel.path = newSession.currentPath
         return true
     }
 
@@ -2288,6 +2290,12 @@ class PanelCoordinator(
             dstCtrl.vaultSession = null
         }
 
+        // 同步压缩包状态：源不在压缩包模式时，清除目标的压缩包状态
+        if (!src.isInArchiveMode && dst.isInArchiveMode) {
+            dst.isInArchiveMode = false
+            dst.archiveSession = null
+        }
+
         dst.navState = dst.navState.navigate(src.path)
         dstCtrl.loadDirectory(src.path, panel = dst)
     }
@@ -2519,7 +2527,8 @@ class PanelCoordinator(
                 val otherHome = if (sourcePanel == "LEFT") rHome else lHome
                 targetCtrl.state.isInArchiveMode = true
                 targetCtrl.state.archiveSession = session
-                targetCtrl.state.path = session.currentPath
+                // panel.path 保持为压缩包文件路径，不设为压缩包内部路径
+                targetCtrl.state.path = session.originalPath
                 targetCtrl.state.entries = session.currentEntries
                 otherCtrl.state.path = otherHome
                 otherCtrl.state.entries = listDirectory(otherHome)
