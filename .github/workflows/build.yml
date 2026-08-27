@@ -6,7 +6,7 @@ on:
       compact:
         description: '启用 R8 代码缩减（压缩编译）'
         required: false
-        default: 'false'
+        default: 'true'
         type: boolean
 
 jobs:
@@ -165,7 +165,7 @@ jobs:
           GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g
         run: |
           COMPACT_FLAG=""
-          if [ "${{ inputs.compact }}" = "true" ]; then
+          if [ "${{ inputs.compact }}" != "false" ]; then
             COMPACT_FLAG="-Pcompact=true"
             echo "压缩编译模式：R8 代码缩减已启用"
           else

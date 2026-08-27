@@ -978,6 +978,8 @@ fun FileManagerScreen(
                                 onClick = {
                                     if (vm.panels.isCloudMode) {
                                         vm.panels.cloud?.goUp()
+                                    } else if (vm.isInArchiveMode) {
+                                        vm.archiveGoUp()
                                     } else {
                                         saveScrollAndGoUp()
                                     }
