@@ -647,11 +647,14 @@ fun FileManagerScreen(
             }
             return@BackHandler
         }
+        // 压缩包模式：优先处理，避免 goUp() 绕过 exitArchive()
+        if (vm.isInArchiveMode) {
+            vm.archiveGoUp()
+            return@BackHandler
+        }
         if (!saveScrollAndGoUp()) {
-            // 在根目录按返回：压缩包/回收站退出模式，其余退出文件管理器
-            if (vm.isInArchiveMode) {
-                vm.exitArchive()
-            } else if (vm.recycleBinPanel == vm.focusedPanel) {
+            // 在根目录按返回：回收站退出模式，其余退出文件管理器
+            if (vm.recycleBinPanel == vm.focusedPanel) {
                 vm.exitRecycleBin()
             } else {
                 if (vm.isVaultMode) vm.exitVaultMode()
