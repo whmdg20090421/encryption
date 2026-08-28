@@ -193,8 +193,6 @@ class FilePaneController(
             internal set
 
         // ── 压缩包浏览 ──
-
-            internal set
         var archiveSession by mutableStateOf<ArchiveBrowser.ArchiveSession?>(null)
             internal set
         var archivePasswordRequest by mutableStateOf<FileEntry?>(null)
@@ -2865,8 +2863,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun navigateToWithScroll(path: PanelPath, scrollToIndex: Int = 0, scrollToOffset: Int = 0) = focusedController.navigateToWithScroll(path, scrollToIndex, scrollToOffset)
     fun goBack(): PanelPath? = focusedController.goBack()
     fun goForward(): PanelPath? = focusedController.goForward()
-    fun goUp(): String? = focusedController.goUp()
+    fun goUp(): PanelPath? = focusedController.goUp()
     fun isAtVaultRoot(): Boolean = focusedController.isAtVaultRoot()
+    /** String 便捷重载，供 Screen 层直接传路径字符串使用 */
+    fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0) =
+        focusedController.navigateToWithScroll(PanelPath.FileSystem(path), scrollToIndex, scrollToOffset)
+    /** String 便捷重载 */
+    fun getScrollPosition(path: String, panel: FilePaneController.VmPanelState = currentPanel): Pair<Int, Int>? =
+        focusedController.getScrollPosition(path)
     fun navigateToHistoryDir(entry: HistoryEntry) = focusedController.navigateToHistoryDir(entry)
     fun navigateToHistoryFile(entry: HistoryEntry) = focusedController.navigateToHistoryFile(entry)
     fun navigateToBookmark(bm: BookmarkEntry) = focusedController.navigateToBookmark(bm)
@@ -2931,9 +2935,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun formatShellError(name: String, stderr: String): String = focusedController.formatShellError(name, stderr)
     
     // 目录加载
-    private fun loadDirectory(targetPath: String, panel: FilePaneController.VmPanelState = currentPanel, isRefresh: Boolean = false, onComplete: ((String) -> Unit)? = null) = focusedController.loadDirectory(targetPath, panel, isRefresh, onComplete)
-    private fun loadDirectoryAsync(targetPath: String, panel: FilePaneController.VmPanelState, isRefresh: Boolean = false, onComplete: ((String) -> Unit)? = null) = focusedController.loadDirectoryAsync(targetPath, panel, isRefresh, onComplete)
-    private fun loadDirectorySync(targetPath: String, panel: FilePaneController.VmPanelState, isRefresh: Boolean = false, onComplete: ((String) -> Unit)? = null) = focusedController.loadDirectorySync(targetPath, panel, isRefresh, onComplete)
+    private fun loadDirectory(targetPath: String, panel: FilePaneController.VmPanelState = currentPanel, isRefresh: Boolean = false, onComplete: ((String) -> Unit)? = null, panelPath: PanelPath = PanelPath.FileSystem(targetPath)) = focusedController.loadDirectory(targetPath, panel, isRefresh, onComplete, panelPath)
+    private fun loadDirectoryAsync(targetPath: String, panel: FilePaneController.VmPanelState, isRefresh: Boolean = false, onComplete: ((String) -> Unit)? = null, panelPath: PanelPath = PanelPath.FileSystem(targetPath)) = focusedController.loadDirectoryAsync(targetPath, panel, isRefresh, onComplete, panelPath)
+    private fun loadDirectorySync(targetPath: String, panel: FilePaneController.VmPanelState, isRefresh: Boolean = false, onComplete: ((String) -> Unit)? = null, panelPath: PanelPath = PanelPath.FileSystem(targetPath)) = focusedController.loadDirectorySync(targetPath, panel, isRefresh, onComplete, panelPath)
     fun listDirectory(path: String): List<FileEntry> = focusedController.listDirectory(path)
     private fun sortEntries(entries: List<FileEntry>): List<FileEntry> = focusedController.sortEntries(entries)
     private fun listDirNamesViaLs(dirPath: String, showHidden: Boolean): List<String> = focusedController.listDirNamesViaLs(dirPath, showHidden)

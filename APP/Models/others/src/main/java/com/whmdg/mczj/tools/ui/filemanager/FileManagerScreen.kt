@@ -883,7 +883,7 @@ fun FileManagerScreen(
                                         val targetPath = vm.goBack()
                                         if (targetPath != null) {
                                             val saved = vm.getScrollPosition(targetPath)
-                                            vm.currentPanel.pendingScrollTo = Triple(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+                                            vm.currentPanel.pendingScrollTo = Triple(targetPath.displayPath, saved?.first ?: 0, saved?.second ?: 0)
                                         }
                                     }
                                 },
@@ -2339,7 +2339,7 @@ fun FileManagerScreen(
                                             val targetDir = vm.otherPanel.path
                                             copyMoveConfirmIsCopy = true
                                             copyMoveConfirmSourcePaths = sourcePaths
-                                            copyMoveConfirmTargetDir = targetDir
+                                            copyMoveConfirmTargetDir = targetDir.fileSystemPath
                                             showCopyMoveConfirmDialog = true
                                         }
                                         .padding(vertical = 16.dp),
@@ -2375,7 +2375,7 @@ fun FileManagerScreen(
                                             val targetDir = vm.otherPanel.path
                                             copyMoveConfirmIsCopy = false
                                             copyMoveConfirmSourcePaths = sourcePaths
-                                            copyMoveConfirmTargetDir = targetDir
+                                            copyMoveConfirmTargetDir = targetDir.fileSystemPath
                                             showCopyMoveConfirmDialog = true
                                         }
                                         .padding(vertical = 16.dp),
@@ -4343,9 +4343,9 @@ fun FileManagerScreen(
             compressEntries[0].name + ".zip"
         } else {
             val dirName = if (vm.focusedPanel == FocusedPanel.LEFT) {
-                vm.左.path.substringAfterLast('/').ifEmpty { "压缩包" }
+                vm.左.path.displayPath.substringAfterLast('/').ifEmpty { "压缩包" }
             } else {
-                vm.右.path.substringAfterLast('/').ifEmpty { "压缩包" }
+                vm.右.path.displayPath.substringAfterLast('/').ifEmpty { "压缩包" }
             }
             "$dirName.zip"
         }
@@ -4359,9 +4359,9 @@ fun FileManagerScreen(
                 compressEntries[0].name.substringBeforeLast(".")
             } else {
                 val dirName = if (vm.focusedPanel == FocusedPanel.LEFT) {
-                    vm.左.path.substringAfterLast('/').ifEmpty { "压缩包" }
+                    vm.左.path.displayPath.substringAfterLast('/').ifEmpty { "压缩包" }
                 } else {
-                    vm.右.path.substringAfterLast('/').ifEmpty { "压缩包" }
+                    vm.右.path.displayPath.substringAfterLast('/').ifEmpty { "压缩包" }
                 }
                 dirName
             }
