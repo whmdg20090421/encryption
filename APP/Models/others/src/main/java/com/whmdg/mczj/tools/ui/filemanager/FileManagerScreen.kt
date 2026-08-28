@@ -674,9 +674,10 @@ fun FileManagerScreen(
                 TopAppBar(
                     title = {
                         val titleText = when {
-                            vm.isInArchiveMode -> vm.archiveSession?.let {
-                                if (it.currentPath == it.archivePath) it.archiveName
-                                else "${it.archiveName} / ${it.currentPath.removePrefix(it.archivePath).trimStart('/')}"
+                            vm.isInArchiveMode -> vm.archiveSession?.let { session ->
+                                val archivePath = session.archivePath
+                                if (vm.currentPath == archivePath) session.archiveName
+                                else "${session.archiveName} / ${vm.currentPath.removePrefix(archivePath).trimStart('/')}"
                             } ?: "压缩包"
                             vm.recycleBinPanel == vm.focusedPanel -> "回收站"
                             vm.panels.isCloudMode && vm.focusedPanel == FocusedPanel.LEFT -> {
