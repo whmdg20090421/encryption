@@ -596,7 +596,7 @@ class FilePaneController(
                 val cmp = numA.compareTo(numB)
                 if (cmp != 0) return cmp
             } else {
-                val cmp = ca.compareTo(cb, ignoreCase = true)
+                val cmp = ca.lowercaseChar().compareTo(cb.lowercaseChar())
                 if (cmp != 0) return cmp
                 i++
                 j++
@@ -639,9 +639,9 @@ class FilePaneController(
             SortField.NAME -> {
                 val nameComparator = Comparator<FileEntry> { a, b -> naturalCompare(a.name.lowercase(), b.name.lowercase()) }
                 if (sortOrder() == SortOrder.ASC)
-                    withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenWith(nameComparator))
+                    withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.then(nameComparator))
                 else
-                    withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenWith(nameComparator.reversed()))
+                    withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.then(nameComparator.reversed()))
             }
             SortField.SIZE -> {
                 fun effectiveSize(entry: FileEntry): Long {
