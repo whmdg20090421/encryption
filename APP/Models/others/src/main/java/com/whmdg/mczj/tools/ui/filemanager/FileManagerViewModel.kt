@@ -175,7 +175,7 @@ class FilePaneController(
     class VmPanelState(
         defaultPath: String
     ) {
-        var path by mutableStateOf(defaultPath)
+        var path by mutableStateOf<PanelPath>(PanelPath.FileSystem(defaultPath))
             internal set
         var entries by mutableStateOf(listOf<FileEntry>())
             internal set
@@ -193,7 +193,7 @@ class FilePaneController(
             internal set
 
         // ── 压缩包浏览 ──
-        var isInArchiveMode by mutableStateOf(false)
+
             internal set
         var archiveSession by mutableStateOf<ArchiveBrowser.ArchiveSession?>(null)
             internal set
@@ -458,7 +458,8 @@ class FilePaneController(
         targetPath: String,
         panel: FilePaneController.VmPanelState,
         isRefresh: Boolean = false,
-        onComplete: ((String) -> Unit)? = null
+        onComplete: ((String) -> Unit)? = null,
+        panelPath: PanelPath = PanelPath.FileSystem(targetPath)
     ) {
         panel.loadMetadataJob?.cancel()
         val myVersion = panel.loadVersion
@@ -520,7 +521,7 @@ class FilePaneController(
                 if (myVersion != panel.loadVersion) return@withContext
                 panel.isLoading = false
                 if (!isRefresh) {
-                    panel.path = targetPath
+                    panel.path = panelPath
                 }
                 panel.entries = sorted
                 onComplete?.invoke(targetPath)
@@ -638,7 +639,8 @@ class FilePaneController(
         targetPath: String,
         panel: FilePaneController.VmPanelState,
         isRefresh: Boolean = false,
-        onComplete: ((String) -> Unit)? = null
+        onComplete: ((String) -> Unit)? = null,
+        panelPath: PanelPath = PanelPath.FileSystem(targetPath)
     ) {
         val myVersion = panel.loadVersion
 
@@ -668,7 +670,7 @@ class FilePaneController(
                 if (myVersion != panel.loadVersion) return@withContext
                 panel.isLoading = false
                 if (!isRefresh) {
-                    panel.path = targetPath
+                    panel.path = panelPath
                 }
                 panel.entries = sorted
                 onComplete?.invoke(targetPath)
@@ -684,7 +686,8 @@ class FilePaneController(
         targetPath: String,
         panel: FilePaneController.VmPanelState,
         isRefresh: Boolean = false,
-        onComplete: ((String) -> Unit)? = null
+        onComplete: ((String) -> Unit)? = null,
+        panelPath: PanelPath = PanelPath.FileSystem(targetPath)
     ) {
         panel.loadJob?.cancel()
         panel.loadVersion++
@@ -693,9 +696,9 @@ class FilePaneController(
         panel.resetTransientState()
 
         if (hasShellEngine()) {
-            loadDirectoryAsync(targetPath, panel, isRefresh, onComplete)
+            loadDirectoryAsync(targetPath, panel, isRefresh, onComplete, panelPath)
         } else {
-            loadDirectorySync(targetPath, panel, isRefresh, onComplete)
+            loadDirectorySync(targetPath, panel, isRefresh, onComplete, panelPath)
         }
     }
 
@@ -1031,58 +1034,73 @@ class FilePaneController(
     fun navigateTo(path: String, onComplete: ((String) -> Unit)? = null, onPathChanged: (() -> Unit)? = null) {
         val panel = state
         if (panel.isInRecycleBin) panel.isInRecycleBin = false
-        if (panel.path == path) return
-        panel.navState = panel.navState.navigate(path)
-        loadDirectory(path, panel = panel, onComplete = onComplete)
+        val panelPath = PanelPath.FileSystem(path, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
+        if (panel.path == panelPath) return
+        panel.navState = panel.navState.navigate(panelPath)
+        loadDirectory(path, panel = panel, onComplete = onComplete, panelPath = panelPath)
         onPathChanged?.invoke()
     }
 
-    fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
-        navigateTo(path)
-        state.pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
+    fun navigateToWithScroll(path: PanelPath, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
+        navigateTo(path.fileSystemPath)
+        state.pendingScrollTo = Triple(path.displayPath, scrollToIndex, scrollToOffset)
     }
 
     /** 后退一步：更新 nav state index + 异步加载目录，返回目标路径 */
-    fun goBack(): String? {
+    fun goBack(): PanelPath? {
         val panel = state
         val back = panel.navState.back() ?: return null
         panel.navState = back
-        loadDirectory(back.current, panel = panel)
-        return back.current
+        val backPath = back.current
+        navigateToPanelPath(backPath, panel)
+        return backPath
     }
 
     /** 前进一步：更新 nav state index + 异步加载目录，返回目标路径 */
-    fun goForward(): String? {
+    fun goForward(): PanelPath? {
         val panel = state
         val fwd = panel.navState.forward() ?: return null
         panel.navState = fwd
-        loadDirectory(fwd.current, panel = panel)
-        return fwd.current
+        val fwdPath = fwd.current
+        navigateToPanelPath(fwdPath, panel)
+        return fwdPath
     }
 
-    /** 返回上级目录，返回目标路径，null 表示已在根目录 */
-    fun goUp(): String? {
-        val effectiveRoot = if (isRootEngine()) "/" else safeDefault
-        val path = state.path
-        if (path == effectiveRoot || !path.contains('/')) return null
-        val parent = path.substringBeforeLast('/').ifEmpty { "/" }
-        if (parent == path) return null
-        return parent
+    /** 根据 PanelPath 类型执行导航 */
+    private fun navigateToPanelPath(panelPath: PanelPath, panel: VmPanelState) {
+        when (panelPath) {
+            is PanelPath.Archive -> {
+                panel.path = panelPath
+                panel.archiveSession?.let { session ->
+                    panel.entries = session.currentEntries
+                }
+            }
+            is PanelPath.FileSystem -> {
+                loadDirectory(panelPath.path, panel = panel, panelPath = panelPath)
+            }
+            is PanelPath.Vault -> {
+                loadDirectory(panelPath.path, panel = panel, panelPath = panelPath)
+            }
+        }
     }
+
+    /** 返回上级目录，返回目标 PanelPath，null 表示已在根目录 */
+    fun goUp(): PanelPath? = state.path.goUp()
 
     /** 当前聚焦面板是否在保险箱根目录 */
     fun isAtVaultRoot(): Boolean {
-        val root = vaultSession?.vaultDir?.absolutePath ?: return false
-        return state.path == root
+        val p = state.path
+        return p is PanelPath.Vault && p.isAtRoot
     }
 
     fun navigateToHistoryDir(entry: HistoryEntry) {
         val panel = state
+        val panelPath = PanelPath.FileSystem(entry.path, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
         if (hasShellEngine()) {
-            loadDirectory(entry.path, panel = panel)
+            loadDirectory(entry.path, panel = panel, panelPath = panelPath)
         } else {
             val testDir = File(entry.path)
-            if (testDir.exists() && testDir.canRead()) loadDirectory(entry.path, panel = panel)
+            if (testDir.exists() && testDir.canRead()) loadDirectory(entry.path, panel = panel, panelPath = panelPath)
         }
     }
 
@@ -1090,22 +1108,24 @@ class FilePaneController(
         val file = File(entry.path)
         val parentDir = file.parentFile ?: return
         val panel = state
+        val panelPath = PanelPath.FileSystem(parentDir.absolutePath, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
         if (hasShellEngine()) {
             panel.pendingScrollToFile = file.name
-            loadDirectory(parentDir.absolutePath, panel = panel)
+            loadDirectory(parentDir.absolutePath, panel = panel, panelPath = panelPath)
         } else if (parentDir.exists() && parentDir.canRead()) {
             panel.pendingScrollToFile = file.name
-            loadDirectory(parentDir.absolutePath, panel = panel)
+            loadDirectory(parentDir.absolutePath, panel = panel, panelPath = panelPath)
         }
     }
 
     fun navigateToBookmark(bm: BookmarkEntry) {
         val panel = state
+        val panelPath = PanelPath.FileSystem(bm.path, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
         if (hasShellEngine()) {
-            loadDirectory(bm.path, panel = panel)
+            loadDirectory(bm.path, panel = panel, panelPath = panelPath)
         } else {
             val testDir = File(bm.path)
-            if (testDir.exists() && testDir.canRead()) loadDirectory(bm.path, panel = panel)
+            if (testDir.exists() && testDir.canRead()) loadDirectory(bm.path, panel = panel, panelPath = panelPath)
         }
     }
 
@@ -1647,7 +1667,7 @@ class FilePaneController(
         scope.launch(Dispatchers.IO) {
             try {
                 val permLevel = permissionLevel
-                val currentPathVal = panel.path
+                val currentPathVal = panel.path.fileSystemPath
                 val currentEntriesVal = panel.entries
 
                 val passwordCheck = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
@@ -1700,7 +1720,7 @@ class FilePaneController(
         val panel = state
         scope.launch(Dispatchers.IO) {
             val permLevel = permissionLevel
-            val currentPathVal = panel.path
+            val currentPathVal = panel.path.fileSystemPath
             val currentEntriesVal = panel.entries
 
             val info = ArchiveBrowser.parseArchiveDebug(
@@ -1737,9 +1757,13 @@ class FilePaneController(
     fun enterArchiveMode(session: ArchiveBrowser.ArchiveSession) {
         val panel = state
         panel.entries = session.currentEntries
-        panel.path = session.currentPath
+        panel.path = PanelPath.Archive(
+            virtualPath = session.currentPath,
+            archivePath = session.archivePath,
+            originalPath = session.originalPath,
+            isAtArchiveRoot = true
+        )
         panel.archiveSession = session
-        panel.isInArchiveMode = true
         onArchiveSessionEntered?.invoke(session)
     }
 
@@ -1752,8 +1776,12 @@ class FilePaneController(
             panel.loadError = RuntimeException("无法进入压缩包子目录: ${entry.name}")
             return
         }
-        // 压缩包内导航：同步 panel.path 和 session
-        panel.path = newSession.currentPath
+        panel.path = PanelPath.Archive(
+            virtualPath = newSession.currentPath,
+            archivePath = newSession.archivePath,
+            originalPath = newSession.originalPath,
+            isAtArchiveRoot = false
+        )
         panel.archiveSession = newSession
         panel.entries = newSession.currentEntries
     }
@@ -1764,12 +1792,15 @@ class FilePaneController(
         val session = panel.archiveSession ?: return false
         val newSession = ArchiveBrowser.navigateUp(session)
         if (newSession == null) {
-            // 已在根目录，退出压缩包
             exitArchive()
             return true
         }
-        // 压缩包内导航：同步 panel.path 和 session
-        panel.path = newSession.currentPath
+        panel.path = PanelPath.Archive(
+            virtualPath = newSession.currentPath,
+            archivePath = newSession.archivePath,
+            originalPath = newSession.originalPath,
+            isAtArchiveRoot = ArchiveBrowser.isAtRoot(newSession)
+        )
         panel.archiveSession = newSession
         panel.entries = newSession.currentEntries
         return true
@@ -1779,10 +1810,9 @@ class FilePaneController(
     fun exitArchive() {
         val panel = state
         val session = panel.archiveSession ?: return
-        panel.path = session.originalPath
+        panel.path = PanelPath.FileSystem(session.originalPath, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
         panel.entries = session.originalEntries.ifEmpty { listDirectory(session.originalPath) }
         panel.archiveSession = null
-        panel.isInArchiveMode = false
     }
 
     /** 当前是否在压缩包根目录 */
@@ -2171,12 +2201,24 @@ class FilePaneController(
         val idx = panel.currentScrollIndex
         val off = panel.currentScrollOffset
         if (idx != 0 || off != 0) {
-            panel.pendingScrollTo = Triple(panel.path, idx, off)
+            panel.pendingScrollTo = Triple(panel.path.displayPath, idx, off)
         }
-        if (panel.isWebDavMode) {
-            loadWebDavEntries(panel)
-        } else {
-            loadDirectory(panel.path, panel = panel, isRefresh = true)
+        when (val p = panel.path) {
+            is PanelPath.Archive -> {
+                panel.archiveSession?.let { session ->
+                    panel.entries = session.currentEntries
+                }
+            }
+            is PanelPath.FileSystem -> {
+                if (panel.isWebDavMode) {
+                    loadWebDavEntries(panel)
+                } else {
+                    loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p)
+                }
+            }
+            is PanelPath.Vault -> {
+                loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p)
+            }
         }
     }
 
@@ -2281,32 +2323,43 @@ class PanelCoordinator(
         val dst = dstCtrl.state
 
         // 同步 vault session：源有 session 且目标路径在 vault 内 → 注入；否则清除
-        val session = srcCtrl.vaultSession
-        val vaultDir = session?.vaultDir?.absolutePath
-        if (session != null && vaultDir != null && (src.path == vaultDir || src.path.startsWith("$vaultDir/"))) {
-            dstCtrl.vaultSession = session
+        val srcPath = src.path
+        if (srcPath is PanelPath.Vault) {
+            dstCtrl.vaultSession = srcCtrl.vaultSession
         } else {
             dstCtrl.vaultSession?.dispose()
             dstCtrl.vaultSession = null
         }
 
         // 同步压缩包状态：源不在压缩包模式时，清除目标的压缩包状态
-        if (!src.isInArchiveMode && dst.isInArchiveMode) {
-            dst.isInArchiveMode = false
+        if (srcPath !is PanelPath.Archive && dst.path is PanelPath.Archive) {
+            dst.path = PanelPath.FileSystem(dst.path.fileSystemPath)
             dst.archiveSession = null
         }
 
-        dst.navState = dst.navState.navigate(src.path)
-        dstCtrl.loadDirectory(src.path, panel = dst)
+        dst.navState = dst.navState.navigate(srcPath)
+        dstCtrl.loadDirectory(srcPath.fileSystemPath, panel = dst, panelPath = srcPath)
     }
 
     fun refreshBoth() {
         for (ctrl in both()) {
             val panel = ctrl.state
-            if (panel.isWebDavMode) {
-                ctrl.loadWebDavEntries(panel)
-            } else {
-                ctrl.loadDirectory(panel.path, panel = panel, isRefresh = true)
+            when (val p = panel.path) {
+                is PanelPath.Archive -> {
+                    panel.archiveSession?.let { session ->
+                        panel.entries = session.currentEntries
+                    }
+                }
+                is PanelPath.FileSystem -> {
+                    if (panel.isWebDavMode) {
+                        ctrl.loadWebDavEntries(panel)
+                    } else {
+                        ctrl.loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p)
+                    }
+                }
+                is PanelPath.Vault -> {
+                    ctrl.loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p)
+                }
             }
         }
     }
@@ -2358,7 +2411,7 @@ class PanelCoordinator(
         session.loadNameMapping(context)
         ctrl.vaultSession = session
         val vaultPath = session.vaultDir.absolutePath
-        ctrl.state.path = vaultPath
+        ctrl.state.path = PanelPath.Vault(vaultPath, vaultPath)
         ctrl.state.entries = ctrl.listDirectory(vaultPath)
     }
 
@@ -2392,7 +2445,7 @@ class PanelCoordinator(
         private set
 
     // 保存左面板挂起前的状态
-    private var savedLeftPath: String? = null
+    private var savedLeftPath: PanelPath? = null
     private var savedLeftNavState: PanelNavState? = null
     private var savedLeftScrollIndex: Int = 0
     private var savedLeftScrollOffset: Int = 0
@@ -2487,11 +2540,10 @@ class PanelCoordinator(
         cloud = null
         isCloudMode = false
         isCloudLoading = false
-        // 恢复左面板状态
-        savedLeftPath?.let { path ->
-            left.state.path = path
+        savedLeftPath?.let { panelPath ->
+            left.state.path = panelPath
             savedLeftNavState?.let { left.state.navState = it }
-            left.loadDirectory(path, panel = left.state)
+            left.loadDirectory(panelPath.fileSystemPath, panel = left.state, panelPath = panelPath)
         }
     }
 
@@ -2511,12 +2563,13 @@ class PanelCoordinator(
         rHome: String,
         listDirectory: (String) -> List<FileEntry>
     ) {
-        left.state.path = lHome
-        right.state.path = rHome
-        left.state.navState = PanelNavState(paths = listOf(lHome), index = 0)
-        right.state.navState = PanelNavState(paths = listOf(rHome), index = 0)
+        val lHomePath = PanelPath.FileSystem(lHome)
+        val rHomePath = PanelPath.FileSystem(rHome)
+        left.state.path = lHomePath
+        right.state.path = rHomePath
+        left.state.navState = PanelNavState(paths = listOf(lHomePath), index = 0)
+        right.state.navState = PanelNavState(paths = listOf(rHomePath), index = 0)
 
-        // 初始加载（优先尝试恢复压缩包会话）
         val cachedArchive = ArchiveBrowser.loadSessionCache(context)
         if (cachedArchive != null) {
             val (cache, sourcePanel) = cachedArchive
@@ -2524,13 +2577,18 @@ class PanelCoordinator(
                 val session = ArchiveBrowser.restoreSession(cache)
                 val targetCtrl = if (sourcePanel == "LEFT") left else right
                 val otherCtrl = if (sourcePanel == "LEFT") right else left
-                val otherHome = if (sourcePanel == "LEFT") rHome else lHome
-                targetCtrl.state.isInArchiveMode = true
+                val otherHome = if (sourcePanel == "LEFT") rHomePath else lHomePath
+                val archivePath = PanelPath.Archive(
+                    virtualPath = session.currentPath,
+                    archivePath = session.archivePath,
+                    originalPath = session.originalPath,
+                    isAtArchiveRoot = ArchiveBrowser.isAtRoot(session)
+                )
                 targetCtrl.state.archiveSession = session
-                targetCtrl.state.path = session.currentPath
+                targetCtrl.state.path = archivePath
                 targetCtrl.state.entries = session.currentEntries
                 otherCtrl.state.path = otherHome
-                otherCtrl.state.entries = listDirectory(otherHome)
+                otherCtrl.state.entries = listDirectory(otherHome.fileSystemPath)
                 ArchiveBrowser.clearSessionCache(context)
             } catch (e: Exception) {
                 DiagnosticLog.log("FileMgr", "恢复压缩包会话失败: ${e.message}")
@@ -2647,7 +2705,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 压缩包浏览（面板级状态已移入 VmPanelState） ──
     /** 向后兼容：当前聚焦面板的压缩包状态 */
-    val isInArchiveMode: Boolean get() = currentPanel.isInArchiveMode
+    val isInArchiveMode: Boolean get() = currentPanel.path is PanelPath.Archive
     val archiveSession: ArchiveBrowser.ArchiveSession? get() = currentPanel.archiveSession
     val archivePasswordRequest: FileEntry? get() = currentPanel.archivePasswordRequest
     val archiveDebugInfo: ArchiveBrowser.ArchiveDebugInfo? get() = currentPanel.archiveDebugInfo
@@ -2718,8 +2776,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 导航后检查指定面板是否离开了 vault，若是则销毁该面板的密钥 */
     private fun checkVaultPanelExit(ctrl: FilePaneController) {
         if (!ctrl.isVaultMode) return
-        val vaultDir = ctrl.vaultSession?.vaultDir?.absolutePath ?: return
-        if (ctrl.state.path != vaultDir && !ctrl.state.path.startsWith("$vaultDir/")) {
+        if (ctrl.state.path !is PanelPath.Vault) {
             ctrl.vaultSession?.dispose()
             ctrl.vaultSession = null
             cleanupVaultTempFiles()
@@ -2787,27 +2844,27 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         // 初始化双面板（委托给 Coordinator）
         if (preloadCache != null && preloadCache.leftPath == lHome && preloadCache.rightPath == rHome) {
-            // 使用预加载的缓存数据
-            左.path = lHome
-            右.path = rHome
-            左.navState = PanelNavState(paths = listOf(lHome), index = 0)
-            右.navState = PanelNavState(paths = listOf(rHome), index = 0)
+            val lHomePath = PanelPath.FileSystem(lHome)
+            val rHomePath = PanelPath.FileSystem(rHome)
+            左.path = lHomePath
+            右.path = rHomePath
+            左.navState = PanelNavState(paths = listOf(lHomePath), index = 0)
+            右.navState = PanelNavState(paths = listOf(rHomePath), index = 0)
             左.entries = preloadCache.leftEntries
             右.entries = preloadCache.rightEntries
         } else {
-            // 没有缓存或路径不匹配，正常加载
             panels.initialize(lHome, rHome) { listDirectory(it) }
         }
-        loadExtFlagsForDir(左.path, panel = 左)
-        loadExtFlagsForDir(右.path, panel = 右)
+        loadExtFlagsForDir(左.path.fileSystemPath, panel = 左)
+        loadExtFlagsForDir(右.path.fileSystemPath, panel = 右)
     }
 
     // ═══ Phase 2: 委托方法（转发到 Controller） ═══
 
     // ═══ Phase 3: 委托方法（转发到 Controller） ═══
-    fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0) = focusedController.navigateToWithScroll(path, scrollToIndex, scrollToOffset)
-    fun goBack(): String? = focusedController.goBack()
-    fun goForward(): String? = focusedController.goForward()
+    fun navigateToWithScroll(path: PanelPath, scrollToIndex: Int = 0, scrollToOffset: Int = 0) = focusedController.navigateToWithScroll(path, scrollToIndex, scrollToOffset)
+    fun goBack(): PanelPath? = focusedController.goBack()
+    fun goForward(): PanelPath? = focusedController.goForward()
     fun goUp(): String? = focusedController.goUp()
     fun isAtVaultRoot(): Boolean = focusedController.isAtVaultRoot()
     fun navigateToHistoryDir(entry: HistoryEntry) = focusedController.navigateToHistoryDir(entry)
@@ -2896,7 +2953,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 "$proto://${config.host}:${config.port}${panel.webDavCurrentPath}"
             } ?: panel.webDavCurrentPath
         } else {
-            panel.path
+            panel.path.displayPath
         }
     }
     val currentNavState: PanelNavState get() = currentPanel.navState
@@ -2904,10 +2961,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     // ── 滚动位置保存（按路径+面板记忆，内存中，应用关闭自动清空） ──
     private val scrollPositions = HashMap<String, Pair<Int, Int>>()
 
-    /** 生成面板感知的 key: "L:/path" 或 "R:/path" */
-    private fun scrollKey(panel: FilePaneController.VmPanelState, path: String): String {
+    /** 生成面板感知的 key: "L:fs:/path" 或 "R:archive:/path" */
+    private fun scrollKey(panel: FilePaneController.VmPanelState, path: PanelPath): String {
         val side = if (panel === 左) "L" else "R"
-        return "$side:$path"
+        return "$side:${path.scrollKey}"
     }
 
     /** 保存当前聚焦面板的滚动位置 */
@@ -2917,11 +2974,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 读取指定路径的滚动位置 */
-    fun getScrollPosition(path: String, panel: FilePaneController.VmPanelState = currentPanel): Pair<Int, Int>? =
+    fun getScrollPosition(path: PanelPath, panel: FilePaneController.VmPanelState = currentPanel): Pair<Int, Int>? =
         scrollPositions[scrollKey(panel, path)]
 
     /** 清空指定路径的滚动位置（前进导航时使用，确保目标从第一行开始） */
-    fun clearScrollPosition(path: String, panel: FilePaneController.VmPanelState = currentPanel) {
+    fun clearScrollPosition(path: PanelPath, panel: FilePaneController.VmPanelState = currentPanel) {
         scrollPositions.remove(scrollKey(panel, path))
     }
 
@@ -3021,7 +3078,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         ctrl.vaultSession?.dispose()
         ctrl.vaultSession = null
         val panel = ctrl.state
-        panel.path = safeDefault
+        panel.path = PanelPath.FileSystem(safeDefault, effectiveRoot = if (isRootEngine) "/" else safeDefault)
         panel.entries = listOf()
         cleanupVaultTempFiles()
     }
@@ -3364,8 +3421,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (panel.isInRecycleBin) {
             panel.entries = focusedController.listRecycleBinDir(java.io.File(recycleBinPath))
         } else {
-            loadDirectory(左.path, panel = 左, isRefresh = true)
-            loadDirectory(右.path, panel = 右, isRefresh = true)
+            val lp = 左.path; loadDirectory(lp.fileSystemPath, panel = 左, isRefresh = true, panelPath = lp)
+            val rp = 右.path; loadDirectory(rp.fileSystemPath, panel = 右, isRefresh = true, panelPath = rp)
         }
     }
 
@@ -3376,8 +3433,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         if (panel.isInRecycleBin) {
             panel.entries = focusedController.listRecycleBinDir(java.io.File(recycleBinPath))
         } else {
-            loadDirectory(左.path, panel = 左, isRefresh = true)
-            loadDirectory(右.path, panel = 右, isRefresh = true)
+            val lp = 左.path; loadDirectory(lp.fileSystemPath, panel = 左, isRefresh = true, panelPath = lp)
+            val rp = 右.path; loadDirectory(rp.fileSystemPath, panel = 右, isRefresh = true, panelPath = rp)
         }
     }
 
@@ -3641,18 +3698,29 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val focused = currentPanel
         val other = otherPanel
 
-        // 聚焦面板：必刷
         refreshPanel(focused)
 
-        // 非聚焦面板：仅当在压缩包所在目录（即聚焦目录）或解压目录时刷新
-        if (other.path == focused.path || other.path == outputDir) {
+        if (other.path.fileSystemPath == focused.path.fileSystemPath || other.path.fileSystemPath == outputDir) {
             refreshPanel(other)
         }
     }
 
     private fun refreshPanel(panel: FilePaneController.VmPanelState) {
-        panel.entries = listDirectory(panel.path)
-        loadExtFlagsForDir(panel.path, panel = panel)
+        when (val p = panel.path) {
+            is PanelPath.Archive -> {
+                panel.archiveSession?.let { session ->
+                    panel.entries = session.currentEntries
+                }
+            }
+            is PanelPath.FileSystem -> {
+                panel.entries = listDirectory(p.path)
+                loadExtFlagsForDir(p.path, panel = panel)
+            }
+            is PanelPath.Vault -> {
+                panel.entries = listDirectory(p.path)
+                loadExtFlagsForDir(p.path, panel = panel)
+            }
+        }
     }
 
     /** 递归展开目录树，获取扁平的文件大小列表（顺序与 7zzs l 一致） */
@@ -3682,7 +3750,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val panel = currentPanel
         return try {
             val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
-            val currentPathVal = panel.path
+            val currentPathVal = panel.path.fileSystemPath
             val currentEntriesVal = panel.entries
 
             val result = ArchiveBrowser.openArchive(

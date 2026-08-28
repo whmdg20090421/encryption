@@ -185,14 +185,14 @@ data class BookmarkEntry(
  * 面板导航历史状态（不可变，每次操作返回新实例）
  */
 data class PanelNavState(
-    val paths: List<String> = emptyList(),
+    val paths: List<PanelPath> = emptyList(),
     val index: Int = -1
 ) {
     val canGoBack: Boolean get() = index > 0
     val canGoForward: Boolean get() = index < paths.size - 1
 
     /** 访问新目录：截断前进历史，追加路径并前进到末尾 */
-    fun navigate(path: String): PanelNavState {
+    fun navigate(path: PanelPath): PanelNavState {
         val newPaths = if (index < paths.size - 1) {
             paths.take(index + 1) + path
         } else {
@@ -207,7 +207,7 @@ data class PanelNavState(
     /** 前进一步 */
     fun forward(): PanelNavState? = if (canGoForward) copy(index = index + 1) else null
 
-    val current: String get() = paths[index]
+    val current: PanelPath get() = paths[index]
 }
 
 /** 滑动选择 UI 状态（纯 Compose 交互状态，不存 ViewModel） */
@@ -508,16 +508,15 @@ fun FileManagerScreen(
             true
         } else {
             listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
-            val targetPath = vm.goUp()
-            if (targetPath != null) {
-                // 导航时清空当前面板的多选状态
+            val targetPanelPath = vm.goUp()
+            if (targetPanelPath != null) {
                 if (vm.focusedPanel == FocusedPanel.LEFT) {
                     vm.左.selectedPaths = emptySet(); swipeStates[0].selectFlag = 0; swipeStates[0].lastIndex = -1
                 } else {
                     vm.右.selectedPaths = emptySet(); swipeStates[1].selectFlag = 0; swipeStates[1].lastIndex = -1
                 }
-                val saved = vm.getScrollPosition(targetPath)
-                vm.navigateToWithScroll(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+                val saved = vm.getScrollPosition(targetPanelPath)
+                vm.navigateToWithScroll(targetPanelPath, saved?.first ?: 0, saved?.second ?: 0)
                 true
             } else {
                 false
@@ -790,7 +789,7 @@ fun FileManagerScreen(
                                         Toast.makeText(context, "当前列表没有文件夹", Toast.LENGTH_SHORT).show()
                                     } else {
                                         val parentPath = vm.currentPanel.path
-                                        vm.calculateFolderSizeAsync(parentPath)
+                                        vm.calculateFolderSizeAsync(parentPath.fileSystemPath)
                                     }
                                 }
                             )
@@ -876,7 +875,7 @@ fun FileManagerScreen(
                         ) {
                             IconButton(
                                 onClick = {
-                                    if (vm.isInArchiveMode) {
+                                    if (vm.currentPanel.path is PanelPath.Archive) {
                                         vm.archiveGoUp()
                                     } else if (vm.isWebDavMode) {
                                         vm.webDavGoBack()
@@ -902,10 +901,10 @@ fun FileManagerScreen(
                         ) {
                             IconButton(
                                 onClick = {
-                                    val targetPath = vm.goForward()
-                                    if (targetPath != null) {
-                                        val saved = vm.getScrollPosition(targetPath)
-                                        vm.currentPanel.pendingScrollTo = Triple(targetPath, saved?.first ?: 0, saved?.second ?: 0)
+                                    val targetPanelPath = vm.goForward()
+                                    if (targetPanelPath != null) {
+                                        val saved = vm.getScrollPosition(targetPanelPath)
+                                        vm.currentPanel.pendingScrollTo = Triple(targetPanelPath.displayPath, saved?.first ?: 0, saved?.second ?: 0)
                                     }
                                 },
                                 enabled = !vm.isInArchiveMode && vm.currentNavState.canGoForward
@@ -957,29 +956,15 @@ fun FileManagerScreen(
                             val canGoUp = if (vm.panels.isCloudMode) {
                                 val cloudPath = vm.panels.cloud?.state?.currentPath ?: "/"
                                 cloudPath != "/"
-                            } else if (vm.isInArchiveMode) {
-                                !vm.isAtArchiveRoot()
-                            } else if (vm.recycleBinPanel == vm.focusedPanel) {
-                                !vm.isAtRecycleBinRoot
-                            } else if (vm.isVaultMode) {
-                                val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                                val parentPath = vm.currentPath.substringBeforeLast('/').ifEmpty { "/" }
-                                vm.currentPath != effectiveRoot
-                                    && vm.currentPath.contains('/')
-                                    && parentPath != vm.currentPath
                             } else {
-                                val effectiveRoot = if (vm.isRootEngine) "/" else "/storage/emulated/0"
-                                val parentPath = vm.currentPath.substringBeforeLast('/').ifEmpty { "/" }
-                                vm.currentPath != effectiveRoot
-                                    && vm.currentPath.contains('/')
-                                    && parentPath != vm.currentPath
+                                vm.currentPanel.path.goUp() != null
                             }
 
                             IconButton(
                                 onClick = {
                                     if (vm.panels.isCloudMode) {
                                         vm.panels.cloud?.goUp()
-                                    } else if (vm.isInArchiveMode) {
+                                    } else if (vm.currentPanel.path is PanelPath.Archive) {
                                         vm.archiveGoUp()
                                     } else {
                                         saveScrollAndGoUp()
@@ -1194,15 +1179,10 @@ fun FileManagerScreen(
                         } else {
                             val panel = vm.panels[side.panelId].state
                             computeParentPath(
-                                currentPath = panel.path,
-                                isInArchiveMode = panel.isInArchiveMode,
-                                isAtArchiveRoot = { vm.isAtArchiveRoot() },
+                                panelPath = panel.path,
                                 isRecycleBinPanel = vm.recycleBinPanel == side,
                                 isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
-                                recycleBinPath = panel.recycleBinPath,
-                                isRootEngine = vm.isRootEngine,
-                                isVaultMode = vm.isVaultMode,
-                                vaultRootPath = vm.vaultSession?.vaultDir?.absolutePath
+                                recycleBinPath = panel.recycleBinPath
                             )
                         }
                     }
@@ -1261,12 +1241,12 @@ fun FileManagerScreen(
                                 FileBrowserPanel(
                                     entries = rightPanel.entries,
                                     isFocused = vm.focusedPanel == FocusedPanel.RIGHT,
-                                    currentPath = rightPanel.path,
+                                    currentPath = rightPanel.path.displayPath,
                                     isLeftPanel = false,
                                     onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
                                     onFolderClick = { entry ->
                                         vm.focusedPanel = FocusedPanel.RIGHT
-                                        if (rightPanel.isInArchiveMode) {
+                                        if (rightPanel.path is PanelPath.Archive) {
                                             vm.navigateInArchive(entry)
                                         } else if (vm.recycleBinPanel == vm.focusedPanel) {
                                             vm.navigateInRecycleBin(entry)
@@ -1295,7 +1275,11 @@ fun FileManagerScreen(
                                     lazyListState = listStates[1],
                                     onNavigateUp = {
                                         vm.focusedPanel = FocusedPanel.RIGHT
-                                        saveScrollAndGoUp()
+                                        if (rightPanel.path is PanelPath.Archive) {
+                                            vm.archiveGoUp()
+                                        } else {
+                                            saveScrollAndGoUp()
+                                        }
                                     },
                                     archiveSizeProvider = null,
                                     onVisibleRangeChanged = null,
@@ -1313,18 +1297,18 @@ fun FileManagerScreen(
                                 FileBrowserPanel(
                                     entries = panel.entries,
                                     isFocused = vm.focusedPanel == side,
-                                    currentPath = panel.path,
+                                    currentPath = panel.path.displayPath,
                                     isLeftPanel = side == FocusedPanel.LEFT,
                                     onFocus = { vm.focusedPanel = side },
                                     onFolderClick = { entry ->
                                         vm.focusedPanel = side
-                                        if (panel.isInArchiveMode) {
+                                        if (panel.path is PanelPath.Archive) {
                                             vm.navigateInArchive(entry)
                                         } else if (vm.recycleBinPanel == vm.focusedPanel) {
                                             vm.navigateInRecycleBin(entry)
                                         } else {
                                             DiagnosticLog.beginSession("[$side] 点击文件夹 '${entry.name}'")
-                                            DiagnosticLog.log("FileMgr", "[$side] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${panel.path}")
+                                            DiagnosticLog.log("FileMgr", "[$side] 点击文件夹 name='${entry.name}' path='${entry.path}' from=${panel.path.displayPath}")
                                             listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
                                             if (panel.isWebDavMode) {
                                                 vm.navigateToWebDavFolder(entry.name)
@@ -1335,7 +1319,7 @@ fun FileManagerScreen(
                                         }
                                     },
                                     onFileClick = { entry ->
-                                        if (panel.isInArchiveMode) {
+                                        if (panel.path is PanelPath.Archive) {
                                             DiagnosticLog.beginSession("[$side] 压缩包内点击文件 '${entry.name}'")
                                             DiagnosticLog.log("FileMgr", "[$side] 压缩包内文件 name='${entry.name}'")
                                             vm.focusedPanel = side
@@ -1363,9 +1347,13 @@ fun FileManagerScreen(
                                     lazyListState = listStates[idx],
                                     onNavigateUp = {
                                         vm.focusedPanel = side
-                                        saveScrollAndGoUp()
+                                        if (panel.path is PanelPath.Archive) {
+                                            vm.archiveGoUp()
+                                        } else {
+                                            saveScrollAndGoUp()
+                                        }
                                     },
-                                    archiveSizeProvider = if (panel.isInArchiveMode) { entry ->
+                                    archiveSizeProvider = if (panel.path is PanelPath.Archive) { entry ->
                                         if (entry.compressedSize > 0 || entry.size > 0)
                                             "${compactSize(entry.compressedSize)}(${compactSize(entry.size)})"
                                         else "--"
@@ -3276,7 +3264,7 @@ fun FileManagerScreen(
                     val parentPath = vm.goUp()
                     vm.exitVaultMode()
                     if (parentPath != null) {
-                        vm.navigateTo(parentPath)
+                        vm.navigateTo(parentPath.fileSystemPath)
                     }
                 }) { Text("确认") }
             },
@@ -3859,10 +3847,10 @@ fun FileManagerScreen(
 
                                         showPermissionEditor = false
                                         listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
-                                        val targetPath = vm.currentPanel.path
-                                        val saved = vm.getScrollPosition(targetPath)
+                                        val targetPanelPath = vm.currentPanel.path
+                                        val saved = vm.getScrollPosition(targetPanelPath)
                                         vm.refreshCurrent()
-                                        if (saved != null) vm.currentPanel.pendingScrollTo = Triple(targetPath, saved.first, saved.second)
+                                        if (saved != null) vm.currentPanel.pendingScrollTo = Triple(targetPanelPath.displayPath, saved.first, saved.second)
 
                                         // 后台验证
                                         val failed = withContext(Dispatchers.IO) {
@@ -4314,7 +4302,7 @@ fun FileManagerScreen(
                 TextButton(onClick = {
                     showSortSizeRefreshDialog = false
                     val parentPath = vm.currentPanel.path
-                    vm.calculateFolderSizeAsync(parentPath)
+                    vm.calculateFolderSizeAsync(parentPath.fileSystemPath)
                     // 统计完成后由 refreshCurrent 触发列表刷新，但排序字段需在此立即应用
                     vm.updateSortField(tempSortField)
                     vm.updateSortOrder(tempSortOrder)
@@ -4790,7 +4778,7 @@ fun FileManagerScreen(
         val firstEntry = extractTargetEntries.first()
         val archiveParent = firstEntry.path.substringBeforeLast('/')
         val strippedName = ArchiveBrowser.stripArchiveExtension(firstEntry.name)
-        val currentDir = vm.currentPanel.path
+        val currentDir = vm.currentPanel.path.fileSystemPath
 
         var extractMode by remember { mutableStateOf(0) }  // 0=压缩包所在文件夹, 1=当前文件夹
 
@@ -5130,39 +5118,20 @@ fun FileManagerScreen(
     }
 }
 
-/** 计算指定面板的"返回上一级"路径，null 表示不显示。纯路径判断，与焦点无关。 */
+/** 计算指定面板的"返回上一级"路径，null 表示不显示。 */
 private fun computeParentPath(
-    currentPath: String,
-    isInArchiveMode: Boolean,
-    isAtArchiveRoot: () -> Boolean,
+    panelPath: PanelPath,
     isRecycleBinPanel: Boolean,
     isAtRecycleBinRoot: Boolean,
-    recycleBinPath: String,
-    isRootEngine: Boolean,
-    isVaultMode: Boolean = false,
-    vaultRootPath: String? = null
+    recycleBinPath: String
 ): String? {
-    if (isInArchiveMode) {
-        return if (isAtArchiveRoot()) null else "__archive_parent__"
-    }
     if (isRecycleBinPanel) {
         if (isAtRecycleBinRoot) return null
         return java.io.File(recycleBinPath).parentFile?.absolutePath?.let { p ->
             if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
         }
     }
-    if (isVaultMode && vaultRootPath != null) {
-        return currentPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-            if (p != currentPath) p else null
-        }
-    }
-    val effectiveRoot = if (isRootEngine) "/" else "/storage/emulated/0"
-    if (currentPath != effectiveRoot && currentPath.contains('/')) {
-        return currentPath.substringBeforeLast('/').ifEmpty { "/" }.let { p ->
-            if (p != currentPath) p else null
-        }
-    }
-    return null
+    return panelPath.goUp()?.displayPath
 }
 
 @Composable
