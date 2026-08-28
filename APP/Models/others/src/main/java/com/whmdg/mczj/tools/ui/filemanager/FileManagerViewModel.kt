@@ -573,6 +573,39 @@ class FilePaneController(
     }
 
     /**
+     * 自然排序比较器：逐字符比较，连续数字按数值大小排序。
+     * file2 < file10，而不是字典序的 file10 < file2。
+     */
+    private fun naturalCompare(a: String, b: String): Int {
+        var i = 0
+        var j = 0
+        while (i < a.length && j < b.length) {
+            val ca = a[i]
+            val cb = b[j]
+            if (ca.isDigit() && cb.isDigit()) {
+                var numA = 0L
+                while (i < a.length && a[i].isDigit()) {
+                    numA = numA * 10 + (a[i] - '0')
+                    i++
+                }
+                var numB = 0L
+                while (j < b.length && b[j].isDigit()) {
+                    numB = numB * 10 + (b[j] - '0')
+                    j++
+                }
+                val cmp = numA.compareTo(numB)
+                if (cmp != 0) return cmp
+            } else {
+                val cmp = ca.compareTo(cb, ignoreCase = true)
+                if (cmp != 0) return cmp
+                i++
+                j++
+            }
+        }
+        return a.length.compareTo(b.length)
+    }
+
+    /**
      * 对 FileEntry 列表执行排序（directories first + 当前排序字段）。
      * 复用 listDirectory() 的排序逻辑。
      */
@@ -603,10 +636,13 @@ class FilePaneController(
         } else filtered
 
         return when (sortField()) {
-            SortField.NAME -> if (sortOrder() == SortOrder.ASC)
-                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenBy { it.name.lowercase() })
-            else
-                withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenByDescending { it.name.lowercase() })
+            SortField.NAME -> {
+                val nameComparator = Comparator<FileEntry> { a, b -> naturalCompare(a.name.lowercase(), b.name.lowercase()) }
+                if (sortOrder() == SortOrder.ASC)
+                    withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenWith(nameComparator))
+                else
+                    withCreationTime.sortedWith(compareByDescending<FileEntry> { it.isDirectory }.thenWith(nameComparator.reversed()))
+            }
             SortField.SIZE -> {
                 fun effectiveSize(entry: FileEntry): Long {
                     if (!entry.isDirectory) return entry.size
