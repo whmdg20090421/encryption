@@ -26,6 +26,7 @@ import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.ArchiveBrowser
 import com.whmdg.mczj.tools.util.CompressService
+import com.whmdg.mczj.tools.util.CompressPreviewCache
 import com.whmdg.mczj.tools.util.SevenZipCommand
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.FileAccessLevel
@@ -199,7 +200,7 @@ class FilePaneController(
             internal set
         var archiveDebugInfo by mutableStateOf<ArchiveBrowser.ArchiveDebugInfo?>(null)
             internal set
-        var archiveOpenError by mutableStateOf<Pair<String, String>?>(null)
+        var archiveOpenError by mutableStateOf<com.whmdg.mczj.tools.ui.MessageDialogData?>(null)
             internal set
 
         // ── WebDAV ──
@@ -1704,17 +1705,22 @@ class FilePaneController(
                 val currentPathVal = panel.path.fileSystemPath
                 val currentEntriesVal = panel.entries
 
-                val passwordCheck = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
+                val passwordCheckResult = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
 
-                if (passwordCheck == null) {
+                if (passwordCheckResult.needsPassword == null) {
                     // exitCode≠0 且未检测到加密标志 → 档案本身有问题
                     withContext(Dispatchers.Main) {
-                        panel.archiveOpenError = Pair(entry.name, "该压缩包无法读取，可能已损坏或格式不受支持。")
+                        panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
+                            title = "无法打开压缩包",
+                            command = passwordCheckResult.command,
+                            output = passwordCheckResult.output,
+                            errorMessage = passwordCheckResult.errorMessage.ifEmpty { "该压缩包无法读取，可能已损坏或格式不受支持。" }
+                        )
                     }
                     return@launch
                 }
 
-                if (passwordCheck == true) {
+                if (passwordCheckResult.needsPassword == true) {
                     // Encrypted = + → 需要密码
                     withContext(Dispatchers.Main) { panel.archivePasswordRequest = entry }
                     return@launch
@@ -1737,13 +1743,19 @@ class FilePaneController(
                             enterArchiveMode(session)
                         },
                         onFailure = { error ->
-                            panel.archiveOpenError = Pair(entry.name, "打开压缩包失败: ${error.message}")
+                            panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
+                                title = "打开压缩包失败",
+                                errorMessage = error.message ?: "未知错误"
+                            )
                         }
                     )
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    panel.archiveOpenError = Pair(entry.name, "打开压缩包异常: ${e.message}")
+                    panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
+                        title = "打开压缩包异常",
+                        errorMessage = e.message ?: "未知异常"
+                    )
                 }
             }
         }
@@ -2743,7 +2755,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     val archiveSession: ArchiveBrowser.ArchiveSession? get() = currentPanel.archiveSession
     val archivePasswordRequest: FileEntry? get() = currentPanel.archivePasswordRequest
     val archiveDebugInfo: ArchiveBrowser.ArchiveDebugInfo? get() = currentPanel.archiveDebugInfo
-    val archiveOpenError: Pair<String, String>? get() = currentPanel.archiveOpenError
+    val archiveOpenError: com.whmdg.mczj.tools.ui.MessageDialogData? get() = currentPanel.archiveOpenError
     /** 压缩包密码缓存：archivePath → password（仅内存，进程退出即清除） */
     private val archivePasswordCache = mutableMapOf<String, String>()
 
@@ -3841,28 +3853,76 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      * 供 FileManagerScreen 的 onFileClick 在 isInArchiveMode 时调用。
      * @return 提取成功后对应的 Screen，失败返回 null（由调用方 Toast 提示）
      */
-    suspend fun openArchiveFile(context: Context, entry: FileEntry): Boolean {
-        val session = archiveSession ?: return false
+    suspend fun openArchiveFile(context: Context, entry: FileEntry): ArchiveBrowser.ExtractResult {
+        val session = archiveSession ?: return ArchiveBrowser.ExtractResult(
+            success = false,
+            errorMessage = "压缩包会话不存在"
+        )
         // 构建压缩包内相对路径
         val subPath = session.currentPath.removePrefix(session.archivePath).removePrefix("/")
         val relativePath = if (subPath.isEmpty()) entry.name else "$subPath/${entry.name}"
         val password = archivePasswordCache[session.archivePath] ?: ""
-        val outputDir = java.io.File(context.externalCacheDir, "archive_preview")
+
+        // 清理过期缓存（在打开任意压缩包时调用）
+        CompressPreviewCache.cleanExpiredCaches(context)
+
+        // 获取压缩包的元数据
+        val archiveFile = java.io.File(session.archivePath)
+        val lastModified = archiveFile.lastModified()
+        val fileSize = archiveFile.length()
+
+        // 检查缓存是否命中
+        val cacheResult = CompressPreviewCache.checkCacheHit(
+            context = context,
+            archivePath = session.archivePath,
+            lastModified = lastModified,
+            fileSize = fileSize,
+            relativePaths = listOf(relativePath)
+        )
+
+        if (cacheResult.hit && cacheResult.cacheDir != null && cacheResult.filesToExtract == null) {
+            // 缓存完全命中，直接使用缓存
+            val cachedFile = java.io.File(cacheResult.cacheDir, relativePath)
+            DiagnosticLog.log("OpenFile", "缓存命中，直接使用: ${cachedFile.absolutePath}")
+            val tempEntry = entry.copy(path = cachedFile.absolutePath, name = cachedFile.name)
+            openFile(context, tempEntry)
+            return ArchiveBrowser.ExtractResult(
+                success = true,
+                file = cachedFile,
+                command = "(缓存命中)",
+                output = "使用缓存文件"
+            )
+        }
+
+        // 缓存未完全命中，需要解压文件
+        val outputDir = cacheResult.cacheDir ?: CompressPreviewCache.getArchiveCacheDir(context, session.archivePath)
+        if (!outputDir.exists()) {
+            outputDir.mkdirs()
+        }
 
         DiagnosticLog.log("OpenFile", "压缩包内提取: $relativePath")
-        val extracted = ArchiveBrowser.extractSingleFile(
+        val result = ArchiveBrowser.extractSingleFile(
             context, session.archivePath, relativePath,
             outputDir.absolutePath, password, permissionLevel
         )
-        if (extracted == null) {
-            DiagnosticLog.log("OpenFile", "提取失败: $relativePath")
-            return false
+        if (!result.success) {
+            DiagnosticLog.log("OpenFile", "提取失败: $relativePath, 错误: ${result.errorMessage}")
+            return result
         }
-        DiagnosticLog.log("OpenFile", "提取成功: ${extracted.absolutePath}")
+
+        // 更新缓存记录
+        CompressPreviewCache.updateRecord(
+            context = context,
+            archivePath = session.archivePath,
+            lastModified = lastModified,
+            fileSize = fileSize
+        )
+
+        DiagnosticLog.log("OpenFile", "提取成功: ${result.file?.absolutePath}")
         // 用提取后的临时文件构建 FileEntry，复用 openFile 的类型判断
-        val tempEntry = entry.copy(path = extracted.absolutePath, name = extracted.name)
+        val tempEntry = entry.copy(path = result.file!!.absolutePath, name = result.file.name)
         openFile(context, tempEntry)
-        return true
+        return result
     }
 
 

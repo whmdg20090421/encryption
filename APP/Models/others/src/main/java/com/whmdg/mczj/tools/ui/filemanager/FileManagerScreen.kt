@@ -307,6 +307,8 @@ fun FileManagerScreen(
     var showCloudDeleteDialog by remember { mutableStateOf(false) }
     var cloudDeleteTarget by remember { mutableStateOf<CloudPaneController.CloudFileEntry?>(null) }
     var cloudDeleteMode by remember { mutableIntStateOf(0) } // 0=全部, 1=仅本地, 2=仅云端
+    // ── 消息弹窗状态 ──
+    var messageDialogData by remember { mutableStateOf<com.whmdg.mczj.tools.ui.MessageDialogData?>(null) }
     // ── 多选状态（按面板索引：0=左, 1=右） ──
     val swipeStates = listOf(remember { SwipeUiState() }, remember { SwipeUiState() })
     val sortAscLabels = mapOf(
@@ -1324,9 +1326,14 @@ fun FileManagerScreen(
                                             DiagnosticLog.log("FileMgr", "[$side] 压缩包内文件 name='${entry.name}'")
                                             vm.focusedPanel = side
                                             coroutineScope.launch {
-                                                val success = vm.openArchiveFile(context, entry)
-                                                if (!success) {
-                                                    Toast.makeText(context, "文件提取失败", Toast.LENGTH_SHORT).show()
+                                                val result = vm.openArchiveFile(context, entry)
+                                                if (!result.success) {
+                                                    messageDialogData = com.whmdg.mczj.tools.ui.MessageDialogData(
+                                                        title = "文件提取失败",
+                                                        command = result.command,
+                                                        output = result.output,
+                                                        errorMessage = result.errorMessage
+                                                    )
                                                 }
                                             }
                                             return@FileBrowserPanel
@@ -2945,16 +2952,10 @@ fun FileManagerScreen(
     }
 
     // ── 压缩包打开错误弹窗 ──
-    vm.archiveOpenError?.let { (fileName, message) ->
-        StandardDialog(
-            onDismissRequest = { vm.currentPanel.archiveOpenError = null },
-            title = { Text("无法打开压缩包") },
-            text = { Text(message) },
-            confirmButton = {
-                TextButton(onClick = { vm.currentPanel.archiveOpenError = null }) {
-                    Text("确定")
-                }
-            }
+    vm.archiveOpenError?.let { errorData ->
+        com.whmdg.mczj.tools.ui.MessageDialog(
+            data = errorData,
+            onDismiss = { vm.currentPanel.archiveOpenError = null }
         )
     }
 
@@ -5102,6 +5103,14 @@ fun FileManagerScreen(
         ErrorDialog(
             error = extractError,
             onDismiss = { extractError = null }
+        )
+    }
+
+    // ── 消息弹窗 ──
+    if (messageDialogData != null) {
+        com.whmdg.mczj.tools.ui.MessageDialog(
+            data = messageDialogData!!,
+            onDismiss = { messageDialogData = null }
         )
     }
 

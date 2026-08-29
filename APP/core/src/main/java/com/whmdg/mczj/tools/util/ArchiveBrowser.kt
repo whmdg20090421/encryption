@@ -44,10 +44,25 @@ object ArchiveBrowser {
     }
 
     /**
+     * 密码检测结果数据类
+     */
+    data class PasswordCheckResult(
+        val needsPassword: Boolean?,
+        val command: String = "",
+        val output: String = "",
+        val errorMessage: String = ""
+    ) {
+        companion object {
+            fun needsPassword() = PasswordCheckResult(needsPassword = true)
+            fun noPassword() = PasswordCheckResult(needsPassword = false)
+        }
+    }
+
+    /**
      * 探测压缩包是否需要密码。
      * 通过 `7zzs l -slt -p"dummy"` 假密码探测，不会阻塞在 stdin。
      *
-     * 返回值：
+     * 返回 PasswordCheckResult，其中 needsPassword 字段：
      * - true  → 需要密码（仅内容加密或头部加密）
      * - false → 不需要密码（无加密）
      * - null  → 文件损坏
@@ -56,17 +71,22 @@ object ArchiveBrowser {
         context: Context,
         archivePath: String,
         permissionLevel: String
-    ): Boolean? = withContext(Dispatchers.IO) {
+    ): PasswordCheckResult = withContext(Dispatchers.IO) {
         val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
         val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
         val (output, exitCode) = run7zs(cmd)
         Log.d(TAG, "密码检测: exitCode=$exitCode, output=${output.take(200)}")
         when {
-            exitCode == 0 && (output.contains("7zAES", ignoreCase = true) || output.contains("Encrypted = +")) -> true
-            exitCode == 0 -> false
-            output.contains("Cannot open encrypted archive", ignoreCase = true) -> true
-            output.contains("Cannot open the file as", ignoreCase = true) -> null
-            else -> null
+            exitCode == 0 && (output.contains("7zAES", ignoreCase = true) || output.contains("Encrypted = +")) ->
+                PasswordCheckResult(needsPassword = true, command = cmd, output = output)
+            exitCode == 0 ->
+                PasswordCheckResult(needsPassword = false, command = cmd, output = output)
+            output.contains("Cannot open encrypted archive", ignoreCase = true) ->
+                PasswordCheckResult(needsPassword = true, command = cmd, output = output, errorMessage = "头部加密，需要密码才能查看文件列表")
+            output.contains("Cannot open the file as", ignoreCase = true) ->
+                PasswordCheckResult(needsPassword = null, command = cmd, output = output, errorMessage = "文件损坏，无法识别为压缩格式")
+            else ->
+                PasswordCheckResult(needsPassword = null, command = cmd, output = output, errorMessage = "未知错误 (exitCode=$exitCode)")
         }
     }
 
@@ -580,13 +600,24 @@ object ArchiveBrowser {
     }
 
     /**
+     * 提取结果数据类
+     */
+    data class ExtractResult(
+        val success: Boolean,
+        val file: File? = null,
+        val command: String = "",
+        val output: String = "",
+        val errorMessage: String = ""
+    )
+
+    /**
      * 从压缩包中提取单个文件到指定目录。
      * @param archivePath 压缩包路径
      * @param fileName 压缩包内相对路径，如 "docs/readme.txt"
      * @param outputDir 输出目录
      * @param password 密码（空=不带密码）
      * @param permissionLevel 执行权限级别
-     * @return 提取后的文件，失败返回 null
+     * @return 提取结果，包含成功状态、文件、命令、输出和错误信息
      */
     suspend fun extractSingleFile(
         context: Context,
@@ -595,7 +626,7 @@ object ArchiveBrowser {
         outputDir: String,
         password: String = "",
         permissionLevel: String = "NORMAL"
-    ): File? = withContext(Dispatchers.IO) {
+    ): ExtractResult = withContext(Dispatchers.IO) {
         try {
             val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
             val cmd = SevenZipCommand.buildExtractSingleCommand(
@@ -605,14 +636,31 @@ object ArchiveBrowser {
             val (output, exitCode) = run7zs(cmd)
             if (exitCode != 0) {
                 Log.w(TAG, "提取失败 exitCode=$exitCode output=$output")
-                return@withContext null
+                return@withContext ExtractResult(
+                    success = false,
+                    command = cmd,
+                    output = output,
+                    errorMessage = "退出码: $exitCode"
+                )
             }
             // 保留目录结构：outputDir/fileName
             val outputFile = File(outputDir, fileName)
-            if (outputFile.exists()) outputFile else null
+            if (outputFile.exists()) {
+                ExtractResult(success = true, file = outputFile, command = cmd, output = output)
+            } else {
+                ExtractResult(
+                    success = false,
+                    command = cmd,
+                    output = output,
+                    errorMessage = "文件提取后未找到: ${outputFile.absolutePath}"
+                )
+            }
         } catch (e: Exception) {
             Log.e(TAG, "提取单文件异常", e)
-            null
+            ExtractResult(
+                success = false,
+                errorMessage = "异常: ${e.javaClass.simpleName}: ${e.message}"
+            )
         }
     }
 
