@@ -254,20 +254,17 @@ object P7zipClient {
         val fullCmd = when (permission) {
             Permission.ROOT -> "su -c \"$daemonCmd\""
             Permission.ADB -> {
-                // Shizuku 转发
                 val shizukuService = ShizukuAuthorizer.getShellService()
-                if (shizukuService != null) {
-                    // 通过 Shizuku 执行
-                    daemonCmd
-                } else {
-                    daemonCmd
-                }
+                if (shizukuService != null) daemonCmd else daemonCmd
             }
             else -> daemonCmd
         }
 
         Log.d(TAG, "启动 daemon: 权限=$permission")
         Log.d(TAG, "命令: $fullCmd")
+
+        // 清除旧端口文件，避免读取过期缓存
+        try { portFilePath.delete() } catch (_: Exception) {}
 
         // 启动进程
         val process = try {
@@ -277,10 +274,24 @@ object P7zipClient {
                 Runtime.getRuntime().exec(arrayOf("sh", "-c", daemonCmd))
             }
         } catch (e: Exception) {
-            throw RuntimeException("启动 P7zipDaemon 失败: ${e.message}", e)
+            throw RuntimeException("启动 P7zipDaemon 失败: ${e.message}\n命令: $fullCmd", e)
         }
 
         daemonProcess = process
+
+        // 立即异步读取 stderr/stdout，避免进程退出后丢失输出
+        val stderrBuf = StringBuilder()
+        val stdoutBuf = StringBuilder()
+        thread(isDaemon = true) {
+            try {
+                process.errorStream.bufferedReader(Charsets.UTF_8).forEachLine { stderrBuf.appendLine(it) }
+            } catch (_: Exception) {}
+        }
+        thread(isDaemon = true) {
+            try {
+                process.inputStream.bufferedReader(Charsets.UTF_8).forEachLine { stdoutBuf.appendLine(it) }
+            } catch (_: Exception) {}
+        }
 
         // 等待端口文件写入（daemon 启动后会写入端口号）
         var waited = 0L
@@ -291,7 +302,6 @@ object P7zipClient {
                 if (port != null) {
                     cachedPort = port
                     Log.d(TAG, "Daemon 已启动，端口: $port")
-                    // 持久化权限
                     persistPermission(permission)
                     return@withContext
                 }
@@ -300,10 +310,14 @@ object P7zipClient {
             waited += 100
         }
 
-        // 超时：读取进程输出诊断
-        val stderr = process.errorStream.bufferedReader().readText()
-        val stdout = process.inputStream.bufferedReader().readText()
-        throw RuntimeException("P7zipDaemon 启动超时。stdout=$stdout, stderr=$stderr")
+        // 超时：抛出包含完整诊断信息的异常
+        val stdout = stdoutBuf.toString().trim()
+        val stderr = stderrBuf.toString().trim()
+        throw RuntimeException(
+            "P7zipDaemon 启动超时\n权限=$permission\n命令: $fullCmd" +
+                (if (stdout.isNotEmpty()) "\n\nstdout:\n$stdout" else "") +
+                (if (stderr.isNotEmpty()) "\n\nstderr:\n$stderr" else "")
+        )
     }
 
     /**

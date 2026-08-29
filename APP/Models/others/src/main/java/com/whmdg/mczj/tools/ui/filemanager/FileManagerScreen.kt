@@ -2951,6 +2951,27 @@ fun FileManagerScreen(
         )
     }
 
+    // ── 压缩包加载中弹窗 ──
+    if (vm.archiveLoading) {
+        StandardDialog(
+            onDismissRequest = { },
+            title = { Text("正在打开压缩包") },
+            text = {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("正在加载...")
+                }
+            },
+            confirmButton = { },
+            dismissButton = { }
+        )
+    }
+
     // ── 压缩包打开错误弹窗 ──
     vm.archiveOpenError?.let { errorData ->
         com.whmdg.mczj.tools.ui.MessageDialog(

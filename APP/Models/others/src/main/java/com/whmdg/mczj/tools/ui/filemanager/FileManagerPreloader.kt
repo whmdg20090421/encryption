@@ -89,6 +89,13 @@ object FileManagerPreloader {
                 leftEntries = lEntries
                 rightPath = rHome
                 rightEntries = rEntries
+
+                // 预热 P7zipClient daemon，避免首次点击压缩包时等待启动
+                try {
+                    com.whmdg.mczj.tools.util.P7zipClient.ensureDaemonOrThrow()
+                } catch (e: Exception) {
+                    com.whmdg.mczj.tools.util.DiagnosticLog.log("FilePreload", "P7zipClient 预热失败: ${e.message}")
+                }
             } catch (e: Exception) {
                 // 预加载失败不影响正常使用
                 com.whmdg.mczj.tools.util.DiagnosticLog.log("FilePreload", "预加载失败: ${e.message}")

@@ -202,6 +202,8 @@ class FilePaneController(
             internal set
         var archiveOpenError by mutableStateOf<com.whmdg.mczj.tools.ui.MessageDialogData?>(null)
             internal set
+        var archiveLoading by mutableStateOf(false)
+            internal set
 
         // ── WebDAV ──
         var webDavClient by mutableStateOf<WebDavFileClient?>(null)
@@ -1700,6 +1702,7 @@ class FilePaneController(
     fun openArchive(entry: FileEntry) {
         val panel = state
         scope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) { panel.archiveLoading = true }
             try {
                 val permLevel = permissionLevel
                 val currentPathVal = panel.path.fileSystemPath
@@ -1708,7 +1711,6 @@ class FilePaneController(
                 val passwordCheckResult = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
 
                 if (passwordCheckResult.needsPassword == null) {
-                    // exitCode≠0 且未检测到加密标志 → 档案本身有问题
                     withContext(Dispatchers.Main) {
                         panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
                             title = "无法打开压缩包",
@@ -1716,13 +1718,16 @@ class FilePaneController(
                             command = passwordCheckResult.command,
                             output = passwordCheckResult.output
                         )
+                        panel.archiveLoading = false
                     }
                     return@launch
                 }
 
                 if (passwordCheckResult.needsPassword == true) {
-                    // Encrypted = + → 需要密码
-                    withContext(Dispatchers.Main) { panel.archivePasswordRequest = entry }
+                    withContext(Dispatchers.Main) {
+                        panel.archivePasswordRequest = entry
+                        panel.archiveLoading = false
+                    }
                     return@launch
                 }
 
@@ -1745,17 +1750,21 @@ class FilePaneController(
                         onFailure = { error ->
                             panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
                                 title = "打开压缩包失败",
-                                errorSummary = error.message ?: "未知错误"
+                                errorSummary = "无法读取压缩包内容",
+                                errorMessage = error.message ?: "未知错误"
                             )
                         }
                     )
+                    panel.archiveLoading = false
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
                         title = "打开压缩包异常",
-                        errorSummary = e.message ?: "未知异常"
+                        errorSummary = "压缩包操作失败",
+                        errorMessage = e.message ?: "未知异常"
                     )
+                    panel.archiveLoading = false
                 }
             }
         }
@@ -2756,6 +2765,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     val archivePasswordRequest: FileEntry? get() = currentPanel.archivePasswordRequest
     val archiveDebugInfo: ArchiveBrowser.ArchiveDebugInfo? get() = currentPanel.archiveDebugInfo
     val archiveOpenError: com.whmdg.mczj.tools.ui.MessageDialogData? get() = currentPanel.archiveOpenError
+    val archiveLoading: Boolean get() = currentPanel.archiveLoading
     /** 压缩包密码缓存：archivePath → password（仅内存，进程退出即清除） */
     private val archivePasswordCache = mutableMapOf<String, String>()
 
@@ -3838,7 +3848,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             )
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {
-                panel.loadError = RuntimeException("打开压缩包失败: ${e.message}")
+                panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
+                    title = "打开压缩包异常",
+                    errorSummary = "压缩包操作失败",
+                    errorMessage = e.message ?: "未知异常"
+                )
                 panel.archivePasswordRequest = null
             }
             false
