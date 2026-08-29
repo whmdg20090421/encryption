@@ -1129,7 +1129,6 @@ class FilePaneController(
     }
 
     fun navigateToHistoryDir(entry: HistoryEntry) {
-        addHistory(entry.name, entry.path, true)
         val panel = state
         val panelPath = PanelPath.FileSystem(entry.path, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
         if (hasShellEngine()) {
@@ -1141,7 +1140,6 @@ class FilePaneController(
     }
 
     fun navigateToHistoryFile(entry: HistoryEntry) {
-        addHistory(entry.name, entry.path, false)
         val file = File(entry.path)
         val parentDir = file.parentFile ?: return
         val panel = state
@@ -2921,8 +2919,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** String 便捷重载 */
     fun getScrollPosition(path: String, panel: FilePaneController.VmPanelState = currentPanel): Pair<Int, Int>? =
         focusedController.getScrollPosition(path)
-    fun navigateToHistoryDir(entry: HistoryEntry) = focusedController.navigateToHistoryDir(entry)
-    fun navigateToHistoryFile(entry: HistoryEntry) = focusedController.navigateToHistoryFile(entry)
+    fun navigateToHistoryDir(entry: HistoryEntry) {
+        addHistory(entry.name, entry.path, true)
+        focusedController.navigateToHistoryDir(entry)
+    }
+    fun navigateToHistoryFile(entry: HistoryEntry) {
+        addHistory(entry.name, entry.path, false)
+        focusedController.navigateToHistoryFile(entry)
+    }
     fun navigateToBookmark(bm: BookmarkEntry) = focusedController.navigateToBookmark(bm)
     fun navigateToWebDav(config: WebDavServerConfig) = focusedController.navigateToWebDav(config)
     fun navigateToWebDavFolder(name: String) = focusedController.navigateToWebDavFolder(name)
