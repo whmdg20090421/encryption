@@ -499,7 +499,7 @@ object ArchiveBrowser {
             ArchiveDebugInfo(
                 archivePath = archivePath, archiveName = archiveName,
                 passwordRequired = passwordRequired,
-                listCommand = listCmd, listExitCode = exitCode,
+                listCommand = "P7zipClient.listArchive", listExitCode = 0,
                 listStdout = listOutput, listStderr = "",
                 parsedEntryCount = entries.size, rootEntries = rootEntries,
                 session = session
@@ -795,15 +795,8 @@ object ArchiveBrowser {
         return try {
             val zipFile = java.util.zip.ZipFile(archivePath, Charsets.UTF_8)
             zipFile.use { zf ->
-                // 遍历所有条目，用解码后的名称匹配
-                val entry = zf.entries().asSequence().find { entry ->
-                    val decodedName = ZipEncodingDetector.decodeFilename(
-                        entry.name.toByteArray(Charsets.UTF_8),
-                        entry.extra?.let { false } ?: false
-                    ) || entry.name == fileName
-                    // ZipFile.getName() 已经用 JVM charset 解码，直接比较
-                    entry.name == fileName
-                }
+                // ZipFile.getName() 已经用 JVM charset 解码，直接比较
+                val entry = zf.entries().asSequence().find { it.name == fileName }
 
                 if (entry == null) {
                     // 回退：尝试用原始字节匹配（处理编码不一致的情况）
