@@ -329,7 +329,8 @@ object ArchiveBrowser {
             val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
 
             // 1. 密码检测
-            val passwordRequired = checkPasswordRequired(context, archivePath, permissionLevel) == true
+            val passwordCheckResult = checkPasswordRequired(context, archivePath, permissionLevel)
+            val passwordRequired = passwordCheckResult.needsPassword == true
 
             // 2. 需要密码时跳过列表命令（无密码会导致 7zzs 阻塞在 stdin 等待输入）
             if (passwordRequired) {
