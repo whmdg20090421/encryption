@@ -1330,9 +1330,9 @@ fun FileManagerScreen(
                                                 if (!result.success) {
                                                     messageDialogData = com.whmdg.mczj.tools.ui.MessageDialogData(
                                                         title = "文件提取失败",
+                                                        errorSummary = result.errorMessage.ifEmpty { "无法提取文件" },
                                                         command = result.command,
-                                                        output = result.output,
-                                                        errorMessage = result.errorMessage
+                                                        output = result.output
                                                     )
                                                 }
                                             }

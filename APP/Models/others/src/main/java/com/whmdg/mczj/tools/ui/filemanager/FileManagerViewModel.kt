@@ -1129,6 +1129,7 @@ class FilePaneController(
     }
 
     fun navigateToHistoryDir(entry: HistoryEntry) {
+        addHistory(entry.name, entry.path, true)
         val panel = state
         val panelPath = PanelPath.FileSystem(entry.path, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
         if (hasShellEngine()) {
@@ -1140,6 +1141,7 @@ class FilePaneController(
     }
 
     fun navigateToHistoryFile(entry: HistoryEntry) {
+        addHistory(entry.name, entry.path, false)
         val file = File(entry.path)
         val parentDir = file.parentFile ?: return
         val panel = state
@@ -1712,9 +1714,9 @@ class FilePaneController(
                     withContext(Dispatchers.Main) {
                         panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
                             title = "无法打开压缩包",
+                            errorSummary = passwordCheckResult.errorMessage.ifEmpty { "文件损坏，无法识别为压缩格式" },
                             command = passwordCheckResult.command,
-                            output = passwordCheckResult.output,
-                            errorMessage = passwordCheckResult.errorMessage.ifEmpty { "该压缩包无法读取，可能已损坏或格式不受支持。" }
+                            output = passwordCheckResult.output
                         )
                     }
                     return@launch
@@ -1745,7 +1747,7 @@ class FilePaneController(
                         onFailure = { error ->
                             panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
                                 title = "打开压缩包失败",
-                                errorMessage = error.message ?: "未知错误"
+                                errorSummary = error.message ?: "未知错误"
                             )
                         }
                     )
@@ -1754,7 +1756,7 @@ class FilePaneController(
                 withContext(Dispatchers.Main) {
                     panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
                         title = "打开压缩包异常",
-                        errorMessage = e.message ?: "未知异常"
+                        errorSummary = e.message ?: "未知异常"
                     )
                 }
             }

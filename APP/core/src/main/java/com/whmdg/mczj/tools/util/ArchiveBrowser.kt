@@ -275,6 +275,11 @@ object ArchiveBrowser {
         originalEntries: List<FileEntry> = emptyList()
     ): Result<ArchiveSession> = withContext(Dispatchers.IO) {
         try {
+            // zip 格式：直接解析 zip 结构，自适应编码检测
+            if (archivePath.endsWith(".zip", ignoreCase = true)) {
+                return@withContext openZipArchive(archivePath, archiveName, originalPath, originalEntries)
+            }
+
             val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
             val cmd = SevenZipCommand.buildListCommand(binaryPath, archivePath, password)
             Log.d(TAG, "列表命令: $cmd")
@@ -316,6 +321,121 @@ object ArchiveBrowser {
         }
     }
 
+    /**
+     * 用 ZipRawReader 打开 zip 文件，自适应编码检测文件名。
+     */
+    private fun openZipArchive(
+        archivePath: String,
+        archiveName: String,
+        originalPath: String,
+        originalEntries: List<FileEntry>
+    ): Result<ArchiveSession> {
+        return try {
+            val rawEntries = ZipRawReader.readRawEntries(File(archivePath))
+            Log.d(TAG, "ZipRawReader 解析到 ${rawEntries.size} 个条目")
+
+            if (rawEntries.isEmpty()) {
+                return Result.failure(Exception("压缩包内容为空，可能是加密文件或格式不受支持"))
+            }
+
+            val entries = rawEntries.map { raw ->
+                val decodedName = ZipEncodingDetector.decodeFilename(
+                    raw.rawName,
+                    raw.generalFlag and 0x800 != 0
+                )
+                ParsedEntry(
+                    path = decodedName,
+                    isDirectory = raw.isDirectory,
+                    size = raw.size,
+                    compressedSize = raw.compressedSize
+                )
+            }
+
+            val root = buildTree(entries)
+            val rootEntries = nodeChildrenToEntries(root)
+
+            Result.success(
+                ArchiveSession(
+                    archivePath = archivePath,
+                    archiveName = archiveName,
+                    root = root,
+                    currentPath = archivePath,
+                    currentEntries = rootEntries,
+                    originalPath = originalPath,
+                    originalEntries = originalEntries
+                )
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "打开 zip 压缩包失败", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * zip 格式的 Debug 模式：用 ZipRawReader 解析，自适应编码检测。
+     * 注意：密码检测由外层 parseArchiveDebug 负责。
+     */
+    private fun parseZipDebug(
+        archivePath: String,
+        archiveName: String,
+        permissionLevel: String,
+        originalPath: String,
+        originalEntries: List<FileEntry>
+    ): ArchiveDebugInfo {
+        return try {
+            val rawEntries = ZipRawReader.readRawEntries(File(archivePath))
+            Log.d(TAG, "ZipRawReader Debug: 解析到 ${rawEntries.size} 个条目")
+
+            val entries = rawEntries.map { raw ->
+                val decodedName = ZipEncodingDetector.decodeFilename(
+                    raw.rawName,
+                    raw.generalFlag and 0x800 != 0
+                )
+                ParsedEntry(
+                    path = decodedName,
+                    isDirectory = raw.isDirectory,
+                    size = raw.size,
+                    compressedSize = raw.compressedSize
+                )
+            }
+
+            if (entries.isEmpty()) {
+                return ArchiveDebugInfo(
+                    archivePath = archivePath, archiveName = archiveName,
+                    passwordRequired = false, listCommand = "", listExitCode = 0,
+                    listStdout = "", listStderr = "",
+                    parsedEntryCount = 0, rootEntries = emptyList(),
+                    error = "压缩包内容为空，可能是加密文件或格式不受支持"
+                )
+            }
+
+            val root = buildTree(entries)
+            val rootEntries = nodeChildrenToEntries(root)
+            val session = ArchiveSession(
+                archivePath = archivePath, archiveName = archiveName,
+                root = root, currentPath = archivePath, currentEntries = rootEntries,
+                originalPath = originalPath, originalEntries = originalEntries
+            )
+
+            ArchiveDebugInfo(
+                archivePath = archivePath, archiveName = archiveName,
+                passwordRequired = false, listCommand = "ZipRawReader", listExitCode = 0,
+                listStdout = "", listStderr = "",
+                parsedEntryCount = entries.size, rootEntries = rootEntries,
+                session = session
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "zip Debug 解析失败", e)
+            ArchiveDebugInfo(
+                archivePath = archivePath, archiveName = archiveName,
+                passwordRequired = false, listCommand = "", listExitCode = -1,
+                listStdout = "", listStderr = "",
+                parsedEntryCount = 0, rootEntries = emptyList(),
+                error = e.message ?: "zip 解析异常"
+            )
+        }
+    }
+
     /** Debug 模式：解析压缩包信息但不进入浏览模式 */
     suspend fun parseArchiveDebug(
         context: Context,
@@ -326,13 +446,10 @@ object ArchiveBrowser {
         originalEntries: List<FileEntry> = emptyList()
     ): ArchiveDebugInfo = withContext(Dispatchers.IO) {
         try {
-            val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
-
-            // 1. 密码检测
+            // 1. 密码检测（所有格式都需要）
             val passwordCheckResult = checkPasswordRequired(context, archivePath, permissionLevel)
             val passwordRequired = passwordCheckResult.needsPassword == true
 
-            // 2. 需要密码时跳过列表命令（无密码会导致 7zzs 阻塞在 stdin 等待输入）
             if (passwordRequired) {
                 return@withContext ArchiveDebugInfo(
                     archivePath = archivePath, archiveName = archiveName,
@@ -343,6 +460,13 @@ object ArchiveBrowser {
                     error = "需要密码"
                 )
             }
+
+            // 2. zip 格式：直接解析 zip 结构，自适应编码检测
+            if (archivePath.endsWith(".zip", ignoreCase = true)) {
+                return@withContext parseZipDebug(archivePath, archiveName, permissionLevel, originalPath, originalEntries)
+            }
+
+            val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
 
             // 3. 列表命令
             val listCmd = SevenZipCommand.buildListCommand(binaryPath, archivePath)

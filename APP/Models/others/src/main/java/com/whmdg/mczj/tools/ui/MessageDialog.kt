@@ -23,6 +23,7 @@ import com.whmdg.mczj.tools.ui.theme.DialogWidthFraction
  */
 data class MessageDialogData(
     val title: String,
+    val errorSummary: String = "",  // 错误简介（固定显示，如"文件损坏，无法识别为压缩格式"）
     val command: String = "",
     val output: String = "",
     val errorMessage: String = ""
@@ -56,7 +57,7 @@ fun MessageDialog(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // 标题
+                // 固定区域：标题
                 Text(
                     text = data.title,
                     style = MaterialTheme.typography.titleMedium,
@@ -64,7 +65,17 @@ fun MessageDialog(
                     color = MaterialTheme.colorScheme.error
                 )
 
-                // 详细信息（可滚动）
+                // 固定区域：错误简介
+                if (data.errorSummary.isNotEmpty()) {
+                    Text(
+                        text = data.errorSummary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                // 可滚动区域：详细信息
                 val scrollState = rememberScrollState()
                 Box(
                     modifier = Modifier
@@ -109,11 +120,11 @@ fun MessageDialog(
                             }
                         }
 
-                        // 错误信息
+                        // 错误详情
                         if (data.errorMessage.isNotEmpty()) {
                             Column {
                                 Text(
-                                    text = "错误信息：",
+                                    text = "错误详情：",
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.error
@@ -140,6 +151,9 @@ fun MessageDialog(
                             try {
                                 val fullText = buildString {
                                     appendLine("标题: ${data.title}")
+                                    if (data.errorSummary.isNotEmpty()) {
+                                        appendLine("简介: ${data.errorSummary}")
+                                    }
                                     if (data.command.isNotEmpty()) {
                                         appendLine("命令: ${data.command}")
                                     }
