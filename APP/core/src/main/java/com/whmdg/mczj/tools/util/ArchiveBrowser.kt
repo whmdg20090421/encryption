@@ -72,22 +72,20 @@ object ArchiveBrowser {
         archivePath: String,
         permissionLevel: String
     ): PasswordCheckResult = withContext(Dispatchers.IO) {
-        val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
-        val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
-        val (output, exitCode) = run7zs(cmd)
-        Log.d(TAG, "密码检测: exitCode=$exitCode, output=${output.take(200)}")
-        when {
-            exitCode == 0 && (output.contains("7zAES", ignoreCase = true) || output.contains("Encrypted = +")) ->
-                PasswordCheckResult(needsPassword = true, command = cmd, output = output)
-            exitCode == 0 ->
-                PasswordCheckResult(needsPassword = false, command = cmd, output = output)
-            output.contains("Cannot open encrypted archive", ignoreCase = true) ->
-                PasswordCheckResult(needsPassword = true, command = cmd, output = output, errorMessage = "头部加密，需要密码才能查看文件列表")
-            output.contains("Cannot open the file as", ignoreCase = true) ->
-                PasswordCheckResult(needsPassword = null, command = cmd, output = output, errorMessage = "文件损坏，无法识别为压缩格式")
-            else ->
-                PasswordCheckResult(needsPassword = null, command = cmd, output = output, errorMessage = "未知错误 (exitCode=$exitCode)")
-        }
+        val result = P7zipClient.detectPassword(archivePath)
+        result.fold(
+            onSuccess = { output ->
+                // output 是 "true" / "false" / "null"
+                when (output.trim()) {
+                    "true" -> PasswordCheckResult(needsPassword = true, command = "P7zipClient.detectPassword", output = output)
+                    "false" -> PasswordCheckResult(needsPassword = false, command = "P7zipClient.detectPassword", output = output)
+                    else -> PasswordCheckResult(needsPassword = null, command = "P7zipClient.detectPassword", output = output, errorMessage = "文件损坏，无法识别为压缩格式")
+                }
+            },
+            onFailure = { e ->
+                PasswordCheckResult(needsPassword = null, command = "P7zipClient.detectPassword", output = "", errorMessage = e.message ?: "密码检测失败")
+            }
+        )
     }
 
     /** 7z 文件分析结果 */
@@ -119,22 +117,28 @@ object ArchiveBrowser {
         val fileName = File(archivePath).name
         val fileSize = File(archivePath).length()
         return try {
-            val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
-            val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
-            val (output, exitCode) = run7zs(cmd)
-            Log.e(TAG, "7z分析: exitCode=$exitCode, output=${output.take(300)}")
-            when {
-                exitCode == 0 && (output.contains("7zAES", ignoreCase = true) || output.contains("Encrypted = +")) ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = true, isCorrupted = false)
-                exitCode == 0 ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = false)
-                output.contains("Cannot open encrypted archive", ignoreCase = true) ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = true, contentEncrypted = true, isCorrupted = false, errorMessage = "头部加密，需要密码才能查看文件列表")
-                output.contains("Cannot open the file as", ignoreCase = true) ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "文件损坏，无法识别为 7z 格式")
-                else ->
-                    SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "未知错误 (exitCode=$exitCode)", diagnosticInfo = "exitCode=$exitCode\n$output")
-            }
+            val result = P7zipClient.listArchiveDetail(archivePath, password = "dummy")
+            result.fold(
+                onSuccess = { output ->
+                    when {
+                        output.contains("7zAES", ignoreCase = true) || output.contains("Encrypted = +") ->
+                            SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = true, isCorrupted = false)
+                        else ->
+                            SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = false)
+                    }
+                },
+                onFailure = { e ->
+                    val errMsg = e.message ?: ""
+                    when {
+                        errMsg.contains("Cannot open encrypted archive", ignoreCase = true) ->
+                            SevenZipInfo(fileName, fileSize, headerEncrypted = true, contentEncrypted = true, isCorrupted = false, errorMessage = "头部加密，需要密码才能查看文件列表")
+                        errMsg.contains("Cannot open the file as", ignoreCase = true) ->
+                            SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = "文件损坏，无法识别为 7z 格式")
+                        else ->
+                            SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = errMsg)
+                    }
+                }
+            )
         } catch (e: Exception) {
             Log.e(TAG, "7z 分析失败", e)
             SevenZipInfo(fileName, fileSize, headerEncrypted = false, contentEncrypted = false, isCorrupted = true, errorMessage = e.message ?: "分析失败")
@@ -280,18 +284,12 @@ object ArchiveBrowser {
                 return@withContext openZipArchive(archivePath, archiveName, originalPath, originalEntries)
             }
 
-            val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
-            val cmd = SevenZipCommand.buildListCommand(binaryPath, archivePath, password)
-            Log.d(TAG, "列表命令: $cmd")
-
-            val (output, exitCode) = run7zs(cmd)
-            Log.d(TAG, "执行完毕: exitCode=$exitCode, output=${output.length}字节")
-
-            if (exitCode != 0) {
-                val errMsg = output.ifBlank { "7zzs 退出码: $exitCode" }
-                Log.w(TAG, "非零退出: $errMsg")
-                return@withContext Result.failure(Exception(errMsg))
+            val result = P7zipClient.listArchive(archivePath, password)
+            val output = result.getOrElse { e ->
+                return@withContext Result.failure(Exception(e.message ?: "列出压缩包失败"))
             }
+
+            Log.d(TAG, "执行完毕: output=${output.length}字节")
 
             val entries = parseListOutput(output)
             Log.d(TAG, "解析到 ${entries.size} 个条目")
@@ -466,21 +464,15 @@ object ArchiveBrowser {
                 return@withContext parseZipDebug(archivePath, archiveName, permissionLevel, originalPath, originalEntries)
             }
 
-            val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
-
-            // 3. 列表命令
-            val listCmd = SevenZipCommand.buildListCommand(binaryPath, archivePath)
-            val (listOutput, exitCode) = run7zs(listCmd)
-
-            if (exitCode != 0) {
-                val errMsg = listOutput.ifBlank { "7zzs 退出码: $exitCode" }
+            val listResult = P7zipClient.listArchive(archivePath)
+            val listOutput = listResult.getOrElse { e ->
                 return@withContext ArchiveDebugInfo(
                     archivePath = archivePath, archiveName = archiveName,
                     passwordRequired = passwordRequired,
-                    listCommand = listCmd, listExitCode = exitCode,
-                    listStdout = "", listStderr = listOutput,
+                    listCommand = "P7zipClient.listArchive", listExitCode = -1,
+                    listStdout = "", listStderr = "",
                     parsedEntryCount = 0, rootEntries = emptyList(),
-                    error = errMsg
+                    error = e.message ?: "列出压缩包失败"
                 )
             }
 
@@ -489,7 +481,7 @@ object ArchiveBrowser {
                 return@withContext ArchiveDebugInfo(
                     archivePath = archivePath, archiveName = archiveName,
                     passwordRequired = passwordRequired,
-                    listCommand = listCmd, listExitCode = exitCode,
+                    listCommand = "P7zipClient.listArchive", listExitCode = 0,
                     listStdout = listOutput, listStderr = "",
                     parsedEntryCount = 0, rootEntries = emptyList(),
                     error = "压缩包内容为空，可能是加密文件或格式不受支持"
@@ -753,33 +745,35 @@ object ArchiveBrowser {
         permissionLevel: String = "NORMAL"
     ): ExtractResult = withContext(Dispatchers.IO) {
         try {
-            val binaryPath = BinaryExtractor.ensureExtracted(context).absolutePath
-            val cmd = SevenZipCommand.buildExtractSingleCommand(
-                binaryPath, archivePath, fileName, outputDir, password
-            )
+            // zip 格式：用 java.util.zip.ZipFile 直接提取，避免 7zzs 编码匹配问题
+            if (archivePath.endsWith(".zip", ignoreCase = true) && password.isEmpty()) {
+                return@withContext extractFromZip(archivePath, fileName, outputDir)
+            }
+
             Log.d(TAG, "提取单文件: $fileName")
-            val (output, exitCode) = run7zs(cmd)
-            if (exitCode != 0) {
-                Log.w(TAG, "提取失败 exitCode=$exitCode output=$output")
-                return@withContext ExtractResult(
-                    success = false,
-                    command = cmd,
-                    output = output,
-                    errorMessage = "退出码: $exitCode"
-                )
-            }
-            // 保留目录结构：outputDir/fileName
-            val outputFile = File(outputDir, fileName)
-            if (outputFile.exists()) {
-                ExtractResult(success = true, file = outputFile, command = cmd, output = output)
-            } else {
-                ExtractResult(
-                    success = false,
-                    command = cmd,
-                    output = output,
-                    errorMessage = "文件提取后未找到: ${outputFile.absolutePath}"
-                )
-            }
+            val result = P7zipClient.extractSingleFile(archivePath, fileName, outputDir, password)
+            result.fold(
+                onSuccess = { output ->
+                    val outputFile = File(outputDir, fileName)
+                    if (outputFile.exists()) {
+                        ExtractResult(success = true, file = outputFile, command = "P7zipClient.extractSingleFile", output = output)
+                    } else {
+                        ExtractResult(
+                            success = false,
+                            command = "P7zipClient.extractSingleFile",
+                            output = output,
+                            errorMessage = "文件提取后未找到: ${outputFile.absolutePath}"
+                        )
+                    }
+                },
+                onFailure = { e ->
+                    ExtractResult(
+                        success = false,
+                        command = "P7zipClient.extractSingleFile",
+                        errorMessage = e.message ?: "提取失败"
+                    )
+                }
+            )
         } catch (e: Exception) {
             Log.e(TAG, "提取单文件异常", e)
             ExtractResult(
@@ -789,11 +783,79 @@ object ArchiveBrowser {
         }
     }
 
-    /** 执行 7zzs 命令，返回 (stdout+stderr, exitCode) */
-    private fun run7zs(cmd: String): Pair<String, Int> {
-        val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "$cmd 2>&1"))
-        val output = process.inputStream.bufferedReader(Charsets.UTF_8).readText().trim()
-        process.waitFor()
-        return Pair(output, process.exitValue())
+    /**
+     * 用 java.util.zip.ZipFile 从 zip 中提取单个文件。
+     * ZipFile 内部自动处理文件名编码匹配，不受 -sccUTF-8 影响。
+     */
+    private fun extractFromZip(
+        archivePath: String,
+        fileName: String,
+        outputDir: String
+    ): ExtractResult {
+        return try {
+            val zipFile = java.util.zip.ZipFile(archivePath, Charsets.UTF_8)
+            zipFile.use { zf ->
+                // 遍历所有条目，用解码后的名称匹配
+                val entry = zf.entries().asSequence().find { entry ->
+                    val decodedName = ZipEncodingDetector.decodeFilename(
+                        entry.name.toByteArray(Charsets.UTF_8),
+                        entry.extra?.let { false } ?: false
+                    ) || entry.name == fileName
+                    // ZipFile.getName() 已经用 JVM charset 解码，直接比较
+                    entry.name == fileName
+                }
+
+                if (entry == null) {
+                    // 回退：尝试用原始字节匹配（处理编码不一致的情况）
+                    val rawEntry = zf.entries().asSequence().find { entry ->
+                        val rawBytes = entry.name.toByteArray(Charsets.ISO_8859_1)
+                        val decoded = ZipEncodingDetector.decodeFilename(rawBytes, false)
+                        decoded == fileName
+                    }
+                    if (rawEntry != null) {
+                        extractZipEntry(zf, rawEntry, outputDir, fileName)
+                    } else {
+                        ExtractResult(
+                            success = false,
+                            command = "ZipFile",
+                            errorMessage = "在 zip 中未找到: $fileName"
+                        )
+                    }
+                } else {
+                    extractZipEntry(zf, entry, outputDir, fileName)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "ZipFile 提取失败", e)
+            ExtractResult(
+                success = false,
+                command = "ZipFile",
+                errorMessage = "异常: ${e.javaClass.simpleName}: ${e.message}"
+            )
+        }
+    }
+
+    private fun extractZipEntry(
+        zipFile: java.util.zip.ZipFile,
+        entry: java.util.zip.ZipEntry,
+        outputDir: String,
+        fileName: String
+    ): ExtractResult {
+        val outputFile = File(outputDir, fileName)
+        outputFile.parentFile?.mkdirs()
+        zipFile.getInputStream(entry).use { input ->
+            outputFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        return if (outputFile.exists()) {
+            ExtractResult(success = true, file = outputFile, command = "ZipFile")
+        } else {
+            ExtractResult(
+                success = false,
+                command = "ZipFile",
+                errorMessage = "文件写入失败: ${outputFile.absolutePath}"
+            )
+        }
     }
 }

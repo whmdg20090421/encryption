@@ -278,6 +278,9 @@ object AppDataPaths {
     /** 云盘同步 SharedPreferences */
     const val PREFS_CLOUD_SYNC = "cloud_sync_prefs"
 
+    /** P7zip 守护进程 SharedPreferences（权限持久化 + PID） */
+    const val PREFS_P7ZIP_DAEMON = "p7zip_daemon_prefs"
+
     /** 分类图标主题色 SharedPreferences Key（十六进制颜色值，如 "#00BCD4"） */
     const val PREF_KEY_ICON_COLOR = "category_icon_color"
 

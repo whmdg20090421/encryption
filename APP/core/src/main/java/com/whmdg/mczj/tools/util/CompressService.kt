@@ -2,18 +2,14 @@ package com.whmdg.mczj.tools.util
 
 import android.content.Context
 import android.util.Log
-import com.whmdg.mczj.tools.security.ShizukuAuthorizer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 压缩服务，通过 7zzs 静态二进制实现，支持三条权限路径（普通/Shizuku/Root）。
+ * 压缩服务，通过 P7zipDaemon 持久守护进程实现。
+ * 自动使用最高可用权限（Permission.MAX）。
  */
 object CompressService {
 
@@ -53,8 +49,7 @@ object CompressService {
 
     /**
      * 压缩入口（挂起函数，在 Dispatchers.IO 上执行）。
-     * @param permissionLevel "NORMAL" / "SHIZUKU" / "ROOT"
-     * @param cancelFlag 外部设为 true 取消任务
+     * 通过 P7zipClient 流式执行，自动使用最高可用权限。
      */
     suspend fun compress(
         context: Context,
@@ -63,49 +58,28 @@ object CompressService {
         cancelFlag: AtomicBoolean,
         callback: ProgressCallback
     ) = withContext(Dispatchers.IO) {
-        // 1. 确定二进制路径（统一提取）
-        val binaryPath = resolveBinary(context)
-        if (binaryPath == null) {
-            callback.onComplete(false, null, "无法准备压缩工具，请检查权限或重新安装应用")
-            return@withContext
-        }
-
-        // 2. 预计算总字节数和文件数
         val totalBytes = options.sourcePaths.sumOf { calculateTotalBytes(it) }
         val totalFiles = options.sourcePaths.sumOf { countFiles(it) }
 
-        // 3. 构建命令
-        val cmd = SevenZipCommand.build(binaryPath, options)
-        Log.d(TAG, "压缩命令: $cmd")
-
-        // 4. 按权限路径执行
         try {
-            val permission = when (permissionLevel) {
-                "ROOT" -> com.whmdg.mczj.tools.security.Permission.ROOT
-                "SHIZUKU" -> null  // Shizuku 走 AIDL streaming
-                else -> com.whmdg.mczj.tools.security.Permission.APPLICANT
-            }
-            if (permission != null) {
-                executeWithShellStreaming(permission, cmd, totalBytes, totalFiles, cancelFlag, callback)
-            } else {
-                executeViaShizuku(context, cmd, totalBytes, totalFiles, cancelFlag, callback)
-            }
-            callback.onComplete(true, options.outputPath, null)
-        } catch (e: CancellationException) {
-            // 取消时删除残留的不完整输出文件（7zzs 无法覆盖损坏的7z文件）
-            try {
-                val permission = when (permissionLevel) {
-                    "ROOT" -> com.whmdg.mczj.tools.security.Permission.ROOT
-                    "SHIZUKU" -> com.whmdg.mczj.tools.security.Permission.ADB
-                    else -> com.whmdg.mczj.tools.security.Permission.APPLICANT
+            val result = P7zipClient.compressStream(
+                sourcePaths = options.sourcePaths,
+                outputPath = options.outputPath,
+                format = options.format,
+                level = options.compressionLevel,
+                password = options.password,
+                useAes = options.useAes,
+                encryptNames = options.encryptNames
+            ) { line ->
+                if (!cancelFlag.get()) {
+                    parseProgressLine(line, totalBytes, totalFiles, callback)
                 }
-                com.whmdg.mczj.tools.security.ShellExecutor.execute(
-                    permission, "rm -f '${options.outputPath}'", debug = false
-                )
-                Log.d(TAG, "已清理取消的输出文件: ${options.outputPath}")
-            } catch (rmEx: Exception) {
-                Log.w(TAG, "清理输出文件失败: ${options.outputPath}", rmEx)
             }
+            result.fold(
+                onSuccess = { callback.onComplete(true, options.outputPath, null) },
+                onFailure = { e -> callback.onComplete(false, null, e.message ?: "压缩失败") }
+            )
+        } catch (e: CancellationException) {
             callback.onComplete(false, null, "压缩已取消")
         } catch (e: Exception) {
             callback.onComplete(false, null, e.message ?: "压缩失败")
@@ -114,7 +88,7 @@ object CompressService {
 
     /**
      * 解压入口（挂起函数，在 Dispatchers.IO 上执行）。
-     * 解压前需通过 7zzs l 获取 fileSizes 列表，实现真实字节级进度。
+     * 通过 P7zipClient 流式执行，自动使用最高可用权限。
      */
     suspend fun extract(
         context: Context,
@@ -123,222 +97,24 @@ object CompressService {
         cancelFlag: AtomicBoolean,
         callback: ProgressCallback
     ) = withContext(Dispatchers.IO) {
-        val binaryPath = resolveBinary(context)
-        if (binaryPath == null) {
-            callback.onComplete(false, null, "无法准备解压工具，请检查权限或重新安装应用")
-            return@withContext
-        }
-
-        val cmd = SevenZipCommand.buildExtractCommand(
-            binaryPath, options.archivePath, options.outputDir, options.password
-        )
-        Log.d(TAG, "解压命令: $cmd")
-
         try {
-            val permission = when (permissionLevel) {
-                "ROOT" -> com.whmdg.mczj.tools.security.Permission.ROOT
-                "SHIZUKU" -> null  // Shizuku 走 AIDL streaming
-                else -> com.whmdg.mczj.tools.security.Permission.APPLICANT
+            val result = P7zipClient.extractStream(
+                archivePath = options.archivePath,
+                outputDir = options.outputDir,
+                password = options.password
+            ) { line ->
+                if (!cancelFlag.get()) {
+                    parseExtractProgressLine(line, options.fileSizes, options.totalUncompressedBytes, callback)
+                }
             }
-            if (permission != null) {
-                executeExtractWithShellStreaming(permission, cmd, options.fileSizes, options.totalUncompressedBytes, cancelFlag, callback)
-            } else {
-                executeExtractViaShizuku(context, cmd, options.fileSizes, options.totalUncompressedBytes, cancelFlag, callback)
-            }
-            callback.onComplete(true, options.outputDir, null)
+            result.fold(
+                onSuccess = { callback.onComplete(true, options.outputDir, null) },
+                onFailure = { e -> callback.onComplete(false, null, e.message ?: "解压失败") }
+            )
         } catch (e: CancellationException) {
             callback.onComplete(false, null, "解压已取消")
         } catch (e: Exception) {
             callback.onComplete(false, null, e.message ?: "解压失败")
-        }
-    }
-
-    /** 确定二进制路径（统一提取到 AppDataPaths.binaries()） */
-    private fun resolveBinary(context: Context): String? {
-        return try {
-            BinaryExtractor.ensureExtracted(context).absolutePath
-        } catch (e: Exception) {
-            Log.e(TAG, "提取二进制失败", e)
-            null
-        }
-    }
-
-    /**
-     * Shell 流式执行（普通/Root 权限）。
-     * 通过 ShellExecutor.executeStreaming 实现，解析 7zzs -bsp1 进度输出。
-     */
-    private suspend fun executeWithShellStreaming(
-        permission: com.whmdg.mczj.tools.security.Permission,
-        cmd: String,
-        totalBytes: Long,
-        totalFiles: Int,
-        cancelFlag: AtomicBoolean,
-        callback: ProgressCallback
-    ) = withContext(Dispatchers.IO) {
-        com.whmdg.mczj.tools.security.ShellExecutor.executeStreaming(
-            permission = permission,
-            command = cmd,
-            onOutputLine = { line -> parseProgressLine(line, totalBytes, totalFiles, callback) },
-            cancelFlag = cancelFlag
-        )
-    }
-
-    /**
-     * Shell 流式解压执行（普通/Root 权限）。
-     * 通过 ShellExecutor.executeStreaming 实现，使用 parseExtractProgressLine() 计算真实字节级进度。
-     */
-    private suspend fun executeExtractWithShellStreaming(
-        permission: com.whmdg.mczj.tools.security.Permission,
-        cmd: String,
-        fileSizes: List<Long>,
-        totalBytes: Long,
-        cancelFlag: AtomicBoolean,
-        callback: ProgressCallback
-    ) = withContext(Dispatchers.IO) {
-        com.whmdg.mczj.tools.security.ShellExecutor.executeStreaming(
-            permission = permission,
-            command = cmd,
-            onOutputLine = { line -> parseExtractProgressLine(line, fileSizes, totalBytes, callback) },
-            cancelFlag = cancelFlag
-        )
-    }
-
-    /**
-     * Shizuku 权限执行。
-     * 通过 AIDL 调用 ShellService.executeStreaming()，轮询进度文件。
-     */
-    private suspend fun executeViaShizuku(
-        context: Context,
-        cmd: String,
-        totalBytes: Long,
-        totalFiles: Int,
-        cancelFlag: AtomicBoolean,
-        callback: ProgressCallback
-    ) = withContext(Dispatchers.IO) {
-        val service = ShizukuAuthorizer.getShellService()
-            ?: throw IllegalStateException("Shizuku UserService 未连接")
-
-        // 进度临时文件（app 进程创建，ShellService 进程写入）
-        val progressFile = File.createTempFile("compress_progress", ".txt", context.cacheDir)
-
-        try {
-            // 启动进度轮询协程
-            val pollJob = launch {
-                var lastKey = ""
-                while (isActive && !cancelFlag.get()) {
-                    delay(300)
-                    try {
-                        val content = progressFile.readText().trim()
-                        if (content.startsWith("DONE:")) break
-                        // 格式: "percent:fileNum"
-                        val parts = content.split(":")
-                        val percent = parts.getOrNull(0)?.toIntOrNull() ?: continue
-                        val fileNum = parts.getOrNull(1)?.toIntOrNull() ?: 1
-                        val key = "$percent:$fileNum"
-                        if (key != lastKey) {
-                            lastKey = key
-                            val overallProgress = if (totalFiles <= 1) {
-                                percent / 100f
-                            } else {
-                                ((fileNum - 1).coerceAtLeast(0) + percent / 100f) / totalFiles
-                            }.coerceIn(0f, 1f)
-                            val info = ProgressInfo(
-                                currentFile = fileNum,
-                                totalFiles = totalFiles,
-                                progress = overallProgress,
-                                bytesProcessed = (totalBytes * overallProgress).toLong(),
-                                totalBytes = totalBytes
-                            )
-                            withContext(Dispatchers.Main) { callback.onProgress(info) }
-                        }
-                    } catch (_: Exception) {}
-                }
-            }
-
-            // 同步调用 ShellService（阻塞直到完成）
-            service.executeStreaming(cmd, progressFile.absolutePath)
-
-            pollJob.cancel()
-
-            // 读取最终结果
-            val result = progressFile.readText().trim()
-            val exitCode = result.removePrefix("DONE:").trim().toIntOrNull() ?: -1
-
-            if (cancelFlag.get()) throw CancellationException("用户取消")
-            if (exitCode != 0) throw RuntimeException("7zzs 退出码: $exitCode")
-        } finally {
-            progressFile.delete()
-        }
-    }
-
-    /**
-     * 解压专用 Shizuku 权限执行。
-     * 使用真实字节级进度计算。
-     */
-    private suspend fun executeExtractViaShizuku(
-        context: Context,
-        cmd: String,
-        fileSizes: List<Long>,
-        totalBytes: Long,
-        cancelFlag: AtomicBoolean,
-        callback: ProgressCallback
-    ) = withContext(Dispatchers.IO) {
-        val service = ShizukuAuthorizer.getShellService()
-            ?: throw IllegalStateException("Shizuku UserService 未连接")
-
-        val progressFile = File.createTempFile("extract_progress", ".txt", context.cacheDir)
-
-        try {
-            val pollJob = launch {
-                var lastKey = ""
-                while (isActive && !cancelFlag.get()) {
-                    delay(300)
-                    try {
-                        val content = progressFile.readText().trim()
-                        if (content.startsWith("DONE:")) break
-                        val parts = content.split(":")
-                        val percent = parts.getOrNull(0)?.toIntOrNull() ?: continue
-                        val fileNum = parts.getOrNull(1)?.toIntOrNull() ?: 1
-                        val key = "$percent:$fileNum"
-                        if (key != lastKey) {
-                            lastKey = key
-                            // 真实字节级进度计算
-                            var completedBytes = 0L
-                            for (i in 0 until (fileNum - 1).coerceAtMost(fileSizes.size)) {
-                                completedBytes += fileSizes[i]
-                            }
-                            val currentFileIdx = (fileNum - 1).coerceIn(0, fileSizes.size - 1)
-                            val currentFilePartial = fileSizes[currentFileIdx] * percent / 100L
-                            val bytesProcessed = (completedBytes + currentFilePartial).coerceAtMost(totalBytes)
-                            val overallProgress = if (totalBytes > 0) {
-                                (bytesProcessed.toFloat() / totalBytes).coerceIn(0f, 1f)
-                            } else {
-                                percent / 100f
-                            }
-                            val info = ProgressInfo(
-                                currentFile = fileNum,
-                                totalFiles = fileSizes.size,
-                                progress = overallProgress,
-                                bytesProcessed = bytesProcessed,
-                                totalBytes = totalBytes
-                            )
-                            withContext(Dispatchers.Main) { callback.onProgress(info) }
-                        }
-                    } catch (_: Exception) {}
-                }
-            }
-
-            service.executeStreaming(cmd, progressFile.absolutePath)
-
-            pollJob.cancel()
-
-            val result = progressFile.readText().trim()
-            val exitCode = result.removePrefix("DONE:").trim().toIntOrNull() ?: -1
-
-            if (cancelFlag.get()) throw CancellationException("用户取消")
-            if (exitCode != 0) throw RuntimeException("7zzs 退出码: $exitCode")
-        } finally {
-            progressFile.delete()
         }
     }
 
