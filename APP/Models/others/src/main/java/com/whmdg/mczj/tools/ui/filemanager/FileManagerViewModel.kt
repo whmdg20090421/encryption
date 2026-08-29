@@ -3678,8 +3678,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
                 // 若无密码，先探测是否需要密码
                 if (effectivePassword.isEmpty()) {
-                    val needsPassword = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
-                    if (needsPassword == true) {
+                    val passwordCheckResult = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
+                    if (passwordCheckResult.needsPassword == true) {
                         withContext(Dispatchers.Main) { onPasswordRequired() }
                         return@launch
                     }
@@ -3920,7 +3920,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         DiagnosticLog.log("OpenFile", "提取成功: ${result.file?.absolutePath}")
         // 用提取后的临时文件构建 FileEntry，复用 openFile 的类型判断
-        val tempEntry = entry.copy(path = result.file!!.absolutePath, name = result.file.name)
+        val extractedFile = result.file!!
+        val tempEntry = entry.copy(path = extractedFile.absolutePath, name = extractedFile.name)
         openFile(context, tempEntry)
         return result
     }
