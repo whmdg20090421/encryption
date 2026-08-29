@@ -208,6 +208,16 @@ object P7zipClient {
 
     // ── Daemon 生命周期管理 ──
 
+    private var appContext: Context? = null
+
+    /**
+     * 初始化 P7zipClient，传入应用 Context。
+     * 必须在使用其他方法前调用。
+     */
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
+
     /**
      * 确保 daemon 可用。不可用则启动。
      * @throws RuntimeException 启动失败时
@@ -221,8 +231,8 @@ object P7zipClient {
      * 启动 daemon 进程。使用 Permission.MAX 选择最高可用权限。
      */
     suspend fun startDaemon() = withContext(Dispatchers.IO) {
-        val context = com.whmdg.mczj.tools.ToolsApp.instance
-            ?: throw RuntimeException("ToolsApp 未初始化，无法启动 P7zipDaemon")
+        val context = appContext
+            ?: throw RuntimeException("P7zipClient 未初始化，请先调用 init(context)")
 
         val binaryPath = try {
             BinaryExtractor.ensureExtracted(context).absolutePath
@@ -245,7 +255,7 @@ object P7zipClient {
             Permission.ROOT -> "su -c \"$daemonCmd\""
             Permission.ADB -> {
                 // Shizuku 转发
-                val shizukuService = ShizukuAuthorizer.peekService()
+                val shizukuService = ShizukuAuthorizer.getShellService()
                 if (shizukuService != null) {
                     // 通过 Shizuku 执行
                     daemonCmd
@@ -370,14 +380,15 @@ object P7zipClient {
             output.write(bytes)
             output.flush()
 
-            // 读取响应
-            val respLengthBytes = readBytes(input, 4) ?: return Result.failure(RuntimeException("Daemon 连接断开"))
+            // 读取响应（使用 InputStream 读取原始字节）
+            val inputStream = socket.getInputStream()
+            val respLengthBytes = readBytesFromStream(inputStream, 4) ?: return Result.failure(RuntimeException("Daemon 连接断开"))
             val respLength = ((respLengthBytes[0].toInt() and 0xFF) shl 24) or
                     ((respLengthBytes[1].toInt() and 0xFF) shl 16) or
                     ((respLengthBytes[2].toInt() and 0xFF) shl 8) or
                     (respLengthBytes[3].toInt() and 0xFF)
 
-            val respBytes = readBytes(input, respLength) ?: return Result.failure(RuntimeException("Daemon 响应不完整"))
+            val respBytes = readBytesFromStream(inputStream, respLength) ?: return Result.failure(RuntimeException("Daemon 响应不完整"))
             val response = String(respBytes, Charsets.UTF_8)
 
             // 解析响应
@@ -406,11 +417,11 @@ object P7zipClient {
         return socket
     }
 
-    private fun readBytes(reader: BufferedReader, count: Int): ByteArray? {
+    private fun readBytesFromStream(stream: java.io.InputStream, count: Int): ByteArray? {
         val buf = ByteArray(count)
         var offset = 0
         while (offset < count) {
-            val read = reader.read(buf, offset, count - offset)
+            val read = stream.read(buf, offset, count - offset)
             if (read == -1) return null
             offset += read
         }
@@ -426,7 +437,7 @@ object P7zipClient {
 
         // 自动选择最高可用权限
         if (SpecialPermissionVerifier.isRootAvailable()) return Permission.ROOT
-        if (ShizukuAuthorizer.peekService() != null) return Permission.ADB
+        if (ShizukuAuthorizer.getShellService() != null) return Permission.ADB
         return Permission.APPLICANT
     }
 
@@ -434,7 +445,7 @@ object P7zipClient {
 
     private fun persistPermission(permission: Permission) {
         try {
-            val context = com.whmdg.mczj.tools.ToolsApp.instance ?: return
+            val context = appContext ?: return
             val prefs = context.getSharedPreferences(AppDataPaths.PREFS_P7ZIP_DAEMON, Context.MODE_PRIVATE)
             prefs.edit()
                 .putString("permission_level", permission.name)
@@ -447,7 +458,7 @@ object P7zipClient {
 
     private fun getPersistedPermission(): Permission? {
         return try {
-            val context = com.whmdg.mczj.tools.ToolsApp.instance ?: return null
+            val context = appContext ?: return null
             val prefs = context.getSharedPreferences(AppDataPaths.PREFS_P7ZIP_DAEMON, Context.MODE_PRIVATE)
             val level = prefs.getString("permission_level", null) ?: return null
             val pid = prefs.getInt("pid", 0)
@@ -464,7 +475,7 @@ object P7zipClient {
 
     private fun clearPersistedPermission() {
         try {
-            val context = com.whmdg.mczj.tools.ToolsApp.instance ?: return
+            val context = appContext ?: return
             val prefs = context.getSharedPreferences(AppDataPaths.PREFS_P7ZIP_DAEMON, Context.MODE_PRIVATE)
             prefs.edit().clear().apply()
         } catch (_: Exception) {}

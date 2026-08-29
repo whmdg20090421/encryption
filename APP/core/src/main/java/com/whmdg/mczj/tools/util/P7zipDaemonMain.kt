@@ -1,7 +1,5 @@
 package com.whmdg.mczj.tools.util
 
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -82,12 +80,12 @@ object P7zipDaemonMain {
     private fun handleClient(client: Socket, binaryPath: String) {
         try {
             client.use { sock ->
-                val input = BufferedReader(InputStreamReader(sock.getInputStream()))
+                val inputStream = sock.getInputStream()
                 val output = sock.getOutputStream()
 
                 while (!shutdownRequested) {
-                    // 读取长度前缀
-                    val lengthBytes = readBytes(input, 4) ?: break
+                    // 读取长度前缀（使用 InputStream 读取原始字节）
+                    val lengthBytes = readBytesFromStream(inputStream, 4) ?: break
                     val length = ((lengthBytes[0].toInt() and 0xFF) shl 24) or
                             ((lengthBytes[1].toInt() and 0xFF) shl 16) or
                             ((lengthBytes[2].toInt() and 0xFF) shl 8) or
@@ -95,7 +93,7 @@ object P7zipDaemonMain {
 
                     if (length <= 0 || length > 10 * 1024 * 1024) break // 最大 10MB
 
-                    val jsonBytes = readBytes(input, length) ?: break
+                    val jsonBytes = readBytesFromStream(inputStream, length) ?: break
                     val request = String(jsonBytes, Charsets.UTF_8)
                     lastActivityTime = System.currentTimeMillis()
 
@@ -296,11 +294,11 @@ object P7zipDaemonMain {
         output.flush()
     }
 
-    private fun readBytes(reader: BufferedReader, count: Int): ByteArray? {
+    private fun readBytesFromStream(stream: java.io.InputStream, count: Int): ByteArray? {
         val buf = ByteArray(count)
         var offset = 0
         while (offset < count) {
-            val read = reader.read(buf, offset, count - offset)
+            val read = stream.read(buf, offset, count - offset)
             if (read == -1) return null
             offset += read
         }
