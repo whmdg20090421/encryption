@@ -12,6 +12,7 @@ import com.topjohnwu.superuser.Shell
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.AppIconHelper
 import com.whmdg.mczj.tools.security.ShellExecutor
+import com.whmdg.mczj.tools.util.P7zipClient
 import com.whmdg.mczj.tools.AppDataPaths
 import java.io.File
 import java.text.SimpleDateFormat
@@ -29,6 +30,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
         super.onCreate()
         instance = this
         ShellExecutor.init(this)
+        P7zipClient.init(this)
         // libsu: 配置全局 root shell（首次 Shell.cmd() 时懒创建，后续复用）
         Shell.setDefaultBuilder(Shell.Builder.create()
             .setFlags(Shell.FLAG_MOUNT_MASTER)
