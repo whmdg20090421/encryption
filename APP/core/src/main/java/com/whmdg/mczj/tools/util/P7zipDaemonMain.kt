@@ -22,45 +22,85 @@ object P7zipDaemonMain {
     private const val ERR = "<<<ERR>>>"
     private const val READY = "<<<READY>>>"
 
+    private fun log(msg: String) {
+        System.err.println("[P7zipDaemon] $msg")
+        System.err.flush()
+    }
+
     @JvmStatic
     fun main(args: Array<String>) {
+        val t0 = System.currentTimeMillis()
+        log("main() 启动, args=${args.toList()}")
+
         if (args.isEmpty()) {
+            log("错误: 缺少 binaryPath 参数")
             System.err.println("Usage: P7zipDaemonMain <binaryPath>")
             exitProcess(1)
         }
 
         val binaryPath = args[0]
+        log("binaryPath=$binaryPath")
+        log("检查二进制文件...")
+        val binFile = java.io.File(binaryPath)
+        log("二进制存在=${binFile.exists()}, 可执行=${binFile.canExecute()}, 大小=${binFile.length()}")
+
         val reader = System.`in`.bufferedReader(Charsets.UTF_8)
+        log("stdin 已就绪")
 
         // 通知客户端 daemon 已就绪
+        log("发送 $READY (${System.currentTimeMillis() - t0}ms)")
         println(READY)
+        System.out.flush()
 
         // 主循环：逐条读取命令
+        var cmdCount = 0
         while (true) {
             try {
-                val command = reader.readLine() ?: break
+                log("等待命令...")
+                val command = reader.readLine()
+                log("收到命令行: $command")
+                if (command == null) {
+                    log("stdin EOF，退出")
+                    break
+                }
                 if (command.isBlank()) continue
 
                 val argsList = mutableListOf<String>()
                 while (true) {
-                    val line = reader.readLine() ?: break
-                    if (line == MARKER) break
+                    val line = reader.readLine()
+                    if (line == null) {
+                        log("stdin EOF 读取参数时")
+                        break
+                    }
+                    if (line == MARKER) {
+                        log("参数读取完毕，共 ${argsList.size} 个参数")
+                        break
+                    }
                     argsList.add(line)
                 }
 
                 if (command == "shutdown") {
+                    log("收到 shutdown 命令")
                     println(OK)
                     println("ok")
                     println(MARKER)
+                    System.out.flush()
                     break
                 }
 
+                cmdCount++
+                log("执行命令 #$cmdCount: $command, 参数=$argsList")
+                val cmdStart = System.currentTimeMillis()
                 val result = executeCommand(command, argsList, binaryPath)
+                val cmdElapsed = System.currentTimeMillis() - cmdStart
+                log("命令 #$cmdCount 完成 (${cmdElapsed}ms): marker=${result.first}")
+
                 println(result.first)
                 println(result.second)
                 println(MARKER)
                 System.out.flush()
             } catch (e: Exception) {
+                log("异常: ${e.javaClass.simpleName}: ${e.message}")
                 println(ERR)
                 println("异常: ${e.javaClass.simpleName}: ${e.message}")
                 println(MARKER)
@@ -68,9 +108,10 @@ object P7zipDaemonMain {
             }
         }
 
-        // 关闭 stdin，等待子进程结束
+        log("主循环结束，共处理 $cmdCount 条命令")
         try { System.`in`.close() } catch (_: Exception) {}
         Thread.sleep(200)
+        log("退出")
         exitProcess(0)
     }
 
@@ -89,7 +130,9 @@ object P7zipDaemonMain {
                     val archivePath = argsList[0]
                     val password = argsList.getOrElse(1) { "" }
                     val cmd = SevenZipCommand.buildListCommand(binaryPath, archivePath, password)
+                    log("  7zzs 命令: $cmd")
                     val (output, exitCode) = execCommand(cmd)
+                    log("  退出码=$exitCode, 输出长度=${output.length}")
                     if (exitCode == 0) Pair(OK, output) else Pair(ERR, output.ifEmpty { "退出码: $exitCode" })
                 }
                 "list_detail" -> {
@@ -97,32 +140,41 @@ object P7zipDaemonMain {
                     val archivePath = argsList[0]
                     val password = argsList.getOrElse(1) { "" }
                     val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password)
+                    log("  7zzs 命令: $cmd")
                     val (output, exitCode) = execCommand(cmd)
+                    log("  退出码=$exitCode, 输出长度=${output.length}")
                     if (exitCode == 0) Pair(OK, output) else Pair(ERR, output.ifEmpty { "退出码: $exitCode" })
                 }
                 "detect_password" -> {
                     if (argsList.isEmpty()) return Pair(ERR, "缺少 archivePath")
                     val archivePath = argsList[0]
                     val cmd = SevenZipCommand.buildListDetailCommand(binaryPath, archivePath, password = "dummy")
+                    log("  7zzs 命令: $cmd")
                     val (output, exitCode) = execCommand(cmd)
+                    log("  退出码=$exitCode, 输出长度=${output.length}")
                     val needsPassword = when {
                         exitCode == 0 && (output.contains("7zAES", ignoreCase = true) || output.contains("Encrypted = +")) -> "true"
                         exitCode == 0 -> "false"
                         output.contains("Cannot open encrypted archive", ignoreCase = true) -> "true"
                         else -> "null"
                     }
+                    log("  密码检测结果: $needsPassword")
                     Pair(OK, needsPassword)
                 }
                 "extract_single" -> {
                     if (argsList.size < 3) return Pair(ERR, "参数不足: 需要 archivePath, fileName, outputDir")
                     val cmd = SevenZipCommand.buildExtractSingleCommand(binaryPath, argsList[0], argsList[1], argsList[2], argsList.getOrElse(3) { "" })
+                    log("  7zzs 命令: $cmd")
                     val (output, exitCode) = execCommand(cmd)
+                    log("  退出码=$exitCode, 输出长度=${output.length}")
                     if (exitCode == 0) Pair(OK, output) else Pair(ERR, output.ifEmpty { "退出码: $exitCode" })
                 }
                 "extract_all" -> {
                     if (argsList.size < 2) return Pair(ERR, "参数不足: 需要 archivePath, outputDir")
                     val cmd = SevenZipCommand.buildExtractCommand(binaryPath, argsList[0], argsList[1], argsList.getOrElse(2) { "" })
+                    log("  7zzs 命令: $cmd")
                     val (output, exitCode) = execCommand(cmd)
+                    log("  退出码=$exitCode, 输出长度=${output.length}")
                     if (exitCode == 0) Pair(OK, output) else Pair(ERR, output.ifEmpty { "退出码: $exitCode" })
                 }
                 "compress" -> {
@@ -136,7 +188,9 @@ object P7zipDaemonMain {
                         encryptNames = argsList.getOrElse(6) { "" } == "true"
                     )
                     val cmd = SevenZipCommand.build(binaryPath, options)
+                    log("  7zzs 命令: $cmd")
                     val (output, exitCode) = execCommand(cmd)
+                    log("  退出码=$exitCode, 输出长度=${output.length}")
                     if (exitCode == 0) Pair(OK, output) else Pair(ERR, output.ifEmpty { "退出码: $exitCode" })
                 }
                 "compress_stream" -> {
@@ -150,19 +204,21 @@ object P7zipDaemonMain {
                         encryptNames = argsList.getOrElse(6) { "" } == "true"
                     )
                     val cmd = SevenZipCommand.build(binaryPath, options)
+                    log("  流式压缩命令: $cmd")
                     execStreaming(cmd)
-                    // 返回值由 execStreaming 直接写入 stdout（含 OK/ERR + END）
-                    return Pair("", "") // 不再通过主循环写入
+                    return Pair("", "")
                 }
                 "extract_stream" -> {
                     if (argsList.size < 2) return Pair(ERR, "参数不足: 需要 archivePath, outputDir")
                     val cmd = SevenZipCommand.buildExtractCommand(binaryPath, argsList[0], argsList[1], argsList.getOrElse(2) { "" })
+                    log("  流式解压命令: $cmd")
                     execStreaming(cmd)
                     return Pair("", "")
                 }
                 else -> Pair(ERR, "未知命令: $command")
             }
         } catch (e: Exception) {
+            log("executeCommand 异常: ${e.javaClass.simpleName}: ${e.message}")
             Pair(ERR, "异常: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
@@ -181,7 +237,6 @@ object P7zipDaemonMain {
         val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", "$cmd 2>&1"))
         val reader = process.inputStream.bufferedReader(Charsets.UTF_8)
 
-        // 透传进度行
         var line: String?
         while (reader.readLine().also { line = it } != null) {
             println(line)
@@ -191,6 +246,7 @@ object P7zipDaemonMain {
         val stderr = process.errorStream.bufferedReader(Charsets.UTF_8).readText().trim()
         process.waitFor()
         val exitCode = process.exitValue()
+        log("  流式命令完成, 退出码=$exitCode")
 
         if (exitCode == 0) {
             println(OK)

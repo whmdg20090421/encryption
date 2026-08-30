@@ -19,7 +19,7 @@ import kotlin.concurrent.thread
 object P7zipClient {
 
     private const val TAG = "P7zipClient"
-    private const val MAX_STARTUP_WAIT_MS = 5000L
+    private const val MAX_STARTUP_WAIT_MS = 15000L
     private const val MARKER = "<<<END>>>"
     private const val OK = "<<<OK>>>"
     private const val ERR = "<<<ERR>>>"
@@ -221,68 +221,129 @@ object P7zipClient {
     }
 
     suspend fun ensureDaemonOrThrow() {
-        if (isDaemonAlive()) return
+        val alive = isDaemonAlive()
+        Log.d(TAG, "ensureDaemonOrThrow: alive=$alive, process=${daemonProcess != null}")
+        if (alive) return
         startDaemon()
     }
 
     suspend fun startDaemon() = withContext(Dispatchers.IO) {
+        val totalStart = System.currentTimeMillis()
+        Log.i(TAG, "══════════ startDaemon 开始 ══════════")
+
         val context = appContext
             ?: throw RuntimeException("P7zipClient 未初始化，请先调用 init(context)")
 
+        // Step 1: 获取二进制路径
+        val t1 = System.currentTimeMillis()
+        Log.d(TAG, "[1/6] 获取 7zzs 二进制路径...")
         val binaryPath = try {
             BinaryExtractor.ensureExtracted(context).absolutePath
         } catch (e: Exception) {
             throw RuntimeException("7zzs 二进制缺失: ${e.message}", e)
         }
+        Log.d(TAG, "[1/6] 二进制路径: $binaryPath (${System.currentTimeMillis() - t1}ms)")
 
-        val apkPath = context.applicationInfo.sourceDir
+        // Step 2: 解析权限
+        val t2 = System.currentTimeMillis()
+        Log.d(TAG, "[2/6] 解析权限级别...")
         val permission = resolveMaxPermission()
+        Log.d(TAG, "[2/6] 权限级别: $permission (${System.currentTimeMillis() - t2}ms)")
+
+        // Step 3: 构建命令
+        val apkPath = context.applicationInfo.sourceDir
         val mainClass = "com.whmdg.mczj.tools.util.P7zipDaemonMain"
         val daemonCmd = "app_process -Djava.class.path=$apkPath / $mainClass $binaryPath"
+        val fullCmd = when (permission) {
+            Permission.ROOT -> "su -c \"$daemonCmd\""
+            else -> daemonCmd
+        }
+        Log.d(TAG, "[3/6] 启动命令: $fullCmd")
 
-        Log.d(TAG, "启动 daemon: 权限=$permission")
-
+        // Step 4: 启动进程
+        val t4 = System.currentTimeMillis()
+        Log.d(TAG, "[4/6] Runtime.exec() 启动进程...")
         val process = try {
             when (permission) {
                 Permission.ROOT -> Runtime.getRuntime().exec(arrayOf("su", "-c", daemonCmd))
                 else -> Runtime.getRuntime().exec(arrayOf("sh", "-c", daemonCmd))
             }
         } catch (e: Exception) {
-            throw RuntimeException("启动 P7zipDaemon 失败: ${e.message}", e)
+            Log.e(TAG, "[4/6] 进程启动失败", e)
+            throw RuntimeException("启动 P7zipDaemon 失败: ${e.message}\n命令: $fullCmd", e)
         }
+        val pid = getPid(process)
+        Log.d(TAG, "[4/6] 进程已创建, PID=$pid (${System.currentTimeMillis() - t4}ms)")
 
         daemonProcess = process
         daemonStdin = process.outputStream.bufferedWriter(Charsets.UTF_8)
         daemonOut = process.inputStream.bufferedReader(Charsets.UTF_8)
 
-        // 后台排空 stderr，防止 pipe buffer 满导致 daemon 阻塞
+        // Step 5: 后台排空 stderr
+        Log.d(TAG, "[5/6] 启动 stderr 后台排空线程...")
         val stderrBuf = StringBuilder()
         thread(isDaemon = true) {
             try {
-                process.errorStream.bufferedReader(Charsets.UTF_8).forEachLine { stderrBuf.appendLine(it) }
+                process.errorStream.bufferedReader(Charsets.UTF_8).forEachLine {
+                    stderrBuf.appendLine(it)
+                    Log.w(TAG, "[daemon-stderr] $it")
+                }
             } catch (_: Exception) {}
         }
 
-        // 等待 <<<READY>>>（5 秒超时）
+        // Step 6: 等待 <<<READY>>>
+        val t6 = System.currentTimeMillis()
+        Log.d(TAG, "[6/6] 等待 <<<READY>>> (超时=${MAX_STARTUP_WAIT_MS}ms)...")
+
         val ready = withTimeoutOrNull(MAX_STARTUP_WAIT_MS) {
-            daemonOut?.readLine()
+            Log.d(TAG, "[6/6] readLine() 阻塞中...")
+            val line = daemonOut?.readLine()
+            Log.d(TAG, "[6/6] readLine() 返回: $line")
+            line
         }
 
+        val elapsed = System.currentTimeMillis() - t6
+        Log.d(TAG, "[6/6] 等待结果: ready=$ready, 耗时=${elapsed}ms")
+
         if (ready == null || !ready.contains("READY")) {
+            // 收集完整诊断信息
             val stderr = stderrBuf.toString().trim()
-            val stdout = try { daemonOut?.readLine() } catch (_: Exception) { null }
+            val stdoutLines = mutableListOf<String>()
+            try {
+                while (true) {
+                    val line = daemonOut?.readLine() ?: break
+                    stdoutLines.add(line)
+                    Log.w(TAG, "[daemon-stdout-extra] $line")
+                }
+            } catch (_: Exception) {}
+
+            val totalElapsed = System.currentTimeMillis() - totalStart
+            val diag = buildString {
+                appendLine("══════════ P7zipDaemon 启动失败诊断 ══════════")
+                appendLine("总耗时: ${totalElapsed}ms")
+                appendLine("权限: $permission")
+                appendLine("PID: $pid")
+                appendLine("命令: $fullCmd")
+                appendLine("二进制: $binaryPath")
+                appendLine("APK: $apkPath")
+                appendLine("--- stderr (${stderr.length} chars) ---")
+                if (stderr.isNotEmpty()) appendLine(stderr) else appendLine("(空)")
+                appendLine("--- stdout 额外行 ---")
+                if (stdoutLines.isNotEmpty()) stdoutLines.forEach { appendLine(it) } else appendLine("(空)")
+                appendLine("进程退出码: ${try { process.exitValue() } catch (_: Exception) { "N/A" }}")
+                appendLine("═══════════════════════════════════════════")
+            }
+            Log.e(TAG, diag)
+
             daemonProcess = null
             daemonStdin = null
             daemonOut = null
-            throw RuntimeException(
-                "P7zipDaemon 启动超时\n权限=$permission" +
-                    (if (stdout != null) "\nstdout: $stdout" else "") +
-                    (if (stderr.isNotEmpty()) "\nstderr:\n$stderr" else "")
-            )
+            throw RuntimeException(diag)
         }
 
+        val totalElapsed = System.currentTimeMillis() - totalStart
         persistPermission(permission)
-        Log.d(TAG, "Daemon 已启动, PID=${getPid(process)}")
+        Log.i(TAG, "══════════ startDaemon 成功 ══════════ PID=$pid, 耗时=${totalElapsed}ms")
     }
 
     fun shutdownDaemon() {

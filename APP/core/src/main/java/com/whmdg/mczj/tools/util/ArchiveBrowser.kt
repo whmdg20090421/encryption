@@ -72,7 +72,11 @@ object ArchiveBrowser {
         archivePath: String,
         permissionLevel: String
     ): PasswordCheckResult = withContext(Dispatchers.IO) {
+        val t0 = System.currentTimeMillis()
+        Log.d(TAG, "checkPasswordRequired 开始: archivePath=$archivePath")
         val result = P7zipClient.detectPassword(archivePath)
+        val elapsed = System.currentTimeMillis() - t0
+        Log.d(TAG, "checkPasswordRequired 完成 (${elapsed}ms): success=${result.isSuccess}")
         result.fold(
             onSuccess = { output ->
                 // output 是 "true" / "false" / "null"
