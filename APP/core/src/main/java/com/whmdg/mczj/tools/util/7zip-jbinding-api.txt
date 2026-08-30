@@ -1,0 +1,368 @@
+7-Zip-JBinding-4Android API 参考
+================================
+仓库: https://github.com/omicronapps/7-Zip-JBinding-4Android
+版本: Release-16.02-2.03
+依赖: implementation("com.github.omicronapps:7-Zip-JBinding-4Android:Release-16.02-2.03")
+
+包名: net.sf.sevenzipjbinding
+
+================================
+一、核心类 SevenZip（静态入口）
+================================
+
+// 打开已有压缩包（读取）
+static IInArchive openInArchive(ArchiveFormat format, IInStream stream)
+static IInArchive openInArchive(ArchiveFormat format, IInStream stream, IArchiveOpenCallback callback)
+static IInArchive openInArchive(ArchiveFormat format, IInStream stream, String password)
+// format 可传 null 自动检测格式
+
+// 创建新压缩包（写入）
+static IOutCreateArchive<IOutItemAllFormats> openOutArchive(ArchiveFormat format)
+static IOutCreateArchive7z openOutArchive7z()
+static IOutCreateArchiveZip openOutArchiveZip()
+static IOutCreateArchiveTar openOutArchiveTar()
+static IOutCreateArchiveBZip2 openOutArchiveBZip2()
+static IOutCreateArchiveGZip openOutArchiveGZip()
+
+// 版本信息
+static SevenZip.Version getSevenZipVersion()
+static boolean isInitializedSuccessfully()
+
+================================
+二、ArchiveFormat 枚举
+================================
+
+提取(X) 压缩(X) 枚举值:
+  7z        X  X  SEVEN_ZIP
+  Zip       X  X  ZIP
+  Tar       X  X  TAR
+  GZip      X  X  GZIP
+  BZip2     X  X  BZIP2
+  Rar       X  -  RAR
+  Rar5      X  -  RAR5
+  Arj       X  -  ARJ
+  Cab       X  -  CAB
+  Chm       X  -  CHM
+  Cpio      X  -  CPIO
+  Iso       X  -  ISO
+  Lzh       X  -  LZH
+  Lzma      X  -  LZMA
+  Nsis      X  -  NSIS
+  Ar        X  -  AR (deb/a/lib)
+  Rpm       X  -  RPM
+  Udf       X  -  UDF
+  Wim       X  -  WIM
+  Xar       X  -  XAR
+  Z         X  -  Z
+  Split     -  -  SPLIT
+
+方法:
+  String getMethodName()           // "7z", "Zip" 等
+  boolean isOutArchiveSupported()  // 是否支持创建
+  boolean supportMultipleFiles()   // 是否支持多文件
+
+================================
+三、IInArchive 接口（读取压缩包）
+================================
+
+int getNumberOfItems()
+  // 返回压缩包内文件/目录数量
+
+Object getProperty(int index, PropID propID)
+  // 获取属性值（返回 Object，需转型）
+  // index: 0-based
+  // propID: 属性枚举
+
+String getStringProperty(int index, PropID propID)
+  // 获取属性的人类可读字符串形式
+
+void extract(int[] indices, boolean testMode, IArchiveExtractCallback callback)
+  // indices: 要提取的文件索引数组，null=全部
+  // testMode: true=仅测试，false=实际提取
+
+ExtractOperationResult extractSlow(int index, ISequentialOutStream outStream)
+  // 逐个提取，效率较低但简单
+
+ArchiveFormat getArchiveFormat()
+  // 返回实际的压缩包格式
+
+void close()
+  // 必须调用，关闭压缩包
+
+================================
+四、PropID 枚举（属性标识）
+================================
+
+常用属性:
+  PATH              String   文件完整路径（如 "dir/file.ext"）
+  IS_FOLDER         Boolean  是否为目录
+  SIZE              Long     原始大小（未压缩）
+  PACKED_SIZE       Long     压缩后大小
+  ENCRYPTED         Boolean  是否加密
+  ATTRIBUTES        Integer  文件属性位掩码
+  LAST_MODIFICATION_TIME  Date  最后修改时间
+  CREATION_TIME     Date     创建时间
+  LAST_ACCESS_TIME  Date     最后访问时间
+
+属性值类型:
+  getProperty() 返回 Object，需根据 PropID 转型:
+    PropID.IS_FOLDER → Boolean
+    PropID.SIZE → Long
+    PropID.ENCRYPTED → Boolean
+    PropID.PATH → String
+    PropID.PACKED_SIZE → Long
+
+================================
+五、IArchiveOpenCallback 接口
+================================
+
+void setTotal(Long files, Long bytes)
+  // 设置总工作量（可选参数）
+
+void setCompleted(Long files, Long bytes)
+  // 设置已完成工作量（可选参数）
+
+================================
+六、ICryptoGetTextPassword 接口（提供密码）
+================================
+
+String cryptoGetTextPassword()
+  // 返回密码字符串
+  // 用于打开加密压缩包
+
+================================
+七、IArchiveExtractCallback 接口（解压回调）
+================================
+
+继承: IProgress
+
+ISequentialOutStream getStream(int index, ExtractAskMode extractAskMode)
+  // 返回输出流，接收解压数据
+  // extractAskMode:
+  //   EXTRACT - 实际解压
+  //   TEST    - 仅测试
+  //   DISPLAY - 显示（预览）
+  // 返回 null 跳过当前文件
+
+void prepareOperation(ExtractAskMode extractAskMode)
+  // 准备操作（可空实现）
+
+void setOperationResult(ExtractOperationResult result)
+  // 操作结果:
+  //   OK - 成功
+  //   UNSUPPORTED_METHOD
+  //   DATA_ERROR
+  //   CRC_ERROR
+  //   ...
+
+================================
+八、IProgress 接口（进度回调）
+================================
+
+void setTotal(long total)
+  // 设置总字节数
+
+void setCompleted(long complete)
+  // 设置已处理字节数
+
+================================
+九、ExtractAskMode 枚举
+================================
+
+EXTRACT  实际提取
+TEST     仅测试
+DISPLAY  显示（预览内容）
+
+================================
+十、ExtractOperationResult 枚举
+================================
+
+OK
+UNSUPPORTED_METHOD
+DATA_ERROR
+CRC_ERROR
+...
+
+================================
+十一、IOutCreateArchive<T> 接口（创建压缩包）
+================================
+
+void createArchive(ISequentialOutStream outStream, int numberOfItems,
+                   IOutCreateCallback<? extends T> callback)
+  // 创建压缩包
+  // outStream: 输出流
+  // numberOfItems: 文件数量
+  // callback: 提供每个文件的信息和数据流
+
+ArchiveFormat getArchiveFormat()
+
+================================
+十二、格式专用创建接口
+================================
+
+--- IOutCreateArchive7z ---
+  继承: IOutFeatureSetLevel, IOutFeatureSetSolid,
+        IOutFeatureSetMultithreading, IOutFeatureSetEncryptHeader
+
+--- IOutCreateArchiveZip ---
+  继承: IOutFeatureSetLevel
+  createArchive(IOutStream outStream, int numberOfItems,
+                IOutCreateCallback<? extends IOutItemZip> callback)
+  // 注意: Zip 需要 IOutStream（可 seek），不是 ISequentialOutStream
+
+--- IOutCreateArchiveTar ---
+  // 无额外配置方法
+
+--- IOutCreateArchiveGZip ---
+  继承: IOutFeatureSetLevel
+
+--- IOutCreateArchiveBZip2 ---
+  继承: IOutFeatureSetLevel
+
+================================
+十三、Feature 配置接口
+================================
+
+--- IOutFeatureSetLevel ---
+  void setLevel(int level)
+    // 0=Copy, 1=Fastest, 3=Fast, 5=Normal, 7=Maximum, 9=Ultra
+
+--- IOutFeatureSetEncryptHeader ---
+  void setHeaderEncryption(boolean enabled)
+    // 加密头部（文件名也加密），仅 7z 支持
+    // 需配合 ICryptoGetTextPassword 提供密码
+
+--- IOutFeatureSetSolid ---
+  void setSolid(boolean solid)
+  void setSolidFiles(int count)
+  void setSolidSize(long bytes)
+  void setSolidExtension(boolean extension)
+
+--- IOutFeatureSetMultithreading ---
+  void setNumThreads(int numThreads)
+
+================================
+十四、IOutCreateCallback<T> 接口（创建回调）
+================================
+
+继承: IProgress
+
+T getItemInformation(int index, OutItemFactory<T> factory)
+  // 返回第 index 个文件的信息
+  // factory.createOutItem() 创建空对象
+  // 设置 path, isDir, dataSize 等属性
+
+ISequentialInStream getStream(int index)
+  // 返回第 index 个文件的输入流（压缩用）
+  // 目录返回 null
+
+void setOperationResult(boolean operationResultOk)
+
+================================
+十五、IOutItemBase / IOutItem7z / IOutItemZip（文件属性）
+================================
+
+通用属性（IOutItemBase）:
+  Long getDataSize() / setDataSize(Long)
+  Boolean getUpdateIsNewData() / setUpdateIsNewData(Boolean)
+
+7z 专用（IOutItem7z）:
+  String getPropertyPath() / setPropertyPath(String)
+  Boolean getPropertyIsDir() / setPropertyIsDir(Boolean)
+  Integer getPropertyAttributes() / setPropertyAttributes(Integer)
+  Date getPropertyLastModificationTime() / setPropertyLastModificationTime(Date)
+  Boolean getPropertyIsAnti() / setPropertyIsAnti(Boolean)
+
+Zip 专用（IOutItemZip）:
+  String getPropertyPath() / setPropertyPath(String)
+  Boolean getPropertyIsDir() / setPropertyIsDir(Boolean)
+  Integer getPropertyAttributes() / setPropertyAttributes(Integer)
+  Date getPropertyLastModificationTime() / setPropertyLastModificationTime(Date)
+  Date getPropertyLastAccessTime() / setPropertyLastAccessTime(Date)
+  Date getPropertyCreationTime() / setPropertyCreationTime(Date)
+
+================================
+十六、IOutStream 接口（Zip 等格式需要）
+================================
+
+继承: ISequentialOutStream, ISeekableStream
+
+void setSize(long newSize)
+  // 设置输出流大小
+
+================================
+十七、输入/输出流接口
+================================
+
+--- IInStream ---
+  继承: ISequentialInStream, ISeekableStream
+  // 读取流
+
+--- ISequentialInStream ---
+  int read(byte[] data)
+  // 读取数据，返回读取字节数
+
+--- ISequentialOutStream ---
+  int write(byte[] data)
+  // 写入数据，返回写入字节数
+
+--- ISeekableStream ---
+  void seek(long offset, int seekOrigin)
+  // seekOrigin: SEEK_SET(0), SEEK_CUR(1), SEEK_END(2)
+
+================================
+十八、RandomAccessFileInStream（文件读取流）
+================================
+
+构造: new RandomAccessFileInStream(RandomAccessFile raf)
+  // 用于 SevenZip.openInArchive() 的 IInStream 参数
+
+================================
+十九、常用使用模式
+================================
+
+--- 1. 列出压缩包内容 ---
+  val raf = RandomAccessFileInStream(RandomAccessFile(file, "r"))
+  val inArchive = SevenZip.openInArchive(null, raf, "password")
+  val count = inArchive.numberOfItems
+  for (i in 0 until count) {
+      val path = inArchive.getStringProperty(i, PropID.PATH)
+      val isDir = inArchive.getProperty(i, PropID.IS_FOLDER) as Boolean
+      val size = inArchive.getProperty(i, PropID.SIZE) as Long
+  }
+  inArchive.close()
+
+--- 2. 提取全部文件 ---
+  inArchive.extract(null, false, object : IArchiveExtractCallback {
+      override fun getStream(index: Int, mode: ExtractAskMode): ISequentialOutStream {
+          return ISequentialOutStream { data ->
+              // 写入文件
+              data.size
+          }
+      }
+      override fun prepareOperation(mode: ExtractAskMode) {}
+      override fun setOperationResult(result: ExtractOperationResult) {}
+      override fun setTotal(total: Long) {}
+      override fun setCompleted(complete: Long) {}
+  })
+
+--- 3. 提取单个文件 ---
+  inArchive.extract(intArrayOf(index), false, callback)
+
+--- 4. 创建 7z 压缩包 ---
+  val outArchive = SevenZip.openOutArchive7z()
+  outArchive.setLevel(5)
+  outArchive.setHeaderEncryption(true)  // 可选
+  outArchive.createArchive(outStream, items.size, callback)
+  outArchive.close()
+
+--- 5. 创建 Zip 压缩包 ---
+  val outArchive = SevenZip.openOutArchiveZip()
+  outArchive.setLevel(5)
+  outArchive.createArchive(outStream as IOutStream, items.size, callback)
+  outArchive.close()
+
+--- 6. 创建 Tar 压缩包 ---
+  val outArchive = SevenZip.openOutArchiveTar()
+  outArchive.createArchive(outStream, items.size, callback)
+  outArchive.close()
