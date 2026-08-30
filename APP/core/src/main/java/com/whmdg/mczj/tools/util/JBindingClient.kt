@@ -9,7 +9,6 @@ import net.sf.sevenzipjbinding.ExtractAskMode
 import net.sf.sevenzipjbinding.ExtractOperationResult
 import net.sf.sevenzipjbinding.IArchiveExtractCallback
 import net.sf.sevenzipjbinding.IInArchive
-import net.sf.sevenzipjbinding.IOutCreateArchive
 import net.sf.sevenzipjbinding.IOutCreateArchive7z
 import net.sf.sevenzipjbinding.IOutCreateArchiveZip
 import net.sf.sevenzipjbinding.IOutCreateCallback
@@ -17,10 +16,10 @@ import net.sf.sevenzipjbinding.IOutItem7z
 import net.sf.sevenzipjbinding.IOutItemZip
 import net.sf.sevenzipjbinding.ISequentialInStream
 import net.sf.sevenzipjbinding.ISequentialOutStream
-import net.sf.sevenzipjbinding.OutItemFactory
 import net.sf.sevenzipjbinding.PropID
 import net.sf.sevenzipjbinding.SevenZip
 import net.sf.sevenzipjbinding.SevenZipException
+import net.sf.sevenzipjbinding.impl.OutItemFactory
 import net.sf.sevenzipjbinding.impl.RandomAccessFileInStream
 import net.sf.sevenzipjbinding.impl.RandomAccessFileOutStream
 import java.io.File
@@ -164,14 +163,17 @@ object JBindingClient {
     suspend fun detectPassword(archivePath: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             try {
+                var encrypted = false
                 withInArchive(archivePath, "dummy") { inArchive ->
                     val count = inArchive.numberOfItems
                     for (i in 0 until count) {
-                        val encrypted = inArchive.getProperty(i, PropID.ENCRYPTED) as? Boolean ?: false
-                        if (encrypted) return@runCatching "true"
+                        if (inArchive.getProperty(i, PropID.ENCRYPTED) as? Boolean ?: false) {
+                            encrypted = true
+                            break
+                        }
                     }
                 }
-                "false"
+                encrypted.toString()
             } catch (e: SevenZipException) {
                 val msg = e.message ?: ""
                 when {
@@ -293,6 +295,7 @@ object JBindingClient {
 
             outArchive.createArchive(outStream, files.size, object : IOutCreateCallback<IOutItem7z> {
                 private var currentItem = 0
+                private var totalBytes = 0L
 
                 override fun getItemInformation(index: Int, factory: OutItemFactory<IOutItem7z>): IOutItem7z {
                     val item = factory.createOutItem()
@@ -309,10 +312,10 @@ object JBindingClient {
                     return FileSequentialInStream(file)
                 }
 
-                override fun setTotal(total: Long) {}
+                override fun setTotal(total: Long) { totalBytes = total }
                 override fun setCompleted(complete: Long) {
                     onLine?.let { callback ->
-                        val percent = if (total > 0) (complete * 100 / total).toInt() else 0
+                        val percent = if (totalBytes > 0) (complete * 100 / totalBytes).toInt() else 0
                         callback("  $percent%  ${currentItem + 1}")
                     }
                 }
@@ -344,6 +347,7 @@ object JBindingClient {
 
             outArchive.createArchive(outStream, files.size, object : IOutCreateCallback<IOutItemZip> {
                 private var currentItem = 0
+                private var totalBytes = 0L
 
                 override fun getItemInformation(index: Int, factory: OutItemFactory<IOutItemZip>): IOutItemZip {
                     val item = factory.createOutItem()
@@ -360,10 +364,10 @@ object JBindingClient {
                     return FileSequentialInStream(file)
                 }
 
-                override fun setTotal(total: Long) {}
+                override fun setTotal(total: Long) { totalBytes = total }
                 override fun setCompleted(complete: Long) {
                     onLine?.let { callback ->
-                        val percent = if (total > 0) (complete * 100 / total).toInt() else 0
+                        val percent = if (totalBytes > 0) (complete * 100 / totalBytes).toInt() else 0
                         callback("  $percent%  ${currentItem + 1}")
                     }
                 }
@@ -436,7 +440,7 @@ object JBindingClient {
             return if (bytesRead == -1) 0 else bytesRead
         }
 
-        fun close() = inputStream.close()
+        override fun close() = inputStream.close()
     }
 
     private val FORMAT_MAP = mapOf(
