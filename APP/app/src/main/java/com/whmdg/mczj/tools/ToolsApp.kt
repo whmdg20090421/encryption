@@ -37,6 +37,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
             .setTimeout(10))
         installGlobalCrashHandler()
         AnrWatchdog.start(this)
+        ProcessMonitorService.start(this)
         migrateWebViewData()
         AppIconHelper.init(this)
         WebView.setDataDirectorySuffix("app")

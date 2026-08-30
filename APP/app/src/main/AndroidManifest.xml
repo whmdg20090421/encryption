@@ -189,6 +189,12 @@
             android:enabled="true"
             android:exported="true"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <!-- 独立进程日志监控（主进程崩溃不受影响） -->
+        <service
+            android:name=".ProcessMonitorService"
+            android:process=":monitor"
+            android:exported="false" />
     </application>
 
 </manifest>
