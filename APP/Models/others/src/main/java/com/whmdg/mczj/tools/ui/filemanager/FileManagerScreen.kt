@@ -5128,6 +5128,7 @@ fun FileManagerScreen(
     val archivePwdEntry = vm.archivePasswordRequest
     if (archivePwdEntry != null) {
         val pending7zFile = vm.pending7zFileEntry
+        val pwdContext = LocalContext.current
         com.whmdg.mczj.tools.auth.PasswordDialog(
             title = "输入压缩包密码",
             onDismiss = {
@@ -5139,7 +5140,7 @@ fun FileManagerScreen(
                 // 7z：密码验证+整体解压完成后，自动打开之前点击的文件
                 if (ok && pending7zFile != null) {
                     vm.pending7zFileEntry = null
-                    vm.openArchiveFile(LocalContext.current, pending7zFile)
+                    vm.openArchiveFile(pwdContext, pending7zFile)
                 }
                 ok
             }

@@ -3842,35 +3842,37 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         val cancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
         kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
-            val options = CompressService.ExtractOptions(
-                archivePath = entry.path,
-                outputDir = outputDir.absolutePath,
-                password = password,
-                fileSizes = fileSizes,
-                totalUncompressedBytes = totalBytes
-            )
-            CompressService.extract(
-                context = context, options = options, permissionLevel = permLevel,
-                cancelFlag = cancelFlag,
-                callback = object : CompressService.ProgressCallback {
-                    override fun onProgress(info: CompressService.ProgressInfo) {
-                        kotlinx.coroutines.runBlocking(Dispatchers.Main) {
-                            sevenZipExtractProgress = info.progress
-                            sevenZipExtractBytesProcessed = info.bytesProcessed
+            kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                val options = CompressService.ExtractOptions(
+                    archivePath = entry.path,
+                    outputDir = outputDir.absolutePath,
+                    password = password,
+                    fileSizes = fileSizes,
+                    totalUncompressedBytes = totalBytes
+                )
+                CompressService.extract(
+                    context = context, options = options, permissionLevel = permLevel,
+                    cancelFlag = cancelFlag,
+                    callback = object : CompressService.ProgressCallback {
+                        override fun onProgress(info: CompressService.ProgressInfo) {
+                            kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+                                sevenZipExtractProgress = info.progress
+                                sevenZipExtractBytesProcessed = info.bytesProcessed
+                            }
+                        }
+                        override fun onComplete(success: Boolean, path: String?, error: String?) {
+                            kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+                                sevenZipExtracting = false
+                                sevenZipExtractProgress = 0f
+                            }
+                            if (success) {
+                                CompressPreviewCache.updateRecord(context, entry.path, File(entry.path).lastModified(), File(entry.path).length())
+                            }
+                            cont.resume(success) {}
                         }
                     }
-                    override fun onComplete(success: Boolean, path: String?, error: String?) {
-                        kotlinx.coroutines.runBlocking(Dispatchers.Main) {
-                            sevenZipExtracting = false
-                            sevenZipExtractProgress = 0f
-                        }
-                        if (success) {
-                            CompressPreviewCache.updateRecord(context, entry.path, File(entry.path).lastModified(), File(entry.path).length())
-                        }
-                        cont.resume(success) {}
-                    }
-                }
-            )
+                )
+            }
         }
     }
 
@@ -4016,32 +4018,34 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
             val cancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
             val extractOk = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
-                val options = CompressService.ExtractOptions(
-                    archivePath = session.archivePath,
-                    outputDir = outputDir7z.absolutePath,
-                    password = password,
-                    fileSizes = fileSizes,
-                    totalUncompressedBytes = totalBytes
-                )
-                CompressService.extract(
-                    context = context, options = options, permissionLevel = permLevel,
-                    cancelFlag = cancelFlag,
-                    callback = object : CompressService.ProgressCallback {
-                        override fun onProgress(info: CompressService.ProgressInfo) {
-                            kotlinx.coroutines.runBlocking(Dispatchers.Main) {
-                                sevenZipExtractProgress = info.progress
-                                sevenZipExtractBytesProcessed = info.bytesProcessed
+                kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                    val options = CompressService.ExtractOptions(
+                        archivePath = session.archivePath,
+                        outputDir = outputDir7z.absolutePath,
+                        password = password,
+                        fileSizes = fileSizes,
+                        totalUncompressedBytes = totalBytes
+                    )
+                    CompressService.extract(
+                        context = context, options = options, permissionLevel = permLevel,
+                        cancelFlag = cancelFlag,
+                        callback = object : CompressService.ProgressCallback {
+                            override fun onProgress(info: CompressService.ProgressInfo) {
+                                kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+                                    sevenZipExtractProgress = info.progress
+                                    sevenZipExtractBytesProcessed = info.bytesProcessed
+                                }
+                            }
+                            override fun onComplete(success: Boolean, path: String?, error: String?) {
+                                kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+                                    sevenZipExtracting = false
+                                    sevenZipExtractProgress = 0f
+                                }
+                                cont.resume(success) {}
                             }
                         }
-                        override fun onComplete(success: Boolean, path: String?, error: String?) {
-                            kotlinx.coroutines.runBlocking(Dispatchers.Main) {
-                                sevenZipExtracting = false
-                                sevenZipExtractProgress = 0f
-                            }
-                            cont.resume(success) {}
-                        }
-                    }
-                )
+                    )
+                }
             }
             if (extractOk) {
                 CompressPreviewCache.updateRecord(context, session.archivePath, lastModified, fileSize)
