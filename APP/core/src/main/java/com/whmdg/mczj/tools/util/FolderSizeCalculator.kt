@@ -43,7 +43,7 @@ suspend fun calculateFolderSize(
     cancelFlag: AtomicBoolean? = null
 ): SizeCalcResult {
     // ── 0. 统计总目录数（用于进度条） ──
-    val escaped = SevenZipCommand.escape(rootPath)
+    val escaped = ShellEscape.escape(rootPath)
     val (countOut, countErr, countExit) = accessor.exec("find $escaped -type d | wc -l", cancelFlag)
     if (isCancelled()) return SizeCalcResult.Cancelled
     val totalDirs = countOut.trim().toIntOrNull()?.coerceAtLeast(0) ?: 0

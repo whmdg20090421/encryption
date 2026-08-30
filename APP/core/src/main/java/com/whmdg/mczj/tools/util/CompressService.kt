@@ -9,8 +9,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 压缩服务，通过 P7zipDaemon 持久守护进程实现。
- * 自动使用最高可用权限（Permission.MAX）。
+ * 压缩服务，通过 7-Zip JBinding 实现。
  */
 object CompressService {
 
@@ -30,7 +29,7 @@ object CompressService {
         val archivePath: String,
         val outputDir: String,
         val password: String = "",
-        val fileSizes: List<Long>,       // 每个文件的原始大小（从 7zzs l 获取，顺序与 -bsp1 一致）
+        val fileSizes: List<Long>,       // 每个文件的原始大小（从压缩包列表获取）
         val totalUncompressedBytes: Long  // 解压后总字节数
     )
 
@@ -50,7 +49,7 @@ object CompressService {
 
     /**
      * 压缩入口（挂起函数，在 Dispatchers.IO 上执行）。
-     * 通过 P7zipClient 流式执行，自动使用最高可用权限。
+     * 通过 JBindingClient 流式执行，自动使用最高可用权限。
      */
     suspend fun compress(
         context: Context,
@@ -63,7 +62,7 @@ object CompressService {
         val totalFiles = options.sourcePaths.sumOf { countFiles(it) }
 
         try {
-            val result = P7zipClient.compressStream(
+            val result = JBindingClient.compressStream(
                 sourcePaths = options.sourcePaths,
                 outputPath = options.outputPath,
                 format = options.format,
@@ -89,7 +88,7 @@ object CompressService {
 
     /**
      * 解压入口（挂起函数，在 Dispatchers.IO 上执行）。
-     * 通过 P7zipClient 流式执行，自动使用最高可用权限。
+     * 通过 JBindingClient 流式执行，自动使用最高可用权限。
      */
     suspend fun extract(
         context: Context,
@@ -99,7 +98,7 @@ object CompressService {
         callback: ProgressCallback
     ) = withContext(Dispatchers.IO) {
         try {
-            val result = P7zipClient.extractStream(
+            val result = JBindingClient.extractStream(
                 archivePath = options.archivePath,
                 outputDir = options.outputDir,
                 password = options.password
@@ -119,7 +118,7 @@ object CompressService {
         }
     }
 
-    /** 解析 7zzs -bsp1 输出的进度行，计算真实总体进度 */
+    /** 解析进度行，计算真实总体进度 */
     private fun parseProgressLine(
         line: String,
         totalBytes: Long,

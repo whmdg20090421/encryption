@@ -1173,10 +1173,12 @@ class CloudPaneController(
 
                 val zipFile = File(context.cacheDir, "${vaultName}_vault_sync.db.7z")
                 try {
-                    val binary = com.whmdg.mczj.tools.util.BinaryExtractor.ensureExtracted(context)
-                    val esc = com.whmdg.mczj.tools.util.SevenZipCommand::escape
-                    val cmd = "${esc(binary.absolutePath)} a ${esc(zipFile.absolutePath)} ${esc(dbFile.absolutePath)} -mx=9 -pmczj -mhe=on"
-                    com.whmdg.mczj.tools.security.ShellExecutor.execute(com.whmdg.mczj.tools.security.Permission.MAX, cmd)
+                    com.whmdg.mczj.tools.util.JBindingClient.compress(
+                        sourcePaths = listOf(dbFile.absolutePath),
+                        outputPath = zipFile.absolutePath,
+                        format = "7z", level = 9,
+                        password = "mczj", useAes = true, encryptNames = true
+                    ).getOrThrow()
 
                     // 切换状态：正在上传
                     withContext(Dispatchers.Main) {
@@ -1252,10 +1254,12 @@ class CloudPaneController(
 
             val zipFile = File(context.cacheDir, "${vaultName}_vault_sync.db.7z")
             try {
-                val binary = com.whmdg.mczj.tools.util.BinaryExtractor.ensureExtracted(context)
-                val esc = com.whmdg.mczj.tools.util.SevenZipCommand::escape
-                val cmd = "${esc(binary.absolutePath)} a ${esc(zipFile.absolutePath)} ${esc(dbFile.absolutePath)} -mx=9 -pmczj -mhe=on"
-                com.whmdg.mczj.tools.security.ShellExecutor.execute(com.whmdg.mczj.tools.security.Permission.MAX, cmd)
+                com.whmdg.mczj.tools.util.JBindingClient.compress(
+                    sourcePaths = listOf(dbFile.absolutePath),
+                    outputPath = zipFile.absolutePath,
+                    format = "7z", level = 9,
+                    password = "mczj", useAes = true, encryptNames = true
+                ).getOrThrow()
 
                 val metaDir = "${remoteBasePath}/.sync_meta"
                 try { webdavClient.mkdir(metaDir) } catch (_: Exception) {}
@@ -1320,10 +1324,11 @@ class CloudPaneController(
             // 解压
             val extractDir = File(context.cacheDir, "cloud_db_merge_${vaultName}")
             extractDir.mkdirs()
-            val binary = com.whmdg.mczj.tools.util.BinaryExtractor.ensureExtracted(context)
-            val esc = com.whmdg.mczj.tools.util.SevenZipCommand::escape
-            val cmd = "${esc(binary.absolutePath)} x ${esc(zipFile.absolutePath)} -o${esc(extractDir.absolutePath)} -pmczj -y"
-            com.whmdg.mczj.tools.security.ShellExecutor.execute(com.whmdg.mczj.tools.security.Permission.MAX, cmd)
+            com.whmdg.mczj.tools.util.JBindingClient.extractAll(
+                archivePath = zipFile.absolutePath,
+                outputDir = extractDir.absolutePath,
+                password = "mczj"
+            ).getOrThrow()
 
             // 读取远程 db 的 cloud_entries，合并到本地
             val remoteDbFile = File(extractDir, "vault_sync.db")
@@ -1388,10 +1393,11 @@ class CloudPaneController(
             onPhaseChange("正在解压数据库...")
             val extractDir = File(context.cacheDir, "cloud_db_diff_${vaultName}")
             extractDir.mkdirs()
-            val binary = com.whmdg.mczj.tools.util.BinaryExtractor.ensureExtracted(context)
-            val esc = com.whmdg.mczj.tools.util.SevenZipCommand::escape
-            val cmd = "${esc(binary.absolutePath)} x ${esc(zipFile.absolutePath)} -o${esc(extractDir.absolutePath)} -pmczj -y"
-            com.whmdg.mczj.tools.security.ShellExecutor.execute(com.whmdg.mczj.tools.security.Permission.MAX, cmd)
+            com.whmdg.mczj.tools.util.JBindingClient.extractAll(
+                archivePath = zipFile.absolutePath,
+                outputDir = extractDir.absolutePath,
+                password = "mczj"
+            ).getOrThrow()
 
             onPhaseChange("正在对比文件差异...")
             val remoteDbFile = File(extractDir, "vault_sync.db")

@@ -9,7 +9,7 @@ import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.util.DirEntry
 import com.whmdg.mczj.tools.util.FileAccessLevel
-import com.whmdg.mczj.tools.util.SevenZipCommand
+import com.whmdg.mczj.tools.util.ShellEscape
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -29,7 +29,7 @@ class ShellFileOperator(
     private val accessLevel: FileAccessLevel
 ) : FileOperator {
 
-    private fun escape(path: String): String = SevenZipCommand.escape(path)
+    private fun escape(path: String): String = ShellEscape.escape(path)
 
     private fun exec(command: String): String {
         return ShellExecutor.execute(permission, command, debug = true)
@@ -178,7 +178,7 @@ class ShellFileOperator(
 
     override fun listChildren(path: String): List<DirEntry>? {
         val normalized = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-        val escaped = SevenZipCommand.escape(normalized)
+        val escaped = ShellEscape.escape(normalized)
         val command = "find $escaped -maxdepth 1 -mindepth 1 -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
         val stdout = try {
             exec(command)

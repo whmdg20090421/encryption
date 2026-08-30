@@ -80,7 +80,7 @@ private class ShellAccessor(
 
     override fun listChildren(path: String): List<DirEntry>? {
         val normalized = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-        val escaped = SevenZipCommand.escape(normalized)
+        val escaped = ShellEscape.escape(normalized)
         // find -printf 直接输出各字段，无列对齐问题，保留前导空格等特殊字符
         val command = "find $escaped -maxdepth 1 -mindepth 1 -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
         val (stdout, _, exitCode) = try {
@@ -109,7 +109,7 @@ private class ShellAccessor(
     }
 
     override fun statMtime(path: String): Long? {
-        val escaped = SevenZipCommand.escape(path)
+        val escaped = ShellEscape.escape(path)
         val (stdout, _, exit) = try {
             exec("stat -c %Y $escaped")
         } catch (_: Throwable) { return null }

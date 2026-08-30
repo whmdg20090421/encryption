@@ -6,7 +6,7 @@ import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.ui.FileEntry
-import com.whmdg.mczj.tools.util.SevenZipCommand
+import com.whmdg.mczj.tools.util.ShellEscape
 import kotlinx.coroutines.*
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -90,12 +90,6 @@ object FileManagerPreloader {
                 rightPath = rHome
                 rightEntries = rEntries
 
-                // 预热 P7zipClient daemon，避免首次点击压缩包时等待启动
-                try {
-                    com.whmdg.mczj.tools.util.P7zipClient.ensureDaemonOrThrow()
-                } catch (e: Exception) {
-                    com.whmdg.mczj.tools.util.DiagnosticLog.log("FilePreload", "P7zipClient 预热失败: ${e.message}")
-                }
             } catch (e: Exception) {
                 // 预加载失败不影响正常使用
                 com.whmdg.mczj.tools.util.DiagnosticLog.log("FilePreload", "预加载失败: ${e.message}")
@@ -152,7 +146,7 @@ object FileManagerPreloader {
 
     private fun loadWithShell(path: String, showHidden: Boolean): List<FileEntry> {
         val normalized = if (path == "/") "/" else path.trimEnd('/').ifEmpty { "/" }
-        val escaped = SevenZipCommand.escape(normalized)
+        val escaped = ShellEscape.escape(normalized)
 
         // Phase 1: ls -1aF
         val lsCmd = "ls -1aF $escaped"

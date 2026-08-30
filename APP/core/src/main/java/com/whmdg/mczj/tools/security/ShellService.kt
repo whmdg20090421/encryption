@@ -28,7 +28,7 @@ class ShellService : IShellService.Stub() {
     }
 
     /**
-     * 执行命令并将 7zzs 进度实时写入文件。
+     * 执行命令并将进度实时写入文件。
      */
     override fun executeStreaming(command: String, progressPath: String) {
         val progressFile = java.io.File(progressPath)
@@ -37,7 +37,7 @@ class ShellService : IShellService.Stub() {
                 Permission.APPLICANT,
                 command,
                 onOutputLine = { line ->
-                    // 解析 7zzs 进度行: "  75%  1"（百分比 + 文件序号）
+                    // 解析进度行: "  75%  1"（百分比 + 文件序号）
                     val match = Regex("""\s*(\d+)%\s+(\d+)""").find(line)
                     if (match != null) {
                         val percent = match.groupValues[1]

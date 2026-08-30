@@ -28,7 +28,7 @@ import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.ArchiveBrowser
 import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.util.CompressPreviewCache
-import com.whmdg.mczj.tools.util.SevenZipCommand
+import com.whmdg.mczj.tools.util.ShellEscape
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.FileAccessLevel
 import com.whmdg.mczj.tools.util.FileAccessor
@@ -268,7 +268,7 @@ class FilePaneController(
      */
     internal fun shellPathExists(path: String): Boolean {
         if (!hasShellEngine()) return File(path).exists()
-        val escaped = SevenZipCommand.escape(path)
+        val escaped = ShellEscape.escape(path)
         return try {
             ShellExecutor.execute(Permission.MAX, "test -e $escaped")
             true
@@ -280,7 +280,7 @@ class FilePaneController(
      */
     internal fun shellIsDirectory(path: String): Boolean {
         if (!hasShellEngine()) return File(path).isDirectory
-        val escaped = SevenZipCommand.escape(path)
+        val escaped = ShellEscape.escape(path)
         return try {
             ShellExecutor.execute(Permission.MAX, "test -d $escaped")
             true
@@ -368,7 +368,7 @@ class FilePaneController(
         showHidden: Boolean
     ): List<String> {
         val normalized = if (dirPath == "/") "/" else dirPath.trimEnd('/').ifEmpty { "/" }
-        val escaped = SevenZipCommand.escape(normalized)
+        val escaped = ShellEscape.escape(normalized)
         val cmd = "ls -1aF $escaped"
         return try {
             val stdout = ShellExecutor.execute(Permission.MAX, cmd, debug = true)
@@ -418,7 +418,7 @@ class FilePaneController(
         }
 
         // find -printf 批量填充元数据
-        val escaped = SevenZipCommand.escape(normalizedPath)
+        val escaped = ShellEscape.escape(normalizedPath)
         val hiddenFilter = if (showHidden) "" else " -not -name '.*'"
         val findCmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
         val findOut = try {
@@ -470,7 +470,7 @@ class FilePaneController(
 
         val job = scope.launch(Dispatchers.IO) {
             val normalized = if (targetPath == "/") "/" else targetPath.trimEnd('/').ifEmpty { "/" }
-            val escaped = SevenZipCommand.escape(normalized)
+            val escaped = ShellEscape.escape(normalized)
 
             // vault 配置文件名，用于过滤
             val vaultConfigNames = if (isVaultMode) setOf(
@@ -754,7 +754,7 @@ class FilePaneController(
         }
 
         // find -printf 批量填充元数据
-        val escaped = SevenZipCommand.escape(normalized)
+        val escaped = ShellEscape.escape(normalized)
         val findCmd = "find $escaped -maxdepth 1 -mindepth 1 -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
         val findOut = try {
             ShellExecutor.execute(Permission.MAX, findCmd, debug = true)
@@ -882,7 +882,7 @@ class FilePaneController(
         }
 
         // Phase 2: find -printf 批量填充元数据
-        val escaped = SevenZipCommand.escape(normalizedPath)
+        val escaped = ShellEscape.escape(normalizedPath)
         val hiddenFilter = if (showHidden) "" else " -not -name '.*'"
         val findCmd = "find $escaped -maxdepth 1 -mindepth 1$hiddenFilter -printf '%f|%s|%T@|%m|%u|%g|%M\\n'"
         val findOut = try {
@@ -1028,7 +1028,7 @@ class FilePaneController(
             return
         }
         val realPath = toRealPathForAttr(dirPath)
-        val escaped = SevenZipCommand.escape(realPath.trimEnd('/'))
+        val escaped = ShellEscape.escape(realPath.trimEnd('/'))
         // 使用 lsattr 目录/* 展开通配符，确保列出目录内容（Android toybox 的 lsattr 可能不支持目录参数）
         val (out, _, exit) = try {
             executeShell("lsattr $escaped/* 2>/dev/null")
@@ -1261,8 +1261,8 @@ class FilePaneController(
         val dest = File(parent, newName)
 
         if (hasShellEngine()) {
-            val escapedSrc = SevenZipCommand.escape(entry.path)
-            val escapedDst = SevenZipCommand.escape(dest.absolutePath)
+            val escapedSrc = ShellEscape.escape(entry.path)
+            val escapedDst = ShellEscape.escape(dest.absolutePath)
             val (_, err, exit) = try {
                 executeShell("mv $escapedSrc $escapedDst")
             } catch (e: Exception) { return e.message ?: "重命名失败" }
@@ -1287,7 +1287,7 @@ class FilePaneController(
      */
     fun deleteEntry(entry: FileEntry): String? {
         if (hasShellEngine()) {
-            val escaped = SevenZipCommand.escape(entry.path)
+            val escaped = ShellEscape.escape(entry.path)
             val flag = if (entry.isDirectory) "-rf" else "-f"
             val (_, err, exit) = try {
                 executeShell("rm $flag $escaped")
@@ -1314,7 +1314,7 @@ class FilePaneController(
         val target = File(parentPath, name)
 
         if (hasShellEngine()) {
-            val escaped = SevenZipCommand.escape(target.absolutePath)
+            val escaped = ShellEscape.escape(target.absolutePath)
             val cmd = if (isFolder) "mkdir $escaped" else "touch $escaped"
             val (_, err, exit) = try {
                 executeShell(cmd)
@@ -1399,7 +1399,7 @@ class FilePaneController(
         var group = ""
 
         if (hasShellEngine()) {
-            val escaped = SevenZipCommand.escape(entry.path)
+            val escaped = ShellEscape.escape(entry.path)
             // stat -c 一次获取权限、用户名、组名、UID、GID，无需解析 ls 列对齐
             val (statOut, _, statExit) = try {
                 executeShell("stat -c '%a|%U|%G|%u|%g' $escaped")
@@ -1500,7 +1500,7 @@ class FilePaneController(
         var fileCount = 0
         var folderCount = 0
         if (hasShellEngine()) {
-            val escaped = SevenZipCommand.escape(path)
+            val escaped = ShellEscape.escape(path)
             val cmd = "d=\$(find $escaped -mindepth 1 -type d | wc -l); f=\$(find $escaped -type f | wc -l); echo \"\$d \$f\""
             val (out, _, exit) = try { executeShell(cmd) } catch (_: Exception) { Triple("", "", -1) }
             if (exit == 0 && out.isNotBlank()) {
@@ -1527,7 +1527,7 @@ class FilePaneController(
     fun readExtFlags(path: String): String {
         if (!hasShellEngine()) return ""
         val realPath = toRealPathForAttr(path)
-        val escaped = SevenZipCommand.escape(realPath)
+        val escaped = ShellEscape.escape(realPath)
         val (out, _, exit) = try { executeShell("lsattr $escaped") } catch (_: Exception) { Triple("", "", -1) }
         if (exit != 0 || out.isBlank()) return ""
         val line = out.lines().firstOrNull { it.isNotBlank() } ?: return ""
@@ -1541,7 +1541,7 @@ class FilePaneController(
     fun applyExtFlags(path: String, desiredFlags: Set<Char>, originalFlags: String): String? {
         if (!isRootEngine()) return "需要 Root 权限"
         val realPath = toRealPathForAttr(path)
-        val escaped = SevenZipCommand.escape(realPath)
+        val escaped = ShellEscape.escape(realPath)
         val originalSet = originalFlags.filter { it == 'i' || it == 'a' }.toSet()
         // 需要添加的标志
         val toAdd = desiredFlags - originalSet
@@ -1580,7 +1580,7 @@ class FilePaneController(
         } catch (e: ErrnoException) { return "chmod 失败: ${e.message}\n路径: $path\n\n${e.stackTraceToString()}" to null }
         catch (e: Exception) { return "chmod 异常: ${e.message}\n\n${e.stackTraceToString()}" to null }
 
-        val escapedPath = SevenZipCommand.escape(path)
+        val escapedPath = ShellEscape.escape(path)
         try {
             ShellExecutor.execute(Permission.ROOT, "chown $uid:$gid $escapedPath")
         } catch (e: Exception) {
@@ -1607,7 +1607,7 @@ class FilePaneController(
         val targets = mutableListOf(path)
         try {
             if (File(path).isDirectory) {
-                val escaped = SevenZipCommand.escape(path)
+                val escaped = ShellEscape.escape(path)
                 val (out, _, exit) = try { executeShell("ls -1A $escaped") } catch (_: Exception) { Triple("", "", -1) }
                 if (exit == 0 && out.isNotBlank()) {
                     val children = out.lines().filter { it.isNotBlank() }
@@ -1621,7 +1621,7 @@ class FilePaneController(
         val failed = mutableListOf<String>()
         val expectedOctal = String.format("%03o", expectedMode and 0x1FF)
         for (t in targets) {
-            val escaped = SevenZipCommand.escape(t)
+            val escaped = ShellEscape.escape(t)
             val (out, _, exit) = try { executeShell("stat -c '%a|%u|%g' $escaped") } catch (_: Exception) { Triple("", "", -1) }
             if (exit != 0) { failed.add(t); continue }
             val parts = out.trim().split("|")
@@ -1917,8 +1917,8 @@ class FilePaneController(
         }
 
         if (hasShellEngine()) {
-            val escapedSrc = SevenZipCommand.escape(entry.path)
-            val escapedDst = SevenZipCommand.escape(target.absolutePath)
+            val escapedSrc = ShellEscape.escape(entry.path)
+            val escapedDst = ShellEscape.escape(target.absolutePath)
             val cpFlag = if (entry.isDirectory) "-rf" else "-f"
             val (_, cpErr, cpExit) = try {
                 executeShell("cp $cpFlag $escapedSrc $escapedDst")
@@ -3680,7 +3680,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 解压压缩包。
-     * 解压前通过 7zzs l 获取文件列表和大小，实现真实字节级进度。
+     * 解压前获取文件列表和大小，实现真实字节级进度。
      * 若需要密码则通过回调通知 UI 弹密码框。
      */
     fun extract(
@@ -3713,7 +3713,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                // 通过 7zzs l 获取文件列表（含原始大小）
+                // 获取文件列表（含原始大小）
                 val sessionResult = ArchiveBrowser.openArchive(
                     context = context,
                     archivePath = entry.path,
@@ -3731,7 +3731,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
 
-                // 构建 fileSizes 列表（扁平化的文件大小列表，顺序与 7zzs l 输出一致）
+                // 构建 fileSizes 列表（扁平化的文件大小列表）
                 val fileSizes = flattenFileSizes(session.root)
                 val totalBytes = fileSizes.sum()
 
@@ -3803,7 +3803,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 递归展开目录树，获取扁平的文件大小列表（顺序与 7zzs l 一致） */
+    /** 递归展开目录树，获取扁平的文件大小列表 */
     private fun flattenFileSizes(node: ArchiveBrowser.ArchiveNode): List<Long> {
         val result = mutableListOf<Long>()
         fun walk(n: ArchiveBrowser.ArchiveNode) {
@@ -4053,7 +4053,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 openFile(context, tempEntry)
                 return ArchiveBrowser.ExtractResult(
                     success = true, file = cachedFile7z,
-                    command = "7zzs x (整体解压)", output = "解压成功"
+                    command = "extractAll", output = "解压成功"
                 )
             } else {
                 return ArchiveBrowser.ExtractResult(success = false, errorMessage = "7z 整体解压失败，可能密码错误")

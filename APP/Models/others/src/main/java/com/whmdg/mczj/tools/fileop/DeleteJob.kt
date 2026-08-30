@@ -3,7 +3,7 @@ package com.whmdg.mczj.tools.fileop
 import android.content.Context
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
-import com.whmdg.mczj.tools.util.SevenZipCommand
+import com.whmdg.mczj.tools.util.ShellEscape
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.IOException
@@ -143,8 +143,8 @@ class DeleteJob(
         val binPath = "${binDir.absolutePath}/$binName"
 
         // 通过 shell mv 移动（源可能在 ROOT-only 目录）
-        val escaped_src = SevenZipCommand.escape(entry.path)
-        val escaped_dst = SevenZipCommand.escape(binPath)
+        val escaped_src = ShellEscape.escape(entry.path)
+        val escaped_dst = ShellEscape.escape(binPath)
         try {
             com.whmdg.mczj.tools.security.ShellExecutor.execute(
                 com.whmdg.mczj.tools.security.Permission.MAX, "mv $escaped_src $escaped_dst"

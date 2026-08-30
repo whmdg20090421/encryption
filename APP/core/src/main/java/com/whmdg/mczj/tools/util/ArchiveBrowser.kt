@@ -13,7 +13,7 @@ import java.io.File
 
 /**
  * 压缩包浏览工具类。
- * 通过 7zzs l -ba 命令读取压缩包目录结构，构建内存目录树，支持只读浏览。
+ * 通过 7-Zip JBinding 读取压缩包目录结构，构建内存目录树，支持只读浏览。
  */
 object ArchiveBrowser {
 
@@ -60,7 +60,7 @@ object ArchiveBrowser {
 
     /**
      * 探测压缩包是否需要密码。
-     * 通过 `7zzs l -slt -p"dummy"` 假密码探测，不会阻塞在 stdin。
+     * 通过假密码探测，不会阻塞。
      *
      * 返回 PasswordCheckResult，其中 needsPassword 字段：
      * - true  → 需要密码（仅内容加密或头部加密）
@@ -74,20 +74,20 @@ object ArchiveBrowser {
     ): PasswordCheckResult = withContext(Dispatchers.IO) {
         val t0 = System.currentTimeMillis()
         Log.d(TAG, "checkPasswordRequired 开始: archivePath=$archivePath")
-        val result = P7zipClient.detectPassword(archivePath)
+        val result = JBindingClient.detectPassword(archivePath)
         val elapsed = System.currentTimeMillis() - t0
         Log.d(TAG, "checkPasswordRequired 完成 (${elapsed}ms): success=${result.isSuccess}")
         result.fold(
             onSuccess = { output ->
                 // output 是 "true" / "false" / "null"
                 when (output.trim()) {
-                    "true" -> PasswordCheckResult(needsPassword = true, command = "P7zipClient.detectPassword", output = output)
-                    "false" -> PasswordCheckResult(needsPassword = false, command = "P7zipClient.detectPassword", output = output)
-                    else -> PasswordCheckResult(needsPassword = null, command = "P7zipClient.detectPassword", output = output, errorMessage = "文件损坏，无法识别为压缩格式")
+                    "true" -> PasswordCheckResult(needsPassword = true, command = "JBindingClient.detectPassword", output = output)
+                    "false" -> PasswordCheckResult(needsPassword = false, command = "JBindingClient.detectPassword", output = output)
+                    else -> PasswordCheckResult(needsPassword = null, command = "JBindingClient.detectPassword", output = output, errorMessage = "文件损坏，无法识别为压缩格式")
                 }
             },
             onFailure = { e ->
-                PasswordCheckResult(needsPassword = null, command = "P7zipClient.detectPassword", output = "", errorMessage = e.message ?: "密码检测失败")
+                PasswordCheckResult(needsPassword = null, command = "JBindingClient.detectPassword", output = "", errorMessage = e.message ?: "密码检测失败")
             }
         )
     }
@@ -105,7 +105,7 @@ object ArchiveBrowser {
 
     /**
      * 分析 7z 文件的加密状态。
-     * 通过 `7zzs l -slt -p"dummy"` 假密码探测，不会阻塞。
+     * 通过假密码探测，不会阻塞。
      *
      * 四种情况：
      * 1. exitCode=0 + Encrypted=+/7zAES → 仅内容加密（文件名可见）
@@ -121,7 +121,7 @@ object ArchiveBrowser {
         val fileName = File(archivePath).name
         val fileSize = File(archivePath).length()
         return try {
-            val result = P7zipClient.listArchiveDetail(archivePath, password = "dummy")
+            val result = JBindingClient.listArchiveDetail(archivePath, password = "dummy")
             result.fold(
                 onSuccess = { output ->
                     when {
@@ -288,7 +288,7 @@ object ArchiveBrowser {
                 return@withContext openZipArchive(archivePath, archiveName, originalPath, originalEntries)
             }
 
-            val result = P7zipClient.listArchive(archivePath, password)
+            val result = JBindingClient.listArchive(archivePath, password)
             val output = result.getOrElse { e ->
                 return@withContext Result.failure(Exception(e.message ?: "列出压缩包失败"))
             }
@@ -468,12 +468,12 @@ object ArchiveBrowser {
                 return@withContext parseZipDebug(archivePath, archiveName, permissionLevel, originalPath, originalEntries)
             }
 
-            val listResult = P7zipClient.listArchive(archivePath)
+            val listResult = JBindingClient.listArchive(archivePath)
             val listOutput = listResult.getOrElse { e ->
                 return@withContext ArchiveDebugInfo(
                     archivePath = archivePath, archiveName = archiveName,
                     passwordRequired = passwordRequired,
-                    listCommand = "P7zipClient.listArchive", listExitCode = -1,
+                    listCommand = "JBindingClient.listArchive", listExitCode = -1,
                     listStdout = "", listStderr = "",
                     parsedEntryCount = 0, rootEntries = emptyList(),
                     error = e.message ?: "列出压缩包失败"
@@ -485,7 +485,7 @@ object ArchiveBrowser {
                 return@withContext ArchiveDebugInfo(
                     archivePath = archivePath, archiveName = archiveName,
                     passwordRequired = passwordRequired,
-                    listCommand = "P7zipClient.listArchive", listExitCode = 0,
+                    listCommand = "JBindingClient.listArchive", listExitCode = 0,
                     listStdout = listOutput, listStderr = "",
                     parsedEntryCount = 0, rootEntries = emptyList(),
                     error = "压缩包内容为空，可能是加密文件或格式不受支持"
@@ -503,7 +503,7 @@ object ArchiveBrowser {
             ArchiveDebugInfo(
                 archivePath = archivePath, archiveName = archiveName,
                 passwordRequired = passwordRequired,
-                listCommand = "P7zipClient.listArchive", listExitCode = 0,
+                listCommand = "JBindingClient.listArchive", listExitCode = 0,
                 listStdout = listOutput, listStderr = "",
                 parsedEntryCount = entries.size, rootEntries = rootEntries,
                 session = session
@@ -565,10 +565,10 @@ object ArchiveBrowser {
 
     // ── 内部实现 ──
 
-    /** 解析 7zzs l -ba 输出，提取文件/目录条目 */
+    /** 解析压缩包列表输出，提取文件/目录条目 */
     private fun parseListOutput(output: String): List<ParsedEntry> {
         val entries = mutableListOf<ParsedEntry>()
-        // 7zzs -ba 输出中，空行之前是表头，之后是文件列表
+        // 列表输出中，空行之前是表头，之后是文件列表
         // 也可能没有空行分隔，直接从第一个匹配行开始
         val lineRegex = Regex(
             """^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+.{5}\s+[\d]+\s+[\d]+\s+.+$"""
@@ -749,22 +749,22 @@ object ArchiveBrowser {
         permissionLevel: String = "NORMAL"
     ): ExtractResult = withContext(Dispatchers.IO) {
         try {
-            // zip 格式：用 java.util.zip.ZipFile 直接提取，避免 7zzs 编码匹配问题
+            // zip 格式：用 java.util.zip.ZipFile 直接提取，避免编码匹配问题
             if (archivePath.endsWith(".zip", ignoreCase = true) && password.isEmpty()) {
                 return@withContext extractFromZip(archivePath, fileName, outputDir)
             }
 
             Log.d(TAG, "提取单文件: $fileName")
-            val result = P7zipClient.extractSingleFile(archivePath, fileName, outputDir, password)
+            val result = JBindingClient.extractSingleFile(archivePath, fileName, outputDir, password)
             result.fold(
                 onSuccess = { output ->
                     val outputFile = File(outputDir, fileName)
                     if (outputFile.exists()) {
-                        ExtractResult(success = true, file = outputFile, command = "P7zipClient.extractSingleFile", output = output)
+                        ExtractResult(success = true, file = outputFile, command = "JBindingClient.extractSingleFile", output = output)
                     } else {
                         ExtractResult(
                             success = false,
-                            command = "P7zipClient.extractSingleFile",
+                            command = "JBindingClient.extractSingleFile",
                             output = output,
                             errorMessage = "文件提取后未找到: ${outputFile.absolutePath}"
                         )
@@ -773,7 +773,7 @@ object ArchiveBrowser {
                 onFailure = { e ->
                     ExtractResult(
                         success = false,
-                        command = "P7zipClient.extractSingleFile",
+                        command = "JBindingClient.extractSingleFile",
                         errorMessage = e.message ?: "提取失败"
                     )
                 }
