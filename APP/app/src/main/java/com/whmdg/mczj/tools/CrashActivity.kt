@@ -65,6 +65,9 @@ class CrashActivity : ComponentActivity() {
                     signalNumber = parsed.signalNumber,
                     timestamp = parsed.timestamp,
                     errnoValue = parsed.errnoValue,
+                    faultAddr = parsed.faultAddr,
+                    pc = parsed.pc,
+                    lr = parsed.lr,
                     rawInfo = crashInfo,
                     exitWriteFd = exitWriteFd
                 )
@@ -74,11 +77,22 @@ class CrashActivity : ComponentActivity() {
 
     /**
      * 解析 Native 信号处理器发来的崩溃信息。
-     * 格式: SIGNO|SIGNAME|TIMESTAMP|ERRNO_NUM
+     * 格式: SIGNO|SIGNAME|TIMESTAMP|ERRNO|FAULT_ADDR|PC|LR
+     * 兼容旧格式（仅 4 字段）。
      */
     private fun parseCrashInfo(info: String): CrashInfo {
         val parts = info.split("|")
-        return if (parts.size >= 4) {
+        return if (parts.size >= 7) {
+            CrashInfo(
+                signalNumber = parts[0].toIntOrNull() ?: 0,
+                signalName = parts[1],
+                timestamp = parts[2].toLongOrNull() ?: 0L,
+                errnoValue = parts[3].toIntOrNull() ?: 0,
+                faultAddr = parts[4].trim(),
+                pc = parts[5].trim(),
+                lr = parts[6].trim()
+            )
+        } else if (parts.size >= 4) {
             CrashInfo(
                 signalNumber = parts[0].toIntOrNull() ?: 0,
                 signalName = parts[1],
@@ -94,7 +108,10 @@ class CrashActivity : ComponentActivity() {
         val signalNumber: Int,
         val signalName: String,
         val timestamp: Long,
-        val errnoValue: Int
+        val errnoValue: Int,
+        val faultAddr: String = "0x0",
+        val pc: String = "0x0",
+        val lr: String = "0x0"
     )
 }
 
@@ -104,6 +121,9 @@ private fun CrashScreen(
     signalNumber: Int,
     timestamp: Long,
     errnoValue: Int,
+    faultAddr: String,
+    pc: String,
+    lr: String,
     rawInfo: String,
     exitWriteFd: Int
 ) {
@@ -124,6 +144,9 @@ private fun CrashScreen(
         appendLine("信号: $signalName (SIG #$signalNumber)")
         appendLine("时间: $timeStr")
         appendLine("Errno: $errnoValue")
+        appendLine("Fault Addr: $faultAddr")
+        appendLine("PC: $pc")
+        appendLine("LR: $lr")
         appendLine("原始数据: $rawInfo")
     }
 
@@ -178,6 +201,9 @@ private fun CrashScreen(
                     InfoRow("信号", "$signalName (#$signalNumber)")
                     InfoRow("时间", timeStr)
                     InfoRow("Errno", "$errnoValue")
+                    if (faultAddr != "0x0") InfoRow("Fault Addr", faultAddr)
+                    if (pc != "0x0") InfoRow("PC", pc)
+                    if (lr != "0x0") InfoRow("LR", lr)
                 }
             }
 

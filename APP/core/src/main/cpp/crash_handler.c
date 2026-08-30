@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <time.h>
+#include <ucontext.h>
 
 #include "crash_handler.h"
 
@@ -99,16 +100,42 @@ static long get_timestamp(void) {
     return (long)ts.tv_sec;
 }
 
+/* async-safe 的十六进制写入（用于地址输出） */
+static void write_hex(int fd, unsigned long v, char separator) {
+    char buf[20]; /* 0x + 16 hex digits + separator */
+    int i = 19;
+    buf[i] = separator;
+    i--;
+    if (v == 0) {
+        buf[i] = '0'; i--;
+        buf[i] = 'x'; i--;
+    } else {
+        const char *hex = "0123456789abcdef";
+        while (v > 0 && i >= 2) {
+            buf[i] = hex[v & 0xf];
+            v >>= 4;
+            i--;
+        }
+        buf[i] = 'x'; i--;
+        buf[i] = '0'; i--;
+    }
+    write(fd, buf + i + 1, (size_t)(19 - i));
+}
+
 /*
  * 信号处理器函数。
  * 仅使用 async-safe 函数：write, read, sigaction, clock_gettime, _exit
  *
- * 输出格式（分段写入，避免 snprintf）：
- *   SIGNO|SIGNAME|TIMESTAMP|ERRNO|ERRNO_NUM\n
+ * 输出格式（扩展版，分段写入避免 snprintf）：
+ *   SIGNO|SIGNAME|TIMESTAMP|ERRNO|FAULT_ADDR|PC|LR\n
+ *
+ * - FAULT_ADDR: SIGSEGV/SIGBUS 时的访问地址，其他信号为 0
+ * - PC: 崩溃时的程序计数器（ARM64: uc_mcontext.pc）
+ * - LR: 链接寄存器（ARM64: uc_mcontext.regs[30]）
  *
  * 写完后阻塞在 read(pipe_exit) 等待 Java 通知退出。
  */
-static void crash_signal_handler(int sig) {
+static void crash_signal_handler(int sig, siginfo_t *info, void *context) {
     /* 防重入：如果已经在处理中，直接终止 */
     int expected = 0;
     if (!atomic_compare_exchange_strong(&g_in_handler, &expected, 1)) {
@@ -123,11 +150,40 @@ static void crash_signal_handler(int sig) {
         _exit(128 + sig);
     }
 
-    /* 分段写入崩溃信息：SIGNO|SIGNAME|TIMESTAMP|ERRNO_NUM\n */
+    /* 提取 fault address */
+    unsigned long fault_addr = 0;
+    if (info != NULL) {
+        fault_addr = (unsigned long)info->si_addr;
+    }
+
+    /* 提取 PC 和 LR（ARM64） */
+    unsigned long pc = 0;
+    unsigned long lr = 0;
+    if (context != NULL) {
+        ucontext_t *uc = (ucontext_t *)context;
+#if defined(__aarch64__)
+        pc = (unsigned long)uc->uc_mcontext.pc;
+        lr = (unsigned long)uc->uc_mcontext.regs[30];
+#elif defined(__arm__)
+        pc = (unsigned long)uc->uc_mcontext.arm_pc;
+        lr = (unsigned long)uc->uc_mcontext.arm_lr;
+#elif defined(__x86_64__)
+        pc = (unsigned long)uc->uc_mcontext.gregs[REG_RIP];
+        lr = 0; /* x86_64 无 LR */
+#elif defined(__i386__)
+        pc = (unsigned long)uc->uc_mcontext.gregs[REG_EIP];
+        lr = 0;
+#endif
+    }
+
+    /* 分段写入崩溃信息：SIGNO|SIGNAME|TIMESTAMP|ERRNO|FAULT_ADDR|PC|LR\n */
     write_int(wfd, (long)sig, '|');
     write_str(wfd, get_signal_name(sig), '|');
     write_int(wfd, get_timestamp(), '|');
-    write_int(wfd, (long)saved_errno, '\n');
+    write_int(wfd, (long)saved_errno, '|');
+    write_hex(wfd, fault_addr, '|');
+    write_hex(wfd, pc, '|');
+    write_hex(wfd, lr, '\n');
 
     /*
      * 阻塞等待 Java 层发送退出信号。
@@ -158,12 +214,12 @@ int crash_handler_init(int pipe_crash_write, int pipe_exit_read) {
         return -1;
     }
 
-    /* 信号处理 action：SA_ONSTACK（使用备用栈） + SA_RESETHAND（处理完恢复默认，防递归） */
+    /* 信号处理 action：SA_ONSTACK + SA_RESETHAND + SA_SIGINFO（获取 siginfo_t 和 ucontext_t） */
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_ONSTACK | SA_RESETHAND;
-    sa.sa_handler = crash_signal_handler;
+    sa.sa_flags = SA_ONSTACK | SA_RESETHAND | SA_SIGINFO;
+    sa.sa_sigaction = crash_signal_handler;
 
     /* 注册所有关心的信号 */
     if (sigaction(SIGSEGV, &sa, &g_old_sa_segv) != 0) return -1;
