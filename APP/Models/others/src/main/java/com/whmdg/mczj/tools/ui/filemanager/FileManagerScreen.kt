@@ -2776,7 +2776,7 @@ fun FileManagerScreen(
         val context = LocalContext.current
         StandardDialog(
             onDismissRequest = { if (!vm.sevenZipAnalyzing) vm.sevenZipInfo = null },
-            title = { Text("7z 压缩包信息", fontWeight = FontWeight.Bold) },
+            title = { Text("7z 压缩包错误", fontWeight = FontWeight.Bold) },
             text = {
                 if (vm.sevenZipAnalyzing) {
                     Row(
@@ -2796,62 +2796,13 @@ fun FileManagerScreen(
                         Text("文件名  ${sevenZipDialogEntry.fileName}", style = MaterialTheme.typography.bodyMedium)
                         Text("大小    ${FormatUtils.formatBytes(sevenZipDialogEntry.fileSize)}", style = MaterialTheme.typography.bodyMedium)
                         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("内容加密", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                when {
-                                    sevenZipDialogEntry.isCorrupted -> "无法检测"
-                                    sevenZipDialogEntry.contentEncrypted || sevenZipDialogEntry.headerEncrypted -> "✓ 已加密"
-                                    else -> "✗ 未加密"
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = when {
-                                    sevenZipDialogEntry.isCorrupted -> MaterialTheme.colorScheme.error
-                                    sevenZipDialogEntry.contentEncrypted || sevenZipDialogEntry.headerEncrypted -> MaterialTheme.colorScheme.primary
-                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                            )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("文件名加密", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                when {
-                                    sevenZipDialogEntry.isCorrupted -> "无法检测"
-                                    sevenZipDialogEntry.headerEncrypted -> "✓ 已加密"
-                                    else -> "✗ 未加密"
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = when {
-                                    sevenZipDialogEntry.isCorrupted -> MaterialTheme.colorScheme.error
-                                    sevenZipDialogEntry.headerEncrypted -> MaterialTheme.colorScheme.primary
-                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                            )
-                        }
                         val errMsg = sevenZipDialogEntry.errorMessage
-                        if (errMsg != null) {
-                            Text(
-                                errMsg,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
-                        }
-                        if (sevenZipDialogEntry.headerEncrypted || sevenZipDialogEntry.contentEncrypted) {
-                            Text(
-                                "加密压缩包需要密码才能查看内容",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
-                        }
-                        // 诊断信息（调试阶段始终显示）
+                        Text(
+                            errMsg ?: "文件损坏，无法识别为 7z 格式",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
                         val diag = sevenZipDialogEntry.diagnosticInfo
                         if (diag.isNotBlank()) {
                             Text(
@@ -5119,6 +5070,44 @@ fun FileManagerScreen(
         }
     }
 
+    // ── 7z 整体解压进度面板 ──
+    if (vm.sevenZipExtracting) {
+        val isDark = isSystemInDarkTheme()
+        Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(if (isDark) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Text("正在解压 7z...", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text("解压进度", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = if (vm.sevenZipExtractTotalBytes > 0) "${FormatUtils.formatBytes(vm.sevenZipExtractBytesProcessed)} / ${FormatUtils.formatBytes(vm.sevenZipExtractTotalBytes)}" else "解压中...",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            LinearProgressIndicator(progress = { vm.sevenZipExtractProgress }, modifier = Modifier.weight(1f))
+                            Text("${(vm.sevenZipExtractProgress * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // ── 解压错误弹窗 ──
     if (extractError != null) {
         ErrorDialog(
@@ -5138,11 +5127,21 @@ fun FileManagerScreen(
     // ── 压缩包密码输入弹窗 ──
     val archivePwdEntry = vm.archivePasswordRequest
     if (archivePwdEntry != null) {
+        val pending7zFile = vm.pending7zFileEntry
         com.whmdg.mczj.tools.auth.PasswordDialog(
             title = "输入压缩包密码",
-            onDismiss = { vm.currentPanel.archivePasswordRequest = null },
+            onDismiss = {
+                vm.currentPanel.archivePasswordRequest = null
+                vm.pending7zFileEntry = null
+            },
             onVerify = { password ->
-                vm.openArchiveWithPassword(archivePwdEntry, password)
+                val ok = vm.openArchiveWithPassword(archivePwdEntry, password)
+                // 7z：密码验证+整体解压完成后，自动打开之前点击的文件
+                if (ok && pending7zFile != null) {
+                    vm.pending7zFileEntry = null
+                    vm.openArchiveFile(LocalContext.current, pending7zFile)
+                }
+                ok
             }
         )
     }

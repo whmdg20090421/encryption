@@ -10,6 +10,7 @@ import com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
 import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -2785,6 +2786,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var pendingApkEntry by mutableStateOf<FileEntry?>(null)
     var sevenZipInfo by mutableStateOf<ArchiveBrowser.SevenZipInfo?>(null)
     var sevenZipAnalyzing by mutableStateOf(false)
+    /** 7z 整体解压相关状态 */
+    var sevenZipExtracting by mutableStateOf(false)
+    var sevenZipExtractProgress by mutableFloatStateOf(0f)
+    var sevenZipExtractBytesProcessed by mutableStateOf(0L)
+    var sevenZipExtractTotalBytes by mutableStateOf(0L)
+    /** 浏览模式下点击7z文件等待密码后要打开的文件 */
+    var pending7zFileEntry by mutableStateOf<FileEntry?>(null)
 
     private val recycleBinJson = kotlinx.serialization.json.Json {
         ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true
@@ -3529,7 +3537,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
 
     // ── 文件操作 ──
-    fun openFile(context: Context, entry: FileEntry, isDebug: Boolean = false) {
+    fun openFile(
+        context: Context,
+        entry: FileEntry,
+        isDebug: Boolean = false,
+        overrideImagePaths: List<String>? = null
+    ) {
         if (entry.permission.startsWith("l")) {
             pendingSymlinkEntry = entry
             return
@@ -3558,12 +3571,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 viewModelScope.launch(Dispatchers.IO) {
                     val info = ArchiveBrowser.analyze7z(getApplication(), pending.path, permissionLevel)
                     withContext(Dispatchers.Main) {
-                        if (info.contentEncrypted || info.headerEncrypted || info.isCorrupted) {
-                            sevenZipInfo = info
-                            sevenZipAnalyzing = false
-                        } else {
-                            sevenZipAnalyzing = false
-                            openArchive(pending)
+                        sevenZipAnalyzing = false
+                        when {
+                            info.isCorrupted -> sevenZipInfo = info
+                            info.headerEncrypted -> currentPanel.archivePasswordRequest = pending
+                            else -> openArchive(pending)
                         }
                     }
                 }
@@ -3596,7 +3608,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
         if (ext in imageExtensions) {
             DiagnosticLog.log("OpenFile", "内置查看器打开: ${entry.name}")
-            val imagePaths = currentPanel.entries
+            val imagePaths = overrideImagePaths ?: currentPanel.entries
                 .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions }
                 .map { it.path }
             val startIndex = imagePaths.indexOf(entry.path).coerceAtLeast(0)
@@ -3809,7 +3821,58 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 压缩包浏览 ──
 
+    /** 7z 整体解压到缓存目录 */
+    private suspend fun extract7zFull(
+        context: Context,
+        entry: FileEntry,
+        session: ArchiveBrowser.ArchiveSession,
+        password: String,
+        permLevel: String
+    ) {
+        val fileSizes = flattenFileSizes(session.root)
+        val totalBytes = fileSizes.sum()
+        val outputDir = CompressPreviewCache.getArchiveCacheDir(context, entry.name)
 
+        withContext(Dispatchers.Main) {
+            sevenZipExtracting = true
+            sevenZipExtractProgress = 0f
+            sevenZipExtractTotalBytes = totalBytes
+            sevenZipExtractBytesProcessed = 0L
+        }
+
+        val cancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
+        kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
+            val options = CompressService.ExtractOptions(
+                archivePath = entry.path,
+                outputDir = outputDir.absolutePath,
+                password = password,
+                fileSizes = fileSizes,
+                totalUncompressedBytes = totalBytes
+            )
+            CompressService.extract(
+                context = context, options = options, permissionLevel = permLevel,
+                cancelFlag = cancelFlag,
+                callback = object : CompressService.ProgressCallback {
+                    override fun onProgress(info: CompressService.ProgressInfo) {
+                        kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+                            sevenZipExtractProgress = info.progress
+                            sevenZipExtractBytesProcessed = info.bytesProcessed
+                        }
+                    }
+                    override fun onComplete(success: Boolean, path: String?, error: String?) {
+                        kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+                            sevenZipExtracting = false
+                            sevenZipExtractProgress = 0f
+                        }
+                        if (success) {
+                            CompressPreviewCache.updateRecord(context, entry.path, File(entry.path).lastModified(), File(entry.path).length())
+                        }
+                        cont.resume(success) {}
+                    }
+                }
+            )
+        }
+    }
 
 
     /** 密码弹窗验证回调：带密码重试打开压缩包 */
@@ -3834,9 +3897,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             result.fold(
                 onSuccess = { session ->
                     archivePasswordCache[entry.path] = password
+                    // 7z 需要整体解压（不支持单文件提取）
+                    if (entry.name.endsWith(".7z", ignoreCase = true)) {
+                        extract7zFull(context, entry, session, password, permLevel)
+                    }
                     withContext(Dispatchers.Main) {
                         enterArchiveMode(session)
                         panel.archivePasswordRequest = null
+                        pending7zFileEntry = null
                     }
                     true
                 },
@@ -3914,7 +3982,81 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
 
-        // 缓存未完全命中，需要解压文件
+        // 7z 格式：不支持单文件提取，需要整体解压
+        if (session.archivePath.endsWith(".7z", ignoreCase = true)) {
+            val outputDir7z = CompressPreviewCache.getArchiveCacheDir(context, session.archiveName)
+            val cachedFile7z = java.io.File(outputDir7z, relativePath)
+            // 检查是否已整体解压过
+            if (cachedFile7z.exists() && cachedFile7z.length() > 0) {
+                DiagnosticLog.log("OpenFile", "7z 缓存命中: ${cachedFile7z.absolutePath}")
+                val tempEntry = entry.copy(path = cachedFile7z.absolutePath, name = cachedFile7z.name)
+                openFile(context, tempEntry)
+                return ArchiveBrowser.ExtractResult(
+                    success = true, file = cachedFile7z,
+                    command = "(7z 缓存命中)", output = "使用缓存文件"
+                )
+            }
+            // 无缓存：需要密码才能解压
+            if (password.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    pending7zFileEntry = entry
+                    currentPanel.archivePasswordRequest = entry
+                }
+                return ArchiveBrowser.ExtractResult(success = false, errorMessage = "需要密码")
+            }
+            // 有密码：整体解压
+            val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+            val fileSizes = flattenFileSizes(session.root)
+            val totalBytes = fileSizes.sum()
+            withContext(Dispatchers.Main) {
+                sevenZipExtracting = true
+                sevenZipExtractProgress = 0f
+                sevenZipExtractTotalBytes = totalBytes
+                sevenZipExtractBytesProcessed = 0L
+            }
+            val cancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
+            val extractOk = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
+                val options = CompressService.ExtractOptions(
+                    archivePath = session.archivePath,
+                    outputDir = outputDir7z.absolutePath,
+                    password = password,
+                    fileSizes = fileSizes,
+                    totalUncompressedBytes = totalBytes
+                )
+                CompressService.extract(
+                    context = context, options = options, permissionLevel = permLevel,
+                    cancelFlag = cancelFlag,
+                    callback = object : CompressService.ProgressCallback {
+                        override fun onProgress(info: CompressService.ProgressInfo) {
+                            kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+                                sevenZipExtractProgress = info.progress
+                                sevenZipExtractBytesProcessed = info.bytesProcessed
+                            }
+                        }
+                        override fun onComplete(success: Boolean, path: String?, error: String?) {
+                            kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+                                sevenZipExtracting = false
+                                sevenZipExtractProgress = 0f
+                            }
+                            cont.resume(success) {}
+                        }
+                    }
+                )
+            }
+            if (extractOk) {
+                CompressPreviewCache.updateRecord(context, session.archivePath, lastModified, fileSize)
+                val tempEntry = entry.copy(path = cachedFile7z.absolutePath, name = cachedFile7z.name)
+                openFile(context, tempEntry)
+                return ArchiveBrowser.ExtractResult(
+                    success = true, file = cachedFile7z,
+                    command = "7zzs x (整体解压)", output = "解压成功"
+                )
+            } else {
+                return ArchiveBrowser.ExtractResult(success = false, errorMessage = "7z 整体解压失败，可能密码错误")
+            }
+        }
+
+        // 缓存未完全命中，需要解压文件（zip 等格式）
         val outputDir = cacheResult.cacheDir ?: CompressPreviewCache.getArchiveCacheDir(context, session.archivePath)
         if (!outputDir.exists()) {
             outputDir.mkdirs()
@@ -3941,8 +4083,50 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         DiagnosticLog.log("OpenFile", "提取成功: ${result.file?.absolutePath}")
         // 用提取后的临时文件构建 FileEntry，复用 openFile 的类型判断
         val extractedFile = result.file!!
+        val cacheDir = extractedFile.parentFile
+
+        // 压缩包模式下 entries 的 path 是裸文件名，构建同类型文件的绝对路径列表供图片/文本查看器使用
+        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
+        val textExtensions = setOf(
+            "txt", "md", "json", "xml", "html", "htm", "css", "js",
+            "kt", "java", "py", "sh", "bat", "log", "csv", "yaml", "yml",
+            "toml", "ini", "conf", "cfg", "properties", "gradle", "kts",
+            "c", "cpp", "h", "hpp", "rs", "go", "rb", "php", "sql",
+            "lua", "r", "swift", "dart", "ts", "jsx", "tsx", "vue"
+        )
+        val ext = entry.name.substringAfterLast('.', "").lowercase()
+        val sameTypeEntries = when {
+            ext in imageExtensions -> currentPanel.entries.filter {
+                !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions
+            }
+            ext in textExtensions -> currentPanel.entries.filter {
+                !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in textExtensions
+            }
+            else -> null
+        }
+        if (sameTypeEntries != null) {
+            for (typeEntry in sameTypeEntries) {
+                if (typeEntry.name == entry.name) continue
+                val typeRelPath = if (subPath.isEmpty()) typeEntry.name else "$subPath/${typeEntry.name}"
+                if (typeRelPath == relativePath) continue
+                val typeOutputFile = java.io.File(cacheDir, typeRelPath)
+                if (!typeOutputFile.exists()) {
+                    try {
+                        ArchiveBrowser.extractSingleFile(
+                            context, session.archivePath, typeRelPath,
+                            cacheDir.absolutePath, password, permissionLevel
+                        )
+                    } catch (_: Exception) { }
+                }
+            }
+        }
+
         val tempEntry = entry.copy(path = extractedFile.absolutePath, name = extractedFile.name)
-        openFile(context, tempEntry)
+        val overridePaths = sameTypeEntries?.map { typeEntry ->
+            val typeRelPath = if (subPath.isEmpty()) typeEntry.name else "$subPath/${typeEntry.name}"
+            java.io.File(cacheDir, typeRelPath).absolutePath
+        }
+        openFile(context, tempEntry, overrideImagePaths = overridePaths)
         return result
     }
 
