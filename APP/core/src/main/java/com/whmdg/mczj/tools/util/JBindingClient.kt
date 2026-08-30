@@ -33,7 +33,8 @@ object JBindingClient {
 
     private const val TAG = "JBindingClient"
 
-    fun init(@Suppress("UNUSED_PARAMETER") context: Context) {
+    fun init(context: Context) {
+        SevenZip.init(context)
         Log.d(TAG, "JBindingClient 已初始化")
     }
 
