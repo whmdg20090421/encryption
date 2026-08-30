@@ -4,7 +4,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
-import com.whmdg.mczj.tools.util.AppDataPaths
+import com.whmdg.mczj.tools.AppDataPaths
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
