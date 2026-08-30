@@ -305,10 +305,6 @@ object P7zipClient {
 
     fun isDaemonAlive(): Boolean {
         val process = daemonProcess ?: return false
-        if (process.outputStream.closed()) {
-            markDead()
-            return false
-        }
         val pid = getPid(process)
         return pid > 0 && isProcessAlive(pid)
     }
