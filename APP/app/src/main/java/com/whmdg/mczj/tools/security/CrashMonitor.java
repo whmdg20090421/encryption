@@ -86,18 +86,21 @@ public class CrashMonitor {
                 FileInputStream fis = new FileInputStream(sCrashReadPfd.getFileDescriptor());
                 BufferedReader reader = new BufferedReader(new InputStreamReader(fis));
 
+                StringBuilder sb = new StringBuilder();
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    final String crashInfo = line;
+                    if (line.equals("===END===")) break;
+                    if (sb.length() > 0) sb.append('\n');
+                    sb.append(line);
+                }
+
+                if (sb.length() > 0) {
+                    final String crashInfo = sb.toString();
                     Log.e(TAG, "Native crash received: " + crashInfo);
 
-                    /* 切到主线程启动 CrashActivity */
                     new Handler(Looper.getMainLooper()).post(() -> {
                         launchCrashActivity(crashInfo);
                     });
-
-                    /* 只读取一次崩溃信息，然后退出循环 */
-                    break;
                 }
 
                 reader.close();
