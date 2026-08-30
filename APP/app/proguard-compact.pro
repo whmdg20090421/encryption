@@ -67,3 +67,7 @@
 # ── OkHttp / WebDAV ──
 -keep class okhttp3.** { *; }
 -keep class at.bitfire.dav4jvm.** { *; }
+
+# ── 7-Zip-JBinding（JNI_OnLoad 通过反射访问 Java 类） ──
+-keep class net.sf.sevenzipjbinding.** { *; }
+-dontwarn net.sf.sevenzipjbinding.**
