@@ -68,6 +68,8 @@ class CrashActivity : ComponentActivity() {
                     faultAddr = parsed.faultAddr,
                     pc = parsed.pc,
                     lr = parsed.lr,
+                    registers = parsed.registers,
+                    stackTrace = parsed.stackTrace,
                     rawInfo = crashInfo,
                     exitWriteFd = exitWriteFd
                 )
@@ -76,13 +78,24 @@ class CrashActivity : ComponentActivity() {
     }
 
     /**
-     * 解析 Native 信号处理器发来的崩溃信息。
-     * 格式: SIGNO|SIGNAME|TIMESTAMP|ERRNO|FAULT_ADDR|PC|LR
-     * 兼容旧格式（仅 4 字段）。
+     * 解析 Native 信号处理器发来的崩溃信息（多行格式）。
+     *
+     * 新格式（pipe 传输，行分隔）：
+     *   第1行: SIGNO|SIGNAME|TIMESTAMP|ERRNO|FAULT_ADDR|PC|LR
+     *   第2行: REG: SP=0x.. FP=0x.. X0=0x.. ...
+     *   第3+行: #0 0x..  (栈帧)
+     *   末行: ===END===
+     *
+     * 兼容旧格式（仅 4 字段、无 REG/栈帧）。
      */
     private fun parseCrashInfo(info: String): CrashInfo {
-        val parts = info.split("|")
-        return if (parts.size >= 7) {
+        val lines = info.lines().filter { it.isNotEmpty() }
+
+        /* 第一行：崩溃摘要 */
+        val header = lines.firstOrNull() ?: ""
+        val parts = header.split("|")
+
+        val base = if (parts.size >= 7) {
             CrashInfo(
                 signalNumber = parts[0].toIntOrNull() ?: 0,
                 signalName = parts[1],
@@ -102,6 +115,16 @@ class CrashActivity : ComponentActivity() {
         } else {
             CrashInfo(0, "UNKNOWN", 0L, 0)
         }
+
+        /* 后续行：寄存器 + 栈帧 */
+        val extraLines = lines.drop(1).filter { it != "===END===" }
+        val regLine = extraLines.firstOrNull { it.startsWith("REG:") }
+        val stackLines = extraLines.filter { it.startsWith("#") }
+
+        return base.copy(
+            registers = regLine ?: "",
+            stackTrace = stackLines.joinToString("\n")
+        )
     }
 
     private data class CrashInfo(
@@ -111,7 +134,9 @@ class CrashActivity : ComponentActivity() {
         val errnoValue: Int,
         val faultAddr: String = "0x0",
         val pc: String = "0x0",
-        val lr: String = "0x0"
+        val lr: String = "0x0",
+        val registers: String = "",
+        val stackTrace: String = ""
     )
 }
 
@@ -124,6 +149,8 @@ private fun CrashScreen(
     faultAddr: String,
     pc: String,
     lr: String,
+    registers: String,
+    stackTrace: String,
     rawInfo: String,
     exitWriteFd: Int
 ) {
@@ -147,7 +174,19 @@ private fun CrashScreen(
         appendLine("Fault Addr: $faultAddr")
         appendLine("PC: $pc")
         appendLine("LR: $lr")
-        appendLine("原始数据: $rawInfo")
+        if (registers.isNotBlank()) {
+            appendLine()
+            appendLine("寄存器:")
+            appendLine(registers)
+        }
+        if (stackTrace.isNotBlank()) {
+            appendLine()
+            appendLine("栈回溯:")
+            appendLine(stackTrace)
+        }
+        appendLine()
+        appendLine("原始数据:")
+        appendLine(rawInfo)
     }
 
     /* 保存到文件 */
@@ -204,6 +243,34 @@ private fun CrashScreen(
                     if (faultAddr != "0x0") InfoRow("Fault Addr", faultAddr)
                     if (pc != "0x0") InfoRow("PC", pc)
                     if (lr != "0x0") InfoRow("LR", lr)
+                    if (registers.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "寄存器",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = registers.removePrefix("REG: ").trim(),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = colorScheme.onErrorContainer
+                        )
+                    }
+                    if (stackTrace.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "栈回溯",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = stackTrace,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = colorScheme.onErrorContainer
+                        )
+                    }
                 }
             }
 

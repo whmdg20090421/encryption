@@ -176,7 +176,7 @@ static void crash_signal_handler(int sig, siginfo_t *info, void *context) {
 #endif
     }
 
-    /* 分段写入崩溃信息：SIGNO|SIGNAME|TIMESTAMP|ERRNO|FAULT_ADDR|PC|LR\n */
+    /* ── 第一行：崩溃摘要（向后兼容旧解析器） ── */
     write_int(wfd, (long)sig, '|');
     write_str(wfd, get_signal_name(sig), '|');
     write_int(wfd, get_timestamp(), '|');
@@ -184,6 +184,86 @@ static void crash_signal_handler(int sig, siginfo_t *info, void *context) {
     write_hex(wfd, fault_addr, '|');
     write_hex(wfd, pc, '|');
     write_hex(wfd, lr, '\n');
+
+    /* ── 第二行：关键寄存器 ── */
+    if (context != NULL) {
+        ucontext_t *uc = (ucontext_t *)context;
+#if defined(__aarch64__)
+        write_str(wfd, "REG:", ' ');
+        write_str(wfd, "SP=", ' ');
+        write_hex(wfd, (unsigned long)uc->uc_mcontext.sp, ' ');
+        write_str(wfd, "FP=", ' ');
+        write_hex(wfd, (unsigned long)uc->uc_mcontext.regs[29], ' ');
+        write_str(wfd, "X0=", ' ');
+        write_hex(wfd, (unsigned long)uc->uc_mcontext.regs[0], ' ');
+        write_str(wfd, "X1=", ' ');
+        write_hex(wfd, (unsigned long)uc->uc_mcontext.regs[1], ' ');
+        write_str(wfd, "X2=", ' ');
+        write_hex(wfd, (unsigned long)uc->uc_mcontext.regs[2], ' ');
+        write_str(wfd, "X3=", ' ');
+        write_hex(wfd, (unsigned long)uc->uc_mcontext.regs[3], '\n');
+#elif defined(__arm__)
+        write_str(wfd, "REG:", ' ');
+        write_str(wfd, "SP=", ' ');
+        write_hex(wfd, (unsigned long)uc->uc_mcontext.arm_sp, ' ');
+        write_str(wfd, "FP=", ' ');
+        write_hex(wfd, (unsigned long)uc->uc_mcontext.arm_fp, ' ');
+        write_str(wfd, "R0=", ' ');
+        write_hex(wfd, (unsigned long)uc->uc_mcontext.arm_r0, ' ');
+        write_str(wfd, "R1=", ' ');
+        write_hex(wfd, (unsigned long)uc->uc_mcontext.arm_r1, '\n');
+#endif
+    }
+
+    /* ── 栈回溯：沿 frame pointer 链走 ── */
+    if (context != NULL) {
+        ucontext_t *uc = (ucontext_t *)context;
+#if defined(__aarch64__)
+        unsigned long fp = (unsigned long)uc->uc_mcontext.regs[29];
+        unsigned long sp = (unsigned long)uc->uc_mcontext.sp;
+        int depth = 0;
+        /* 栈边界：sp 往低地址方向最多 256KB */
+        unsigned long stack_lo = (sp > 0x40000) ? (sp - 0x40000) : 0;
+        while (fp != 0 && fp >= sp && fp >= stack_lo && depth < 24) {
+            /* 验证 fp 对齐（ARM64 要求 16 字节对齐） */
+            if ((fp & 0xF) != 0) break;
+            unsigned long prev_fp = 0;
+            unsigned long ret_addr = 0;
+            /* frame pointer 指向 [prev_fp, ret_addr] */
+            if (read((int)fp, &prev_fp, sizeof(prev_fp)) != sizeof(prev_fp)) break;
+            if (read((int)(fp + 8), &ret_addr, sizeof(ret_addr)) != sizeof(ret_addr)) break;
+            if (ret_addr == 0) break;
+            write_str(wfd, "#", ' ');
+            write_int(wfd, depth, ' ');
+            write_hex(wfd, ret_addr, '\n');
+            if (prev_fp <= fp) break; /* 防止死循环 */
+            fp = prev_fp;
+            depth++;
+        }
+#elif defined(__arm__)
+        unsigned long fp = (unsigned long)uc->uc_mcontext.arm_fp;
+        unsigned long sp = (unsigned long)uc->uc_mcontext.arm_sp;
+        int depth = 0;
+        unsigned long stack_lo = (sp > 0x40000) ? (sp - 0x40000) : 0;
+        while (fp != 0 && fp >= sp && fp >= stack_lo && depth < 24) {
+            if ((fp & 0x3) != 0) break;
+            unsigned long prev_fp = 0;
+            unsigned long ret_addr = 0;
+            if (read((int)fp, &prev_fp, sizeof(prev_fp)) != sizeof(prev_fp)) break;
+            if (read((int)(fp + 4), &ret_addr, sizeof(ret_addr)) != sizeof(ret_addr)) break;
+            if (ret_addr == 0) break;
+            write_str(wfd, "#", ' ');
+            write_int(wfd, depth, ' ');
+            write_hex(wfd, ret_addr, '\n');
+            if (prev_fp <= fp) break;
+            fp = prev_fp;
+            depth++;
+        }
+#endif
+    }
+
+    /* 哨兵行：标记栈回溯结束 */
+    write_str(wfd, "===END===\n", '\0');
 
     /*
      * 阻塞等待 Java 层发送退出信号。
