@@ -3559,11 +3559,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         // 解压后打开
         viewModelScope.launch(Dispatchers.IO) {
+            // outputDir 是压缩包对应的缓存目录
+            val archiveCacheDir = File(cacheDir, session.archiveName)
+            archiveCacheDir.mkdirs()
             val result = ArchiveBrowser.extractSingleFile(
                 context = context,
                 archivePath = session.archivePath,
                 fileName = internalPath,
-                outputDir = outputFile.parent,
+                outputDir = archiveCacheDir.absolutePath,
                 password = password,
                 permissionLevel = permissionLevel
             )
