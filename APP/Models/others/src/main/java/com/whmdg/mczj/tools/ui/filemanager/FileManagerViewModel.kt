@@ -3568,8 +3568,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 permissionLevel = permissionLevel
             )
             withContext(Dispatchers.Main) {
-                if (result.success && result.file != null) {
-                    val newEntry = entry.copy(path = result.file.absolutePath)
+                val file = result.file
+                if (result.success && file != null) {
+                    val newEntry = entry.copy(path = file.absolutePath)
                     openFile(context, newEntry)
                 } else {
                     Toast.makeText(context, "解压失败: ${result.errorMessage}", Toast.LENGTH_SHORT).show()
