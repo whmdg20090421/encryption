@@ -1711,25 +1711,28 @@ class FilePaneController(
 
                 val passwordCheckResult = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
 
-                if (passwordCheckResult.needsPassword == null) {
-                    withContext(Dispatchers.Main) {
-                        panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
-                            title = "无法打开压缩包",
-                            errorSummary = passwordCheckResult.errorMessage.ifEmpty { "文件损坏，无法识别为压缩格式" },
-                            command = passwordCheckResult.command,
-                            output = passwordCheckResult.output
-                        )
-                        panel.archiveLoading = false
+                when (passwordCheckResult) {
+                    is ArchiveBrowser.PasswordCheckResult.Error -> {
+                        withContext(Dispatchers.Main) {
+                            panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
+                                title = "无法打开压缩包",
+                                errorSummary = passwordCheckResult.errorMessage,
+                                command = passwordCheckResult.command,
+                                output = passwordCheckResult.output
+                            )
+                            panel.archiveLoading = false
+                        }
+                        return@launch
                     }
-                    return@launch
-                }
-
-                if (passwordCheckResult.needsPassword == true) {
-                    withContext(Dispatchers.Main) {
-                        panel.archivePasswordRequest = entry
-                        panel.archiveLoading = false
+                    is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted -> {
+                        withContext(Dispatchers.Main) {
+                            panel.archivePasswordRequest = entry
+                            panel.archiveLoading = false
+                        }
+                        return@launch
                     }
-                    return@launch
+                    // NoPassword / ContentEncrypted → 直接展开目录树
+                    else -> {}
                 }
 
                 // 不需要密码，直接打开
@@ -3704,10 +3707,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 // 优先使用调用方传入的密码，其次使用缓存密码
                 val effectivePassword = password.ifEmpty { archivePasswordCache[entry.path] ?: "" }
 
-                // 若无密码，先探测是否需要密码
+                // 若无密码，先探测是否需要密码（提取时任何加密类型都需要密码）
                 if (effectivePassword.isEmpty()) {
                     val passwordCheckResult = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
-                    if (passwordCheckResult.needsPassword == true) {
+                    if (passwordCheckResult is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted ||
+                        passwordCheckResult is ArchiveBrowser.PasswordCheckResult.ContentEncrypted) {
                         withContext(Dispatchers.Main) { onPasswordRequired() }
                         return@launch
                     }

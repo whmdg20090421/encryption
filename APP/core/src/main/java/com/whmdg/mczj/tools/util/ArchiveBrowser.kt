@@ -44,50 +44,70 @@ object ArchiveBrowser {
     }
 
     /**
-     * 密码检测结果数据类
+     * 密码检测结果
      */
-    data class PasswordCheckResult(
-        val needsPassword: Boolean?,
-        val command: String = "",
-        val output: String = "",
-        val errorMessage: String = ""
-    ) {
-        companion object {
-            fun needsPassword() = PasswordCheckResult(needsPassword = true)
-            fun noPassword() = PasswordCheckResult(needsPassword = false)
-        }
+    sealed class PasswordCheckResult {
+        /** 无加密，可直接打开 */
+        data object NoPassword : PasswordCheckResult()
+        /** 仅内容加密（文件名可见），可展开目录树，提取时才需要密码 */
+        data object ContentEncrypted : PasswordCheckResult()
+        /** 头部加密（文件名也加密），必须先输入密码 */
+        data object HeaderEncrypted : PasswordCheckResult()
+        /** 检测失败 */
+        data class Error(
+            val errorMessage: String,
+            val command: String = "",
+            val output: String = ""
+        ) : PasswordCheckResult()
     }
 
     /**
-     * 探测压缩包是否需要密码。
-     * 通过假密码探测，不会阻塞。
+     * 探测压缩包加密类型。
      *
-     * 返回 PasswordCheckResult，其中 needsPassword 字段：
-     * - true  → 需要密码（仅内容加密或头部加密）
-     * - false → 不需要密码（无加密）
-     * - null  → 文件损坏
+     * 检测策略：
+     * - 非7z格式 → 直接 NoPassword（文件名列表始终可见）
+     * - 7z格式 → 读文件头判断头部是否加密（无需打开压缩包）
+     *   - 头部加密 → HeaderEncrypted（必须先输入密码）
+     *   - 头部未加密 → NoPassword（直接展开目录树，提取时再按条目 ENCRYPTED 判断）
      */
     suspend fun checkPasswordRequired(
         context: Context,
         archivePath: String,
         permissionLevel: String
     ): PasswordCheckResult = withContext(Dispatchers.IO) {
+        // 非7z格式：文件名列表始终可见，直接展开目录树
+        if (!archivePath.endsWith(".7z", ignoreCase = true)) {
+            Log.d(TAG, "checkPasswordRequired: 非7z格式，跳过检测")
+            return@withContext PasswordCheckResult.NoPassword
+        }
+
+        // 7z格式：读文件头判断头部加密
         val t0 = System.currentTimeMillis()
         Log.d(TAG, "checkPasswordRequired 开始: archivePath=$archivePath")
-        val result = JBindingClient.detectPassword(archivePath)
+        val result = JBindingClient.detect7zHeaderEncryption(archivePath)
         val elapsed = System.currentTimeMillis() - t0
         Log.d(TAG, "checkPasswordRequired 完成 (${elapsed}ms): success=${result.isSuccess}")
         result.fold(
-            onSuccess = { output ->
-                // output 是 "true" / "false" / "null"
-                when (output.trim()) {
-                    "true" -> PasswordCheckResult(needsPassword = true, command = "JBindingClient.detectPassword", output = output)
-                    "false" -> PasswordCheckResult(needsPassword = false, command = "JBindingClient.detectPassword", output = output)
-                    else -> PasswordCheckResult(needsPassword = null, command = "JBindingClient.detectPassword", output = output, errorMessage = "文件损坏，无法识别为压缩格式")
-                }
+            onSuccess = { headerEncrypted ->
+                if (headerEncrypted) PasswordCheckResult.HeaderEncrypted
+                else PasswordCheckResult.NoPassword
             },
             onFailure = { e ->
-                PasswordCheckResult(needsPassword = null, command = "JBindingClient.detectPassword", output = "", errorMessage = e.message ?: "密码检测失败")
+                val errMsg = when {
+                    e.message?.contains("Permission denied", ignoreCase = true) == true ->
+                        "权限不足，无法读取文件"
+                    e.message?.contains("不是有效的7z文件", ignoreCase = true) == true ->
+                        "文件损坏，不是有效的7z格式"
+                    e.message?.contains("7z下一个头大小异常", ignoreCase = true) == true ->
+                        "文件损坏，7z头信息异常"
+                    else -> e.message ?: "未知错误"
+                }
+                Log.e(TAG, "checkPasswordRequired 失败", e)
+                PasswordCheckResult.Error(
+                    errorMessage = errMsg,
+                    command = "detect7zHeaderEncryption($archivePath)",
+                    output = e.stackTraceToString()
+                )
             }
         )
     }
@@ -288,22 +308,19 @@ object ArchiveBrowser {
                 return@withContext openZipArchive(archivePath, archiveName, originalPath, originalEntries)
             }
 
-            val result = JBindingClient.listArchive(archivePath, password)
-            val output = result.getOrElse { e ->
+            val result = JBindingClient.listArchiveEntries(archivePath, password)
+            val jbEntries = result.getOrElse { e ->
                 return@withContext Result.failure(Exception(e.message ?: "列出压缩包失败"))
             }
 
-            Log.d(TAG, "执行完毕: output=${output.length}字节")
+            Log.d(TAG, "JBinding 解析到 ${jbEntries.size} 个条目")
 
-            val entries = parseListOutput(output)
-            Log.d(TAG, "解析到 ${entries.size} 个条目")
-
-            if (entries.isEmpty()) {
+            if (jbEntries.isEmpty()) {
                 Log.w(TAG, "压缩包内容为空（可能是加密或格式不支持）")
                 return@withContext Result.failure(Exception("压缩包内容为空，可能是加密文件或格式不受支持"))
             }
 
-            val root = buildTree(entries)
+            val root = buildTree(jbEntries)
             val rootEntries = nodeChildrenToEntries(root)
 
             Result.success(
@@ -345,7 +362,7 @@ object ArchiveBrowser {
                     raw.rawName,
                     raw.generalFlag and 0x800 != 0
                 )
-                ParsedEntry(
+                JBindingClient.ArchiveEntry(
                     path = decodedName,
                     isDirectory = raw.isDirectory,
                     size = raw.size,
@@ -393,7 +410,7 @@ object ArchiveBrowser {
                     raw.rawName,
                     raw.generalFlag and 0x800 != 0
                 )
-                ParsedEntry(
+                JBindingClient.ArchiveEntry(
                     path = decodedName,
                     isDirectory = raw.isDirectory,
                     size = raw.size,
@@ -450,9 +467,9 @@ object ArchiveBrowser {
         try {
             // 1. 密码检测（所有格式都需要）
             val passwordCheckResult = checkPasswordRequired(context, archivePath, permissionLevel)
-            val passwordRequired = passwordCheckResult.needsPassword == true
 
-            if (passwordRequired) {
+            // 头部加密：文件名也加密，必须先输入密码
+            if (passwordCheckResult is PasswordCheckResult.HeaderEncrypted) {
                 return@withContext ArchiveDebugInfo(
                     archivePath = archivePath, archiveName = archiveName,
                     passwordRequired = true,
@@ -468,31 +485,30 @@ object ArchiveBrowser {
                 return@withContext parseZipDebug(archivePath, archiveName, permissionLevel, originalPath, originalEntries)
             }
 
-            val listResult = JBindingClient.listArchive(archivePath)
-            val listOutput = listResult.getOrElse { e ->
+            val listResult = JBindingClient.listArchiveEntries(archivePath)
+            val jbEntries = listResult.getOrElse { e ->
                 return@withContext ArchiveDebugInfo(
                     archivePath = archivePath, archiveName = archiveName,
-                    passwordRequired = passwordRequired,
-                    listCommand = "JBindingClient.listArchive", listExitCode = -1,
+                    passwordRequired = false,
+                    listCommand = "JBindingClient.listArchiveEntries", listExitCode = -1,
                     listStdout = "", listStderr = "",
                     parsedEntryCount = 0, rootEntries = emptyList(),
                     error = e.message ?: "列出压缩包失败"
                 )
             }
 
-            val entries = parseListOutput(listOutput)
-            if (entries.isEmpty()) {
+            if (jbEntries.isEmpty()) {
                 return@withContext ArchiveDebugInfo(
                     archivePath = archivePath, archiveName = archiveName,
-                    passwordRequired = passwordRequired,
-                    listCommand = "JBindingClient.listArchive", listExitCode = 0,
-                    listStdout = listOutput, listStderr = "",
+                    passwordRequired = false,
+                    listCommand = "JBindingClient.listArchiveEntries", listExitCode = 0,
+                    listStdout = "", listStderr = "",
                     parsedEntryCount = 0, rootEntries = emptyList(),
                     error = "压缩包内容为空，可能是加密文件或格式不受支持"
                 )
             }
 
-            val root = buildTree(entries)
+            val root = buildTree(jbEntries)
             val rootEntries = nodeChildrenToEntries(root)
             val session = ArchiveSession(
                 archivePath = archivePath, archiveName = archiveName,
@@ -502,9 +518,9 @@ object ArchiveBrowser {
 
             ArchiveDebugInfo(
                 archivePath = archivePath, archiveName = archiveName,
-                passwordRequired = passwordRequired,
-                listCommand = "JBindingClient.listArchive", listExitCode = 0,
-                listStdout = listOutput, listStderr = "",
+                passwordRequired = false,
+                listCommand = "JBindingClient.listArchiveEntries", listExitCode = 0,
+                listStdout = "", listStderr = "",
                 parsedEntryCount = entries.size, rootEntries = rootEntries,
                 session = session
             )
@@ -565,48 +581,8 @@ object ArchiveBrowser {
 
     // ── 内部实现 ──
 
-    /** 解析压缩包列表输出，提取文件/目录条目 */
-    private fun parseListOutput(output: String): List<ParsedEntry> {
-        val entries = mutableListOf<ParsedEntry>()
-        // 列表输出中，空行之前是表头，之后是文件列表
-        // 也可能没有空行分隔，直接从第一个匹配行开始
-        val lineRegex = Regex(
-            """^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+.{1,5}\s+\d+\s+\d+\s+.+$"""
-        )
-        val fieldRegex = Regex(
-            """^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(\S{1,5})\s+(\d+)\s+(\d+)\s+(.+)$"""
-        )
-
-        for (line in output.lines()) {
-            val trimmed = line.trimEnd()
-            if (trimmed.isBlank()) continue
-            if (!lineRegex.matches(trimmed)) continue
-
-            val match = fieldRegex.matchEntire(trimmed) ?: continue
-            val attrs = match.groupValues[3]
-            val compressedSize = match.groupValues[4].toLongOrNull() ?: 0
-            val size = match.groupValues[5].toLongOrNull() ?: 0
-            var path = match.groupValues[6].trim()
-            // 统一路径分隔符
-            path = path.replace('\\', '/')
-
-            val isDir = attrs.startsWith('D')
-            entries.add(ParsedEntry(path = path, isDirectory = isDir, size = size, compressedSize = compressedSize))
-        }
-
-        return entries
-    }
-
-    /** 解析后的原始条目 */
-    private data class ParsedEntry(
-        val path: String,
-        val isDirectory: Boolean,
-        val size: Long,
-        val compressedSize: Long
-    )
-
     /** 从扁平路径列表构建目录树 */
-    private fun buildTree(entries: List<ParsedEntry>): ArchiveNode {
+    private fun buildTree(entries: List<JBindingClient.ArchiveEntry>): ArchiveNode {
         val root = ArchiveNode(name = "", isDirectory = true)
 
         for (entry in entries) {

@@ -33,6 +33,24 @@ object JBindingClient {
 
     private const val TAG = "JBindingClient"
 
+    /** 加密类型检测结果 */
+    sealed class EncryptionType {
+        /** 无加密 */
+        object None : EncryptionType()
+        /** 仅内容加密（文件名可见，可直接展开目录树） */
+        object ContentOnly : EncryptionType()
+        /** 头部加密（文件名也加密，必须先输入密码） */
+        object Header : EncryptionType()
+    }
+
+    /** 压缩包条目（结构化数据，无需字符串解析） */
+    data class ArchiveEntry(
+        val path: String,
+        val isDirectory: Boolean,
+        val size: Long,
+        val compressedSize: Long
+    )
+
     fun init(context: Context) {
         Log.d(TAG, "JBindingClient 已初始化")
     }
@@ -41,6 +59,26 @@ object JBindingClient {
 
     // ── 对外 API ──
 
+    /** 列出压缩包条目（结构化数据，推荐使用） */
+    suspend fun listArchiveEntries(archivePath: String, password: String = ""): Result<List<ArchiveEntry>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val entries = mutableListOf<ArchiveEntry>()
+                withInArchive(archivePath, password) { inArchive ->
+                    val count = inArchive.numberOfItems
+                    for (i in 0 until count) {
+                        val path = inArchive.getStringProperty(i, PropID.PATH) ?: continue
+                        val isDir = inArchive.getProperty(i, PropID.IS_FOLDER) as? Boolean ?: false
+                        val size = inArchive.getProperty(i, PropID.SIZE) as? Long ?: 0L
+                        val packedSize = inArchive.getProperty(i, PropID.PACKED_SIZE) as? Long ?: 0L
+                        entries.add(ArchiveEntry(path, isDir, size, packedSize))
+                    }
+                }
+                entries
+            }
+        }
+
+    /** 列出压缩包条目（字符串格式，兼容旧代码） */
     suspend fun listArchive(archivePath: String, password: String = ""): Result<String> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -160,29 +198,88 @@ object JBindingClient {
         }
     }
 
-    suspend fun detectPassword(archivePath: String): Result<String> = withContext(Dispatchers.IO) {
+    /**
+     * 检测压缩包加密类型。
+     * 用 dummy 密码尝试打开：
+     * - 打开失败（异常含 "encrypted"）→ Header（头部加密，文件名也加密）
+     * - 打开成功 → None 或 ContentOnly（文件名可见，可直接展开目录树）
+     *
+     * 注意：头部加密的检测对所有格式通用，不局限于7z。
+     * 但实际只有7z支持头部加密，其他格式不会走到 Header 分支。
+     */
+    suspend fun detectEncryption(archivePath: String): Result<EncryptionType> = withContext(Dispatchers.IO) {
         runCatching {
             try {
-                var encrypted = false
                 withInArchive(archivePath, "dummy") { inArchive ->
-                    val count = inArchive.numberOfItems
-                    for (i in 0 until count) {
+                    // 能打开 → 文件名可见，检查是否有内容加密
+                    var hasEncrypted = false
+                    for (i in 0 until inArchive.numberOfItems) {
                         if (inArchive.getProperty(i, PropID.ENCRYPTED) as? Boolean ?: false) {
-                            encrypted = true
+                            hasEncrypted = true
                             break
                         }
                     }
+                    if (hasEncrypted) EncryptionType.ContentOnly else EncryptionType.None
                 }
-                encrypted.toString()
             } catch (e: SevenZipException) {
                 val msg = e.message ?: ""
-                when {
-                    msg.contains("Wrong password", ignoreCase = true) ||
-                    msg.contains("encrypted", ignoreCase = true) -> "true"
-                    else -> "false"
+                if (msg.contains("encrypted", ignoreCase = true)) {
+                    // 打不开 → 头部加密（文件名也加密）
+                    EncryptionType.Header
+                } else {
+                    throw e
                 }
             }
         }
+    }
+
+    /**
+     * 通过读取7z文件头检测是否头部加密。
+     * 无需打开压缩包，只读取签名头 + 下一个头的首个字节。
+     *
+     * 7z格式：签名头(32B) → nextHeaderOfs/nextHeaderSize → 下一个头首字节：
+     *   0x01 = PROPERTY.HEADER（未加密）
+     *   0x17 = PROPERTY.ENCODED_HEADER（加密）
+     */
+    suspend fun detect7zHeaderEncryption(archivePath: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        runCatching {
+            RandomAccessFile(File(archivePath), "r").use { raf ->
+                // 签名头32字节：魔数(6) + 版本(2) + startHeaderCrc(4) + nextheaderofs(8) + nextheadersize(8) + nextheadercrc(4)
+                val sigHeader = ByteArray(32)
+                raf.readFully(sigHeader)
+
+                // 校验魔数 "7z\xBC\xAF\x27\x1C"
+                if (sigHeader[0] != '7'.code.toByte() || sigHeader[1] != 'z'.code.toByte() ||
+                    sigHeader[2] != 0xBC.toByte() || sigHeader[3] != 0xAF.toByte() ||
+                    sigHeader[4] != 0x27.toByte() || sigHeader[5] != 0x1C.toByte()) {
+                    throw IllegalArgumentException("不是有效的7z文件")
+                }
+
+                // nextheaderofs: 8字节小端，偏移12
+                val nextHeaderOfs = readLongLE(sigHeader, 12)
+                // nextheadersize: 8字节小端，偏移20
+                val nextHeaderSize = readLongLE(sigHeader, 20)
+
+                if (nextHeaderSize < 1) {
+                    throw IllegalArgumentException("7z下一个头大小异常: $nextHeaderSize")
+                }
+
+                // 定位到下一个头，读取首字节
+                raf.seek(nextHeaderOfs)
+                val headerType = raf.read()
+
+                // 0x17 = PROPERTY.ENCODED_HEADER = 头部加密
+                headerType == 0x17
+            }
+        }
+    }
+
+    private fun readLongLE(buf: ByteArray, offset: Int): Long {
+        var result = 0L
+        for (i in 0 until 8) {
+            result = result or ((buf[offset + i].toLong() and 0xFF) shl (i * 8))
+        }
+        return result
     }
 
     suspend fun compressStream(
