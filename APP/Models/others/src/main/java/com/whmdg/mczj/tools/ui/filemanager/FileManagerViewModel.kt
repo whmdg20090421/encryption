@@ -1724,14 +1724,15 @@ class FilePaneController(
                         }
                         return@launch
                     }
-                    is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted -> {
+                    is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted,
+                    is ArchiveBrowser.PasswordCheckResult.ContentEncrypted -> {
                         withContext(Dispatchers.Main) {
                             panel.archivePasswordRequest = entry
                             panel.archiveLoading = false
                         }
                         return@launch
                     }
-                    // NoPassword / ContentEncrypted → 直接展开目录树
+                    // NoPassword → 直接展开目录树
                     else -> {}
                 }
 

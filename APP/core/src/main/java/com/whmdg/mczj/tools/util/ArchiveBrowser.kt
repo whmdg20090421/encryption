@@ -87,10 +87,10 @@ object ArchiveBrowser {
         val result = JBindingClient.detect7zHeaderEncryption(archivePath)
         val elapsed = System.currentTimeMillis() - t0
         Log.d(TAG, "checkPasswordRequired 完成 (${elapsed}ms): success=${result.isSuccess}")
-        result.fold(
+        val headerCheck = result.fold(
             onSuccess = { headerEncrypted ->
                 if (headerEncrypted) PasswordCheckResult.HeaderEncrypted
-                else PasswordCheckResult.NoPassword
+                else null // 头部未加密，继续检测内容加密
             },
             onFailure = { e ->
                 val errMsg = when {
@@ -110,6 +110,18 @@ object ArchiveBrowser {
                 )
             }
         )
+
+        // 头部加密或检测失败，直接返回
+        if (headerCheck != null) return@withContext headerCheck
+
+        // 头部未加密，检测内容是否加密（用 dummy 密码尝试打开）
+        val info = analyze7z(context, archivePath, permissionLevel)
+        if (info.contentEncrypted) {
+            Log.d(TAG, "checkPasswordRequired: 内容加密，需要密码")
+            PasswordCheckResult.ContentEncrypted
+        } else {
+            PasswordCheckResult.NoPassword
+        }
     }
 
     /** 7z 文件分析结果 */
