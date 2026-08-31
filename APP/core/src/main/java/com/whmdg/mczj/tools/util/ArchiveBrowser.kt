@@ -440,7 +440,7 @@ object ArchiveBrowser {
                 archivePath = archivePath, archiveName = archiveName,
                 passwordRequired = false, listCommand = "ZipRawReader", listExitCode = 0,
                 listStdout = "", listStderr = "",
-                parsedEntryCount = entries.size, rootEntries = rootEntries,
+                parsedEntryCount = jbEntries.size, rootEntries = rootEntries,
                 session = session
             )
         } catch (e: Exception) {
@@ -521,7 +521,7 @@ object ArchiveBrowser {
                 passwordRequired = false,
                 listCommand = "JBindingClient.listArchiveEntries", listExitCode = 0,
                 listStdout = "", listStderr = "",
-                parsedEntryCount = entries.size, rootEntries = rootEntries,
+                parsedEntryCount = jbEntries.size, rootEntries = rootEntries,
                 session = session
             )
         } catch (e: Exception) {
