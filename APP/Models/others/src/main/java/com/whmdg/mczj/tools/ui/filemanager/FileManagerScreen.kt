@@ -2939,8 +2939,10 @@ fun FileManagerScreen(
                 onDismissRequest = { vm.currentPanel.archiveEncodingNotice = null },
                 title = { Text("文件名编码已自动转换", style = MaterialTheme.typography.titleSmall) },
                 text = {
+                    val sample = if (conversion.garbledSample.isNotEmpty())
+                        "\n示例：「${conversion.garbledSample}」" else ""
                     Text(
-                        text = "检测到 ${conversion.count} 个文件名存在乱码，已从 ${conversion.originalEncoding} 转换为 ${conversion.targetEncoding}。",
+                        text = "检测到 ${conversion.count} 个文件名存在乱码${sample}\n已从 ${conversion.originalEncoding} 编码转换为 ${conversion.targetEncoding} 编码。",
                         style = MaterialTheme.typography.bodySmall
                     )
                 },

@@ -47,7 +47,8 @@ object JBindingClient {
     data class EncodingConversion(
         val originalEncoding: String,
         val targetEncoding: String,
-        val count: Int
+        val count: Int,
+        val garbledSample: String = ""
     )
 
     /** 压缩包条目（结构化数据，无需字符串解析） */
@@ -84,6 +85,7 @@ object JBindingClient {
                     var convertedCount = 0
                     var srcEnc = ""
                     var dstEnc = ""
+                    var garbledSample = ""
 
                     for (i in 0 until count) {
                         val rawPath = inArchive.getStringProperty(i, PropID.PATH) ?: continue
@@ -97,6 +99,7 @@ object JBindingClient {
                                 convertedCount++
                                 srcEnc = recovered.first
                                 dstEnc = recovered.second
+                                if (garbledSample.isEmpty()) garbledSample = rawPath
                                 entries.add(ArchiveEntry(recovered.third, isDir, size, packedSize))
                             } else {
                                 entries.add(ArchiveEntry(rawPath, isDir, size, packedSize))
@@ -107,7 +110,7 @@ object JBindingClient {
                     }
 
                     if (convertedCount > 0) {
-                        totalConversion = EncodingConversion(srcEnc, dstEnc, convertedCount)
+                        totalConversion = EncodingConversion(srcEnc, dstEnc, convertedCount, garbledSample)
                     }
                 }
 
@@ -609,19 +612,24 @@ object JBindingClient {
             // 纯 ASCII 无需恢复
             if (garbledPath.all { it.code in 0x20..0x7E || it.code == 0x09 }) return null
 
-            // 无替换字符且无控制字符 → 可能已经是正确的 UTF-8
-            if (!garbledPath.contains('�') && garbledPath.all { !it.isISOControl() || it.code == 0x09 }) {
-                // 检查是否为有效 UTF-8（不含高位字节的异常序列）
-                if (isValidUtf8(garbledPath)) return null
-            }
+            // 有替换字符 → 肯定是乱码，需要恢复
+            if (garbledPath.contains('�')) return tryRecovery(garbledPath)
 
-            // 有乱码，尝试逆转换
-            // 7-Zip 在 Android 上通常用 ISO-8859-1 或 UTF-8 解码
-            // ISO-8859-1 是完全可逆的：每个字符映射到唯一的字节
-            val rawBytes = garbledPath.toByteArray(Charsets.ISO_8859_1)
+            // 检查原始字符串的 ISO-8859-1 字节是否构成合法 UTF-8
+            // 如果是 → 已经是正确的 UTF-8 解码，无需恢复
+            // 如果不是 → 可能是 CP437 等编码的乱码，需要逆转换
+            val isoBytes = garbledPath.toByteArray(Charsets.ISO_8859_1)
+            if (isBytesValidUtf8(isoBytes)) return null
+
+            // 字节不构成合法 UTF-8 → 尝试逆转换恢复
+            return tryRecovery(garbledPath)
+        }
+
+        private fun tryRecovery(garbledPath: String): Triple<String, String, String>? {
+            val isoBytes = garbledPath.toByteArray(Charsets.ISO_8859_1)
 
             // 尝试 GBK 解码
-            val gbkDecoded = String(rawBytes, GBK)
+            val gbkDecoded = String(isoBytes, GBK)
             if (isCleanText(gbkDecoded)) {
                 Log.d(TAG, "ZIP 编码恢复: ISO-8859-1 → GBK ($garbledPath → $gbkDecoded)")
                 return Triple("ISO-8859-1", "GBK", gbkDecoded)
@@ -630,7 +638,7 @@ object JBindingClient {
             // 尝试 CP437 解码
             try {
                 val cp437 = java.nio.charset.Charset.forName("CP437")
-                val cp437Decoded = String(rawBytes, cp437)
+                val cp437Decoded = String(isoBytes, cp437)
                 if (isCleanText(cp437Decoded)) {
                     Log.d(TAG, "ZIP 编码恢复: ISO-8859-1 → CP437 ($garbledPath → $cp437Decoded)")
                     return Triple("ISO-8859-1", "CP437", cp437Decoded)
@@ -642,21 +650,31 @@ object JBindingClient {
 
         private fun isCleanText(s: String): Boolean {
             if (s.contains('�')) return false
-            // 检查是否有不合理的控制字符（排除 tab/newline）
             for (c in s) {
                 if (c.isISOControl() && c.code != 0x09 && c.code != 0x0A && c.code != 0x0D) return false
             }
             return true
         }
 
-        private fun isValidUtf8(s: String): Boolean {
-            // 检查字符串中是否有高位字节产生的异常字符
-            for (c in s) {
-                val code = c.code
-                // 补充形式（0xFFFx）或替换字符
-                if (code in 0xFFF0..0xFFFF) return false
-                // Surrogate pairs 在 BMP 中不应该出现
-                if (c.isSurrogate()) return false
+        /** 检查字节数组是否构成合法的 UTF-8 编码 */
+        private fun isBytesValidUtf8(bytes: ByteArray): Boolean {
+            var i = 0
+            while (i < bytes.size) {
+                val b = bytes[i].toInt() and 0xFF
+                val expectedLen = when {
+                    b <= 0x7F -> 1
+                    b in 0xC2..0xDF -> 2
+                    b in 0xE0..0xEF -> 3
+                    b in 0xF0..0xF4 -> 4
+                    else -> return false  // 非法起始字节
+                }
+                // 检查后续字节
+                for (j in 1 until expectedLen) {
+                    if (i + j >= bytes.size) return false
+                    val cb = bytes[i + j].toInt() and 0xFF
+                    if (cb !in 0x80..0xBF) return false
+                }
+                i += expectedLen
             }
             return true
         }
