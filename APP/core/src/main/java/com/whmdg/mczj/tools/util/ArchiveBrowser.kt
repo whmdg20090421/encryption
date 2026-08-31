@@ -186,7 +186,8 @@ object ArchiveBrowser {
         val currentPath: String,
         val currentEntries: List<FileEntry>,
         val originalPath: String,
-        val originalEntries: List<FileEntry>
+        val originalEntries: List<FileEntry>,
+        val encodingConversion: JBindingClient.EncodingConversion? = null
     )
 
     /** 压缩包 Debug 解析信息 */
@@ -303,17 +304,16 @@ object ArchiveBrowser {
         originalEntries: List<FileEntry> = emptyList()
     ): Result<ArchiveSession> = withContext(Dispatchers.IO) {
         try {
-            // zip 格式：直接解析 zip 结构，自适应编码检测
-            if (archivePath.endsWith(".zip", ignoreCase = true)) {
-                return@withContext openZipArchive(archivePath, archiveName, originalPath, originalEntries)
-            }
-
             val result = JBindingClient.listArchiveEntries(archivePath, password)
-            val jbEntries = result.getOrElse { e ->
+            val (jbEntries, encodingConversion) = result.getOrElse { e ->
                 return@withContext Result.failure(Exception(e.message ?: "列出压缩包失败"))
             }
 
             Log.d(TAG, "JBinding 解析到 ${jbEntries.size} 个条目")
+
+            if (encodingConversion != null) {
+                Log.d(TAG, "ZIP 编码恢复: ${encodingConversion.originalEncoding} → ${encodingConversion.targetEncoding}, 共 ${encodingConversion.count} 个文件")
+            }
 
             if (jbEntries.isEmpty()) {
                 Log.w(TAG, "压缩包内容为空（可能是加密或格式不支持）")
@@ -331,7 +331,8 @@ object ArchiveBrowser {
                     currentPath = archivePath,
                     currentEntries = rootEntries,
                     originalPath = originalPath,
-                    originalEntries = originalEntries
+                    originalEntries = originalEntries,
+                    encodingConversion = encodingConversion
                 )
             )
         } catch (e: Exception) {
@@ -486,7 +487,7 @@ object ArchiveBrowser {
             }
 
             val listResult = JBindingClient.listArchiveEntries(archivePath)
-            val jbEntries = listResult.getOrElse { e ->
+            val (jbEntries, encodingConversion) = listResult.getOrElse { e ->
                 return@withContext ArchiveDebugInfo(
                     archivePath = archivePath, archiveName = archiveName,
                     passwordRequired = false,
@@ -513,7 +514,8 @@ object ArchiveBrowser {
             val session = ArchiveSession(
                 archivePath = archivePath, archiveName = archiveName,
                 root = root, currentPath = archivePath, currentEntries = rootEntries,
-                originalPath = originalPath, originalEntries = originalEntries
+                originalPath = originalPath, originalEntries = originalEntries,
+                encodingConversion = encodingConversion
             )
 
             ArchiveDebugInfo(

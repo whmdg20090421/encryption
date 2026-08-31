@@ -43,12 +43,20 @@ object JBindingClient {
         object Header : EncryptionType()
     }
 
+    /** 编码转换信息 */
+    data class EncodingConversion(
+        val originalEncoding: String,
+        val targetEncoding: String,
+        val count: Int
+    )
+
     /** 压缩包条目（结构化数据，无需字符串解析） */
     data class ArchiveEntry(
         val path: String,
         val isDirectory: Boolean,
         val size: Long,
-        val compressedSize: Long
+        val compressedSize: Long,
+        val encodingConversion: EncodingConversion? = null
     )
 
     fun init(context: Context) {
@@ -59,22 +67,51 @@ object JBindingClient {
 
     // ── 对外 API ──
 
-    /** 列出压缩包条目（结构化数据，推荐使用） */
-    suspend fun listArchiveEntries(archivePath: String, password: String = ""): Result<List<ArchiveEntry>> =
+    /**
+     * 列出压缩包条目（结构化数据，推荐使用）。
+     * 对 ZIP 格式自动检测文件名编码，若 JBinding 返回乱码则逆转换恢复。
+     * @return Pair<条目列表, 编码转换信息（可能为null）>
+     */
+    suspend fun listArchiveEntries(archivePath: String, password: String = ""): Result<Pair<List<ArchiveEntry>, EncodingConversion?>> =
         withContext(Dispatchers.IO) {
             runCatching {
+                val isZip = archivePath.endsWith(".zip", ignoreCase = true)
                 val entries = mutableListOf<ArchiveEntry>()
+                var totalConversion: EncodingConversion? = null
+
                 withInArchive(archivePath, password) { inArchive ->
                     val count = inArchive.numberOfItems
+                    var convertedCount = 0
+                    var srcEnc = ""
+                    var dstEnc = ""
+
                     for (i in 0 until count) {
-                        val path = inArchive.getStringProperty(i, PropID.PATH) ?: continue
+                        val rawPath = inArchive.getStringProperty(i, PropID.PATH) ?: continue
                         val isDir = inArchive.getProperty(i, PropID.IS_FOLDER) as? Boolean ?: false
                         val size = inArchive.getProperty(i, PropID.SIZE) as? Long ?: 0L
                         val packedSize = inArchive.getProperty(i, PropID.PACKED_SIZE) as? Long ?: 0L
-                        entries.add(ArchiveEntry(path, isDir, size, packedSize))
+
+                        if (isZip) {
+                            val recovered = ZipFilenameRecovery.recover(rawPath)
+                            if (recovered != null) {
+                                convertedCount++
+                                srcEnc = recovered.first
+                                dstEnc = recovered.second
+                                entries.add(ArchiveEntry(recovered.third, isDir, size, packedSize))
+                            } else {
+                                entries.add(ArchiveEntry(rawPath, isDir, size, packedSize))
+                            }
+                        } else {
+                            entries.add(ArchiveEntry(rawPath, isDir, size, packedSize))
+                        }
+                    }
+
+                    if (convertedCount > 0) {
+                        totalConversion = EncodingConversion(srcEnc, dstEnc, convertedCount)
                     }
                 }
-                entries
+
+                Pair(entries, totalConversion)
             }
         }
 
@@ -549,4 +586,79 @@ object JBindingClient {
         "gz" to ArchiveFormat.GZIP,
         "bz2" to ArchiveFormat.BZIP2,
     )
+
+    /**
+     * ZIP 文件名编码逆转换恢复。
+     *
+     * 7-Zip 对无 UTF-8 flag 的 ZIP 文件名使用 CP_OEMCP/CP_ACP 解码。
+     * 在 Android/Linux 上这些 codepage 通常映射到 UTF-8，但如果原始文件名
+     * 是 GBK/CP437 等编码，7-Zip 会用 UTF-8 错误解码，产生乱码。
+     *
+     * 策略：用 ISO-8859-1（完全可逆）编码回原始字节，再尝试 GBK 解码。
+     */
+    object ZipFilenameRecovery {
+        private val GBK = java.nio.charset.Charset.forName("GBK")
+
+        /**
+         * 尝试恢复文件名编码。
+         * @return Triple(源编码名, 目标编码名, 恢复后的文件名)，null 表示无需恢复
+         */
+        fun recover(garbledPath: String): Triple<String, String, String>? {
+            if (garbledPath.isEmpty()) return null
+
+            // 纯 ASCII 无需恢复
+            if (garbledPath.all { it.code in 0x20..0x7E || it.code == 0x09 }) return null
+
+            // 无替换字符且无控制字符 → 可能已经是正确的 UTF-8
+            if (!garbledPath.contains('�') && garbledPath.all { !it.isISOControl() || it.code == 0x09 }) {
+                // 检查是否为有效 UTF-8（不含高位字节的异常序列）
+                if (isValidUtf8(garbledPath)) return null
+            }
+
+            // 有乱码，尝试逆转换
+            // 7-Zip 在 Android 上通常用 ISO-8859-1 或 UTF-8 解码
+            // ISO-8859-1 是完全可逆的：每个字符映射到唯一的字节
+            val rawBytes = garbledPath.toByteArray(Charsets.ISO_8859_1)
+
+            // 尝试 GBK 解码
+            val gbkDecoded = String(rawBytes, GBK)
+            if (isCleanText(gbkDecoded)) {
+                Log.d(TAG, "ZIP 编码恢复: ISO-8859-1 → GBK ($garbledPath → $gbkDecoded)")
+                return Triple("ISO-8859-1", "GBK", gbkDecoded)
+            }
+
+            // 尝试 CP437 解码
+            try {
+                val cp437 = java.nio.charset.Charset.forName("CP437")
+                val cp437Decoded = String(rawBytes, cp437)
+                if (isCleanText(cp437Decoded)) {
+                    Log.d(TAG, "ZIP 编码恢复: ISO-8859-1 → CP437 ($garbledPath → $cp437Decoded)")
+                    return Triple("ISO-8859-1", "CP437", cp437Decoded)
+                }
+            } catch (_: Exception) { }
+
+            return null
+        }
+
+        private fun isCleanText(s: String): Boolean {
+            if (s.contains('�')) return false
+            // 检查是否有不合理的控制字符（排除 tab/newline）
+            for (c in s) {
+                if (c.isISOControl() && c.code != 0x09 && c.code != 0x0A && c.code != 0x0D) return false
+            }
+            return true
+        }
+
+        private fun isValidUtf8(s: String): Boolean {
+            // 检查字符串中是否有高位字节产生的异常字符
+            for (c in s) {
+                val code = c.code
+                // 补充形式（0xFFFx）或替换字符
+                if (code in 0xFFF0..0xFFFF) return false
+                // Surrogate pairs 在 BMP 中不应该出现
+                if (c.isSurrogate()) return false
+            }
+            return true
+        }
+    }
 }

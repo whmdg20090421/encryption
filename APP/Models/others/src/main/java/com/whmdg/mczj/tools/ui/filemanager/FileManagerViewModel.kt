@@ -203,6 +203,8 @@ class FilePaneController(
             internal set
         var archiveOpenError by mutableStateOf<com.whmdg.mczj.tools.ui.MessageDialogData?>(null)
             internal set
+        var archiveEncodingNotice by mutableStateOf<ArchiveBrowser.ArchiveSession?>(null)
+            internal set
         var archiveLoading by mutableStateOf(false)
             internal set
 
@@ -1750,6 +1752,10 @@ class FilePaneController(
                     result.fold(
                         onSuccess = { session ->
                             enterArchiveMode(session)
+                            // 编码转换通知
+                            if (session.encodingConversion != null) {
+                                panel.archiveEncodingNotice = session
+                            }
                         },
                         onFailure = { error ->
                             panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
@@ -1872,6 +1878,7 @@ class FilePaneController(
         panel.path = PanelPath.FileSystem(session.originalPath, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
         panel.entries = session.originalEntries.ifEmpty { listDirectory(session.originalPath) }
         panel.archiveSession = null
+        panel.archiveEncodingNotice = null
     }
 
     /** 当前是否在压缩包根目录 */
@@ -2394,6 +2401,7 @@ class PanelCoordinator(
         if (srcPath !is PanelPath.Archive && dst.path is PanelPath.Archive) {
             dst.path = PanelPath.FileSystem(dst.path.fileSystemPath)
             dst.archiveSession = null
+            dst.archiveEncodingNotice = null
         }
 
         dst.navState = dst.navState.navigate(srcPath)
@@ -2769,6 +2777,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     val archivePasswordRequest: FileEntry? get() = currentPanel.archivePasswordRequest
     val archiveDebugInfo: ArchiveBrowser.ArchiveDebugInfo? get() = currentPanel.archiveDebugInfo
     val archiveOpenError: com.whmdg.mczj.tools.ui.MessageDialogData? get() = currentPanel.archiveOpenError
+    val archiveEncodingNotice: ArchiveBrowser.ArchiveSession? get() = currentPanel.archiveEncodingNotice
     val archiveLoading: Boolean get() = currentPanel.archiveLoading
     /** 压缩包密码缓存：archivePath → password（仅内存，进程退出即清除） */
     private val archivePasswordCache = mutableMapOf<String, String>()
@@ -3909,6 +3918,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     withContext(Dispatchers.Main) {
                         enterArchiveMode(session)
+                        // 编码转换通知
+                        if (session.encodingConversion != null) {
+                            panel.archiveEncodingNotice = session
+                        }
                         panel.archivePasswordRequest = null
                         pending7zFileEntry = null
                     }
