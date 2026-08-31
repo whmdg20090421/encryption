@@ -1322,20 +1322,6 @@ fun FileManagerScreen(
                                     },
                                     onFileClick = { entry ->
                                         if (panel.path is PanelPath.Archive) {
-                                            DiagnosticLog.beginSession("[$side] 压缩包内点击文件 '${entry.name}'")
-                                            DiagnosticLog.log("FileMgr", "[$side] 压缩包内文件 name='${entry.name}'")
-                                            vm.focusedPanel = side
-                                            coroutineScope.launch {
-                                                val result = vm.openArchiveFile(context, entry)
-                                                if (!result.success) {
-                                                    messageDialogData = com.whmdg.mczj.tools.ui.MessageDialogData(
-                                                        title = "文件提取失败",
-                                                        errorSummary = result.errorMessage.ifEmpty { "无法提取文件" },
-                                                        command = result.command,
-                                                        output = result.output
-                                                    )
-                                                }
-                                            }
                                             return@FileBrowserPanel
                                         }
                                         DiagnosticLog.beginSession("[$side] 点击文件 '${entry.name}'")
@@ -5137,10 +5123,8 @@ fun FileManagerScreen(
             },
             onVerify = { password ->
                 val ok = vm.openArchiveWithPassword(archivePwdEntry, password)
-                // 7z：密码验证+整体解压完成后，自动打开之前点击的文件
-                if (ok && pending7zFile != null) {
+                if (ok) {
                     vm.pending7zFileEntry = null
-                    vm.openArchiveFile(pwdContext, pending7zFile)
                 }
                 ok
             }
