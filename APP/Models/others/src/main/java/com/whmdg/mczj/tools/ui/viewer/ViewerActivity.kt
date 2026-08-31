@@ -111,11 +111,5 @@ class ViewerActivity : ComponentActivity() {
             }
             VaultKeyHolder.clear(id)
         }
-        // 清理压缩包浏览临时文件
-        try {
-            cacheDir.listFiles { _, name ->
-                name.startsWith("archive_text_") || name.startsWith("archive_img_")
-            }?.forEach { it.delete() }
-        } catch (_: Exception) {}
     }
 }
