@@ -2931,32 +2931,6 @@ fun FileManagerScreen(
         )
     }
 
-    // ── ZIP 编码转换通知弹窗 ──
-    vm.archiveEncodingNotice?.let { session ->
-        val conversion = session.encodingConversion
-        if (conversion != null) {
-            AlertDialog(
-                onDismissRequest = { vm.currentPanel.archiveEncodingNotice = null },
-                title = { Text("文件名编码已自动转换", style = MaterialTheme.typography.titleSmall) },
-                text = {
-                    val sample = if (conversion.garbledSample.isNotEmpty())
-                        "\n示例：「${conversion.garbledSample}」" else ""
-                    Text(
-                        text = "检测到 ${conversion.count} 个文件名存在乱码${sample}\n已从 ${conversion.originalEncoding} 编码转换为 ${conversion.targetEncoding} 编码。",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = { vm.currentPanel.archiveEncodingNotice = null }) {
-                        Text("确认")
-                    }
-                }
-            )
-        } else {
-            vm.currentPanel.archiveEncodingNotice = null
-        }
-    }
-
     // ── 强行打开失败详情 ──
     if (forceOpenError != null) {
         StandardDialog(

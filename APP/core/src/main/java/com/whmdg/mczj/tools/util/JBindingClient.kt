@@ -43,21 +43,12 @@ object JBindingClient {
         object Header : EncryptionType()
     }
 
-    /** 编码转换信息 */
-    data class EncodingConversion(
-        val originalEncoding: String,
-        val targetEncoding: String,
-        val count: Int,
-        val garbledSample: String = ""
-    )
-
     /** 压缩包条目（结构化数据，无需字符串解析） */
     data class ArchiveEntry(
         val path: String,
         val isDirectory: Boolean,
         val size: Long,
-        val compressedSize: Long,
-        val encodingConversion: EncodingConversion? = null
+        val compressedSize: Long
     )
 
     fun init(context: Context) {
@@ -70,51 +61,24 @@ object JBindingClient {
 
     /**
      * 列出压缩包条目（结构化数据，推荐使用）。
-     * 对 ZIP 格式自动检测文件名编码，若 JBinding 返回乱码则逆转换恢复。
-     * @return Pair<条目列表, 编码转换信息（可能为null）>
      */
-    suspend fun listArchiveEntries(archivePath: String, password: String = ""): Result<Pair<List<ArchiveEntry>, EncodingConversion?>> =
+    suspend fun listArchiveEntries(archivePath: String, password: String = ""): Result<List<ArchiveEntry>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val isZip = archivePath.endsWith(".zip", ignoreCase = true)
                 val entries = mutableListOf<ArchiveEntry>()
-                var totalConversion: EncodingConversion? = null
 
                 withInArchive(archivePath, password) { inArchive ->
                     val count = inArchive.numberOfItems
-                    var convertedCount = 0
-                    var srcEnc = ""
-                    var dstEnc = ""
-                    var garbledSample = ""
-
                     for (i in 0 until count) {
-                        val rawPath = inArchive.getStringProperty(i, PropID.PATH) ?: continue
+                        val path = inArchive.getStringProperty(i, PropID.PATH) ?: continue
                         val isDir = inArchive.getProperty(i, PropID.IS_FOLDER) as? Boolean ?: false
                         val size = inArchive.getProperty(i, PropID.SIZE) as? Long ?: 0L
                         val packedSize = inArchive.getProperty(i, PropID.PACKED_SIZE) as? Long ?: 0L
-
-                        if (isZip) {
-                            val recovered = ZipFilenameRecovery.recover(rawPath)
-                            if (recovered != null) {
-                                convertedCount++
-                                srcEnc = recovered.first
-                                dstEnc = recovered.second
-                                if (garbledSample.isEmpty()) garbledSample = rawPath
-                                entries.add(ArchiveEntry(recovered.third, isDir, size, packedSize))
-                            } else {
-                                entries.add(ArchiveEntry(rawPath, isDir, size, packedSize))
-                            }
-                        } else {
-                            entries.add(ArchiveEntry(rawPath, isDir, size, packedSize))
-                        }
-                    }
-
-                    if (convertedCount > 0) {
-                        totalConversion = EncodingConversion(srcEnc, dstEnc, convertedCount, garbledSample)
+                        entries.add(ArchiveEntry(path, isDir, size, packedSize))
                     }
                 }
 
-                Pair(entries, totalConversion)
+                entries
             }
         }
 
@@ -589,94 +553,4 @@ object JBindingClient {
         "gz" to ArchiveFormat.GZIP,
         "bz2" to ArchiveFormat.BZIP2,
     )
-
-    /**
-     * ZIP 文件名编码逆转换恢复。
-     *
-     * 7-Zip 对无 UTF-8 flag 的 ZIP 文件名使用 CP_OEMCP/CP_ACP 解码。
-     * 在 Android/Linux 上这些 codepage 通常映射到 UTF-8，但如果原始文件名
-     * 是 GBK/CP437 等编码，7-Zip 会用 UTF-8 错误解码，产生乱码。
-     *
-     * 策略：用 ISO-8859-1（完全可逆）编码回原始字节，再尝试 GBK 解码。
-     */
-    object ZipFilenameRecovery {
-        private val GBK = java.nio.charset.Charset.forName("GBK")
-
-        /**
-         * 尝试恢复文件名编码。
-         * @return Triple(源编码名, 目标编码名, 恢复后的文件名)，null 表示无需恢复
-         */
-        fun recover(garbledPath: String): Triple<String, String, String>? {
-            if (garbledPath.isEmpty()) return null
-
-            // 纯 ASCII 无需恢复
-            if (garbledPath.all { it.code in 0x20..0x7E || it.code == 0x09 }) return null
-
-            // 有替换字符 → 肯定是乱码，需要恢复
-            if (garbledPath.contains('�')) return tryRecovery(garbledPath)
-
-            // 检查原始字符串的 ISO-8859-1 字节是否构成合法 UTF-8
-            // 如果是 → 已经是正确的 UTF-8 解码，无需恢复
-            // 如果不是 → 可能是 CP437 等编码的乱码，需要逆转换
-            val isoBytes = garbledPath.toByteArray(Charsets.ISO_8859_1)
-            if (isBytesValidUtf8(isoBytes)) return null
-
-            // 字节不构成合法 UTF-8 → 尝试逆转换恢复
-            return tryRecovery(garbledPath)
-        }
-
-        private fun tryRecovery(garbledPath: String): Triple<String, String, String>? {
-            val isoBytes = garbledPath.toByteArray(Charsets.ISO_8859_1)
-
-            // 尝试 GBK 解码
-            val gbkDecoded = String(isoBytes, GBK)
-            if (isCleanText(gbkDecoded)) {
-                Log.d(TAG, "ZIP 编码恢复: ISO-8859-1 → GBK ($garbledPath → $gbkDecoded)")
-                return Triple("ISO-8859-1", "GBK", gbkDecoded)
-            }
-
-            // 尝试 CP437 解码
-            try {
-                val cp437 = java.nio.charset.Charset.forName("CP437")
-                val cp437Decoded = String(isoBytes, cp437)
-                if (isCleanText(cp437Decoded)) {
-                    Log.d(TAG, "ZIP 编码恢复: ISO-8859-1 → CP437 ($garbledPath → $cp437Decoded)")
-                    return Triple("ISO-8859-1", "CP437", cp437Decoded)
-                }
-            } catch (_: Exception) { }
-
-            return null
-        }
-
-        private fun isCleanText(s: String): Boolean {
-            if (s.contains('�')) return false
-            for (c in s) {
-                if (c.isISOControl() && c.code != 0x09 && c.code != 0x0A && c.code != 0x0D) return false
-            }
-            return true
-        }
-
-        /** 检查字节数组是否构成合法的 UTF-8 编码 */
-        private fun isBytesValidUtf8(bytes: ByteArray): Boolean {
-            var i = 0
-            while (i < bytes.size) {
-                val b = bytes[i].toInt() and 0xFF
-                val expectedLen = when {
-                    b <= 0x7F -> 1
-                    b in 0xC2..0xDF -> 2
-                    b in 0xE0..0xEF -> 3
-                    b in 0xF0..0xF4 -> 4
-                    else -> return false  // 非法起始字节
-                }
-                // 检查后续字节
-                for (j in 1 until expectedLen) {
-                    if (i + j >= bytes.size) return false
-                    val cb = bytes[i + j].toInt() and 0xFF
-                    if (cb !in 0x80..0xBF) return false
-                }
-                i += expectedLen
-            }
-            return true
-        }
-    }
 }
