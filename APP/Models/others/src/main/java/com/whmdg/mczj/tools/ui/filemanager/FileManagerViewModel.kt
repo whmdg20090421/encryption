@@ -1874,6 +1874,13 @@ class FilePaneController(
         panel.archiveSession = null
     }
 
+    /** 构建压缩包内文件的相对路径（从 virtualPath 中提取相对部分 + entry.name） */
+    private fun buildArchiveRelativePath(archivePath: String, entryName: String): String {
+        val virtualPath = (currentPanel.path as? PanelPath.Archive)?.virtualPath ?: return entryName
+        val relDir = virtualPath.removePrefix(archivePath).trimStart('/')
+        return if (relDir.isEmpty()) entryName else "$relDir/$entryName"
+    }
+
     /** 当前是否在压缩包根目录 */
     fun isAtArchiveRoot(): Boolean {
         val session = state.archiveSession ?: return true
@@ -3166,6 +3173,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         try {
             context.cacheDir.listFiles { _, name ->
                 name.startsWith("vault_open_") || name.startsWith("vault_text_") || name.startsWith("vault_img_")
+                    || name.startsWith("archive_text_") || name.startsWith("archive_img_")
             }?.forEach { it.delete() }
         } catch (_: Exception) {}
     }
@@ -3603,14 +3611,60 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             "lua", "r", "swift", "dart", "ts", "jsx", "tsx", "vue"
         )
         val ext = entry.name.substringAfterLast('.', "").lowercase()
+        val isArchiveMode = currentPanel.path is PanelPath.Archive
         if (ext in textExtensions) {
             DiagnosticLog.log("OpenFile", "内置编辑器打开: ${entry.name}")
+            if (isArchiveMode) {
+                val archivePath = (currentPanel.path as PanelPath.Archive).archivePath
+                val relPath = buildArchiveRelativePath(archivePath, entry.name)
+                val tempDir = File(context.cacheDir, "archive_text_${System.currentTimeMillis()}")
+                tempDir.mkdirs()
+                scope.launch(Dispatchers.IO) {
+                    val result = ArchiveBrowser.extractSingleFile(context, archivePath, relPath, tempDir.absolutePath, permissionLevel = permissionLevel)
+                    withContext(Dispatchers.Main) {
+                        val file = result.file
+                        if (file != null && file.exists()) {
+                            context.startActivity(ViewerActivity.createTextIntent(context, file.absolutePath))
+                        } else {
+                            Toast.makeText(context, "提取文件失败: ${result.errorMessage.ifEmpty { "未知错误" }}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+                return
+            }
             context.startActivity(ViewerActivity.createTextIntent(context, entry.path))
             return
         }
         val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
         if (ext in imageExtensions) {
             DiagnosticLog.log("OpenFile", "内置查看器打开: ${entry.name}")
+            if (isArchiveMode) {
+                val archivePath = (currentPanel.path as PanelPath.Archive).archivePath
+                val imageEntries = currentPanel.entries
+                    .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions }
+                scope.launch(Dispatchers.IO) {
+                    val tempDir = File(context.cacheDir, "archive_img_${System.currentTimeMillis()}")
+                    tempDir.mkdirs()
+                    val extractedPaths = mutableListOf<String>()
+                    var startIndex = 0
+                    for ((idx, imgEntry) in imageEntries.withIndex()) {
+                        val relPath = buildArchiveRelativePath(archivePath, imgEntry.name)
+                        val result = ArchiveBrowser.extractSingleFile(context, archivePath, relPath, tempDir.absolutePath, permissionLevel = permissionLevel)
+                        if (result.file != null && result.file.exists()) {
+                            if (imgEntry.name == entry.name) startIndex = extractedPaths.size
+                            extractedPaths.add(result.file.absolutePath)
+                        }
+                    }
+                    withContext(Dispatchers.Main) {
+                        if (extractedPaths.isNotEmpty()) {
+                            context.startActivity(ViewerActivity.createImageIntent(context, extractedPaths[startIndex], extractedPaths, startIndex))
+                        } else {
+                            Toast.makeText(context, "提取图片失败", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+                return
+            }
             val imagePaths = overrideImagePaths ?: currentPanel.entries
                 .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions }
                 .map { it.path }
