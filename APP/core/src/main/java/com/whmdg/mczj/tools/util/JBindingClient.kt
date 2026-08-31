@@ -148,18 +148,23 @@ object JBindingClient {
                 if (targetIndex < 0) throw RuntimeException("文件不存在: $fileName")
 
                 inArchive.extract(intArrayOf(targetIndex), false, object : IArchiveExtractCallback {
+                    private var outStream: java.io.FileOutputStream? = null
+
                     override fun getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream {
+                        if (extractAskMode == ExtractAskMode.EXTRACT) {
+                            val outFile = File(outputDir, fileName)
+                            outFile.parentFile?.mkdirs()
+                            outStream = java.io.FileOutputStream(outFile)
+                        }
                         return ISequentialOutStream { data ->
-                            if (extractAskMode == ExtractAskMode.EXTRACT) {
-                                val outFile = File(outputDir, fileName)
-                                outFile.parentFile?.mkdirs()
-                                outFile.outputStream().use { it.write(data) }
-                            }
+                            outStream?.write(data)
                             data.size
                         }
                     }
                     override fun prepareOperation(extractAskMode: ExtractAskMode) {}
                     override fun setOperationResult(result: ExtractOperationResult) {
+                        try { outStream?.close() } catch (_: Exception) {}
+                        outStream = null
                         if (result != ExtractOperationResult.OK) {
                             throw SevenZipException("提取失败: $result")
                         }
