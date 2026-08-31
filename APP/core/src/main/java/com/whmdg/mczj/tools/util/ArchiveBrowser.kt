@@ -440,7 +440,7 @@ object ArchiveBrowser {
                 archivePath = archivePath, archiveName = archiveName,
                 passwordRequired = false, listCommand = "ZipRawReader", listExitCode = 0,
                 listStdout = "", listStderr = "",
-                parsedEntryCount = jbEntries.size, rootEntries = rootEntries,
+                parsedEntryCount = entries.size, rootEntries = rootEntries,
                 session = session
             )
         } catch (e: Exception) {
