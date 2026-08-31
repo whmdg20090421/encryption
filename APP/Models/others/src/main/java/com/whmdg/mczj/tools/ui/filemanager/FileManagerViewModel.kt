@@ -3542,7 +3542,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 构建压缩包内文件的相对路径（从 virtualPath 中提取相对部分 + entry.name） */
     private fun buildArchiveRelativePath(archivePath: String, entryName: String): String {
-        val virtualPath = (state.path as? PanelPath.Archive)?.virtualPath ?: return entryName
+        val virtualPath = (currentPanel.path as? PanelPath.Archive)?.virtualPath ?: return entryName
         val relDir = virtualPath.removePrefix(archivePath).trimStart('/')
         return if (relDir.isEmpty()) entryName else "$relDir/$entryName"
     }
