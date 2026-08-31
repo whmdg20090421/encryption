@@ -1264,8 +1264,12 @@ fun FileManagerScreen(
                                     },
                                     onFileClick = { entry ->
                                         vm.focusedPanel = FocusedPanel.RIGHT
-                                        vm.openFile(context, entry, isDebugMode)
-                                        vm.addHistory(entry.name, entry.path, false)
+                                        if (rightPanel.path is PanelPath.Archive) {
+                                            vm.openArchiveFile(context, entry)
+                                        } else {
+                                            vm.openFile(context, entry, isDebugMode)
+                                            vm.addHistory(entry.name, entry.path, false)
+                                        }
                                     },
                                     onLongClick = { entry ->
                                         selectedEntry = entry
@@ -1321,14 +1325,15 @@ fun FileManagerScreen(
                                         }
                                     },
                                     onFileClick = { entry ->
-                                        if (panel.path is PanelPath.Archive) {
-                                            return@FileBrowserPanel
-                                        }
-                                        DiagnosticLog.beginSession("[$side] 点击文件 '${entry.name}'")
-                                        DiagnosticLog.log("FileMgr", "[$side] 点击文件 name='${entry.name}' path='${entry.path}'")
                                         vm.focusedPanel = side
-                                        vm.openFile(context, entry, isDebugMode)
-                                        vm.addHistory(entry.name, entry.path, false)
+                                        if (panel.path is PanelPath.Archive) {
+                                            vm.openArchiveFile(context, entry)
+                                        } else {
+                                            DiagnosticLog.beginSession("[$side] 点击文件 '${entry.name}'")
+                                            DiagnosticLog.log("FileMgr", "[$side] 点击文件 name='${entry.name}' path='${entry.path}'")
+                                            vm.openFile(context, entry, isDebugMode)
+                                            vm.addHistory(entry.name, entry.path, false)
+                                        }
                                     },
                                     onLongClick = { entry ->
                                         selectedEntry = entry

@@ -3540,6 +3540,44 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
 
+    // ── 压缩包内文件预览 ──
+    fun openArchiveFile(context: Context, entry: FileEntry) {
+        val session = currentPanel.archiveSession ?: return
+        val password = archivePasswordCache[session.archivePath] ?: ""
+
+        // 构建缓存路径：cache/archive_cache/{archiveName}/{internalPath}
+        val cacheDir = File(context.cacheDir, "archive_cache")
+        val internalPath = entry.path
+        val outputFile = File(cacheDir, "${session.archiveName}/$internalPath")
+
+        // 缓存已存在，直接打开
+        if (outputFile.exists()) {
+            val newEntry = entry.copy(path = outputFile.absolutePath)
+            openFile(context, newEntry)
+            return
+        }
+
+        // 解压后打开
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = ArchiveBrowser.extractSingleFile(
+                context = context,
+                archivePath = session.archivePath,
+                fileName = internalPath,
+                outputDir = outputFile.parent,
+                password = password,
+                permissionLevel = permissionLevel
+            )
+            withContext(Dispatchers.Main) {
+                if (result.success && result.file != null) {
+                    val newEntry = entry.copy(path = result.file.absolutePath)
+                    openFile(context, newEntry)
+                } else {
+                    Toast.makeText(context, "解压失败: ${result.errorMessage}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     // ── 文件操作 ──
     fun openFile(
         context: Context,
