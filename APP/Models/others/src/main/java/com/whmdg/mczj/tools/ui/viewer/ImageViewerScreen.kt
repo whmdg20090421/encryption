@@ -204,7 +204,7 @@ private class PagerAwarePhotoView(context: android.content.Context) : PhotoView(
     }
 
     /** Double tap fills the direction that has spare space at the initial fitted scale. */
-    private fun scaleForDoubleTap(): Float {
+    fun scaleForDoubleTap(): Float {
         val visibleRect = displayRect
         if (visibleRect == null || width <= 0 || height <= 0) {
             return mediumScale
