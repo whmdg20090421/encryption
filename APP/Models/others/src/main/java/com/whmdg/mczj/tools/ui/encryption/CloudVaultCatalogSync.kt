@@ -30,6 +30,9 @@ object CloudVaultCatalogSync {
                     runInterruptible { client.downloadFile(remotePath(configPath), cacheFile) { } }
                     json.decodeFromString<CloudVaultCatalog>(cacheFile.readText())
                 }
+            } catch (e: Throwable) {
+                // 首次使用时 .sync_meta/vault_catalog.json 尚不存在，应视为空云端清单。
+                if (isNotFound(e)) CloudVaultCatalog() else throw e
             } finally {
                 cacheFile.delete()
             }
@@ -119,4 +122,13 @@ object CloudVaultCatalogSync {
         algorithm = algorithm,
         lastModifiedAt = lastModifiedAt
     )
+
+    private fun isNotFound(error: Throwable): Boolean {
+        var current: Throwable? = error
+        while (current != null) {
+            if (current.message?.contains("HTTP 404") == true) return true
+            current = current.cause
+        }
+        return false
+    }
 }

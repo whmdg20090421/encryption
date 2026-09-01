@@ -143,6 +143,12 @@ fun CloudSyncScreen(
         onProgress(CatalogSyncProgress("正在下载保险箱清单"))
         val catalog = CloudVaultCatalogSync.download(client, config.relativePath, cache)
         val total = catalog.vaults.size
+        if (total == 0) {
+            // 云端还没有同步清单时，卡片视图应反映空的云端状态。
+            syncItems.clear()
+            processedVaultIds.clear()
+            CloudSyncStore.save(context, emptyList())
+        }
         for ((index, meta) in catalog.vaults.withIndex()) {
             // 登录阶段先恢复该保险箱的加密同步库，供卡片打开时直接显示云端目录。
             onProgress(CatalogSyncProgress("正在恢复保险箱同步数据库：${meta.name}", index, total))
