@@ -165,8 +165,34 @@ private fun ArchiveImagePage(
 private class SmartPhotoView(context: android.content.Context) : PhotoView(context) {
     private var downX = 0f
     private var downY = 0f
-    internal var atLeftEdge = false
-    internal var atRightEdge = false
+    private var atLeftEdge = false
+    private var atRightEdge = false
+
+    init {
+        minimumScale = 1f
+        mediumScale = 2f
+        maximumScale = Float.MAX_VALUE
+        scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+        setOnDoubleTapListener(object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                val targetScale = if (scale > minimumScale + 0.01f) minimumScale else scaleForDoubleTap()
+                setScale(targetScale, e.x, e.y, true)
+                return true
+            }
+        })
+        setOnMatrixChangeListener {
+            val rect = displayRect
+            if (rect == null || rect.width() <= width) {
+                atLeftEdge = false
+                atRightEdge = false
+                setAllowParentInterceptOnEdge(true)
+            } else {
+                atLeftEdge = rect.left >= -1f
+                atRightEdge = rect.right <= width + 1f
+                setAllowParentInterceptOnEdge(atLeftEdge || atRightEdge)
+            }
+        }
+    }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
@@ -202,7 +228,7 @@ private class SmartPhotoView(context: android.content.Context) : PhotoView(conte
         return super.dispatchTouchEvent(ev)
     }
 
-    fun scaleForDoubleTap(): Float {
+    private fun scaleForDoubleTap(): Float {
         val visibleRect = displayRect
         if (visibleRect == null || width <= 0 || height <= 0) return mediumScale
         val horizontalScale = width / visibleRect.width()
@@ -211,32 +237,4 @@ private class SmartPhotoView(context: android.content.Context) : PhotoView(conte
     }
 }
 
-private fun createPhotoView(context: android.content.Context): PhotoView {
-    val pv = SmartPhotoView(context)
-    pv.apply {
-        minimumScale = 1f
-        mediumScale = 2f
-        maximumScale = Float.MAX_VALUE
-        scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-        setOnDoubleTapListener(object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDoubleTap(e: MotionEvent): Boolean {
-                val targetScale = if (scale > minimumScale + 0.01f) minimumScale else pv.scaleForDoubleTap()
-                setScale(targetScale, e.x, e.y, true)
-                return true
-            }
-        })
-        setOnMatrixChangeListener {
-            val rect = displayRect
-            if (rect == null || rect.width() <= width) {
-                pv.atLeftEdge = false
-                pv.atRightEdge = false
-                setAllowParentInterceptOnEdge(true)
-            } else {
-                pv.atLeftEdge = rect.left >= -1f
-                pv.atRightEdge = rect.right <= width + 1f
-                setAllowParentInterceptOnEdge(pv.atLeftEdge || pv.atRightEdge)
-            }
-        }
-    }
-    return pv
-}
+private fun createPhotoView(context: android.content.Context) = SmartPhotoView(context)
