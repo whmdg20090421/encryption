@@ -162,14 +162,19 @@ private fun ArchiveImagePage(
     }
 }
 
-private fun createPhotoView(context: android.content.Context): PhotoView = PhotoView(context).apply {
+private fun createPhotoView(context: android.content.Context): PhotoView = PagerAwarePhotoView(context).apply {
     minimumScale = 1f
     mediumScale = 2f
-    maximumScale = 5f
+    maximumScale = Float.MAX_VALUE
     scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
     setOnDoubleTapListener(object : GestureDetector.SimpleOnGestureListener() {
         override fun onDoubleTap(e: MotionEvent): Boolean {
-            setScale(if (scale > 1.5f) 1f else 2f, e.x, e.y, true)
+            val targetScale = if (scale > minimumScale + 0.01f) {
+                minimumScale
+            } else {
+                scaleForDoubleTap()
+            }
+            setScale(targetScale, e.x, e.y, true)
             return true
         }
     })
@@ -182,5 +187,31 @@ private fun createPhotoView(context: android.content.Context): PhotoView = Photo
             val atRight = rect.right <= width + 1f
             setAllowParentInterceptOnEdge(atLeft || atRight)
         }
+    }
+}
+
+/**
+ * When a second finger arrives, a pager must not claim the gesture as a horizontal swipe.
+ * Single-finger gestures are left alone so image-to-image paging still works.
+ */
+private class PagerAwarePhotoView(context: android.content.Context) : PhotoView(context) {
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_POINTER_DOWN -> parent?.requestDisallowInterceptTouchEvent(true)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> parent?.requestDisallowInterceptTouchEvent(false)
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
+    /** Double tap fills the direction that has spare space at the initial fitted scale. */
+    private fun scaleForDoubleTap(): Float {
+        val visibleRect = displayRect
+        if (visibleRect == null || width <= 0 || height <= 0) {
+            return mediumScale
+        }
+
+        val horizontalScale = width / visibleRect.width()
+        val verticalScale = height / visibleRect.height()
+        return scale * maxOf(horizontalScale, verticalScale)
     }
 }
