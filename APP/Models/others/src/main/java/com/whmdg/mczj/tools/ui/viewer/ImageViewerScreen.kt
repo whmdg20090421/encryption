@@ -162,56 +162,79 @@ private fun ArchiveImagePage(
     }
 }
 
-private fun createPhotoView(context: android.content.Context): PhotoView = PagerAwarePhotoView(context).apply {
+private class SmartPhotoView(context: android.content.Context) : PhotoView(context) {
+    private var downX = 0f
+    private var downY = 0f
+    internal var atLeftEdge = false
+    internal var atRightEdge = false
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = ev.x
+                downY = ev.y
+                if (scale > 1f) parent.requestDisallowInterceptTouchEvent(true)
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> parent?.requestDisallowInterceptTouchEvent(true)
+            MotionEvent.ACTION_MOVE -> {
+                val dx = ev.x - downX
+                val dy = ev.y - downY
+                if (dx * dx + dy * dy > 225) {
+                    val angle = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).let {
+                        if (it < 0) it + 360 else it
+                    }
+                    // atan2: 0°=右, 90°=下, 180°=左, 270°=上
+                    val nearHorizontal = angle <= 10 || angle >= 350 || (angle in 170.0..190.0)
+                    val nearVertical = angle in 80.0..100.0 || angle in 260.0..280.0
+                    if (nearVertical) {
+                        ev.offsetLocation(-ev.x + downX, 0f)
+                    } else if (nearHorizontal) {
+                        ev.offsetLocation(0f, -ev.y + downY)
+                        if ((atLeftEdge && dx < 0) || (atRightEdge && dx > 0)) {
+                            parent.requestDisallowInterceptTouchEvent(false)
+                        }
+                    }
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                parent.requestDisallowInterceptTouchEvent(false)
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    fun scaleForDoubleTap(): Float {
+        val visibleRect = displayRect
+        if (visibleRect == null || width <= 0 || height <= 0) return mediumScale
+        val horizontalScale = width / visibleRect.width()
+        val verticalScale = height / visibleRect.height()
+        return scale * maxOf(horizontalScale, verticalScale)
+    }
+}
+
+private fun createPhotoView(context: android.content.Context): PhotoView = SmartPhotoView(context).apply {
     minimumScale = 1f
     mediumScale = 2f
     maximumScale = Float.MAX_VALUE
     scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
     setOnDoubleTapListener(object : GestureDetector.SimpleOnGestureListener() {
         override fun onDoubleTap(e: MotionEvent): Boolean {
-            val targetScale = if (scale > minimumScale + 0.01f) {
-                minimumScale
-            } else {
-                scaleForDoubleTap()
-            }
+            val self = this@apply as SmartPhotoView
+            val targetScale = if (scale > minimumScale + 0.01f) minimumScale else self.scaleForDoubleTap()
             setScale(targetScale, e.x, e.y, true)
             return true
         }
     })
     setOnMatrixChangeListener {
+        val self = this@SmartPhotoView
         val rect = displayRect
         if (rect == null || rect.width() <= width) {
+            self.atLeftEdge = false
+            self.atRightEdge = false
             setAllowParentInterceptOnEdge(true)
         } else {
-            val atLeft = rect.left >= -1f
-            val atRight = rect.right <= width + 1f
-            setAllowParentInterceptOnEdge(atLeft || atRight)
+            self.atLeftEdge = rect.left >= -1f
+            self.atRightEdge = rect.right <= width + 1f
+            setAllowParentInterceptOnEdge(self.atLeftEdge || self.atRightEdge)
         }
-    }
-}
-
-/**
- * When a second finger arrives, a pager must not claim the gesture as a horizontal swipe.
- * Single-finger gestures are left alone so image-to-image paging still works.
- */
-private class PagerAwarePhotoView(context: android.content.Context) : PhotoView(context) {
-    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        when (event.actionMasked) {
-            MotionEvent.ACTION_POINTER_DOWN -> parent?.requestDisallowInterceptTouchEvent(true)
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> parent?.requestDisallowInterceptTouchEvent(false)
-        }
-        return super.dispatchTouchEvent(event)
-    }
-
-    /** Double tap fills the direction that has spare space at the initial fitted scale. */
-    fun scaleForDoubleTap(): Float {
-        val visibleRect = displayRect
-        if (visibleRect == null || width <= 0 || height <= 0) {
-            return mediumScale
-        }
-
-        val horizontalScale = width / visibleRect.width()
-        val verticalScale = height / visibleRect.height()
-        return scale * maxOf(horizontalScale, verticalScale)
     }
 }
