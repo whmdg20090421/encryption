@@ -290,12 +290,13 @@ object ArchiveBrowser {
         val root = fromCacheNode(cache.root)
         val node = if (cache.currentPath == cache.archivePath) root
             else findNode(root, cache.currentPath, cache.archivePath) ?: root
+        val internalPath = cache.currentPath.removePrefix(cache.archivePath).trimStart('/')
         return ArchiveSession(
             archivePath = cache.archivePath,
             archiveName = cache.archiveName,
             root = root,
             currentPath = cache.currentPath,
-            currentEntries = nodeChildrenToEntries(node),
+            currentEntries = nodeChildrenToEntries(node, internalPath),
             originalPath = cache.originalPath,
             originalEntries = emptyList()
         )
@@ -553,7 +554,7 @@ object ArchiveBrowser {
             ?: return null
 
         val newPath = "$currentPath/$dirName"
-        val entries = nodeChildrenToEntries(child)
+        val entries = nodeChildrenToEntries(child, newPath.removePrefix(session.archivePath).trimStart('/'))
 
         return session.copy(
             currentPath = newPath,
@@ -571,7 +572,8 @@ object ArchiveBrowser {
         val parentPath = session.currentPath.substringBeforeLast('/')
         val parentNode = findNode(session.root, parentPath, session.archivePath)
             ?: return null
-        val entries = nodeChildrenToEntries(parentNode)
+        val parentInternalPath = parentPath.removePrefix(session.archivePath).trimStart('/')
+        val entries = nodeChildrenToEntries(parentNode, parentInternalPath)
 
         return session.copy(
             currentPath = parentPath,
@@ -688,11 +690,12 @@ object ArchiveBrowser {
         return current
     }
 
-    /** 将节点的子节点转换为 FileEntry 列表（供 UI 使用） */
-    private fun nodeChildrenToEntries(node: ArchiveNode): List<FileEntry> {
+    /** 将节点的子节点转换为 FileEntry 列表（供 UI 使用）。internalPath 为当前目录在压缩包内的相对路径。 */
+    private fun nodeChildrenToEntries(node: ArchiveNode, internalPath: String = ""): List<FileEntry> {
+        val prefix = if (internalPath.isEmpty()) "" else "$internalPath/"
         return node.children.map { child ->
             FileEntry(
-                path = child.name,
+                path = if (child.name.isEmpty()) "" else "$prefix${child.name}",
                 name = child.name,
                 isDirectory = child.isDirectory,
                 size = child.size,
