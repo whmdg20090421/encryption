@@ -20,7 +20,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.viewinterop.AndroidView
 import com.awxkee.jxlcoder.JxlCoder
 import com.github.chrisbanes.photoview.PhotoView
-import com.github.chrisbanes.photoview.PhotoViewAttacher
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import java.io.File
 
@@ -104,14 +103,11 @@ fun ImageViewerScreen(
                             setOnMatrixChangeListener {
                                 val rect = displayRect
                                 if (rect == null || rect.width() <= width) {
-                                    setAllowParentInterceptOnEdge(PhotoViewAttacher.EDGE_BOTH)
+                                    setAllowParentInterceptOnEdge(true)
                                 } else {
                                     val atLeft = rect.left >= -1f
                                     val atRight = rect.right <= width + 1f
-                                    setAllowParentInterceptOnEdge(
-                                        if (atLeft || atRight) PhotoViewAttacher.EDGE_BOTH
-                                        else PhotoViewAttacher.EDGE_NONE
-                                    )
+                                    setAllowParentInterceptOnEdge(atLeft || atRight)
                                 }
                             }
                         }
