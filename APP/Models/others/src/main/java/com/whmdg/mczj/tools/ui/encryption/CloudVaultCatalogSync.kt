@@ -56,7 +56,7 @@ object CloudVaultCatalogSync {
     }
 
     /** 登录阶段恢复某个保险箱的加密同步数据库。 */
-    fun restoreVaultDatabase(
+    suspend fun restoreVaultDatabase(
         context: Context,
         client: WebDavFileClient,
         configPath: String,
