@@ -173,7 +173,7 @@ private class SmartPhotoView(context: android.content.Context) : PhotoView(conte
             MotionEvent.ACTION_DOWN -> {
                 downX = ev.x
                 downY = ev.y
-                if (scale > 1f) parent.requestDisallowInterceptTouchEvent(true)
+                if (scale > 1f) parent?.requestDisallowInterceptTouchEvent(true)
             }
             MotionEvent.ACTION_POINTER_DOWN -> parent?.requestDisallowInterceptTouchEvent(true)
             MotionEvent.ACTION_MOVE -> {
@@ -191,13 +191,13 @@ private class SmartPhotoView(context: android.content.Context) : PhotoView(conte
                     } else if (nearHorizontal) {
                         ev.offsetLocation(0f, -ev.y + downY)
                         if ((atLeftEdge && dx < 0) || (atRightEdge && dx > 0)) {
-                            parent.requestDisallowInterceptTouchEvent(false)
+                            parent?.requestDisallowInterceptTouchEvent(false)
                         }
                     }
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
-                parent.requestDisallowInterceptTouchEvent(false)
+                parent?.requestDisallowInterceptTouchEvent(false)
         }
         return super.dispatchTouchEvent(ev)
     }
@@ -205,8 +205,8 @@ private class SmartPhotoView(context: android.content.Context) : PhotoView(conte
     fun scaleForDoubleTap(): Float {
         val visibleRect = displayRect
         if (visibleRect == null || width <= 0 || height <= 0) return mediumScale
-        val horizontalScale = width / visibleRect.width()
-        val verticalScale = height / visibleRect.height()
+        val horizontalScale = width.toFloat() / visibleRect.width()
+        val verticalScale = height.toFloat() / visibleRect.height()
         return scale * maxOf(horizontalScale, verticalScale)
     }
 }
