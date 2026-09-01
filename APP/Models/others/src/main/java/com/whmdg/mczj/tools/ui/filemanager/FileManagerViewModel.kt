@@ -3552,7 +3552,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 缓存已存在，直接打开
         if (destFile.exists()) {
             val newEntry = entry.copy(path = destFile.absolutePath)
-            openFile(context, newEntry)
+            openFile(context, newEntry, overrideImagePaths = listOf(destFile.absolutePath))
             return
         }
 
@@ -3570,7 +3570,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val file = result.file
                 if (result.success && file != null) {
                     val newEntry = entry.copy(path = file.absolutePath)
-                    openFile(context, newEntry)
+                    openFile(context, newEntry, overrideImagePaths = listOf(file.absolutePath))
                 } else {
                     Toast.makeText(context, "解压失败: ${result.errorMessage}", Toast.LENGTH_SHORT).show()
                 }

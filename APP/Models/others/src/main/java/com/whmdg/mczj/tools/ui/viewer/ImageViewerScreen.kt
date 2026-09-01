@@ -16,7 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.core.net.toUri
+import androidx.compose.ui.text.style.TextAlign
+import coil3.compose.AsyncImagePainter
 import me.saket.telephoto.zoomable.DoubleClickToZoomListener
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
@@ -73,6 +74,7 @@ fun ImageViewerScreen(
             ) { page ->
                 val zoomableState = rememberZoomableState()
                 val imageState = rememberZoomableImageState(zoomableState)
+                val painter = rememberAsyncImagePainter(model = File(paths[page]))
 
                 // 翻页后重置缩放状态
                 LaunchedEffect(pagerState.settledPage) {
@@ -81,15 +83,28 @@ fun ImageViewerScreen(
                     }
                 }
 
-                ZoomableAsyncImage(
-                    model = File(paths[page]).toUri(),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    state = imageState,
-                    contentScale = ContentScale.Fit,
-                    // 双击在 1x ↔ 2x 之间切换
-                    onDoubleClick = DoubleClickToZoomListener.cycle(maxZoomFactor = 2f)
-                )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    ZoomableAsyncImage(
+                        model = File(paths[page]),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        state = imageState,
+                        contentScale = ContentScale.Fit,
+                        onDoubleClick = DoubleClickToZoomListener.cycle(maxZoomFactor = 2f)
+                    )
+
+                    // Coil 加载失败时显示错误信息
+                    if (painter.state is AsyncImagePainter.State.Error) {
+                        val error = (painter.state as AsyncImagePainter.State.Error).result.throwable
+                        Text(
+                            text = "加载失败: ${error.message ?: error.javaClass.simpleName}\n路径: ${paths[page]}",
+                            color = Color(0xFFFF1744),
+                            style = MaterialTheme.typography.bodyMedium,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+                }
             }
 
             // 底部半透明页码指示器
