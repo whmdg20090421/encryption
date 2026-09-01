@@ -167,6 +167,21 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
         }
     }
 
+    /** 从解压出的云端 SQLite 文件导入 cloud_entries，保留本地 local_entries。 */
+    fun importCloudEntriesFromFile(sourceFile: File) {
+        if (!sourceFile.exists()) return
+        val source = SQLiteDatabase.openDatabase(sourceFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+        try {
+            val entries = mutableListOf<SyncEntryRow>()
+            source.query("cloud_entries", null, null, null, null, null, "path").use { cursor ->
+                while (cursor.moveToNext()) entries.add(cursorToRow(cursor))
+            }
+            upsertEntries("cloud_entries", entries)
+        } finally {
+            source.close()
+        }
+    }
+
     fun updateStatus(table: String, path: String, status: SyncStatus, failReason: String? = null) {
         val db = writableDatabase
         val values = ContentValues().apply {

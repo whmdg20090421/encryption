@@ -65,13 +65,20 @@ data class VaultDb(
         return assigned
     }
 
+    /**
+     * 添加云端恢复的保险箱记录，保留云端稳定 ID。
+     * 若该 ID 已存在则由调用方先完成冲突处理。
+     */
+    fun addVaultWithId(record: VaultRecord, cloudId: Int): VaultRecord {
+        require(cloudId > 0) { "云端保险箱 ID 必须为正数" }
+        require(vaults.none { it.id == cloudId }) { "保险箱 ID 已存在: $cloudId" }
+        val assigned = record.copy(id = cloudId)
+        vaults.add(assigned)
+        return assigned
+    }
+
     fun removeVault(id: Int) {
         vaults.removeAll { it.id == id }
-        for (i in vaults.indices) {
-            if (vaults[i].id != i + 1) {
-                vaults[i] = vaults[i].copy(id = i + 1)
-            }
-        }
     }
 
     fun replaceVault(newRecord: VaultRecord) {

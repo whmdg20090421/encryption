@@ -41,7 +41,8 @@ class CloudPaneController(
     val state = CloudPanelState()
     private val webdavClient = WebDavFileClient(webdavConfig)
     private var syncJob: Job? = null
-    private lateinit var syncDb: SyncDatabase
+    // 构造时即打开本地同步库，支持 init 前的云端索引恢复。
+    private val syncDb: SyncDatabase = SyncDatabase.getInstance(context, vaultName)
 
     /** 云盘面板状态（完全独立，使用 mutableStateOf 驱动 Compose recomposition） */
     class CloudPanelState {
@@ -129,7 +130,6 @@ class CloudPaneController(
 
     /** 初始化：打开 DB + 注册日志写入器 + 首次扫描 + 列出根目录 */
     fun init() {
-        syncDb = SyncDatabase.getInstance(context, vaultName)
         state.vaultFolderName = vaultName
         // 中断恢复：WebDAV 不支持断点续传，所有 UPLOADING 重置为 PENDING
         syncDb.resetUploadingToPending("local_entries")
@@ -143,6 +143,11 @@ class CloudPaneController(
             state.isInitialized = true
         }
         navigateTo("/")
+        // 首次进入云端保险箱时恢复云端文件索引，随后刷新云端-only 目录。
+        scope.launch {
+            restoreCloudDbFromCloud()
+            navigateTo(state.currentPath)
+        }
     }
 
     /** 导航到本地保险箱内的相对路径 */
@@ -1359,6 +1364,34 @@ class CloudPaneController(
         }
     }
 
+    /** 下载并解压云端同步数据库，将 cloud_entries 导入当前本地数据库。 */
+    suspend fun restoreCloudDbFromCloud(): Boolean = withContext(Dispatchers.IO) {
+        val remotePath = "${remoteBasePath}/.sync_meta/${vaultName}_vault_sync.db.7z"
+        val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_restore.db.7z")
+        val extractDir = File(context.cacheDir, "cloud_db_restore_${vaultName}")
+        try {
+            if (!webdavClient.exists(remotePath)) return@withContext false
+            webdavClient.downloadFile(remotePath, zipFile) { }
+            extractDir.mkdirs()
+            com.whmdg.mczj.tools.util.JBindingClient.extractAll(
+                archivePath = zipFile.absolutePath,
+                outputDir = extractDir.absolutePath,
+                password = "mczj"
+            ).getOrThrow()
+            val sourceDb = File(extractDir, "vault_sync.db")
+            if (!sourceDb.exists()) return@withContext false
+            syncDb.importCloudEntriesFromFile(sourceDb)
+            webdavClient.getFileMetadata(remotePath)?.let { saveCloudDbMeta(it.size, it.lastModified) }
+            true
+        } catch (e: Exception) {
+            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "云端索引恢复失败: ${e.message}")
+            false
+        } finally {
+            zipFile.delete()
+            extractDir.deleteRecursively()
+        }
+    }
+
     /** 云端 db 差异检测结果 */
     data class CloudDiffResult(val changedFiles: List<ChangedFile>)
 
@@ -1403,8 +1436,7 @@ class CloudPaneController(
             val remoteDbFile = File(extractDir, "vault_sync.db")
             val changedFiles = mutableListOf<ChangedFile>()
             if (remoteDbFile.exists()) {
-                val remoteDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, "${vaultName}_diff")
-                val remoteEntries = remoteDb.getAllEntries("cloud_entries")
+                val remoteEntries = readCloudEntries(remoteDbFile)
                 for (entry in remoteEntries) {
                     val localEntry = syncDb.getEntry("cloud_entries", entry.path)
                     if (localEntry != null) {
@@ -1443,6 +1475,12 @@ class CloudPaneController(
             zipFile.delete()
             File(context.cacheDir, "cloud_db_diff_${vaultName}").deleteRecursively()
         }
+    }
+
+    private fun readCloudEntries(sourceDb: File): List<com.whmdg.mczj.tools.encryption.data.SyncEntryRow> {
+        val temp = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, "${vaultName}_diff")
+        temp.importCloudEntriesFromFile(sourceDb)
+        return temp.getAllEntries("cloud_entries")
     }
 
     /** 下载被其他设备更新的文件，覆盖本地 */

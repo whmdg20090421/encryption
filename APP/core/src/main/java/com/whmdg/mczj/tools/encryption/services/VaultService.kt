@@ -166,6 +166,67 @@ class VaultService(private val context: Context) {
     /** 获取指定 ID 的保险箱记录 */
     fun getVault(id: Int): VaultRecord? = _db.vaults.find { it.id == id }
 
+    /**
+     * 恢复云端保险箱元数据，保留云端稳定 ID。
+     * 返回现有记录表示本地已存在且被复用；ID 冲突时抛出异常交由 UI 处理。
+     */
+    fun restoreCloudVault(record: VaultRecord): VaultRecord {
+        require(record.id > 0) { "云端保险箱 ID 必须为正数" }
+        val byId = _db.vaults.find { it.id == record.id }
+        if (byId != null) {
+            if (byId.name != record.name || byId.relativePath != record.relativePath) {
+                throw IllegalStateException("本地保险箱 ID ${record.id} 与云端记录不一致")
+            }
+            return byId
+        }
+        val byName = _db.vaults.find { it.name == record.name }
+        if (byName != null && byName.id != record.id) {
+            throw IllegalStateException("本地已有同名保险箱「${record.name}」")
+        }
+        val restored = _db.addVaultWithId(record, record.id)
+        _db.save(context)
+        vaults.clear()
+        vaults.addAll(_db.vaults)
+        return restored
+    }
+
+    /** 用云端记录覆盖占用相同 ID 的本地记录，保留本地目录内容。 */
+    fun overwriteVaultId(localId: Int, cloudRecord: VaultRecord): VaultRecord {
+        require(cloudRecord.id > 0) { "云端保险箱 ID 必须为正数" }
+        val index = _db.vaults.indexOfFirst { it.id == localId }
+        require(index >= 0) { "本地保险箱不存在: id=$localId" }
+        val existingCloud = _db.vaults.indexOfFirst { it.id == cloudRecord.id && it.id != localId }
+        require(existingCloud < 0) { "云端保险箱 ID 已被其他本地记录占用" }
+        val replaced = cloudRecord.copy(relativePath = _db.vaults[index].relativePath)
+        _db.vaults[index] = replaced
+        _db.save(context)
+        vaults.clear()
+        vaults.addAll(_db.vaults)
+        return replaced
+    }
+
+    /**
+     * 将冲突的本地保险箱作为独立副本保留：重命名目录并释放原云端 ID。
+     * 释放后恢复流程才能使用该稳定云端 ID 创建对应的保险箱记录。
+     */
+    fun renameVaultForConflict(localId: Int, newFolderName: String): VaultRecord {
+        val index = _db.vaults.indexOfFirst { it.id == localId }
+        require(index >= 0) { "本地保险箱不存在: id=$localId" }
+        val current = _db.vaults[index]
+        val dir = VaultPaths.resolveVault(context, current.location, current.relativePath)
+        require(newFolderName.isNotBlank()) { "文件夹名称不能为空" }
+        val renamed = File(dir.parentFile ?: dir, newFolderName.trim())
+        require(!renamed.exists()) { "本地冲突目录已存在: ${renamed.name}" }
+        if (dir.exists() && !dir.renameTo(renamed)) throw IllegalStateException("本地目录重命名失败")
+        val replacementId = (_db.vaults.maxOfOrNull { it.id } ?: 0) + 1
+        val updated = current.copy(id = replacementId, relativePath = renamed.absolutePath)
+        _db.vaults[index] = updated
+        _db.save(context)
+        vaults.clear()
+        vaults.addAll(_db.vaults)
+        return updated
+    }
+
     /** 标记保险箱内容已修改（导入/重命名/删除文件后调用） */
     fun markModified(id: Int) {
         val rec = _db.vaults.find { it.id == id } ?: return
