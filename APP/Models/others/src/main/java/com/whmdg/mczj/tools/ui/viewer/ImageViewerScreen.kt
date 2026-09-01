@@ -17,7 +17,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
-import coil3.compose.AsyncImagePainter
 import me.saket.telephoto.zoomable.DoubleClickToZoomListener
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
@@ -74,9 +73,9 @@ fun ImageViewerScreen(
             ) { page ->
                 val zoomableState = rememberZoomableState()
                 val imageState = rememberZoomableImageState(zoomableState)
-                val painter = rememberAsyncImagePainter(model = File(paths[page]))
+                val pageFile = remember(paths[page]) { File(paths[page]) }
+                val fileExists = remember(pageFile) { pageFile.exists() }
 
-                // 翻页后重置缩放状态
                 LaunchedEffect(pagerState.settledPage) {
                     if (pagerState.settledPage != page) {
                         zoomableState.resetZoom(animationSpec = SnapSpec())
@@ -84,20 +83,18 @@ fun ImageViewerScreen(
                 }
 
                 Box(modifier = Modifier.fillMaxSize()) {
-                    ZoomableAsyncImage(
-                        model = File(paths[page]),
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        state = imageState,
-                        contentScale = ContentScale.Fit,
-                        onDoubleClick = DoubleClickToZoomListener.cycle(maxZoomFactor = 2f)
-                    )
-
-                    // Coil 加载失败时显示错误信息
-                    if (painter.state is AsyncImagePainter.State.Error) {
-                        val error = (painter.state as AsyncImagePainter.State.Error).result.throwable
+                    if (fileExists) {
+                        ZoomableAsyncImage(
+                            model = pageFile,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            state = imageState,
+                            contentScale = ContentScale.Fit,
+                            onDoubleClick = DoubleClickToZoomListener.cycle(maxZoomFactor = 2f)
+                        )
+                    } else {
                         Text(
-                            text = "加载失败: ${error.message ?: error.javaClass.simpleName}\n路径: ${paths[page]}",
+                            text = "文件不存在\n${paths[page]}",
                             color = Color(0xFFFF1744),
                             style = MaterialTheme.typography.bodyMedium,
                             textAlign = TextAlign.Center,
@@ -107,7 +104,6 @@ fun ImageViewerScreen(
                 }
             }
 
-            // 底部半透明页码指示器
             if (paths.size > 1) {
                 Text(
                     text = "${pagerState.currentPage + 1}/${paths.size}",
