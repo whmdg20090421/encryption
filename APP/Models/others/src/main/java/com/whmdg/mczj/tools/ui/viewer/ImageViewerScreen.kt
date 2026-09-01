@@ -1,7 +1,7 @@
 package com.whmdg.mczj.tools.ui.viewer
 
-import androidx.compose.animation.core.SnapSpec
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -15,12 +15,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
-import me.saket.telephoto.zoomable.DoubleClickToZoomListener
-import me.saket.telephoto.zoomable.rememberZoomableImageState
-import me.saket.telephoto.zoomable.rememberZoomableState
-import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.SuccessResult
+import coil3.request.crossfade
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -71,30 +73,55 @@ fun ImageViewerScreen(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize()
             ) { page ->
-                val zoomableState = rememberZoomableState()
-                val imageState = rememberZoomableImageState(zoomableState)
                 val pageFile = remember(paths[page]) { File(paths[page]) }
-                val fileExists = remember(pageFile) { pageFile.exists() }
+                var errorMessage by remember { mutableStateOf<String?>(null) }
+                var scale by remember { mutableFloatStateOf(1f) }
+                var offsetX by remember { mutableFloatStateOf(0f) }
+                var offsetY by remember { mutableFloatStateOf(0f) }
 
                 LaunchedEffect(pagerState.settledPage) {
                     if (pagerState.settledPage != page) {
-                        zoomableState.resetZoom(animationSpec = SnapSpec())
+                        scale = 1f; offsetX = 0f; offsetY = 0f
                     }
                 }
 
-                Box(modifier = Modifier.fillMaxSize()) {
-                    if (fileExists) {
-                        ZoomableAsyncImage(
-                            model = pageFile,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            state = imageState,
-                            contentScale = ContentScale.Fit,
-                            onDoubleClick = DoubleClickToZoomListener.cycle(maxZoomFactor = 2f)
-                        )
-                    } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoom, _ ->
+                                scale = (scale * zoom).coerceIn(0.5f, 5f)
+                                offsetX += pan.x
+                                offsetY += pan.y
+                            }
+                        }
+                ) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
+                            .data(pageFile)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer(
+                                scaleX = scale, scaleY = scale,
+                                translationX = offsetX, translationY = offsetY
+                            ),
+                        onSuccess = { success ->
+                            errorMessage = null
+                        },
+                        onError = {
+                            errorMessage = it.result.throwable.let { t ->
+                                "${t.message ?: t.javaClass.simpleName}\n${paths[page]}"
+                            }
+                        }
+                    )
+
+                    if (errorMessage != null) {
                         Text(
-                            text = "文件不存在\n${paths[page]}",
+                            text = "加载失败: $errorMessage",
                             color = Color(0xFFFF1744),
                             style = MaterialTheme.typography.bodyMedium,
                             textAlign = TextAlign.Center,
