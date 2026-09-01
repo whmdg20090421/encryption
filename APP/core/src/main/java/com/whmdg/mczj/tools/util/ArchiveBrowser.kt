@@ -713,41 +713,41 @@ object ArchiveBrowser {
     )
 
     /**
-     * 从压缩包中提取单个文件到指定目录。
+     * 从压缩包中提取单个文件。
      * @param archivePath 压缩包路径
-     * @param fileName 压缩包内相对路径，如 "docs/readme.txt"
-     * @param outputDir 输出目录
+     * @param entryPath 压缩包内相对路径，如 "docs/readme.txt"
+     * @param destFile 目标文件路径
      * @param password 密码（空=不带密码）
      * @param permissionLevel 执行权限级别
-     * @return 提取结果，包含成功状态、文件、命令、输出和错误信息
+     * @return 提取结果
      */
     suspend fun extractSingleFile(
         context: Context,
         archivePath: String,
-        fileName: String,
-        outputDir: String,
+        entryPath: String,
+        destFile: File,
         password: String = "",
         permissionLevel: String = "NORMAL"
     ): ExtractResult = withContext(Dispatchers.IO) {
         try {
+            destFile.parentFile?.mkdirs()
+
             // zip 格式：用 java.util.zip.ZipFile 直接提取，避免编码匹配问题
             if (archivePath.endsWith(".zip", ignoreCase = true) && password.isEmpty()) {
-                return@withContext extractFromZip(archivePath, fileName, outputDir)
+                return@withContext extractFromZip(archivePath, entryPath, destFile)
             }
 
-            Log.d(TAG, "提取单文件: $fileName")
-            val result = JBindingClient.extractSingleFile(archivePath, fileName, outputDir, password)
+            Log.d(TAG, "提取单文件: $entryPath")
+            val result = JBindingClient.extractSingleFile(archivePath, entryPath, destFile, password)
             result.fold(
-                onSuccess = { output ->
-                    val outputFile = File(outputDir, fileName)
-                    if (outputFile.exists()) {
-                        ExtractResult(success = true, file = outputFile, command = "JBindingClient.extractSingleFile", output = output)
+                onSuccess = {
+                    if (destFile.exists()) {
+                        ExtractResult(success = true, file = destFile, command = "JBindingClient.extractSingleFile")
                     } else {
                         ExtractResult(
                             success = false,
                             command = "JBindingClient.extractSingleFile",
-                            output = output,
-                            errorMessage = "文件提取后未找到: ${outputFile.absolutePath}"
+                            errorMessage = "文件提取后未找到: ${destFile.absolutePath}"
                         )
                     }
                 },
@@ -774,33 +774,31 @@ object ArchiveBrowser {
      */
     private fun extractFromZip(
         archivePath: String,
-        fileName: String,
-        outputDir: String
+        entryPath: String,
+        destFile: File
     ): ExtractResult {
         return try {
             val zipFile = java.util.zip.ZipFile(archivePath, Charsets.UTF_8)
             zipFile.use { zf ->
-                // ZipFile.getName() 已经用 JVM charset 解码，直接比较
-                val entry = zf.entries().asSequence().find { it.name == fileName }
+                val entry = zf.entries().asSequence().find { it.name == entryPath }
 
                 if (entry == null) {
-                    // 回退：尝试用原始字节匹配（处理编码不一致的情况）
-                    val rawEntry = zf.entries().asSequence().find { entry ->
-                        val rawBytes = entry.name.toByteArray(Charsets.ISO_8859_1)
+                    val rawEntry = zf.entries().asSequence().find { e ->
+                        val rawBytes = e.name.toByteArray(Charsets.ISO_8859_1)
                         val decoded = ZipEncodingDetector.decodeFilename(rawBytes, false)
-                        decoded == fileName
+                        decoded == entryPath
                     }
                     if (rawEntry != null) {
-                        extractZipEntry(zf, rawEntry, outputDir, fileName)
+                        extractZipEntry(zf, rawEntry, destFile)
                     } else {
                         ExtractResult(
                             success = false,
                             command = "ZipFile",
-                            errorMessage = "在 zip 中未找到: $fileName"
+                            errorMessage = "在 zip 中未找到: $entryPath"
                         )
                     }
                 } else {
-                    extractZipEntry(zf, entry, outputDir, fileName)
+                    extractZipEntry(zf, entry, destFile)
                 }
             }
         } catch (e: Exception) {
@@ -816,23 +814,21 @@ object ArchiveBrowser {
     private fun extractZipEntry(
         zipFile: java.util.zip.ZipFile,
         entry: java.util.zip.ZipEntry,
-        outputDir: String,
-        fileName: String
+        destFile: File
     ): ExtractResult {
-        val outputFile = File(outputDir, fileName)
-        outputFile.parentFile?.mkdirs()
+        destFile.parentFile?.mkdirs()
         zipFile.getInputStream(entry).use { input ->
-            outputFile.outputStream().use { output ->
+            destFile.outputStream().use { output ->
                 input.copyTo(output)
             }
         }
-        return if (outputFile.exists()) {
-            ExtractResult(success = true, file = outputFile, command = "ZipFile")
+        return if (destFile.exists()) {
+            ExtractResult(success = true, file = destFile, command = "ZipFile")
         } else {
             ExtractResult(
                 success = false,
                 command = "ZipFile",
-                errorMessage = "文件写入失败: ${outputFile.absolutePath}"
+                errorMessage = "文件写入失败: ${destFile.absolutePath}"
             )
         }
     }

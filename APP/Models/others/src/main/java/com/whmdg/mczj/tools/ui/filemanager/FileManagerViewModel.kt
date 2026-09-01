@@ -3547,26 +3547,22 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         // 构建缓存路径：cache/archive_cache/{archiveName}/{internalPath}
         val cacheDir = File(context.cacheDir, "archive_cache")
-        val internalPath = entry.path
-        val outputFile = File(cacheDir, "${session.archiveName}/$internalPath")
+        val destFile = File(cacheDir, "${session.archiveName}/${entry.path}")
 
         // 缓存已存在，直接打开
-        if (outputFile.exists()) {
-            val newEntry = entry.copy(path = outputFile.absolutePath)
+        if (destFile.exists()) {
+            val newEntry = entry.copy(path = destFile.absolutePath)
             openFile(context, newEntry)
             return
         }
 
         // 解压后打开
         viewModelScope.launch(Dispatchers.IO) {
-            // outputDir 是压缩包对应的缓存目录
-            val archiveCacheDir = File(cacheDir, session.archiveName)
-            archiveCacheDir.mkdirs()
             val result = ArchiveBrowser.extractSingleFile(
                 context = context,
                 archivePath = session.archivePath,
-                fileName = internalPath,
-                outputDir = archiveCacheDir.absolutePath,
+                entryPath = entry.path,
+                destFile = destFile,
                 password = password,
                 permissionLevel = permissionLevel
             )

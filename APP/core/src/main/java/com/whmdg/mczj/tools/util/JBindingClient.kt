@@ -130,8 +130,8 @@ object JBindingClient {
 
     suspend fun extractSingleFile(
         archivePath: String,
-        fileName: String,
-        outputDir: String,
+        entryPath: String,
+        destFile: File,
         password: String = ""
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
@@ -140,38 +140,35 @@ object JBindingClient {
                 var targetIndex = -1
                 for (i in 0 until count) {
                     val path = inArchive.getStringProperty(i, PropID.PATH) ?: continue
-                    if (path == fileName || path.replace('\\', '/') == fileName.replace('\\', '/')) {
+                    if (path == entryPath || path.replace('\\', '/') == entryPath.replace('\\', '/')) {
                         targetIndex = i
                         break
                     }
                 }
-                if (targetIndex < 0) throw RuntimeException("文件不存在: $fileName")
+                if (targetIndex < 0) throw RuntimeException("文件不存在: $entryPath")
 
-                inArchive.extract(intArrayOf(targetIndex), false, object : IArchiveExtractCallback {
-                    private var outStream: java.io.FileOutputStream? = null
-
-                    override fun getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream {
-                        if (extractAskMode == ExtractAskMode.EXTRACT) {
-                            val outFile = File(outputDir, fileName)
-                            outFile.parentFile?.mkdirs()
-                            outStream = java.io.FileOutputStream(outFile)
+                destFile.parentFile?.mkdirs()
+                val out = java.io.FileOutputStream(destFile)
+                try {
+                    inArchive.extract(intArrayOf(targetIndex), false, object : IArchiveExtractCallback {
+                        override fun getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream {
+                            return ISequentialOutStream { data ->
+                                out.write(data)
+                                data.size
+                            }
                         }
-                        return ISequentialOutStream { data ->
-                            outStream?.write(data)
-                            data.size
+                        override fun prepareOperation(extractAskMode: ExtractAskMode) {}
+                        override fun setOperationResult(result: ExtractOperationResult) {
+                            if (result != ExtractOperationResult.OK) {
+                                throw SevenZipException("提取失败: $result")
+                            }
                         }
-                    }
-                    override fun prepareOperation(extractAskMode: ExtractAskMode) {}
-                    override fun setOperationResult(result: ExtractOperationResult) {
-                        try { outStream?.close() } catch (_: Exception) {}
-                        outStream = null
-                        if (result != ExtractOperationResult.OK) {
-                            throw SevenZipException("提取失败: $result")
-                        }
-                    }
-                    override fun setTotal(total: Long) {}
-                    override fun setCompleted(complete: Long) {}
-                })
+                        override fun setTotal(total: Long) {}
+                        override fun setCompleted(complete: Long) {}
+                    })
+                } finally {
+                    out.close()
+                }
             }
             ""
         }
