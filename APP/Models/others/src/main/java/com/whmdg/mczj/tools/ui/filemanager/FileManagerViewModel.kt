@@ -2551,37 +2551,7 @@ class PanelCoordinator(
             recalculateFolderSize = recalculateFolderSize
         )
 
-        // 云端 db 同步检查（必须在 init 之前，否则用户先看到文件列表再看到弹窗）
-        cloudSyncDialogVisible = true
-        cloudSyncPhase = "正在下载云端数据库..."
-        val diffResult = controller.downloadAndCompareCloudDb { phase ->
-            cloudSyncPhase = phase
-        }
-        cloudSyncDialogVisible = false
-
-        if (diffResult.changedFiles.isNotEmpty()) {
-            // 发现差异，弹窗让用户选择
-            cloudDiffFiles = diffResult.changedFiles
-            cloudDiffDialogVisible = true
-            val userChoice = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
-                cloudDiffContinuation = cont
-            }
-            cloudDiffDialogVisible = false
-
-            if (userChoice) {
-                // 下载被更新的文件
-                cloudDownloadDialogVisible = true
-                controller.downloadChangedFiles(diffResult.changedFiles) { progress ->
-                    cloudDownloadProgress = progress
-                }
-                cloudDownloadDialogVisible = false
-                cloudDownloadProgress = null
-            } else {
-                controller.state.uploadDisabled = true
-            }
-        }
-
-        // 同步检查完成后再初始化面板（加载文件列表）
+        // 登录/手动刷新阶段已经恢复云端数据库；进入保险箱只读取本地索引，避免重复联网同步。
         controller.init()
         cloud = controller
         isCloudMode = true

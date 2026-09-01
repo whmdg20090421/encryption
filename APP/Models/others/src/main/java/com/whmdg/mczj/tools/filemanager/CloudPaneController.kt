@@ -143,11 +143,6 @@ class CloudPaneController(
             state.isInitialized = true
         }
         navigateTo("/")
-        // 首次进入云端保险箱时恢复云端文件索引，随后刷新云端-only 目录。
-        scope.launch {
-            restoreCloudDbFromCloud()
-            navigateTo(state.currentPath)
-        }
     }
 
     /** 导航到本地保险箱内的相对路径 */

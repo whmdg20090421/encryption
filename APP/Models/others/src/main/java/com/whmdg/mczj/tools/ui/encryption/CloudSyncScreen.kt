@@ -51,7 +51,10 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -111,6 +114,7 @@ fun CloudSyncScreen(
     var accountState by remember { mutableStateOf(WebDavAccountState()) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var confirmError by remember { mutableStateOf<Throwable?>(null) }
+    var syncErrorMessage by remember { mutableStateOf<String?>(null) }
 
     // 异常恢复弹窗状态
     var showRecoveryDialog by remember { mutableStateOf(false) }
@@ -125,8 +129,10 @@ fun CloudSyncScreen(
     var showManualSyncConfirm by remember { mutableStateOf(false) }
     var catalogSyncProgress by remember { mutableStateOf<CatalogSyncProgress?>(null) }
     var syncRunning by remember { mutableStateOf(false) }
+    var syncJob by remember { mutableStateOf<Job?>(null) }
+    var showCancelSyncConfirm by remember { mutableStateOf(false) }
 
-    /** 登录后从云端清单恢复保险箱卡片与本地占位目录。 */
+    /** 用户确认同步后，从云端清单恢复保险箱卡片与本地占位目录。 */
     suspend fun restoreCloudCatalog(
         config: WebDavServerConfig,
         onProgress: (CatalogSyncProgress) -> Unit = {}
@@ -135,12 +141,14 @@ fun CloudSyncScreen(
         val client = WebDavFileClient(config)
         val cache = File(context.cacheDir, "vault_catalog.json")
         onProgress(CatalogSyncProgress("正在下载保险箱清单"))
-        val catalog = CloudVaultCatalogSync.download(client, config.relativePath, cache) ?: return
+        val catalog = CloudVaultCatalogSync.download(client, config.relativePath, cache)
         val total = catalog.vaults.size
         for ((index, meta) in catalog.vaults.withIndex()) {
             // 登录阶段先恢复该保险箱的加密同步库，供卡片打开时直接显示云端目录。
             onProgress(CatalogSyncProgress("正在恢复保险箱同步数据库：${meta.name}", index, total))
-            CloudVaultCatalogSync.restoreVaultDatabase(context, client, config.relativePath, meta)
+            if (!CloudVaultCatalogSync.restoreVaultDatabase(context, client, config.relativePath, meta)) {
+                throw IllegalStateException("保险箱「${meta.name}」同步数据库恢复失败")
+            }
             val localPath = meta.relativePath.ifBlank {
                 VaultPaths.resolveVault(context, meta.location, meta.name).absolutePath
             }
@@ -177,30 +185,58 @@ fun CloudSyncScreen(
     }
 
     suspend fun publishCloudCatalog(config: WebDavServerConfig) {
-        CloudVaultCatalogSync.upload(
+        val ok = CloudVaultCatalogSync.upload(
             client = WebDavFileClient(config),
             configPath = config.relativePath,
             vaults = vaultService.vaults.toList(),
             cacheFile = File(context.cacheDir, "vault_catalog_upload.json")
         )
+        if (!ok) throw IllegalStateException("云端保险箱清单上传失败")
     }
 
     suspend fun runCatalogSync(config: WebDavServerConfig) {
-        if (syncRunning) return
-        syncRunning = true
-        catalogSyncProgress = CatalogSyncProgress("准备同步")
         try {
             restoreCloudCatalog(config) { catalogSyncProgress = it }
+            catalogSyncProgress = CatalogSyncProgress("正在上传保险箱清单")
             publishCloudCatalog(config)
-        } catch (e: Exception) {
-            catalogSyncProgress = CatalogSyncProgress(
-                phase = "同步失败",
-                completed = true,
-                error = e.message ?: "未知错误"
+            catalogSyncProgress = CatalogSyncProgress("同步完成", completed = true)
+        } catch (e: TimeoutCancellationException) {
+            catalogSyncProgress = null
+            syncErrorMessage = "同步超时：云端在两分钟内未响应，请检查网络后重试。"
+        } catch (_: CancellationException) {
+            // 取消时临时下载文件会由各同步步骤的 finally 删除。
+            catalogSyncProgress = null
+        } catch (e: java.io.IOException) {
+            catalogSyncProgress = null
+            syncErrorMessage = "网络同步失败：${e.message ?: "连接中断"}"
+        } catch (e: IllegalStateException) {
+            catalogSyncProgress = null
+            syncErrorMessage = e.message ?: "同步数据不完整"
+        } catch (e: Throwable) {
+            catalogSyncProgress = null
+            com.whmdg.mczj.tools.util.DiagnosticLog.exportCrashReport(
+                context, e, "云盘同步发生未预期错误"
             )
+            confirmError = e
         } finally {
             syncRunning = false
+            syncJob = null
         }
+    }
+
+    fun startCatalogSync(config: WebDavServerConfig) {
+        if (syncJob?.isActive == true) return
+        syncRunning = true
+        syncErrorMessage = null
+        catalogSyncProgress = CatalogSyncProgress("准备同步")
+        syncJob = scope.launch { runCatalogSync(config) }
+    }
+
+    fun cancelCatalogSync() {
+        syncJob?.cancel()
+        syncJob = null
+        syncRunning = false
+        catalogSyncProgress = null
     }
 
     // 从持久化存储加载同步项 + 刷新保险箱大小 + 检测 WebDAV 连接状态
@@ -246,8 +282,6 @@ fun CloudSyncScreen(
             }
             if (!ok) {
                 accountState = accountState.copy(status = WebDavConnectionStatus.EXPIRED)
-            } else {
-                runCatalogSync(config)
             }
         }
     }
@@ -270,9 +304,6 @@ fun CloudSyncScreen(
             )
             syncItems.add(item)
             CloudSyncStore.save(context, syncItems.toList())
-            accountState.config?.let { config ->
-                scope.launch { runCatalogSync(config) }
-            }
         }
     }
 
@@ -557,11 +588,6 @@ fun CloudSyncScreen(
                     )
                 }
 
-                // 报错弹窗
-                com.whmdg.mczj.tools.ui.ErrorDialog(
-                    error = confirmError,
-                    onDismiss = { confirmError = null }
-                )
             }
         }
     }
@@ -683,7 +709,7 @@ fun CloudSyncScreen(
                         catalogConflict = null
                         scope.launch {
                             vaultService.overwriteVaultId(local.id, meta.toVaultRecord(local.relativePath.ifBlank { meta.name }))
-                            accountState.config?.let { restoreCloudCatalog(it) }
+                            accountState.config?.let(::startCatalogSync)
                         }
                     }) { Text("使用云端 ID") }
                 }
@@ -725,7 +751,7 @@ fun CloudSyncScreen(
                             scope.launch {
                                 try {
                                     vaultService.renameVaultForConflict(local.id, renameFolderName)
-                                    accountState.config?.let { restoreCloudCatalog(it) }
+                                    accountState.config?.let(::startCatalogSync)
                                 } catch (e: Exception) {
                                     android.widget.Toast.makeText(context, e.message ?: "重命名失败", android.widget.Toast.LENGTH_SHORT).show()
                                 }
@@ -745,10 +771,34 @@ fun CloudSyncScreen(
                 confirmButton = {
                     TextButton(onClick = {
                         showManualSyncConfirm = false
-                        accountState.config?.let { config -> scope.launch { runCatalogSync(config) } }
+                        accountState.config?.let(::startCatalogSync)
                     }) { Text("开始同步") }
                 },
                 dismissButton = { TextButton(onClick = { showManualSyncConfirm = false }) { Text("取消") } }
+            )
+        }
+
+        if (showCancelSyncConfirm) {
+            AlertDialog(
+                onDismissRequest = { showCancelSyncConfirm = false },
+                title = { Text("取消云端同步") },
+                text = { Text("将停止当前同步并清理临时下载文件，已恢复的数据会保留。是否取消？") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showCancelSyncConfirm = false
+                        cancelCatalogSync()
+                    }) { Text("确认取消") }
+                },
+                dismissButton = { TextButton(onClick = { showCancelSyncConfirm = false }) { Text("继续同步") } }
+            )
+        }
+
+        syncErrorMessage?.let { message ->
+            AlertDialog(
+                onDismissRequest = { syncErrorMessage = null },
+                title = { Text("云端同步失败") },
+                text = { Text(message) },
+                confirmButton = { TextButton(onClick = { syncErrorMessage = null }) { Text("关闭") } }
             )
         }
 
@@ -781,7 +831,11 @@ fun CloudSyncScreen(
                         TextButton(onClick = { catalogSyncProgress = null }) { Text("关闭") }
                     }
                 },
-                dismissButton = {}
+                dismissButton = {
+                    if (syncRunning) {
+                        TextButton(onClick = { showCancelSyncConfirm = true }) { Text("取消同步") }
+                    }
+                }
             )
         }
 
@@ -810,14 +864,20 @@ fun CloudSyncScreen(
                             status = if (ok) WebDavConnectionStatus.LOGGED_IN else WebDavConnectionStatus.EXPIRED
                         )
                         if (ok) {
-                            restoreCloudCatalog(config)
-                            publishCloudCatalog(config)
+                            startCatalogSync(config)
+                        } else {
+                            syncErrorMessage = "无法连接云端，请检查服务器地址、账号、密码和网络后重试。"
                         }
                     }
                 }
             )
         }
     }
+
+    com.whmdg.mczj.tools.ui.ErrorDialog(
+        error = confirmError,
+        onDismiss = { confirmError = null }
+    )
 }
 
 // ── WebDAV 设置弹窗 ──
