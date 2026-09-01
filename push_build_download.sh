@@ -1,22 +1,24 @@
 #!/bin/sh
-# Push local changes, run the release workflow, and collect its APK artifact.
+# Run the release workflow and collect its APK artifact.
 
 set -eu
 
 export PATH="/data/data/com.termux/files/usr/bin:$PATH"
-PROJECT_ROOT="/data/user/0/com.termux/files/home/Android_tools"
+export GH_CONFIG_DIR="/data/user/0/com.termux/files/home/.config/gh"
+GH_BIN="/data/data/com.termux/files/usr/bin/gh"
+# Use the directory containing this script. Android's /data/user/0 and
+# /data/data aliases can otherwise make a fixed Termux home path unreliable.
+PROJECT_ROOT=$(CDPATH= cd "$(dirname "$0")" && pwd)
 REPO="whmdg20090421/encryption"
-REPO_URL="https://github.com/whmdg20090421/encryption.git"
 BRANCH="master"
 WORKFLOW="build.yml"
 ARTIFACT_NAME="工具箱-arm64-v8a-release"
 POLL_INTERVAL=30
-APK_OUTPUT_DIR="$PROJECT_ROOT/apk_output"
+APK_OUTPUT_DIR="$PROJECT_ROOT/应用安装包"
 TEMP_DIR=""
 
 RED='\033[31m'
 GREEN='\033[32m'
-YELLOW='\033[33m'
 CYAN='\033[36m'
 RESET='\033[0m'
 
@@ -43,48 +45,25 @@ directory_megabytes() {
 
 cd "$PROJECT_ROOT" || die "Cannot enter project directory: $PROJECT_ROOT"
 
-require_command git
-require_command gh
 require_command find
 require_command du
 require_command awk
 
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    die "Project path is not a Git worktree: $PROJECT_ROOT"
-fi
-if ! git remote get-url origin >/dev/null 2>&1; then
-    printf '%bGit remote origin is missing. Adding %s...%b\n' "$YELLOW" "$REPO_URL" "$RESET"
-    git remote add origin "$REPO_URL" || die "Unable to add Git remote 'origin'."
-fi
-[ "$(git branch --show-current)" = "$BRANCH" ] || die "This script only runs on branch '$BRANCH'."
-gh auth status --hostname github.com >/dev/null 2>&1 || die "GitHub CLI is not authenticated."
+[ -x "$GH_BIN" ] || die "GitHub CLI was not found: $GH_BIN"
+"$GH_BIN" auth status --hostname github.com >/dev/null 2>&1 \
+    || die "GitHub CLI is not authenticated with $GH_CONFIG_DIR."
 
-printf '%bStaging local changes...%b\n' "$CYAN" "$RESET"
-git add -A
-
-if ! git diff --cached --quiet; then
-    COMMIT_MESSAGE=${1:-"build: $(date '+%Y-%m-%d %H:%M:%S')"}
-    printf '%bCreating commit...%b\n' "$CYAN" "$RESET"
-    git commit -m "$COMMIT_MESSAGE"
-else
-    printf '%bNo local changes to commit.%b\n' "$YELLOW" "$RESET"
-fi
-
-printf '%bPushing %s...%b\n' "$CYAN" "$BRANCH" "$RESET"
-git push origin "$BRANCH"
-printf '%bPush completed.%b\n' "$GREEN" "$RESET"
-
-PREVIOUS_RUN_ID=$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BRANCH" \
+PREVIOUS_RUN_ID=$("$GH_BIN" run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BRANCH" \
     --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)
 
 printf '%bTriggering GitHub Actions workflow...%b\n' "$CYAN" "$RESET"
-gh workflow run "$WORKFLOW" --repo "$REPO" --ref "$BRANCH" --field compact=true
+"$GH_BIN" workflow run "$WORKFLOW" --repo "$REPO" --ref "$BRANCH" --field compact=true
 printf '%bWorkflow triggered.%b\n' "$GREEN" "$RESET"
 
 RUN_ID=""
 attempt=1
 while [ "$attempt" -le 12 ]; do
-    RUN_ID=$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BRANCH" \
+    RUN_ID=$("$GH_BIN" run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BRANCH" \
         --limit 1 --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)
     if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ] && [ "$RUN_ID" != "$PREVIOUS_RUN_ID" ]; then
         break
@@ -98,7 +77,7 @@ done
 printf 'Monitoring workflow run: %s\n' "$RUN_ID"
 RUN_URL=""
 while true; do
-    RUN_INFO=$(gh run view "$RUN_ID" --repo "$REPO" --json status,conclusion,url \
+    RUN_INFO=$("$GH_BIN" run view "$RUN_ID" --repo "$REPO" --json status,conclusion,url \
         --jq '[.status, .conclusion, .url] | @tsv') || die "Unable to query workflow run $RUN_ID."
     STATUS=$(printf '%s\n' "$RUN_INFO" | awk -F '\t' '{print $1}')
     CONCLUSION=$(printf '%s\n' "$RUN_INFO" | awk -F '\t' '{print $2}')
@@ -111,7 +90,7 @@ while true; do
         fi
         printf '%bBuild failed: %s%b\n' "$RED" "${CONCLUSION:-unknown}" "$RESET" >&2
         printf 'Run: %s\n' "$RUN_URL" >&2
-        gh run view "$RUN_ID" --repo "$REPO" --log-failed || true
+        "$GH_BIN" run view "$RUN_ID" --repo "$REPO" --log-failed || true
         exit 1
     fi
 
@@ -124,7 +103,7 @@ mkdir -p "$APK_OUTPUT_DIR"
 TEMP_DIR=$(mktemp -d "$PROJECT_ROOT/.artifact-download.XXXXXX")
 printf '%bDownloading artifact...%b\n' "$CYAN" "$RESET"
 
-gh run download "$RUN_ID" --repo "$REPO" --name "$ARTIFACT_NAME" --dir "$TEMP_DIR" &
+"$GH_BIN" run download "$RUN_ID" --repo "$REPO" --name "$ARTIFACT_NAME" --dir "$TEMP_DIR" &
 DOWNLOAD_PID=$!
 PREVIOUS_MB=0
 while kill -0 "$DOWNLOAD_PID" 2>/dev/null; do
