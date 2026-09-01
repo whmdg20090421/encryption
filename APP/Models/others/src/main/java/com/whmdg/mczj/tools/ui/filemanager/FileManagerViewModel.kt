@@ -3544,6 +3544,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun openArchiveFile(context: Context, entry: FileEntry) {
         val session = currentPanel.archiveSession ?: return
         val password = archivePasswordCache[session.archivePath] ?: ""
+        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
+        val imageEntries = session.currentEntries.filter {
+            !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions
+        }
+        val cacheRoot = File(context.cacheDir, "archive_cache/${session.archiveName}")
+        val imagePaths = imageEntries.map { File(cacheRoot, it.path).absolutePath }
+        val imageEntryPaths = imageEntries.map { it.path }
+        val startIndex = imageEntries.indexOfFirst { it.path == entry.path }.coerceAtLeast(0)
 
         // 构建缓存路径：cache/archive_cache/{archiveName}/{internalPath}
         val cacheDir = File(context.cacheDir, "archive_cache")
@@ -3552,7 +3560,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 缓存已存在，直接打开
         if (destFile.exists()) {
             val newEntry = entry.copy(path = destFile.absolutePath)
-            openFile(context, newEntry, overrideImagePaths = listOf(destFile.absolutePath))
+            openFile(context, newEntry, overrideImagePaths = imagePaths, archivePath = session.archivePath,
+                archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
+                archivePassword = password, archiveStartIndex = startIndex,
+                archivePermissionLevel = permissionLevel)
             return
         }
 
@@ -3570,7 +3581,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 val file = result.file
                 if (result.success && file != null) {
                     val newEntry = entry.copy(path = file.absolutePath)
-                    openFile(context, newEntry, overrideImagePaths = listOf(file.absolutePath))
+                    openFile(context, newEntry, overrideImagePaths = imagePaths, archivePath = session.archivePath,
+                        archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
+                        archivePassword = password, archiveStartIndex = startIndex,
+                        archivePermissionLevel = permissionLevel)
                 } else {
                     Toast.makeText(context, "解压失败: ${result.errorMessage}", Toast.LENGTH_SHORT).show()
                 }
@@ -3583,7 +3597,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         context: Context,
         entry: FileEntry,
         isDebug: Boolean = false,
-        overrideImagePaths: List<String>? = null
+        overrideImagePaths: List<String>? = null,
+        archivePath: String? = null,
+        archiveName: String? = null,
+        archiveEntryPaths: List<String> = emptyList(),
+        archivePassword: String = "",
+        archiveStartIndex: Int = 0,
+        archivePermissionLevel: String = "NORMAL"
     ) {
         if (entry.permission.startsWith("l")) {
             pendingSymlinkEntry = entry
@@ -3653,8 +3673,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val imagePaths = overrideImagePaths ?: currentPanel.entries
                 .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions }
                 .map { it.path }
-            val startIndex = imagePaths.indexOf(entry.path).coerceAtLeast(0)
-            context.startActivity(ViewerActivity.createImageIntent(context, entry.path, imagePaths, startIndex))
+            val startIndex = if (archivePath != null) archiveStartIndex
+            else imagePaths.indexOf(entry.path).coerceAtLeast(0)
+            context.startActivity(ViewerActivity.createImageIntent(context, entry.path, imagePaths, startIndex,
+                archivePath = archivePath, archiveName = archiveName,
+                archiveEntryPaths = archiveEntryPaths, archivePassword = archivePassword,
+                archivePermissionLevel = archivePermissionLevel))
             return
         }
         // 外部 Intent

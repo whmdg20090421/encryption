@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.viewinterop.AndroidView
 import com.awxkee.jxlcoder.JxlCoder
 import com.github.chrisbanes.photoview.PhotoView
+import com.whmdg.mczj.tools.util.ArchiveBrowser
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import java.io.File
 
@@ -29,6 +30,10 @@ fun ImageViewerScreen(
     filePath: String,
     imagePaths: List<String> = emptyList(),
     startIndex: Int = 0,
+    archivePath: String? = null,
+    archiveEntryPaths: List<String> = emptyList(),
+    archivePassword: String = "",
+    archivePermissionLevel: String = "NORMAL",
     onBack: () -> Unit
 ) {
     val paths = if (imagePaths.isNotEmpty()) imagePaths else listOf(filePath)
@@ -72,47 +77,12 @@ fun ImageViewerScreen(
                 modifier = Modifier.fillMaxSize()
             ) { page ->
                 val file = File(paths[page])
-                AndroidView(
-                    factory = { context ->
-                        PhotoView(context).apply {
-                            minimumScale = 1f
-                            mediumScale = 2f
-                            maximumScale = 5f
-                            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-
-                            if (file.extension.equals("jxl", ignoreCase = true)) {
-                                try {
-                                    setImageBitmap(JxlCoder.decode(file.readBytes()))
-                                } catch (e: Exception) {
-                                    DiagnosticLog.log("ImageViewer", "JXL 解码失败: ${e.message}")
-                                }
-                            } else {
-                                setImageURI(Uri.fromFile(file))
-                            }
-
-                            setOnDoubleTapListener(object : GestureDetector.SimpleOnGestureListener() {
-                                override fun onDoubleTap(e: MotionEvent): Boolean {
-                                    setScale(if (scale > 1.5f) 1f else 2f, e.x, e.y, true)
-                                    return true
-                                }
-                            })
-
-                            // PhotoView clamps matrix movement to its bounds. Once the
-                            // image reaches a horizontal edge, the pager may intercept
-                            // an outward drag to switch images.
-                            setOnMatrixChangeListener {
-                                val rect = displayRect
-                                if (rect == null || rect.width() <= width) {
-                                    setAllowParentInterceptOnEdge(true)
-                                } else {
-                                    val atLeft = rect.left >= -1f
-                                    val atRight = rect.right <= width + 1f
-                                    setAllowParentInterceptOnEdge(atLeft || atRight)
-                                }
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
+                ArchiveImagePage(
+                    file = file,
+                    archivePath = archivePath,
+                    archiveEntryPath = archiveEntryPaths.getOrNull(page),
+                    archivePassword = archivePassword,
+                    archivePermissionLevel = archivePermissionLevel
                 )
             }
 
@@ -127,6 +97,90 @@ fun ImageViewerScreen(
                         .padding(bottom = 24.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ArchiveImagePage(
+    file: File,
+    archivePath: String?,
+    archiveEntryPath: String?,
+    archivePassword: String,
+    archivePermissionLevel: String
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var loadState by remember(file.absolutePath) { mutableIntStateOf(if (file.exists()) 1 else 0) }
+    var loadError by remember(file.absolutePath) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(file.absolutePath, archivePath, archiveEntryPath) {
+        if (archivePath != null && archiveEntryPath != null && !file.exists()) {
+            val result = ArchiveBrowser.extractSingleFile(
+                context = context,
+                archivePath = archivePath,
+                entryPath = archiveEntryPath,
+                destFile = file,
+                password = archivePassword,
+                permissionLevel = archivePermissionLevel
+            )
+            if (result.success) {
+                loadState = 1
+            } else {
+                loadError = result.errorMessage
+                loadState = 2
+            }
+        } else {
+            loadState = 1
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (loadState == 1) {
+            AndroidView(
+                factory = { context -> createPhotoView(context) },
+                update = { photoView ->
+                    if (photoView.tag != file.absolutePath) {
+                        photoView.tag = file.absolutePath
+                        if (file.extension.equals("jxl", ignoreCase = true)) {
+                            try {
+                                photoView.setImageBitmap(JxlCoder.decode(file.readBytes()))
+                            } catch (e: Exception) {
+                                DiagnosticLog.log("ImageViewer", "JXL 解码失败: ${e.message}")
+                            }
+                        } else {
+                            photoView.setImageURI(Uri.fromFile(file))
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else if (loadState == 2) {
+            Text(loadError ?: "图片解压失败", color = Color.White)
+        } else {
+            CircularProgressIndicator(color = Color.White)
+        }
+    }
+}
+
+private fun createPhotoView(context: android.content.Context): PhotoView = PhotoView(context).apply {
+    minimumScale = 1f
+    mediumScale = 2f
+    maximumScale = 5f
+    scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+    setOnDoubleTapListener(object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDoubleTap(e: MotionEvent): Boolean {
+            setScale(if (scale > 1.5f) 1f else 2f, e.x, e.y, true)
+            return true
+        }
+    })
+    setOnMatrixChangeListener {
+        val rect = displayRect
+        if (rect == null || rect.width() <= width) {
+            setAllowParentInterceptOnEdge(true)
+        } else {
+            val atLeft = rect.left >= -1f
+            val atRight = rect.right <= width + 1f
+            setAllowParentInterceptOnEdge(atLeft || atRight)
         }
     }
 }

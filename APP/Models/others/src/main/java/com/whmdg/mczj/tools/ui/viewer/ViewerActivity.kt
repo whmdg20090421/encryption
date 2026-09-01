@@ -25,6 +25,11 @@ class ViewerActivity : ComponentActivity() {
         const val EXTRA_FILE_PATH = "file_path"
         const val EXTRA_IMAGE_PATHS = "image_paths"
         const val EXTRA_START_INDEX = "start_index"
+        const val EXTRA_ARCHIVE_PATH = "archive_path"
+        const val EXTRA_ARCHIVE_NAME = "archive_name"
+        const val EXTRA_ARCHIVE_ENTRY_PATHS = "archive_entry_paths"
+        const val EXTRA_ARCHIVE_PASSWORD = "archive_password"
+        const val EXTRA_ARCHIVE_PERMISSION = "archive_permission"
         const val EXTRA_VAULT_SESSION_ID = "vault_session_id"
 
         private const val TYPE_IMAGE = "image"
@@ -35,13 +40,23 @@ class ViewerActivity : ComponentActivity() {
             filePath: String,
             imagePaths: List<String> = emptyList(),
             startIndex: Int = 0,
-            vaultSessionId: String? = null
+            vaultSessionId: String? = null,
+            archivePath: String? = null,
+            archiveName: String? = null,
+            archiveEntryPaths: List<String> = emptyList(),
+            archivePassword: String = "",
+            archivePermissionLevel: String = "NORMAL"
         ): Intent {
             return Intent(context, ViewerActivity::class.java).apply {
                 putExtra(EXTRA_VIEWER_TYPE, TYPE_IMAGE)
                 putExtra(EXTRA_FILE_PATH, filePath)
                 putStringArrayListExtra(EXTRA_IMAGE_PATHS, ArrayList(imagePaths))
                 putExtra(EXTRA_START_INDEX, startIndex)
+                if (archivePath != null) putExtra(EXTRA_ARCHIVE_PATH, archivePath)
+                if (archiveName != null) putExtra(EXTRA_ARCHIVE_NAME, archiveName)
+                putStringArrayListExtra(EXTRA_ARCHIVE_ENTRY_PATHS, ArrayList(archiveEntryPaths))
+                if (archivePath != null) putExtra(EXTRA_ARCHIVE_PASSWORD, archivePassword)
+                if (archivePath != null) putExtra(EXTRA_ARCHIVE_PERMISSION, archivePermissionLevel)
                 if (vaultSessionId != null) putExtra(EXTRA_VAULT_SESSION_ID, vaultSessionId)
             }
         }
@@ -69,6 +84,11 @@ class ViewerActivity : ComponentActivity() {
         val filePath = intent.getStringExtra(EXTRA_FILE_PATH) ?: run { finish(); return }
         val imagePaths = intent.getStringArrayListExtra(EXTRA_IMAGE_PATHS) ?: emptyList()
         val startIndex = intent.getIntExtra(EXTRA_START_INDEX, 0)
+        val archivePath = intent.getStringExtra(EXTRA_ARCHIVE_PATH)
+        val archiveName = intent.getStringExtra(EXTRA_ARCHIVE_NAME)
+        val archiveEntryPaths = intent.getStringArrayListExtra(EXTRA_ARCHIVE_ENTRY_PATHS) ?: emptyList()
+        val archivePassword = intent.getStringExtra(EXTRA_ARCHIVE_PASSWORD) ?: ""
+        val archivePermissionLevel = intent.getStringExtra(EXTRA_ARCHIVE_PERMISSION) ?: "NORMAL"
         vaultSessionId = intent.getStringExtra(EXTRA_VAULT_SESSION_ID)
 
         // 验证 vault session 有效性
@@ -86,6 +106,10 @@ class ViewerActivity : ComponentActivity() {
                         filePath = filePath,
                         imagePaths = imagePaths,
                         startIndex = startIndex,
+                        archivePath = archivePath,
+                        archiveEntryPaths = archiveEntryPaths,
+                        archivePassword = archivePassword,
+                        archivePermissionLevel = archivePermissionLevel,
                         onBack = { finish() }
                     )
                     TYPE_TEXT -> TextEditorScreen(
