@@ -173,7 +173,7 @@ private class SmartPhotoView(context: android.content.Context) : PhotoView(conte
             MotionEvent.ACTION_DOWN -> {
                 downX = ev.x
                 downY = ev.y
-                if (scale > 1f) parent?.requestDisallowInterceptTouchEvent(true)
+                if (scale > 1f) parent.requestDisallowInterceptTouchEvent(true)
             }
             MotionEvent.ACTION_POINTER_DOWN -> parent?.requestDisallowInterceptTouchEvent(true)
             MotionEvent.ACTION_MOVE -> {
@@ -191,13 +191,13 @@ private class SmartPhotoView(context: android.content.Context) : PhotoView(conte
                     } else if (nearHorizontal) {
                         ev.offsetLocation(0f, -ev.y + downY)
                         if ((atLeftEdge && dx < 0) || (atRightEdge && dx > 0)) {
-                            parent?.requestDisallowInterceptTouchEvent(false)
+                            parent.requestDisallowInterceptTouchEvent(false)
                         }
                     }
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
-                parent?.requestDisallowInterceptTouchEvent(false)
+                parent.requestDisallowInterceptTouchEvent(false)
         }
         return super.dispatchTouchEvent(ev)
     }
@@ -205,36 +205,38 @@ private class SmartPhotoView(context: android.content.Context) : PhotoView(conte
     fun scaleForDoubleTap(): Float {
         val visibleRect = displayRect
         if (visibleRect == null || width <= 0 || height <= 0) return mediumScale
-        val horizontalScale = width.toFloat() / visibleRect.width()
-        val verticalScale = height.toFloat() / visibleRect.height()
+        val horizontalScale = width / visibleRect.width()
+        val verticalScale = height / visibleRect.height()
         return scale * maxOf(horizontalScale, verticalScale)
     }
 }
 
-private fun createPhotoView(context: android.content.Context): PhotoView = SmartPhotoView(context).apply {
-    minimumScale = 1f
-    mediumScale = 2f
-    maximumScale = Float.MAX_VALUE
-    scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-    setOnDoubleTapListener(object : GestureDetector.SimpleOnGestureListener() {
-        override fun onDoubleTap(e: MotionEvent): Boolean {
-            val self = this@apply as SmartPhotoView
-            val targetScale = if (scale > minimumScale + 0.01f) minimumScale else self.scaleForDoubleTap()
-            setScale(targetScale, e.x, e.y, true)
-            return true
-        }
-    })
-    setOnMatrixChangeListener {
-        val self = this@SmartPhotoView
-        val rect = displayRect
-        if (rect == null || rect.width() <= width) {
-            self.atLeftEdge = false
-            self.atRightEdge = false
-            setAllowParentInterceptOnEdge(true)
-        } else {
-            self.atLeftEdge = rect.left >= -1f
-            self.atRightEdge = rect.right <= width + 1f
-            setAllowParentInterceptOnEdge(self.atLeftEdge || self.atRightEdge)
+private fun createPhotoView(context: android.content.Context): PhotoView {
+    val pv = SmartPhotoView(context)
+    pv.apply {
+        minimumScale = 1f
+        mediumScale = 2f
+        maximumScale = Float.MAX_VALUE
+        scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+        setOnDoubleTapListener(object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                val targetScale = if (scale > minimumScale + 0.01f) minimumScale else pv.scaleForDoubleTap()
+                setScale(targetScale, e.x, e.y, true)
+                return true
+            }
+        })
+        setOnMatrixChangeListener {
+            val rect = displayRect
+            if (rect == null || rect.width() <= width) {
+                pv.atLeftEdge = false
+                pv.atRightEdge = false
+                setAllowParentInterceptOnEdge(true)
+            } else {
+                pv.atLeftEdge = rect.left >= -1f
+                pv.atRightEdge = rect.right <= width + 1f
+                setAllowParentInterceptOnEdge(pv.atLeftEdge || pv.atRightEdge)
+            }
         }
     }
+    return pv
 }
