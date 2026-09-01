@@ -50,7 +50,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.coil.compose)
     implementation(libs.coil.svg)
-    implementation(libs.telephoto.zoomable)
+    implementation(libs.photoView)
     implementation(libs.jxl.coder)
     // XLSX 生成（使用时长数据导出，fastexcel 仅 131KB）
     implementation("org.dhatim:fastexcel:0.20.2")

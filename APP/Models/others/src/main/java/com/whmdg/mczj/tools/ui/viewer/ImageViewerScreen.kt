@@ -1,7 +1,9 @@
 package com.whmdg.mczj.tools.ui.viewer
 
+import android.net.Uri
+import android.view.GestureDetector
+import android.view.MotionEvent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -15,14 +17,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.style.TextAlign
-import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.request.SuccessResult
-import coil3.request.crossfade
+import androidx.compose.ui.viewinterop.AndroidView
+import com.awxkee.jxlcoder.JxlCoder
+import com.github.chrisbanes.photoview.PhotoView
+import com.github.chrisbanes.photoview.PhotoViewAttacher
+import com.whmdg.mczj.tools.util.DiagnosticLog
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -73,64 +72,55 @@ fun ImageViewerScreen(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize()
             ) { page ->
-                val pageFile = remember(paths[page]) { File(paths[page]) }
-                var errorMessage by remember { mutableStateOf<String?>(null) }
-                var scale by remember { mutableFloatStateOf(1f) }
-                var offsetX by remember { mutableFloatStateOf(0f) }
-                var offsetY by remember { mutableFloatStateOf(0f) }
+                val file = File(paths[page])
+                AndroidView(
+                    factory = { context ->
+                        PhotoView(context).apply {
+                            minimumScale = 1f
+                            mediumScale = 2f
+                            maximumScale = 5f
+                            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
 
-                LaunchedEffect(pagerState.settledPage) {
-                    if (pagerState.settledPage != page) {
-                        scale = 1f; offsetX = 0f; offsetY = 0f
-                    }
-                }
+                            if (file.extension.equals("jxl", ignoreCase = true)) {
+                                try {
+                                    setImageBitmap(JxlCoder.decode(file.readBytes()))
+                                } catch (e: Exception) {
+                                    DiagnosticLog.log("ImageViewer", "JXL 解码失败: ${e.message}")
+                                }
+                            } else {
+                                setImageURI(Uri.fromFile(file))
+                            }
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(Unit) {
-                            detectTransformGestures { _, pan, zoom, _ ->
-                                scale = (scale * zoom).coerceIn(0.5f, 5f)
-                                offsetX += pan.x
-                                offsetY += pan.y
+                            setOnDoubleTapListener(object : GestureDetector.SimpleOnGestureListener() {
+                                override fun onDoubleTap(e: MotionEvent): Boolean {
+                                    setScale(if (scale > 1.5f) 1f else 2f, e.x, e.y, true)
+                                    return true
+                                }
+                            })
+
+                            // PhotoView clamps matrix movement to its bounds. Once the
+                            // image reaches a horizontal edge, the pager may intercept
+                            // an outward drag to switch images.
+                            setOnMatrixChangeListener {
+                                val rect = displayRect
+                                if (rect == null || rect.width() <= width) {
+                                    setAllowParentInterceptOnEdge(PhotoViewAttacher.EDGE_BOTH)
+                                } else {
+                                    val atLeft = rect.left >= -1f
+                                    val atRight = rect.right <= width + 1f
+                                    setAllowParentInterceptOnEdge(
+                                        if (atLeft || atRight) PhotoViewAttacher.EDGE_BOTH
+                                        else PhotoViewAttacher.EDGE_NONE
+                                    )
+                                }
                             }
                         }
-                ) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(androidx.compose.ui.platform.LocalContext.current)
-                            .data(pageFile)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = null,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer(
-                                scaleX = scale, scaleY = scale,
-                                translationX = offsetX, translationY = offsetY
-                            ),
-                        onSuccess = { success ->
-                            errorMessage = null
-                        },
-                        onError = {
-                            errorMessage = it.result.throwable.let { t ->
-                                "${t.message ?: t.javaClass.simpleName}\n${paths[page]}"
-                            }
-                        }
-                    )
-
-                    if (errorMessage != null) {
-                        Text(
-                            text = "加载失败: $errorMessage",
-                            color = Color(0xFFFF1744),
-                            style = MaterialTheme.typography.bodyMedium,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.align(Alignment.Center)
-                        )
-                    }
-                }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
             }
 
+            // 底部半透明页码指示器
             if (paths.size > 1) {
                 Text(
                     text = "${pagerState.currentPage + 1}/${paths.size}",
