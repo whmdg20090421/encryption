@@ -31,7 +31,8 @@ fun PasswordDialog(
     title: String = "输入密钥",
     onDismiss: () -> Unit,
     onVerify: suspend (String) -> Boolean,
-    dismissOnFailure: Boolean = false
+    dismissOnFailure: Boolean = false,
+    externalError: String? = null
 ) {
     var password by remember { mutableStateOf("") }
     var errorCount by remember { mutableIntStateOf(0) }
@@ -91,6 +92,14 @@ fun PasswordDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(text = title, style = MaterialTheme.typography.titleLarge)
+
+                if (!externalError.isNullOrBlank()) {
+                    Text(
+                        text = externalError,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
 
                 val now = System.currentTimeMillis()
                 if (lockedUntil > now) {

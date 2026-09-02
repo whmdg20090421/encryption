@@ -3890,7 +3890,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            val suppliedPassword = archivePassword.isNotEmpty()
             val password = archivePassword.ifEmpty {
                 session.password.ifEmpty { archivePasswordCache[archivePath] ?: "" }
             }
@@ -3907,28 +3906,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     else -> Unit
                 }
-            } else {
-                val passwordCheck = JBindingClient.extractSingleFileToSink(
-                    archivePath, allFiles.first(), password
-                ) { }
-                if (passwordCheck.isFailure) {
-                    val cause = passwordCheck.exceptionOrNull()
-                    val message = cause?.message ?: cause?.javaClass?.simpleName ?: "未知错误"
-                    val passwordFailure = message.contains("password", ignoreCase = true) ||
-                        message.contains("密码") || message.contains("密钥") ||
-                        message.contains("encrypted", ignoreCase = true)
-                    if (suppliedPassword && passwordFailure) {
-                        withContext(Dispatchers.Main) {
-                            onPasswordRequired("密码验证失败: $message")
-                        }
-                    } else {
-                        withContext(Dispatchers.Main) {
-                            onComplete(0, allFiles.size, "压缩包条目读取失败: $message")
-                        }
-                    }
-                    return@launch
-                }
-                archivePasswordCache[archivePath] = password
             }
 
             var successCount = 0
@@ -3956,23 +3933,44 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                             }
                             if (!pending.renameTo(output)) throw IllegalStateException("无法提交解压文件: ${output.path}")
                             successCount++
-                        } catch (e: Exception) { pending.delete(); lastError = e.message ?: e.javaClass.simpleName; break }
+                        } catch (e: Exception) {
+                            pending.delete()
+                            val error = formatArchiveExtractionError(e)
+                            if (password.isNotEmpty() && isArchivePasswordError(e)) {
+                                withContext(Dispatchers.Main) { onPasswordRequired(error) }
+                                return@launch
+                            }
+                            lastError = error
+                            break
+                        }
                     }
                     is ArchiveExtractionTarget.Vault -> {
                         val subDir = listOf(target.subDir.trim('/'), entryPath.substringBeforeLast('/', "").trim('/'))
                             .filter { it.isNotEmpty() }.joinToString("/")
                         val writer = try {
                             CryptoService.openStreamIntoVault(context, target.session, entryPath.substringAfterLast('/'), subDir, cancelFlag = ctrl.extractCancelFlag)
-                        } catch (e: Exception) { lastError = e.message ?: e.javaClass.simpleName; break }
+                        } catch (e: Exception) { lastError = formatArchiveExtractionError(e); break }
                         try {
                             JBindingClient.extractSingleFileToSink(archivePath, entryPath, password, writer.sink::write).getOrThrow()
                             writer.finish()
                             successCount++
-                        } catch (e: Exception) { writer.abort(); lastError = e.message ?: e.javaClass.simpleName; break }
+                        } catch (e: Exception) {
+                            writer.abort()
+                            val error = formatArchiveExtractionError(e)
+                            if (password.isNotEmpty() && isArchivePasswordError(e)) {
+                                withContext(Dispatchers.Main) { onPasswordRequired(error) }
+                                return@launch
+                            }
+                            lastError = error
+                            break
+                        }
                     }
                 }
             }
             if (ctrl.extractCancelFlag.get() && lastError == null) lastError = "用户取消"
+            if (successCount > 0 && password.isNotEmpty()) {
+                archivePasswordCache[archivePath] = password
+            }
             if (target is ArchiveExtractionTarget.Vault && target.disposeSessionWhenDone) target.session.dispose()
             withContext(Dispatchers.Main) {
                 when (target) {
@@ -3987,10 +3985,33 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 if (target is ArchiveExtractionTarget.Vault && target.disposeSessionWhenDone) target.session.dispose()
                 withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) {
-                    onComplete(0, 0, "解压异常: ${e.message ?: e.javaClass.simpleName}")
+                    onComplete(0, 0, formatArchiveExtractionError(e))
                 }
             }
         }
+    }
+
+    /** 将底层压缩库异常转换为用户可读说明，同时保留原始异常文本。 */
+    private fun formatArchiveExtractionError(error: Throwable): String {
+        val raw = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+        val lower = raw.lowercase()
+        val translated = when {
+            lower.contains("password") || lower.contains("encrypted") || raw.contains("密码") || raw.contains("密钥") ->
+                "压缩包密码不正确，或压缩库无法使用该密码解密"
+            lower.contains("crc") || lower.contains("data error") || raw.contains("数据错误") ->
+                "压缩包数据校验失败，文件可能损坏"
+            raw.contains("文件不存在") -> "压缩包内找不到要提取的文件"
+            raw.contains("目标文件已存在") -> "目标位置已有同名文件"
+            else -> "解压压缩包条目失败"
+        }
+        return "$translated\n原文：$raw"
+    }
+
+    private fun isArchivePasswordError(error: Throwable): Boolean {
+        val raw = error.message ?: return false
+        val lower = raw.lowercase()
+        return lower.contains("password") || lower.contains("encrypted") ||
+            raw.contains("密码") || raw.contains("密钥")
     }
 
     /** 拒绝会逃出压缩包目录树的条目路径。 */

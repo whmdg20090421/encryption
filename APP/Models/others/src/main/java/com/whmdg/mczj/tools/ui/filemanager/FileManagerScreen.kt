@@ -3276,6 +3276,7 @@ fun FileManagerScreen(
     if (showArchiveExtractionPasswordDialog) {
         com.whmdg.mczj.tools.auth.PasswordDialog(
             title = if (archiveExtractionPasswordError == null) "输入压缩包密码" else "压缩包密码错误，请重新输入",
+            externalError = archiveExtractionPasswordError,
             onDismiss = {
                 showArchiveExtractionPasswordDialog = false
                 pendingVaultExtractionSession?.dispose()
