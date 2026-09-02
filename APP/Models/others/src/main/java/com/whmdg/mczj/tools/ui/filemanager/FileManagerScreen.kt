@@ -396,7 +396,6 @@ fun FileManagerScreen(
     var extractPasswordError by remember { mutableStateOf<String?>(null) }
 
 
-    // 移动/复制（功能待实现，保留 UI 占位）
     val isArchiveSource = vm.currentPanel.path is PanelPath.Archive
 
     // 文件操作进度（从 ViewModel StateFlow 收集）
@@ -2453,7 +2452,7 @@ fun FileManagerScreen(
                                     }
                                 }
                             }
-                            // ── 第三行：压缩 / 解压（占位） ──
+                            // ── 第三行：压缩 / 解压 ──
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
