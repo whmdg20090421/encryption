@@ -191,28 +191,24 @@ object JBindingClient {
                     val path = inArchive.getStringProperty(index, PropID.PATH) ?: return@firstOrNull false
                     path == entryPath || path.replace('\\', '/') == entryPath.replace('\\', '/')
                 } ?: throw RuntimeException("文件不存在: $entryPath")
+                // extractSlow 是 JBinding 的单条目 API。相比 extract(indices, callback)，
+                // 它对加密/固实 7z 会返回具体条目状态，而不是通用 S_FALSE。
                 var sinkFailure: Exception? = null
-                try {
-                    inArchive.extract(intArrayOf(targetIndex), false, object : IArchiveExtractCallback {
-                    override fun getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream =
-                        ISequentialOutStream { data ->
-                            try {
-                                if (extractAskMode == ExtractAskMode.EXTRACT && data.isNotEmpty()) onBytes(data)
-                            } catch (e: Exception) {
-                                sinkFailure = e
-                                throw e
-                            }
-                            data.size
+                val result = try {
+                    inArchive.extractSlow(targetIndex, ISequentialOutStream { data ->
+                        try {
+                            if (data.isNotEmpty()) onBytes(data)
+                        } catch (e: Exception) {
+                            sinkFailure = e
+                            throw e
                         }
-                    override fun prepareOperation(extractAskMode: ExtractAskMode) {}
-                    override fun setOperationResult(result: ExtractOperationResult) {
-                        if (result != ExtractOperationResult.OK) throw SevenZipException("提取失败: $result")
-                    }
-                    override fun setTotal(total: Long) {}
-                    override fun setCompleted(complete: Long) {}
+                        data.size
                     })
                 } catch (e: Exception) {
                     throw sinkFailure ?: e
+                }
+                if (result != ExtractOperationResult.OK) {
+                    throw SevenZipException("提取失败: $result")
                 }
             }
             ""
