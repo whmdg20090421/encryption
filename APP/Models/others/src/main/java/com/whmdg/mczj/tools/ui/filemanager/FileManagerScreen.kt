@@ -397,6 +397,7 @@ fun FileManagerScreen(
 
 
     // 移动/复制（功能待实现，保留 UI 占位）
+    val isArchiveSource = vm.currentPanel.path is PanelPath.Archive
 
     // 文件操作进度（从 ViewModel StateFlow 收集）
     val fileOpProgress by vm.fileOpProgress.collectAsState()
@@ -3097,7 +3098,6 @@ fun FileManagerScreen(
     }
 
     // ── 复制/移动确认对话框 ──
-    val isArchiveSource = vm.currentPanel.path is PanelPath.Archive
     CopyMoveConfirmDialog(
         show = showCopyMoveConfirmDialog,
         isCopy = copyMoveConfirmIsCopy,
