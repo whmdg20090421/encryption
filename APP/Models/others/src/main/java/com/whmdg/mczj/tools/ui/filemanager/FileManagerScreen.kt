@@ -337,6 +337,9 @@ fun FileManagerScreen(
     var copyMoveConfirmIsCopy by remember { mutableStateOf(true) }
     var copyMoveConfirmSourcePaths by remember { mutableStateOf(listOf<String>()) }
     var copyMoveConfirmTargetDir by remember { mutableStateOf("") }
+    var copyMoveConfirmTargetVaultId by remember { mutableStateOf<Int?>(null) }
+    var copyMoveConfirmTargetVaultSubDir by remember { mutableStateOf("") }
+    var showVaultExtractPasswordDialog by remember { mutableStateOf(false) }
     var showFileOpProgress by remember { mutableStateOf(false) }
     var recycleBinEnabled by remember { mutableStateOf(true) }
     var showForceDeleteDialog by remember { mutableStateOf(false) }
@@ -2339,6 +2342,15 @@ fun FileManagerScreen(
                                             copyMoveConfirmIsCopy = true
                                             copyMoveConfirmSourcePaths = sourcePaths
                                             copyMoveConfirmTargetDir = targetDir.fileSystemPath
+                                            val targetVaultPath = targetDir as? PanelPath.Vault
+                                            val targetSession = if (targetVaultPath != null) {
+                                                if (isToRight) vm.panels.right.vaultSession else vm.panels.left.vaultSession
+                                            } else null
+                                            copyMoveConfirmTargetVaultId = targetSession?.record?.id
+                                            copyMoveConfirmTargetVaultSubDir = targetVaultPath
+                                                ?.path
+                                                ?.removePrefix("${targetVaultPath.vaultDir}/")
+                                                .orEmpty()
                                             showCopyMoveConfirmDialog = true
                                         }
                                         .padding(vertical = 16.dp),
@@ -3110,6 +3122,10 @@ fun FileManagerScreen(
             if (isArchiveSource && copyMoveConfirmIsCopy) {
                 // ── 压缩包内复制 → 解压到目标目录 ──
                 val archivePath = (vm.currentPanel.path as PanelPath.Archive).archivePath
+                if (copyMoveConfirmTargetVaultId != null) {
+                    showVaultExtractPasswordDialog = true
+                    return@CopyMoveConfirmDialog
+                }
                 showExtractProgress = true
                 extractProgress = 0f
                 extractCurrentFile = 0
@@ -3117,7 +3133,7 @@ fun FileManagerScreen(
                 vm.extractFromArchive(
                     archivePath = archivePath,
                     entryPaths = copyMoveConfirmSourcePaths,
-                    outputDir = copyMoveConfirmTargetDir,
+                    target = ArchiveExtractionTarget.Directory(copyMoveConfirmTargetDir),
                     onProgress = { current, total, fileName ->
                         extractCurrentFile = current
                         extractTotalFiles = total
@@ -3165,6 +3181,51 @@ fun FileManagerScreen(
             vm.右.selectedPaths = emptySet()
         }
     )
+
+    if (showVaultExtractPasswordDialog) {
+        com.whmdg.mczj.tools.auth.PasswordDialog(
+            title = "输入保险箱密码",
+            onDismiss = { showVaultExtractPasswordDialog = false },
+            onVerify = { password ->
+                val vaultId = copyMoveConfirmTargetVaultId ?: return@PasswordDialog false
+                val service = vaultService ?: return@PasswordDialog false
+                val session = try {
+                    withContext(Dispatchers.IO) { service.open(vaultId, password) }
+                } catch (_: Exception) {
+                    Toast.makeText(context, "保险箱密码错误，已取消本次解压", Toast.LENGTH_LONG).show()
+                    null
+                } ?: return@PasswordDialog false
+
+                val archivePath = (vm.currentPanel.path as? PanelPath.Archive)?.archivePath
+                if (archivePath == null) {
+                    session.dispose()
+                    return@PasswordDialog false
+                }
+                showExtractProgress = true
+                extractProgress = 0f
+                extractCurrentFile = 0
+                extractTotalFiles = 0
+                vm.extractFromArchive(
+                    archivePath = archivePath,
+                    entryPaths = copyMoveConfirmSourcePaths,
+                    target = ArchiveExtractionTarget.Vault(session, copyMoveConfirmTargetVaultSubDir),
+                    onProgress = { current, total, fileName ->
+                        extractCurrentFile = current
+                        extractTotalFiles = total
+                        extractProgress = (current - 1).coerceAtLeast(0).toFloat() / total.coerceAtLeast(1)
+                    },
+                    onComplete = { successCount, totalCount, error ->
+                        showExtractProgress = false
+                        val message = if (successCount == totalCount) "已解压并加密 $totalCount 个文件"
+                        else "解压并加密完成：$successCount/$totalCount，$error"
+                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                    }
+                )
+                true
+            },
+            dismissOnFailure = true
+        )
+    }
 
     // ── 复制/移动进度对话框 ──
     CopyMoveProgressDialog(

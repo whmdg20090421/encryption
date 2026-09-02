@@ -30,7 +30,8 @@ import kotlinx.coroutines.launch
 fun PasswordDialog(
     title: String = "输入密钥",
     onDismiss: () -> Unit,
-    onVerify: suspend (String) -> Boolean
+    onVerify: suspend (String) -> Boolean,
+    dismissOnFailure: Boolean = false
 ) {
     var password by remember { mutableStateOf("") }
     var errorCount by remember { mutableIntStateOf(0) }
@@ -62,6 +63,10 @@ fun PasswordDialog(
             if (success) {
                 onDismiss()
             } else {
+                if (dismissOnFailure) {
+                    onDismiss()
+                    return@launch
+                }
                 errorCount++
                 password = ""
                 if (errorCount >= maxErrors) {
