@@ -209,7 +209,9 @@ object ArchiveBrowser {
         val currentPath: String,
         val currentEntries: List<FileEntry>,
         val originalPath: String,
-        val originalEntries: List<FileEntry>
+        val originalEntries: List<FileEntry>,
+        /** 已通过目录读取验证的密码；仅保存在当前内存会话中。 */
+        val password: String = ""
     )
 
     /** 压缩包 Debug 解析信息 */
@@ -349,7 +351,8 @@ object ArchiveBrowser {
                     currentPath = archivePath,
                     currentEntries = rootEntries,
                     originalPath = originalPath,
-                    originalEntries = originalEntries
+                    originalEntries = originalEntries,
+                    password = password
                 )
             )
         } catch (e: Exception) {

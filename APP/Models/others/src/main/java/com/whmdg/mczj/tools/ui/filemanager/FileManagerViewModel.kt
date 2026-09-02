@@ -1723,31 +1723,32 @@ class FilePaneController(
                 val currentPathVal = panel.path.fileSystemPath
                 val currentEntriesVal = panel.entries
 
-                val passwordCheckResult = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
-
-                when (passwordCheckResult) {
-                    is ArchiveBrowser.PasswordCheckResult.Error -> {
-                        withContext(Dispatchers.Main) {
-                            panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
-                                title = "无法打开压缩包",
-                                errorSummary = passwordCheckResult.errorMessage,
-                                command = passwordCheckResult.command,
-                                output = passwordCheckResult.output
-                            )
-                            panel.archiveLoading = false
+                // 只有 7z 头部加密时，目录树本身不可读取，打开阶段才需要密码。
+                // 内容加密（以及 ZIP/TAR/RAR 等格式）允许先浏览目录，密码延迟到
+                // 统一解压入口读取具体文件时再询问。
+                if (entry.name.endsWith(".7z", ignoreCase = true)) {
+                    when (val passwordCheckResult = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)) {
+                        is ArchiveBrowser.PasswordCheckResult.Error -> {
+                            withContext(Dispatchers.Main) {
+                                panel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
+                                    title = "无法打开压缩包",
+                                    errorSummary = passwordCheckResult.errorMessage,
+                                    command = passwordCheckResult.command,
+                                    output = passwordCheckResult.output
+                                )
+                                panel.archiveLoading = false
+                            }
+                            return@launch
                         }
-                        return@launch
-                    }
-                    is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted,
-                    is ArchiveBrowser.PasswordCheckResult.ContentEncrypted -> {
-                        withContext(Dispatchers.Main) {
-                            panel.archivePasswordRequest = entry
-                            panel.archiveLoading = false
+                        is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted -> {
+                            withContext(Dispatchers.Main) {
+                                panel.archivePasswordRequest = entry
+                                panel.archiveLoading = false
+                            }
+                            return@launch
                         }
-                        return@launch
+                        else -> Unit
                     }
-                    // NoPassword → 直接展开目录树
-                    else -> {}
                 }
 
                 // 不需要密码，直接打开
@@ -3889,7 +3890,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            val password = archivePassword.ifEmpty { archivePasswordCache[archivePath] ?: "" }
+            val suppliedPassword = archivePassword.isNotEmpty()
+            val password = archivePassword.ifEmpty {
+                session.password.ifEmpty { archivePasswordCache[archivePath] ?: "" }
+            }
             if (password.isEmpty()) {
                 when (val check = ArchiveBrowser.checkPasswordRequired(context, archivePath, permLevel)) {
                     is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted,
@@ -3909,8 +3913,18 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 ) { }
                 if (passwordCheck.isFailure) {
                     val cause = passwordCheck.exceptionOrNull()
-                    withContext(Dispatchers.Main) {
-                        onPasswordRequired("密码验证失败: ${cause?.message ?: cause?.javaClass?.simpleName ?: "未知错误"}")
+                    val message = cause?.message ?: cause?.javaClass?.simpleName ?: "未知错误"
+                    val passwordFailure = message.contains("password", ignoreCase = true) ||
+                        message.contains("密码") || message.contains("密钥") ||
+                        message.contains("encrypted", ignoreCase = true)
+                    if (suppliedPassword && passwordFailure) {
+                        withContext(Dispatchers.Main) {
+                            onPasswordRequired("密码验证失败: $message")
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            onComplete(0, allFiles.size, "压缩包条目读取失败: $message")
+                        }
                     }
                     return@launch
                 }
