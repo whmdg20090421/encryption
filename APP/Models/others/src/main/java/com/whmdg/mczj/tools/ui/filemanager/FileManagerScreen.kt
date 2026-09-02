@@ -401,11 +401,58 @@ fun FileManagerScreen(
     var showExtractPasswordDialog by remember { mutableStateOf(false) }
     var extractPasswordInput by remember { mutableStateOf("") }
     var extractPasswordError by remember { mutableStateOf<String?>(null) }
+    var showArchiveExtractionPasswordDialog by remember { mutableStateOf(false) }
+    var archiveExtractionPasswordInput by remember { mutableStateOf("") }
+    var archiveExtractionPasswordError by remember { mutableStateOf<String?>(null) }
+    var pendingVaultExtractionSession by remember { mutableStateOf<com.whmdg.mczj.tools.encryption.services.VaultSession?>(null) }
 
 
     val isArchiveSource = vm.currentPanel.path is PanelPath.Archive
 
-    fun startVaultArchiveExtraction(session: com.whmdg.mczj.tools.encryption.services.VaultSession, disposeWhenDone: Boolean) {
+    fun requestArchiveExtractionPassword(error: String?) {
+        showExtractProgress = false
+        archiveExtractionPasswordInput = ""
+        archiveExtractionPasswordError = error
+        showArchiveExtractionPasswordDialog = true
+    }
+
+    fun startDirectoryArchiveExtraction(archivePassword: String = "") {
+        val archivePath = (vm.currentPanel.path as? PanelPath.Archive)?.archivePath ?: run {
+            archiveExtractionResult = "解压失败" to "压缩包会话已失效"
+            return
+        }
+        showExtractProgress = true
+        extractProgress = 0f
+        extractCurrentFile = 0
+        extractTotalFiles = 0
+        extractStage = "正在准备解压..."
+        vm.extractFromArchive(
+            archivePath = archivePath,
+            entryPaths = copyMoveConfirmSourcePaths,
+            target = ArchiveExtractionTarget.Directory(copyMoveConfirmTargetDir),
+            archivePassword = archivePassword,
+            onPasswordRequired = ::requestArchiveExtractionPassword,
+            onProgress = { current, total, fileName ->
+                extractCurrentFile = current
+                extractTotalFiles = total
+                extractStage = "正在解压：$fileName"
+                extractProgress = (current - 1).coerceAtLeast(0).toFloat() / total.coerceAtLeast(1)
+            },
+            onComplete = { successCount, totalCount, error ->
+                showExtractProgress = false
+                val title = if (successCount == totalCount && totalCount > 0) "解压完成" else "解压结果"
+                val detail = "成功：$successCount/$totalCount" + if (error.isNullOrBlank()) "" else "\n失败原因：$error"
+                archiveExtractionResult = title to detail
+            }
+        )
+    }
+
+    fun startVaultArchiveExtraction(
+        session: com.whmdg.mczj.tools.encryption.services.VaultSession,
+        disposeWhenDone: Boolean,
+        archivePassword: String = ""
+    ) {
+        if (disposeWhenDone) pendingVaultExtractionSession = session
         val archivePath = (vm.currentPanel.path as? PanelPath.Archive)?.archivePath
         if (archivePath == null) {
             if (disposeWhenDone) session.dispose()
@@ -426,6 +473,8 @@ fun FileManagerScreen(
                 targetPanel = copyMoveConfirmTargetPanel,
                 disposeSessionWhenDone = disposeWhenDone
             ),
+            archivePassword = archivePassword,
+            onPasswordRequired = ::requestArchiveExtractionPassword,
             onProgress = { current, total, fileName ->
                 extractCurrentFile = current
                 extractTotalFiles = total
@@ -434,6 +483,7 @@ fun FileManagerScreen(
             },
             onComplete = { successCount, totalCount, error ->
                 showExtractProgress = false
+                if (pendingVaultExtractionSession === session) pendingVaultExtractionSession = null
                 val title = if (successCount == totalCount && totalCount > 0) "解压并加密完成" else "解压并加密结果"
                 val detail = "成功：$successCount/$totalCount" + if (error.isNullOrBlank()) "" else "\n失败原因：$error"
                 archiveExtractionResult = title to detail
@@ -3164,35 +3214,13 @@ fun FileManagerScreen(
 
             if (isArchiveSource && copyMoveConfirmIsCopy) {
                 // ── 压缩包内复制 → 解压到目标目录 ──
-                val archivePath = (vm.currentPanel.path as PanelPath.Archive).archivePath
                 if (copyMoveConfirmTargetVaultId != null) {
                     val openSession = copyMoveConfirmTargetVaultSession
                     if (openSession != null) startVaultArchiveExtraction(openSession, disposeWhenDone = false)
                     else showVaultExtractPasswordDialog = true
                     return@CopyMoveConfirmDialog
                 }
-                showExtractProgress = true
-                extractProgress = 0f
-                extractCurrentFile = 0
-                extractTotalFiles = 0
-                extractStage = "正在准备解压..."
-                vm.extractFromArchive(
-                    archivePath = archivePath,
-                    entryPaths = copyMoveConfirmSourcePaths,
-                    target = ArchiveExtractionTarget.Directory(copyMoveConfirmTargetDir),
-                    onProgress = { current, total, fileName ->
-                        extractCurrentFile = current
-                        extractTotalFiles = total
-                        extractStage = "正在解压：$fileName"
-                        extractProgress = (current - 1).coerceAtLeast(0).toFloat() / total.coerceAtLeast(1)
-                    },
-                    onComplete = { successCount, totalCount, error ->
-                        showExtractProgress = false
-                        val title = if (successCount == totalCount && totalCount > 0) "解压完成" else "解压结果"
-                        val detail = "成功：$successCount/$totalCount" + if (error.isNullOrBlank()) "" else "\n失败原因：$error"
-                        archiveExtractionResult = title to detail
-                    }
-                )
+                startDirectoryArchiveExtraction()
             } else {
                 // ── 普通复制/移动 ──
                 val accessLevel = when {
@@ -3242,6 +3270,37 @@ fun FileManagerScreen(
                 true
             },
             dismissOnFailure = true
+        )
+    }
+
+    if (showArchiveExtractionPasswordDialog) {
+        com.whmdg.mczj.tools.auth.PasswordDialog(
+            title = if (archiveExtractionPasswordError == null) "输入压缩包密码" else "压缩包密码错误，请重新输入",
+            onDismiss = {
+                showArchiveExtractionPasswordDialog = false
+                pendingVaultExtractionSession?.dispose()
+                pendingVaultExtractionSession = null
+            },
+            onVerify = { password ->
+                showArchiveExtractionPasswordDialog = false
+                val vaultSession = copyMoveConfirmTargetVaultSession ?: pendingVaultExtractionSession
+                if (copyMoveConfirmTargetVaultId != null) {
+                    if (vaultSession == null) {
+                        archiveExtractionPasswordError = "保险箱会话已失效，请重新执行解压"
+                        showArchiveExtractionPasswordDialog = true
+                        return@PasswordDialog false
+                    }
+                    startVaultArchiveExtraction(
+                        session = vaultSession,
+                        disposeWhenDone = vaultSession === pendingVaultExtractionSession,
+                        archivePassword = password
+                    )
+                } else {
+                    startDirectoryArchiveExtraction(password)
+                }
+                true
+            },
+            dismissOnFailure = false
         )
     }
 

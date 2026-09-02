@@ -191,10 +191,17 @@ object JBindingClient {
                     val path = inArchive.getStringProperty(index, PropID.PATH) ?: return@firstOrNull false
                     path == entryPath || path.replace('\\', '/') == entryPath.replace('\\', '/')
                 } ?: throw RuntimeException("文件不存在: $entryPath")
-                inArchive.extract(intArrayOf(targetIndex), false, object : IArchiveExtractCallback {
+                var sinkFailure: Exception? = null
+                try {
+                    inArchive.extract(intArrayOf(targetIndex), false, object : IArchiveExtractCallback {
                     override fun getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream =
                         ISequentialOutStream { data ->
-                            if (extractAskMode == ExtractAskMode.EXTRACT && data.isNotEmpty()) onBytes(data)
+                            try {
+                                if (extractAskMode == ExtractAskMode.EXTRACT && data.isNotEmpty()) onBytes(data)
+                            } catch (e: Exception) {
+                                sinkFailure = e
+                                throw e
+                            }
                             data.size
                         }
                     override fun prepareOperation(extractAskMode: ExtractAskMode) {}
@@ -203,7 +210,10 @@ object JBindingClient {
                     }
                     override fun setTotal(total: Long) {}
                     override fun setCompleted(complete: Long) {}
-                })
+                    })
+                } catch (e: Exception) {
+                    throw sinkFailure ?: e
+                }
             }
             ""
         }

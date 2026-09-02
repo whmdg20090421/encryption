@@ -75,10 +75,21 @@ object ArchiveBrowser {
         archivePath: String,
         permissionLevel: String
     ): PasswordCheckResult = withContext(Dispatchers.IO) {
-        // 非7z格式：文件名列表始终可见，直接展开目录树
+        // ZIP 等非 7z 格式同样可能只加密内容。文件名可见不代表后续读取
+        // 文件数据无需密码，因此不能在这里跳过检测。
         if (!archivePath.endsWith(".7z", ignoreCase = true)) {
-            Log.d(TAG, "checkPasswordRequired: 非7z格式，跳过检测")
-            return@withContext PasswordCheckResult.NoPassword
+            val encryption = JBindingClient.detectEncryption(archivePath).getOrElse { e ->
+                return@withContext PasswordCheckResult.Error(
+                    errorMessage = e.message ?: "无法检测压缩包加密状态",
+                    command = "detectEncryption($archivePath)",
+                    output = e.stackTraceToString()
+                )
+            }
+            return@withContext when (encryption) {
+                JBindingClient.EncryptionType.None -> PasswordCheckResult.NoPassword
+                JBindingClient.EncryptionType.ContentOnly -> PasswordCheckResult.ContentEncrypted
+                JBindingClient.EncryptionType.Header -> PasswordCheckResult.HeaderEncrypted
+            }
         }
 
         // 7z格式：读文件头判断头部加密
@@ -734,6 +745,26 @@ object ArchiveBrowser {
         cancelFlag: java.util.concurrent.atomic.AtomicBoolean? = null
     ): ExtractResult = withContext(Dispatchers.IO) {
         try {
+            if (password.isEmpty()) {
+                when (val passwordCheck = checkPasswordRequired(context, archivePath, permissionLevel)) {
+                    is PasswordCheckResult.HeaderEncrypted,
+                    is PasswordCheckResult.ContentEncrypted -> {
+                        return@withContext ExtractResult(
+                            success = false,
+                            command = "ArchiveBrowser.checkPasswordRequired",
+                            errorMessage = "压缩包需要密码"
+                        )
+                    }
+                    is PasswordCheckResult.Error -> {
+                        return@withContext ExtractResult(
+                            success = false,
+                            command = passwordCheck.command,
+                            errorMessage = "无法检测压缩包密码: ${passwordCheck.errorMessage}"
+                        )
+                    }
+                    else -> Unit
+                }
+            }
             destFile.parentFile?.mkdirs()
 
             Log.d(TAG, "提取单文件: $entryPath")

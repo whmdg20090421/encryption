@@ -3554,29 +3554,37 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        // 解压后打开
-        viewModelScope.launch(Dispatchers.IO) {
-            val result = ArchiveBrowser.extractSingleFile(
-                context = context,
-                archivePath = session.archivePath,
-                entryPath = entry.path,
-                destFile = destFile,
-                password = password,
-                permissionLevel = permissionLevel
-            )
-            withContext(Dispatchers.Main) {
-                val file = result.file
-                if (result.success && file != null) {
-                    val newEntry = entry.copy(path = file.absolutePath)
+        // 预览缓存就是本地目录目标，必须经过与复制/解压相同的密码门控。
+        extractFromArchive(
+            archivePath = session.archivePath,
+            entryPaths = imageEntryPaths,
+            target = ArchiveExtractionTarget.Directory(cacheDir.absolutePath),
+            onPasswordRequired = {
+                currentPanel.archivePasswordRequest = FileEntry(
+                    path = session.archivePath,
+                    name = session.archiveName,
+                    isDirectory = false,
+                    size = File(session.archivePath).length(),
+                    lastModified = File(session.archivePath).lastModified()
+                )
+            },
+            onProgress = { _, _, _ -> },
+            onComplete = { successCount, _, error ->
+                if (successCount > 0 && destFile.exists()) {
+                    val newEntry = entry.copy(path = destFile.absolutePath)
                     openFile(context, newEntry, overrideImagePaths = imagePaths, archivePath = session.archivePath,
                         archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
                         archivePassword = password, archiveStartIndex = startIndex,
                         archivePermissionLevel = permissionLevel)
                 } else {
-                    Toast.makeText(context, "解压失败: ${result.errorMessage}", Toast.LENGTH_SHORT).show()
+                    currentPanel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
+                        title = "预览解压失败",
+                        errorSummary = "无法读取压缩包内文件",
+                        errorMessage = error ?: "未知错误"
+                    )
                 }
             }
-        }
+        )
     }
 
     // ── 文件操作 ──
@@ -3760,10 +3768,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 // 若无密码，先探测是否需要密码（提取时任何加密类型都需要密码）
                 if (effectivePassword.isEmpty()) {
                     val passwordCheckResult = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
-                    if (passwordCheckResult is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted ||
-                        passwordCheckResult is ArchiveBrowser.PasswordCheckResult.ContentEncrypted) {
-                        withContext(Dispatchers.Main) { onPasswordRequired() }
-                        return@launch
+                    when (passwordCheckResult) {
+                        is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted,
+                        is ArchiveBrowser.PasswordCheckResult.ContentEncrypted -> {
+                            withContext(Dispatchers.Main) { onPasswordRequired() }
+                            return@launch
+                        }
+                        is ArchiveBrowser.PasswordCheckResult.Error -> {
+                            withContext(Dispatchers.Main) {
+                                onComplete(false, null, "无法检测压缩包密码: ${passwordCheckResult.errorMessage}")
+                            }
+                            return@launch
+                        }
+                        else -> Unit
                     }
                 }
 
@@ -3785,10 +3802,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
 
-                // 构建 fileSizes 列表（扁平化的文件大小列表）
-                val fileSizes = flattenFileSizes(session.root)
-                val totalBytes = fileSizes.sum()
-
                 // 计算单个压缩包的目标目录
                 val singleOutputDir = if (entries.size == 1) {
                     outputDir
@@ -3797,31 +3810,32 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     "$outputDir/${ArchiveBrowser.stripArchiveExtension(entry.name)}"
                 }
 
-                val options = CompressService.ExtractOptions(
-                    archivePath = entry.path,
-                    outputDir = singleOutputDir,
-                    password = effectivePassword,
-                    fileSizes = fileSizes,
-                    totalUncompressedBytes = totalBytes
-                )
-
-                CompressService.extract(
-                    context = context,
-                    options = options,
-                    permissionLevel = permLevel,
-                    cancelFlag = ctrl.extractCancelFlag,
-                    callback = object : CompressService.ProgressCallback {
-                        override fun onProgress(info: CompressService.ProgressInfo) {
-                            onProgress(info)
+                // 所有实际文件输出都由统一协调器完成；此处仅把普通解压 UI
+                // 适配为本地目录目标，避免保留第二条解压/清理路径。
+                withContext(Dispatchers.Main) {
+                    extractFromArchive(
+                        archivePath = entry.path,
+                        entryPaths = session.currentEntries.map { it.path },
+                        target = ArchiveExtractionTarget.Directory(singleOutputDir),
+                        sourceSession = session,
+                        archivePassword = effectivePassword,
+                        onPasswordRequired = { onPasswordRequired() },
+                        onProgress = { current, total, fileName ->
+                            onProgress(
+                                CompressService.ProgressInfo(
+                                    currentFile = current,
+                                    totalFiles = total,
+                                    progress = current.toFloat() / total.coerceAtLeast(1),
+                                    currentFileName = fileName
+                                )
+                            )
+                        },
+                        onComplete = { success, total, error ->
+                            onComplete(success == total && total > 0, singleOutputDir, error)
                         }
-                        override fun onComplete(success: Boolean, path: String?, error: String?) {
-                            if (success && effectivePassword.isNotEmpty()) {
-                                archivePasswordCache[entry.path] = effectivePassword
-                            }
-                            launch(Dispatchers.Main) { onComplete(success, path, error) }
-                        }
-                    }
-                )
+                    )
+                }
+                return@launch
             }
         }
     }
@@ -3883,23 +3897,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         archivePath: String,
         entryPaths: List<String>,
         target: ArchiveExtractionTarget,
-        onProgress: (current: Int, total: Int, fileName: String) -> Unit,
-        onComplete: (successCount: Int, totalCount: Int, error: String?) -> Unit
-    ) {
-        when (target) {
-            is ArchiveExtractionTarget.Directory -> extractFromArchiveToDirectory(
-                archivePath, entryPaths, target.outputDir, onProgress, onComplete
-            )
-            is ArchiveExtractionTarget.Vault -> extractFromArchiveToVault(
-                archivePath, entryPaths, target, onProgress, onComplete
-            )
-        }
-    }
-
-    private fun extractFromArchiveToDirectory(
-        archivePath: String,
-        entryPaths: List<String>,
-        outputDir: String,
+        sourceSession: ArchiveBrowser.ArchiveSession? = null,
+        archivePassword: String = "",
+        onPasswordRequired: (String?) -> Unit = {},
         onProgress: (current: Int, total: Int, fileName: String) -> Unit,
         onComplete: (successCount: Int, totalCount: Int, error: String?) -> Unit
     ) {
@@ -3907,159 +3907,112 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         ctrl.extractCancelFlag.set(false)
         ctrl.extractJob?.cancel()
         ctrl.extractJob = viewModelScope.launch(Dispatchers.IO) {
-            val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
-            val ctx = context
-            val session = currentPanel.archiveSession
-            if (session == null) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(ctx, "压缩包会话已失效", Toast.LENGTH_SHORT).show()
-                }
-                return@launch
-            }
-            val password = archivePasswordCache[archivePath] ?: ""
-
-            // 收集所有待提取的文件路径（目录递归展开）
-            val allFiles = mutableListOf<String>()
-            for (ep in entryPaths) {
-                if (ctrl.extractCancelFlag.get()) break
-                if (ep.isEmpty()) continue
-                val node = findArchiveNode(session.root, ep, archivePath)
-                if (node != null && node.isDirectory) {
-                    collectArchiveFiles(node, ep, allFiles)
-                } else {
-                    allFiles.add(ep)
-                }
-            }
-            if (allFiles.isEmpty()) {
-                withContext(Dispatchers.Main) {
-                    onComplete(0, 0, "未找到可提取的文件")
-                }
-                return@launch
-            }
-            val total = allFiles.size
-            var successCount = 0
-            var lastError: String? = null
-            for ((idx, filePath) in allFiles.withIndex()) {
-                if (ctrl.extractCancelFlag.get()) break
-                val fileName = filePath.substringAfterLast('/')
-                withContext(Dispatchers.Main) { onProgress(idx + 1, total, fileName) }
-                val destFile = safeArchiveOutput(File(outputDir), filePath)
-                if (destFile == null) {
-                    lastError = "压缩包包含非法路径: $filePath"
-                    break
-                }
-                val result = ArchiveBrowser.extractSingleFile(
-                    context = ctx,
-                    archivePath = archivePath,
-                    entryPath = filePath,
-                    destFile = destFile,
-                    password = password,
-                    permissionLevel = permLevel,
-                    cancelFlag = ctrl.extractCancelFlag
-                )
-                if (result.success) {
-                    successCount++
-                } else {
-                    destFile.delete()
-                    lastError = result.errorMessage
-                    break
-                }
-            }
-            if (ctrl.extractCancelFlag.get() && lastError == null) lastError = "用户取消"
-            if (password.isNotEmpty() && successCount > 0) {
-                archivePasswordCache[archivePath] = password
-            }
-            withContext(Dispatchers.Main) {
-                refreshAfterExtract(outputDir)
-                onComplete(successCount, total, lastError)
-            }
-        }
-    }
-
-    /**
-     * 将压缩包条目解压到受管临时目录，再逐个加密写入保险箱。
-     * 明文只在任务运行期间存在，任务结束后始终删除。
-     */
-    private fun extractFromArchiveToVault(
-        archivePath: String,
-        entryPaths: List<String>,
-        target: ArchiveExtractionTarget.Vault,
-        onProgress: (current: Int, total: Int, fileName: String) -> Unit,
-        onComplete: (successCount: Int, totalCount: Int, error: String?) -> Unit
-    ) {
-        val ctrl = focusedController
-        ctrl.extractCancelFlag.set(false)
-        ctrl.extractJob?.cancel()
-        ctrl.extractJob = viewModelScope.launch(Dispatchers.IO) {
-            val session = currentPanel.archiveSession
+            try {
+                val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+                val session = sourceSession ?: currentPanel.archiveSession
             if (session == null) {
                 withContext(Dispatchers.Main) { onComplete(0, 0, "压缩包会话已失效") }
-                if (target.disposeSessionWhenDone) target.session.dispose()
+                if (target is ArchiveExtractionTarget.Vault && target.disposeSessionWhenDone) target.session.dispose()
                 return@launch
             }
-
             val allFiles = mutableListOf<String>()
             for (entryPath in entryPaths) {
                 if (ctrl.extractCancelFlag.get()) break
                 if (entryPath.isEmpty()) continue
                 val node = findArchiveNode(session.root, entryPath, archivePath)
-                if (node != null && node.isDirectory) collectArchiveFiles(node, entryPath, allFiles)
-                else allFiles.add(entryPath)
+                if (node?.isDirectory == true) collectArchiveFiles(node, entryPath, allFiles) else allFiles.add(entryPath)
             }
             if (allFiles.isEmpty()) {
                 withContext(Dispatchers.Main) { onComplete(0, 0, "未找到可提取的文件") }
-                if (target.disposeSessionWhenDone) target.session.dispose()
                 return@launch
+            }
+
+            val password = archivePassword.ifEmpty { archivePasswordCache[archivePath] ?: "" }
+            if (password.isEmpty()) {
+                when (val check = ArchiveBrowser.checkPasswordRequired(context, archivePath, permLevel)) {
+                    is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted,
+                    is ArchiveBrowser.PasswordCheckResult.ContentEncrypted -> {
+                        withContext(Dispatchers.Main) { onPasswordRequired(null) }
+                        return@launch
+                    }
+                    is ArchiveBrowser.PasswordCheckResult.Error -> {
+                        withContext(Dispatchers.Main) { onComplete(0, allFiles.size, "无法检测压缩包密码: ${check.errorMessage}") }
+                        return@launch
+                    }
+                    else -> Unit
+                }
+            } else {
+                val passwordCheck = JBindingClient.extractSingleFileToSink(
+                    archivePath, allFiles.first(), password
+                ) { }
+                if (passwordCheck.isFailure) {
+                    val cause = passwordCheck.exceptionOrNull()
+                    withContext(Dispatchers.Main) {
+                        onPasswordRequired("密码验证失败: ${cause?.message ?: cause?.javaClass?.simpleName ?: "未知错误"}")
+                    }
+                    return@launch
+                }
+                archivePasswordCache[archivePath] = password
             }
 
             var successCount = 0
             var lastError: String? = null
-            try {
-                val password = archivePasswordCache[archivePath] ?: ""
-                for ((index, entryPath) in allFiles.withIndex()) {
-                    if (ctrl.extractCancelFlag.get()) break
-                    if (safeArchiveRelativePath(entryPath) == null) {
-                        lastError = "压缩包包含非法路径: $entryPath"
-                        break
+            for ((index, entryPath) in allFiles.withIndex()) {
+                if (ctrl.extractCancelFlag.get()) break
+                if (safeArchiveRelativePath(entryPath) == null) {
+                    lastError = "压缩包包含非法路径: $entryPath"
+                    break
+                }
+                withContext(Dispatchers.Main) { onProgress(index + 1, allFiles.size, entryPath.substringAfterLast('/')) }
+                when (target) {
+                    is ArchiveExtractionTarget.Directory -> {
+                        val output = safeArchiveOutput(File(target.outputDir), entryPath)
+                        if (output == null) { lastError = "压缩包包含非法路径: $entryPath"; break }
+                        val pending = File(output.parentFile, ".${output.name}.part")
+                        try {
+                            output.parentFile?.mkdirs()
+                            if (output.exists() || pending.exists()) throw IllegalStateException("目标文件已存在: ${output.path}")
+                            pending.outputStream().use { out ->
+                                JBindingClient.extractSingleFileToSink(archivePath, entryPath, password) { bytes ->
+                                    if (ctrl.extractCancelFlag.get()) throw java.io.InterruptedIOException("用户取消")
+                                    out.write(bytes)
+                                }.getOrThrow()
+                            }
+                            if (!pending.renameTo(output)) throw IllegalStateException("无法提交解压文件: ${output.path}")
+                            successCount++
+                        } catch (e: Exception) { pending.delete(); lastError = e.message ?: e.javaClass.simpleName; break }
                     }
-                    withContext(Dispatchers.Main) {
-                        onProgress(index + 1, allFiles.size, entryPath.substringAfterLast('/'))
-                    }
-                    val relativeParent = entryPath.substringBeforeLast('/', "").trim('/')
-                    val vaultSubDir = listOf(target.subDir.trim('/'), relativeParent)
-                        .filter { it.isNotEmpty() }
-                        .joinToString("/")
-                    val writer = try {
-                        CryptoService.openStreamIntoVault(
-                            context = context,
-                            session = target.session,
-                            sourceName = entryPath.substringAfterLast('/'),
-                            subDir = vaultSubDir,
-                            cancelFlag = ctrl.extractCancelFlag
-                        )
-                    } catch (e: Exception) {
-                        lastError = e.message ?: e.javaClass.simpleName
-                        break
-                    }
-                    try {
-                        JBindingClient.extractSingleFileToSink(archivePath, entryPath, password, writer.sink::write).getOrThrow()
-                        writer.finish()
-                        successCount++
-                    } catch (e: Exception) {
-                        writer.abort()
-                        lastError = e.message ?: e.javaClass.simpleName
-                        break
+                    is ArchiveExtractionTarget.Vault -> {
+                        val subDir = listOf(target.subDir.trim('/'), entryPath.substringBeforeLast('/', "").trim('/'))
+                            .filter { it.isNotEmpty() }.joinToString("/")
+                        val writer = try {
+                            CryptoService.openStreamIntoVault(context, target.session, entryPath.substringAfterLast('/'), subDir, cancelFlag = ctrl.extractCancelFlag)
+                        } catch (e: Exception) { lastError = e.message ?: e.javaClass.simpleName; break }
+                        try {
+                            JBindingClient.extractSingleFileToSink(archivePath, entryPath, password, writer.sink::write).getOrThrow()
+                            writer.finish()
+                            successCount++
+                        } catch (e: Exception) { writer.abort(); lastError = e.message ?: e.javaClass.simpleName; break }
                     }
                 }
-                if (ctrl.extractCancelFlag.get() && lastError == null) lastError = "用户取消"
-            } catch (e: Exception) {
-                lastError = e.message ?: e.javaClass.simpleName
-            } finally {
-                if (target.disposeSessionWhenDone) target.session.dispose()
             }
+            if (ctrl.extractCancelFlag.get() && lastError == null) lastError = "用户取消"
+            if (target is ArchiveExtractionTarget.Vault && target.disposeSessionWhenDone) target.session.dispose()
             withContext(Dispatchers.Main) {
-                refreshPanel(panels[target.targetPanel].state)
+                when (target) {
+                    is ArchiveExtractionTarget.Directory -> refreshAfterExtract(target.outputDir)
+                    is ArchiveExtractionTarget.Vault -> refreshPanel(panels[target.targetPanel].state)
+                }
                 onComplete(successCount, allFiles.size, lastError)
+            }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                if (target is ArchiveExtractionTarget.Vault && target.disposeSessionWhenDone) target.session.dispose()
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) { onComplete(0, 0, "用户取消") }
+            } catch (e: Exception) {
+                if (target is ArchiveExtractionTarget.Vault && target.disposeSessionWhenDone) target.session.dispose()
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) {
+                    onComplete(0, 0, "解压异常: ${e.message ?: e.javaClass.simpleName}")
+                }
             }
         }
     }
@@ -4121,8 +4074,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         password: String,
         permLevel: String
     ) {
-        val fileSizes = flattenFileSizes(session.root)
-        val totalBytes = fileSizes.sum()
+        val totalBytes = flattenFileSizes(session.root).sum()
         val outputDir = CompressPreviewCache.getArchiveCacheDir(context, entry.name)
 
         withContext(Dispatchers.Main) {
@@ -4132,39 +4084,26 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             sevenZipExtractBytesProcessed = 0L
         }
 
-        val cancelFlag = java.util.concurrent.atomic.AtomicBoolean(false)
         kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
-            kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
-                val options = CompressService.ExtractOptions(
-                    archivePath = entry.path,
-                    outputDir = outputDir.absolutePath,
-                    password = password,
-                    fileSizes = fileSizes,
-                    totalUncompressedBytes = totalBytes
-                )
-                CompressService.extract(
-                    context = context, options = options, permissionLevel = permLevel,
-                    cancelFlag = cancelFlag,
-                    callback = object : CompressService.ProgressCallback {
-                        override fun onProgress(info: CompressService.ProgressInfo) {
-                            kotlinx.coroutines.runBlocking(Dispatchers.Main) {
-                                sevenZipExtractProgress = info.progress
-                                sevenZipExtractBytesProcessed = info.bytesProcessed
-                            }
-                        }
-                        override fun onComplete(success: Boolean, path: String?, error: String?) {
-                            kotlinx.coroutines.runBlocking(Dispatchers.Main) {
-                                sevenZipExtracting = false
-                                sevenZipExtractProgress = 0f
-                            }
-                            if (success) {
-                                CompressPreviewCache.updateRecord(context, entry.path, File(entry.path).lastModified(), File(entry.path).length())
-                            }
-                            cont.resume(success) {}
-                        }
+            extractFromArchive(
+                archivePath = entry.path,
+                entryPaths = session.currentEntries.map { it.path },
+                target = ArchiveExtractionTarget.Directory(outputDir.absolutePath),
+                sourceSession = session,
+                archivePassword = password,
+                onProgress = { current, total, _ ->
+                    sevenZipExtractProgress = current.toFloat() / total.coerceAtLeast(1)
+                },
+                onComplete = { success, total, error ->
+                    sevenZipExtracting = false
+                    sevenZipExtractProgress = 0f
+                    if (success == total && total > 0) {
+                        CompressPreviewCache.updateRecord(context, entry.path, File(entry.path).lastModified(), File(entry.path).length())
                     }
-                )
-            }
+                    if (cont.isActive) cont.resume(success == total && total > 0) {}
+                }
+            )
+            cont.invokeOnCancellation { cancelExtract() }
         }
     }
 

@@ -20,7 +20,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.viewinterop.AndroidView
 import com.awxkee.jxlcoder.JxlCoder
 import com.github.chrisbanes.photoview.PhotoView
-import com.whmdg.mczj.tools.util.ArchiveBrowser
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import java.io.File
 
@@ -115,20 +114,9 @@ private fun ArchiveImagePage(
 
     LaunchedEffect(file.absolutePath, archivePath, archiveEntryPath) {
         if (archivePath != null && archiveEntryPath != null && !file.exists()) {
-            val result = ArchiveBrowser.extractSingleFile(
-                context = context,
-                archivePath = archivePath,
-                entryPath = archiveEntryPath,
-                destFile = file,
-                password = archivePassword,
-                permissionLevel = archivePermissionLevel
-            )
-            if (result.success) {
-                loadState = 1
-            } else {
-                loadError = result.errorMessage
-                loadState = 2
-            }
+            // 压缩包文件必须由 FileManagerViewModel 的统一解压协调器预先写入缓存。
+            loadError = "压缩包文件尚未完成统一解压"
+            loadState = 2
         } else {
             loadState = 1
         }
