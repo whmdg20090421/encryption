@@ -3856,6 +3856,118 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         return result
     }
 
+    // ── 压缩包内条目解压到目标目录 ──
+
+    /**
+     * 从已打开的压缩包中提取选中的条目到目标目录。
+     * 用于"从压缩包内复制"场景：源面板是压缩包浏览模式，目标面板是普通目录。
+     */
+    fun extractFromArchive(
+        archivePath: String,
+        entryPaths: List<String>,
+        outputDir: String,
+        onProgress: (current: Int, total: Int, fileName: String) -> Unit,
+        onComplete: (successCount: Int, totalCount: Int, error: String?) -> Unit
+    ) {
+        val ctrl = focusedController
+        ctrl.extractCancelFlag.set(false)
+        ctrl.extractJob?.cancel()
+        ctrl.extractJob = viewModelScope.launch(Dispatchers.IO) {
+            val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+            val ctx = context
+            val session = currentPanel.archiveSession
+            if (session == null) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(ctx, "压缩包会话已失效", Toast.LENGTH_SHORT).show()
+                }
+                return@launch
+            }
+            val password = archivePasswordCache[archivePath] ?: ""
+
+            // 收集所有待提取的文件路径（目录递归展开）
+            val allFiles = mutableListOf<String>()
+            for (ep in entryPaths) {
+                if (ctrl.extractCancelFlag.get()) break
+                if (ep.isEmpty()) continue
+                val node = findArchiveNode(session.root, ep, archivePath)
+                if (node != null && node.isDirectory) {
+                    collectArchiveFiles(node, ep, allFiles)
+                } else {
+                    allFiles.add(ep)
+                }
+            }
+            if (allFiles.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    onComplete(0, 0, "未找到可提取的文件")
+                }
+                return@launch
+            }
+            val total = allFiles.size
+            var successCount = 0
+            var lastError: String? = null
+            for ((idx, filePath) in allFiles.withIndex()) {
+                if (ctrl.extractCancelFlag.get()) break
+                val fileName = filePath.substringAfterLast('/')
+                withContext(Dispatchers.Main) { onProgress(idx + 1, total, fileName) }
+                val destFile = File(outputDir, filePath)
+                val result = ArchiveBrowser.extractSingleFile(
+                    context = ctx,
+                    archivePath = archivePath,
+                    entryPath = filePath,
+                    destFile = destFile,
+                    password = password,
+                    permissionLevel = permLevel
+                )
+                if (result.success) {
+                    successCount++
+                } else {
+                    lastError = result.errorMessage
+                }
+            }
+            if (password.isNotEmpty() && successCount > 0) {
+                archivePasswordCache[archivePath] = password
+            }
+            withContext(Dispatchers.Main) {
+                refreshAfterExtract(outputDir)
+                onComplete(successCount, total, lastError)
+            }
+        }
+    }
+
+    /** 在 ArchiveNode 树中查找指定路径的节点 */
+    private fun findArchiveNode(
+        root: ArchiveBrowser.ArchiveNode,
+        internalPath: String,
+        archivePath: String
+    ): ArchiveBrowser.ArchiveNode? {
+        val fullVirtualPath = "$archivePath/$internalPath"
+        val relativePath = fullVirtualPath.removePrefix(archivePath).trimStart('/')
+        if (relativePath.isBlank()) return root
+        val parts = relativePath.split('/').filter { it.isNotEmpty() }
+        var current = root
+        for (part in parts) {
+            val child = current.children.find { it.name == part && it.isDirectory } ?: return null
+            current = child
+        }
+        return current
+    }
+
+    /** 递归收集目录下所有文件的相对路径 */
+    private fun collectArchiveFiles(
+        node: ArchiveBrowser.ArchiveNode,
+        prefix: String,
+        out: MutableList<String>
+    ) {
+        for (child in node.children) {
+            val path = if (prefix.isEmpty()) child.name else "$prefix/${child.name}"
+            if (child.isDirectory) {
+                collectArchiveFiles(child, path, out)
+            } else {
+                out.add(path)
+            }
+        }
+    }
+
     // ── 压缩包浏览 ──
 
     /** 7z 整体解压到缓存目录 */

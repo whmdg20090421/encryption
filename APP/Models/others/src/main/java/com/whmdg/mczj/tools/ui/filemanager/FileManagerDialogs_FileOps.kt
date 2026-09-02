@@ -235,6 +235,7 @@ internal fun DeleteProgressDialog(
 internal fun CopyMoveConfirmDialog(
     show: Boolean,
     isCopy: Boolean,
+    isArchiveExtract: Boolean = false,
     sourcePaths: List<String>,
     targetDir: String,
     onDismiss: () -> Unit,
@@ -245,13 +246,23 @@ internal fun CopyMoveConfirmDialog(
     val sourceDisplay = if (sourceNames.size == 1) sourceNames[0]
     else "${sourceNames[0]} 等 ${sourceNames.size} 个文件"
     val sourceDir = sourcePaths.firstOrNull()?.substringBeforeLast('/') ?: ""
+    val title = when {
+        isArchiveExtract -> "确认解压"
+        isCopy -> "确认复制"
+        else -> "确认移动"
+    }
+    val bodyText = when {
+        isArchiveExtract -> "解压到以下目录："
+        isCopy -> "复制到以下目录："
+        else -> "移动到以下目录："
+    }
     StandardDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (isCopy) "确认复制" else "确认移动") },
+        title = { Text(title) },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = if (isCopy) "复制到以下目录：" else "移动到以下目录：",
+                    text = bodyText,
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(Modifier.height(8.dp))

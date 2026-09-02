@@ -2320,7 +2320,8 @@ fun FileManagerScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // 左列：复制
+                                // 左列：复制 / 解压（压缩包模式下显示"解压"）
+                                val copyLabel = if (isArchiveSource) "解压" else "复制"
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
@@ -2345,22 +2346,23 @@ fun FileManagerScreen(
                                 ) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("复制", style = MaterialTheme.typography.bodyLarge)
+                                            Text(copyLabel, style = MaterialTheme.typography.bodyLarge)
                                             Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Text("复制", style = MaterialTheme.typography.bodyLarge)
+                                            Text(copyLabel, style = MaterialTheme.typography.bodyLarge)
                                         }
                                     }
                                 }
                                 VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
-                                // 右列：移动
+                                // 右列：移动（压缩包模式下禁用）
+                                val canMove = !isArchiveSource
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
-                                        .clickable {
+                                        .clickable(enabled = canMove) {
                                             val sourcePaths = if (activeSelectedPaths.isNotEmpty()) {
                                                 activeSelectedPaths.toList()
                                             } else {
@@ -2381,13 +2383,13 @@ fun FileManagerScreen(
                                 ) {
                                     if (isToRight) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text("移动", style = MaterialTheme.typography.bodyLarge)
-                                            Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Text("移动", style = MaterialTheme.typography.bodyLarge, color = if (canMove) Color.Unspecified else disabledColor)
+                                            Icon(Icons.Default.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (canMove) MaterialTheme.colorScheme.onSurface else disabledIconColor)
                                         }
                                     } else {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Text("移动", style = MaterialTheme.typography.bodyLarge)
+                                            Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (canMove) MaterialTheme.colorScheme.onSurface else disabledIconColor)
+                                            Text("移动", style = MaterialTheme.typography.bodyLarge, color = if (canMove) Color.Unspecified else disabledColor)
                                         }
                                     }
                                 }
@@ -3095,38 +3097,70 @@ fun FileManagerScreen(
     }
 
     // ── 复制/移动确认对话框 ──
+    val isArchiveSource = vm.currentPanel.path is PanelPath.Archive
     CopyMoveConfirmDialog(
         show = showCopyMoveConfirmDialog,
         isCopy = copyMoveConfirmIsCopy,
+        isArchiveExtract = isArchiveSource && copyMoveConfirmIsCopy,
         sourcePaths = copyMoveConfirmSourcePaths,
         targetDir = copyMoveConfirmTargetDir,
         onDismiss = { showCopyMoveConfirmDialog = false },
         onConfirm = {
             showCopyMoveConfirmDialog = false
-            val accessLevel = when {
-                vm.isRootEngine -> FileAccessLevel.ROOT
-                com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> FileAccessLevel.SHIZUKU
-                else -> FileAccessLevel.NORMAL
-            }
 
-            // ── 保险箱感知前置校验 ──
-            val vaultContext = buildVaultOperationContext(
-                context = context,
-                sourcePaths = copyMoveConfirmSourcePaths,
-                targetDir = copyMoveConfirmTargetDir,
-                vm = vm
-            )
-            if (vaultContext == null) {
-                // 混合批次，已弹出 Toast，不执行操作
-                return@CopyMoveConfirmDialog
-            }
-
-            if (copyMoveConfirmIsCopy) {
-                FileOperationManager.copy(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode, vaultContext)
+            if (isArchiveSource && copyMoveConfirmIsCopy) {
+                // ── 压缩包内复制 → 解压到目标目录 ──
+                val archivePath = (vm.currentPanel.path as PanelPath.Archive).archivePath
+                showExtractProgress = true
+                extractProgress = 0f
+                extractCurrentFile = 0
+                extractTotalFiles = 0
+                vm.extractFromArchive(
+                    archivePath = archivePath,
+                    entryPaths = copyMoveConfirmSourcePaths,
+                    outputDir = copyMoveConfirmTargetDir,
+                    onProgress = { current, total, fileName ->
+                        extractCurrentFile = current
+                        extractTotalFiles = total
+                        extractProgress = (current - 1).coerceAtLeast(0).toFloat() / total.coerceAtLeast(1)
+                    },
+                    onComplete = { successCount, totalCount, error ->
+                        showExtractProgress = false
+                        if (successCount == totalCount && totalCount > 0) {
+                            Toast.makeText(context, "已解压 $totalCount 个文件", Toast.LENGTH_SHORT).show()
+                        } else if (successCount > 0) {
+                            Toast.makeText(context, "部分解压成功 ($successCount/$totalCount): $error", Toast.LENGTH_LONG).show()
+                        } else if (totalCount > 0) {
+                            Toast.makeText(context, "解压失败: $error", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                )
             } else {
-                FileOperationManager.move(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode, vaultContext)
+                // ── 普通复制/移动 ──
+                val accessLevel = when {
+                    vm.isRootEngine -> FileAccessLevel.ROOT
+                    com.whmdg.mczj.tools.security.SpecialPermissionVerifier.isShizukuAuthorized(context) -> FileAccessLevel.SHIZUKU
+                    else -> FileAccessLevel.NORMAL
+                }
+
+                // ── 保险箱感知前置校验 ──
+                val vaultContext = buildVaultOperationContext(
+                    context = context,
+                    sourcePaths = copyMoveConfirmSourcePaths,
+                    targetDir = copyMoveConfirmTargetDir,
+                    vm = vm
+                )
+                if (vaultContext == null) {
+                    return@CopyMoveConfirmDialog
+                }
+
+                if (copyMoveConfirmIsCopy) {
+                    FileOperationManager.copy(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode, vaultContext)
+                } else {
+                    FileOperationManager.move(copyMoveConfirmSourcePaths, copyMoveConfirmTargetDir, accessLevel, context, isDebugMode, vaultContext)
+                }
+                showFileOpProgress = true
             }
-            showFileOpProgress = true
             selectedEntry = null
             vm.左.selectedPaths = emptySet()
             vm.右.selectedPaths = emptySet()
