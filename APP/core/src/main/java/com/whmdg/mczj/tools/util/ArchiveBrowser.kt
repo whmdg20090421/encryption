@@ -730,13 +730,14 @@ object ArchiveBrowser {
         entryPath: String,
         destFile: File,
         password: String = "",
-        permissionLevel: String = "NORMAL"
+        permissionLevel: String = "NORMAL",
+        cancelFlag: java.util.concurrent.atomic.AtomicBoolean? = null
     ): ExtractResult = withContext(Dispatchers.IO) {
         try {
             destFile.parentFile?.mkdirs()
 
             Log.d(TAG, "提取单文件: $entryPath")
-            val result = JBindingClient.extractSingleFile(archivePath, entryPath, destFile, password)
+            val result = JBindingClient.extractSingleFile(archivePath, entryPath, destFile, password, cancelFlag)
             result.fold(
                 onSuccess = {
                     if (destFile.exists()) {

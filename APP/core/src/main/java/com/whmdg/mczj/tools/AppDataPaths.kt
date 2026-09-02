@@ -47,13 +47,6 @@ object AppDataPaths {
         return dir
     }
 
-    /** 文件管理器解压中转目录。保险箱目标会在这里完成明文解压后立即加密。 */
-    fun archiveExtractionTemp(context: Context): File {
-        val dir = File(fileManager(context), "解压临时")
-        if (!dir.exists()) dir.mkdirs()
-        return dir
-    }
-
     /** 加密模块目录 */
     fun encryption(context: Context): File {
         val dir = File(root(context), "加密模块")

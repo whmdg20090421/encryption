@@ -12,6 +12,71 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object CryptoService {
 
+    /** 已打开的保险箱流式写入事务。成功时原子发布密文，失败时删除未完成文件。 */
+    class VaultStreamWrite internal constructor(
+        private val context: Context,
+        private val session: VaultSession,
+        private val output: File,
+        private val pending: File,
+        private val mappingKey: String?,
+        private val mappingValue: String?,
+        val sink: FileCodec.EncryptingSink
+    ) {
+        fun finish(): File {
+            try {
+                sink.finish()
+                if (!pending.renameTo(output)) {
+                    pending.delete()
+                    throw IllegalStateException("无法提交加密文件: ${output.path}")
+                }
+                if (mappingKey != null && mappingValue != null) {
+                    session.nameMapping.set(mappingKey, mappingValue)
+                    session.saveNameMapping(context)
+                }
+                return output
+            } catch (e: Exception) {
+                pending.delete()
+                output.delete()
+                throw e
+            }
+        }
+
+        fun abort() = sink.abort()
+    }
+
+    /** 创建一个接收明文分块的保险箱写入器，明文不会落盘。 */
+    fun openStreamIntoVault(
+        context: Context,
+        session: VaultSession,
+        sourceName: String,
+        subDir: String = "",
+        onProgress: (Long) -> Unit = {},
+        cancelFlag: AtomicBoolean? = null
+    ): VaultStreamWrite {
+        val encodedName = if (session.record.encryptFilename) {
+            FilenameCodec.encrypt(
+                filename = sourceName,
+                dek = session.dek,
+                aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null
+            )
+        } else null
+        val outName = encodedName?.encoded ?: "$sourceName.whm"
+        val targetDir = if (subDir.isEmpty()) session.vaultDir else File(session.vaultDir, subDir)
+        val output = File(targetDir, outName)
+        val pending = File(targetDir, ".${outName}.part")
+        targetDir.mkdirs()
+        if (output.exists() || pending.exists()) throw IllegalStateException("目标加密文件已存在: ${output.path}")
+        val sink = FileCodec.EncryptingSink(
+            dst = pending,
+            dek = session.dek,
+            encryptMetadata = session.record.encryptMetadata,
+            customEncryption = session.record.customEncryption,
+            onProgress = onProgress,
+            cancelFlag = cancelFlag
+        )
+        return VaultStreamWrite(context, session, output, pending, encodedName?.mappingKey, encodedName?.mappingValue, sink)
+    }
+
     /**
      * 把 [srcFile] 加密进 [session]，返回生成的 `.whm` 文件路径。
      */

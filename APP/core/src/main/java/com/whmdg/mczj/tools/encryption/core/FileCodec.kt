@@ -21,6 +21,81 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object FileCodec {
 
+    /**
+     * 接收解压回调的明文字节并按加密格式写出，始终只保留一个固定大小明文块。
+     * 调用方必须在成功时调用 [finish]，失败或取消时调用 [abort]。
+     */
+    class EncryptingSink(
+        private val dst: File,
+        private val dek: ByteArray,
+        private val encryptMetadata: Boolean,
+        private val customEncryption: Boolean,
+        private val sourceModifiedAt: Long = System.currentTimeMillis(),
+        private val onProgress: (Long) -> Unit = {},
+        private val cancelFlag: AtomicBoolean? = null
+    ) {
+        private val aad = if (customEncryption) FileConstants.aadCustomObf else null
+        private val buffer = ByteArray(FileConstants.CHUNK_SIZE)
+        private val out = FileOutputStream(dst)
+        private var buffered = 0
+        private var written = 0L
+        private var closed = false
+
+        init {
+            if (customEncryption) out.write(FileConstants.magicHeader)
+            val metadata = if (encryptMetadata) {
+                "{\"mtime\":${sourceModifiedAt / 1000.0},\"ctime\":${sourceModifiedAt / 1000.0}}"
+            } else "{}"
+            val encrypted = AesGcm256.encrypt(dek, metadata.toByteArray(Charsets.UTF_8), aad)
+            out.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(encrypted.iv.size + encrypted.ciphertext.size).array())
+            out.write(encrypted.iv)
+            out.write(encrypted.ciphertext)
+        }
+
+        fun write(data: ByteArray) {
+            check(!closed) { "加密写入器已关闭" }
+            if (cancelFlag?.get() == true) throw InterruptedIOException("用户取消")
+            var offset = 0
+            while (offset < data.size) {
+                val count = minOf(buffer.size - buffered, data.size - offset)
+                data.copyInto(buffer, buffered, offset, offset + count)
+                buffered += count
+                offset += count
+                if (buffered == buffer.size) flushChunk()
+            }
+        }
+
+        fun finish() {
+            if (closed) return
+            if (buffered > 0) flushChunk()
+            closed = true
+            out.close()
+            onProgress(written)
+        }
+
+        fun abort() {
+            if (!closed) {
+                closed = true
+                out.close()
+            }
+            dst.delete()
+        }
+
+        private fun flushChunk() {
+            if (cancelFlag?.get() == true) throw InterruptedIOException("用户取消")
+            val plain = if (buffered == buffer.size) buffer else buffer.copyOf(buffered)
+            val encrypted = AesGcm256.encrypt(dek, plain, aad)
+            var cipher = encrypted.ciphertext
+            if (customEncryption && cipher.size >= 1024) cipher = NailObfuscation.insert(cipher, encrypted.iv, dek)
+            out.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(encrypted.iv.size + cipher.size).array())
+            out.write(encrypted.iv)
+            out.write(cipher)
+            written += buffered
+            buffered = 0
+            onProgress(written)
+        }
+    }
+
     fun encrypt(
         src: File,
         dst: File,

@@ -339,7 +339,10 @@ fun FileManagerScreen(
     var copyMoveConfirmTargetDir by remember { mutableStateOf("") }
     var copyMoveConfirmTargetVaultId by remember { mutableStateOf<Int?>(null) }
     var copyMoveConfirmTargetVaultSubDir by remember { mutableStateOf("") }
+    var copyMoveConfirmTargetVaultSession by remember { mutableStateOf<com.whmdg.mczj.tools.encryption.services.VaultSession?>(null) }
+    var copyMoveConfirmTargetPanel by remember { mutableStateOf(PanelId.LEFT) }
     var showVaultExtractPasswordDialog by remember { mutableStateOf(false) }
+    var archiveExtractionResult by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showFileOpProgress by remember { mutableStateOf(false) }
     var recycleBinEnabled by remember { mutableStateOf(true) }
     var showForceDeleteDialog by remember { mutableStateOf(false) }
@@ -391,6 +394,7 @@ fun FileManagerScreen(
     var extractProgress by remember { mutableFloatStateOf(0f) }
     var extractCurrentFile by remember { mutableIntStateOf(0) }
     var extractTotalFiles by remember { mutableIntStateOf(0) }
+    var extractStage by remember { mutableStateOf("正在准备...") }
     var extractBytesProcessed by remember { mutableStateOf(0L) }
     var extractTotalBytes by remember { mutableStateOf(0L) }
     var extractError by remember { mutableStateOf<Throwable?>(null) }
@@ -400,6 +404,42 @@ fun FileManagerScreen(
 
 
     val isArchiveSource = vm.currentPanel.path is PanelPath.Archive
+
+    fun startVaultArchiveExtraction(session: com.whmdg.mczj.tools.encryption.services.VaultSession, disposeWhenDone: Boolean) {
+        val archivePath = (vm.currentPanel.path as? PanelPath.Archive)?.archivePath
+        if (archivePath == null) {
+            if (disposeWhenDone) session.dispose()
+            archiveExtractionResult = "解压失败" to "压缩包会话已失效"
+            return
+        }
+        showExtractProgress = true
+        extractProgress = 0f
+        extractCurrentFile = 0
+        extractTotalFiles = 0
+        extractStage = "正在准备解压..."
+        vm.extractFromArchive(
+            archivePath = archivePath,
+            entryPaths = copyMoveConfirmSourcePaths,
+            target = ArchiveExtractionTarget.Vault(
+                session = session,
+                subDir = copyMoveConfirmTargetVaultSubDir,
+                targetPanel = copyMoveConfirmTargetPanel,
+                disposeSessionWhenDone = disposeWhenDone
+            ),
+            onProgress = { current, total, fileName ->
+                extractCurrentFile = current
+                extractTotalFiles = total
+                extractStage = "正在解压并加密：$fileName"
+                extractProgress = (current - 1).coerceAtLeast(0).toFloat() / total.coerceAtLeast(1)
+            },
+            onComplete = { successCount, totalCount, error ->
+                showExtractProgress = false
+                val title = if (successCount == totalCount && totalCount > 0) "解压并加密完成" else "解压并加密结果"
+                val detail = "成功：$successCount/$totalCount" + if (error.isNullOrBlank()) "" else "\n失败原因：$error"
+                archiveExtractionResult = title to detail
+            }
+        )
+    }
 
     // 文件操作进度（从 ViewModel StateFlow 收集）
     val fileOpProgress by vm.fileOpProgress.collectAsState()
@@ -2347,9 +2387,12 @@ fun FileManagerScreen(
                                                 if (isToRight) vm.panels.right.vaultSession else vm.panels.left.vaultSession
                                             } else null
                                             copyMoveConfirmTargetVaultId = targetSession?.record?.id
+                                            copyMoveConfirmTargetVaultSession = targetSession
+                                            copyMoveConfirmTargetPanel = if (isToRight) PanelId.RIGHT else PanelId.LEFT
                                             copyMoveConfirmTargetVaultSubDir = targetVaultPath
                                                 ?.path
-                                                ?.removePrefix("${targetVaultPath.vaultDir}/")
+                                                ?.removePrefix(targetVaultPath.vaultDir)
+                                                ?.trimStart('/')
                                                 .orEmpty()
                                             showCopyMoveConfirmDialog = true
                                         }
@@ -3123,13 +3166,16 @@ fun FileManagerScreen(
                 // ── 压缩包内复制 → 解压到目标目录 ──
                 val archivePath = (vm.currentPanel.path as PanelPath.Archive).archivePath
                 if (copyMoveConfirmTargetVaultId != null) {
-                    showVaultExtractPasswordDialog = true
+                    val openSession = copyMoveConfirmTargetVaultSession
+                    if (openSession != null) startVaultArchiveExtraction(openSession, disposeWhenDone = false)
+                    else showVaultExtractPasswordDialog = true
                     return@CopyMoveConfirmDialog
                 }
                 showExtractProgress = true
                 extractProgress = 0f
                 extractCurrentFile = 0
                 extractTotalFiles = 0
+                extractStage = "正在准备解压..."
                 vm.extractFromArchive(
                     archivePath = archivePath,
                     entryPaths = copyMoveConfirmSourcePaths,
@@ -3137,17 +3183,14 @@ fun FileManagerScreen(
                     onProgress = { current, total, fileName ->
                         extractCurrentFile = current
                         extractTotalFiles = total
+                        extractStage = "正在解压：$fileName"
                         extractProgress = (current - 1).coerceAtLeast(0).toFloat() / total.coerceAtLeast(1)
                     },
                     onComplete = { successCount, totalCount, error ->
                         showExtractProgress = false
-                        if (successCount == totalCount && totalCount > 0) {
-                            Toast.makeText(context, "已解压 $totalCount 个文件", Toast.LENGTH_SHORT).show()
-                        } else if (successCount > 0) {
-                            Toast.makeText(context, "部分解压成功 ($successCount/$totalCount): $error", Toast.LENGTH_LONG).show()
-                        } else if (totalCount > 0) {
-                            Toast.makeText(context, "解压失败: $error", Toast.LENGTH_LONG).show()
-                        }
+                        val title = if (successCount == totalCount && totalCount > 0) "解压完成" else "解压结果"
+                        val detail = "成功：$successCount/$totalCount" + if (error.isNullOrBlank()) "" else "\n失败原因：$error"
+                        archiveExtractionResult = title to detail
                     }
                 )
             } else {
@@ -3192,35 +3235,10 @@ fun FileManagerScreen(
                 val session = try {
                     withContext(Dispatchers.IO) { service.open(vaultId, password) }
                 } catch (_: Exception) {
-                    Toast.makeText(context, "保险箱密码错误，已取消本次解压", Toast.LENGTH_LONG).show()
+                    archiveExtractionResult = "解压已取消" to "保险箱密码错误"
                     null
                 } ?: return@PasswordDialog false
-
-                val archivePath = (vm.currentPanel.path as? PanelPath.Archive)?.archivePath
-                if (archivePath == null) {
-                    session.dispose()
-                    return@PasswordDialog false
-                }
-                showExtractProgress = true
-                extractProgress = 0f
-                extractCurrentFile = 0
-                extractTotalFiles = 0
-                vm.extractFromArchive(
-                    archivePath = archivePath,
-                    entryPaths = copyMoveConfirmSourcePaths,
-                    target = ArchiveExtractionTarget.Vault(session, copyMoveConfirmTargetVaultSubDir),
-                    onProgress = { current, total, fileName ->
-                        extractCurrentFile = current
-                        extractTotalFiles = total
-                        extractProgress = (current - 1).coerceAtLeast(0).toFloat() / total.coerceAtLeast(1)
-                    },
-                    onComplete = { successCount, totalCount, error ->
-                        showExtractProgress = false
-                        val message = if (successCount == totalCount) "已解压并加密 $totalCount 个文件"
-                        else "解压并加密完成：$successCount/$totalCount，$error"
-                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                    }
-                )
+                startVaultArchiveExtraction(session, disposeWhenDone = true)
                 true
             },
             dismissOnFailure = true
@@ -5098,7 +5116,7 @@ fun FileManagerScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         Text(
-                            text = "正在解压...",
+                            text = extractStage,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -5198,6 +5216,15 @@ fun FileManagerScreen(
         ErrorDialog(
             error = extractError,
             onDismiss = { extractError = null }
+        )
+    }
+
+    archiveExtractionResult?.let { (title, detail) ->
+        AlertDialog(
+            onDismissRequest = { archiveExtractionResult = null },
+            title = { Text(title) },
+            text = { Text(detail) },
+            confirmButton = { TextButton(onClick = { archiveExtractionResult = null }) { Text("确定") } }
         )
     }
 

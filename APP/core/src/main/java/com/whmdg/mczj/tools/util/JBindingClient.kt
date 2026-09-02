@@ -23,7 +23,9 @@ import net.sf.sevenzipjbinding.impl.OutItemFactory
 import net.sf.sevenzipjbinding.impl.RandomAccessFileInStream
 import net.sf.sevenzipjbinding.impl.RandomAccessFileOutStream
 import java.io.File
+import java.io.InterruptedIOException
 import java.io.RandomAccessFile
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 7-Zip JBinding 客户端 API。
@@ -132,7 +134,8 @@ object JBindingClient {
         archivePath: String,
         entryPath: String,
         destFile: File,
-        password: String = ""
+        password: String = "",
+        cancelFlag: AtomicBoolean? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             withInArchive(archivePath, password) { inArchive ->
@@ -153,6 +156,7 @@ object JBindingClient {
                     inArchive.extract(intArrayOf(targetIndex), false, object : IArchiveExtractCallback {
                         override fun getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream {
                             return ISequentialOutStream { data ->
+                                if (cancelFlag?.get() == true) throw InterruptedIOException("用户取消")
                                 out.write(data)
                                 data.size
                             }
@@ -169,6 +173,37 @@ object JBindingClient {
                 } finally {
                     out.close()
                 }
+            }
+            ""
+        }
+    }
+
+    /** 将单个压缩包条目直接写入调用方提供的字节接收器，不创建明文临时文件。 */
+    suspend fun extractSingleFileToSink(
+        archivePath: String,
+        entryPath: String,
+        password: String = "",
+        onBytes: (ByteArray) -> Unit
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            withInArchive(archivePath, password) { inArchive ->
+                val targetIndex = (0 until inArchive.numberOfItems).firstOrNull { index ->
+                    val path = inArchive.getStringProperty(index, PropID.PATH) ?: return@firstOrNull false
+                    path == entryPath || path.replace('\\', '/') == entryPath.replace('\\', '/')
+                } ?: throw RuntimeException("文件不存在: $entryPath")
+                inArchive.extract(intArrayOf(targetIndex), false, object : IArchiveExtractCallback {
+                    override fun getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream =
+                        ISequentialOutStream { data ->
+                            if (extractAskMode == ExtractAskMode.EXTRACT && data.isNotEmpty()) onBytes(data)
+                            data.size
+                        }
+                    override fun prepareOperation(extractAskMode: ExtractAskMode) {}
+                    override fun setOperationResult(result: ExtractOperationResult) {
+                        if (result != ExtractOperationResult.OK) throw SevenZipException("提取失败: $result")
+                    }
+                    override fun setTotal(total: Long) {}
+                    override fun setCompleted(complete: Long) {}
+                })
             }
             ""
         }

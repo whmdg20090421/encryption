@@ -26,6 +26,7 @@ import com.whmdg.mczj.tools.security.ShellException
 import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.ArchiveBrowser
+import com.whmdg.mczj.tools.util.JBindingClient
 import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.util.CompressPreviewCache
 import com.whmdg.mczj.tools.util.ShellEscape
@@ -88,7 +89,12 @@ data class FilePropertyData(
 /** 压缩包解压后的目标，由统一入口决定后续处理方式。 */
 sealed class ArchiveExtractionTarget {
     data class Directory(val outputDir: String) : ArchiveExtractionTarget()
-    data class Vault(val session: VaultSession, val subDir: String) : ArchiveExtractionTarget()
+    data class Vault(
+        val session: VaultSession,
+        val subDir: String,
+        val targetPanel: PanelId,
+        val disposeSessionWhenDone: Boolean
+    ) : ArchiveExtractionTarget()
 }
 
 /** 面板标识（仅 Coordinator 层使用，不传入 Controller） */
@@ -3885,7 +3891,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 archivePath, entryPaths, target.outputDir, onProgress, onComplete
             )
             is ArchiveExtractionTarget.Vault -> extractFromArchiveToVault(
-                archivePath, entryPaths, target.session, target.subDir, onProgress, onComplete
+                archivePath, entryPaths, target, onProgress, onComplete
             )
         }
     }
@@ -3937,21 +3943,29 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (ctrl.extractCancelFlag.get()) break
                 val fileName = filePath.substringAfterLast('/')
                 withContext(Dispatchers.Main) { onProgress(idx + 1, total, fileName) }
-                val destFile = File(outputDir, filePath)
+                val destFile = safeArchiveOutput(File(outputDir), filePath)
+                if (destFile == null) {
+                    lastError = "压缩包包含非法路径: $filePath"
+                    break
+                }
                 val result = ArchiveBrowser.extractSingleFile(
                     context = ctx,
                     archivePath = archivePath,
                     entryPath = filePath,
                     destFile = destFile,
                     password = password,
-                    permissionLevel = permLevel
+                    permissionLevel = permLevel,
+                    cancelFlag = ctrl.extractCancelFlag
                 )
                 if (result.success) {
                     successCount++
                 } else {
+                    destFile.delete()
                     lastError = result.errorMessage
+                    break
                 }
             }
+            if (ctrl.extractCancelFlag.get() && lastError == null) lastError = "用户取消"
             if (password.isNotEmpty() && successCount > 0) {
                 archivePasswordCache[archivePath] = password
             }
@@ -3969,8 +3983,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun extractFromArchiveToVault(
         archivePath: String,
         entryPaths: List<String>,
-        targetSession: VaultSession,
-        targetSubDir: String,
+        target: ArchiveExtractionTarget.Vault,
         onProgress: (current: Int, total: Int, fileName: String) -> Unit,
         onComplete: (successCount: Int, totalCount: Int, error: String?) -> Unit
     ) {
@@ -3981,7 +3994,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val session = currentPanel.archiveSession
             if (session == null) {
                 withContext(Dispatchers.Main) { onComplete(0, 0, "压缩包会话已失效") }
-                targetSession.dispose()
+                if (target.disposeSessionWhenDone) target.session.dispose()
                 return@launch
             }
 
@@ -3995,65 +4008,72 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
             if (allFiles.isEmpty()) {
                 withContext(Dispatchers.Main) { onComplete(0, 0, "未找到可提取的文件") }
-                targetSession.dispose()
+                if (target.disposeSessionWhenDone) target.session.dispose()
                 return@launch
             }
 
-            val taskDir = File(
-                AppDataPaths.archiveExtractionTemp(context),
-                "archive_${System.currentTimeMillis()}_${archivePath.hashCode()}"
-            )
             var successCount = 0
             var lastError: String? = null
             try {
                 val password = archivePasswordCache[archivePath] ?: ""
                 for ((index, entryPath) in allFiles.withIndex()) {
                     if (ctrl.extractCancelFlag.get()) break
-                    val relativeFile = safeArchiveOutput(taskDir, entryPath)
-                    if (relativeFile == null) {
+                    if (safeArchiveRelativePath(entryPath) == null) {
                         lastError = "压缩包包含非法路径: $entryPath"
-                        continue
+                        break
                     }
                     withContext(Dispatchers.Main) {
                         onProgress(index + 1, allFiles.size, entryPath.substringAfterLast('/'))
                     }
-                    val extractResult = ArchiveBrowser.extractSingleFile(
-                        context = context,
-                        archivePath = archivePath,
-                        entryPath = entryPath,
-                        destFile = relativeFile,
-                        password = password,
-                        permissionLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
-                    )
-                    if (!extractResult.success) {
-                        lastError = extractResult.errorMessage
-                        continue
-                    }
-
-                    val relativeParent = relativeFile.relativeTo(taskDir).parent?.replace('\\', '/') ?: ""
-                    val vaultSubDir = listOf(targetSubDir.trim('/'), relativeParent)
+                    val relativeParent = entryPath.substringBeforeLast('/', "").trim('/')
+                    val vaultSubDir = listOf(target.subDir.trim('/'), relativeParent)
                         .filter { it.isNotEmpty() }
                         .joinToString("/")
-                    CryptoService.encryptIntoVault(context, targetSession, relativeFile, vaultSubDir, cancelFlag = ctrl.extractCancelFlag)
-                    successCount++
+                    val writer = try {
+                        CryptoService.openStreamIntoVault(
+                            context = context,
+                            session = target.session,
+                            sourceName = entryPath.substringAfterLast('/'),
+                            subDir = vaultSubDir,
+                            cancelFlag = ctrl.extractCancelFlag
+                        )
+                    } catch (e: Exception) {
+                        lastError = e.message ?: e.javaClass.simpleName
+                        break
+                    }
+                    try {
+                        JBindingClient.extractSingleFileToSink(archivePath, entryPath, password, writer.sink::write).getOrThrow()
+                        writer.finish()
+                        successCount++
+                    } catch (e: Exception) {
+                        writer.abort()
+                        lastError = e.message ?: e.javaClass.simpleName
+                        break
+                    }
                 }
+                if (ctrl.extractCancelFlag.get() && lastError == null) lastError = "用户取消"
             } catch (e: Exception) {
                 lastError = e.message ?: e.javaClass.simpleName
             } finally {
-                taskDir.deleteRecursively()
-                targetSession.dispose()
+                if (target.disposeSessionWhenDone) target.session.dispose()
             }
             withContext(Dispatchers.Main) {
-                refreshAfterExtract(targetSession.vaultDir.absolutePath)
+                refreshPanel(panels[target.targetPanel].state)
                 onComplete(successCount, allFiles.size, lastError)
             }
         }
     }
 
-    /** 防止压缩包中的 ../ 路径逃出受管临时目录。 */
+    /** 拒绝会逃出压缩包目录树的条目路径。 */
+    private fun safeArchiveRelativePath(entryPath: String): String? {
+        val normalized = entryPath.replace('\\', '/').trimStart('/')
+        return normalized.takeIf { it.isNotEmpty() && it.split('/').none { part -> part == ".." || part.isEmpty() } }
+    }
+
     private fun safeArchiveOutput(root: File, entryPath: String): File? {
         val canonicalRoot = root.canonicalFile
-        val output = File(canonicalRoot, entryPath).canonicalFile
+        val relative = safeArchiveRelativePath(entryPath) ?: return null
+        val output = File(canonicalRoot, relative).canonicalFile
         return output.takeIf { it.path.startsWith("${canonicalRoot.path}${File.separator}") }
     }
 
