@@ -1072,7 +1072,9 @@ class FilePaneController(
     fun navigateTo(path: String, onComplete: ((String) -> Unit)? = null, onPathChanged: (() -> Unit)? = null) {
         val panel = state
         if (panel.isInRecycleBin) panel.isInRecycleBin = false
-        val panelPath = PanelPath.FileSystem(path, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
+        val vaultDir = (panel.path as? PanelPath.Vault)?.vaultDir
+        val panelPath: PanelPath = if (vaultDir != null) PanelPath.Vault(path, vaultDir)
+        else PanelPath.FileSystem(path, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
         if (panel.path == panelPath) return
         panel.navState = panel.navState.navigate(panelPath)
         loadDirectory(path, panel = panel, onComplete = onComplete, panelPath = panelPath)
@@ -3060,13 +3062,16 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val displayPath = entry.path
         val panel = currentPanel
 
+        val vaultDir = (panel.path as? PanelPath.Vault)?.vaultDir
+        val navPanelPath: PanelPath? = if (vaultDir != null) PanelPath.Vault(displayPath, vaultDir) else null
+
         if (hasShellEngine) {
             loadDirectory(displayPath, panel = panel, onComplete = { path ->
                 addHistory(entry.name, path, true)
                 if (scrollToIndex != 0 || scrollToOffset != 0) {
                     panel.pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
                 }
-            })
+            }, panelPath = navPanelPath ?: PanelPath.FileSystem(displayPath))
         } else {
             val testDir = File(displayPath)
             val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
@@ -3076,7 +3081,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     if (scrollToIndex != 0 || scrollToOffset != 0) {
                         panel.pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
                     }
-                })
+                }, panelPath = navPanelPath ?: PanelPath.FileSystem(displayPath))
             } else if (!testDir.exists()) {
                 panel.loadError = RuntimeException("文件夹不存在: ${entry.name}\n路径: $displayPath")
             } else {

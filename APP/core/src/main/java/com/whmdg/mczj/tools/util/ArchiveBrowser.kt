@@ -735,11 +735,6 @@ object ArchiveBrowser {
         try {
             destFile.parentFile?.mkdirs()
 
-            // zip 格式：用 java.util.zip.ZipFile 直接提取，避免编码匹配问题
-            if (archivePath.endsWith(".zip", ignoreCase = true) && password.isEmpty()) {
-                return@withContext extractFromZip(archivePath, entryPath, destFile)
-            }
-
             Log.d(TAG, "提取单文件: $entryPath")
             val result = JBindingClient.extractSingleFile(archivePath, entryPath, destFile, password)
             result.fold(
