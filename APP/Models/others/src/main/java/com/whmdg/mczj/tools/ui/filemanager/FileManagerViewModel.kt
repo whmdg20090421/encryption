@@ -3530,34 +3530,18 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     // ── 压缩包内文件预览 ──
     fun openArchiveFile(context: Context, entry: FileEntry) {
         val session = currentPanel.archiveSession ?: return
-        val password = archivePasswordCache[session.archivePath] ?: ""
-        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
-        val imageEntries = session.currentEntries.filter {
-            !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions
-        }
-        val cacheRoot = File(context.cacheDir, "archive_cache/${session.archiveName}")
-        val imagePaths = imageEntries.map { File(cacheRoot, it.path).absolutePath }
-        val imageEntryPaths = imageEntries.map { it.path }
-        val startIndex = imageEntries.indexOfFirst { it.path == entry.path }.coerceAtLeast(0)
-
-        // 构建缓存路径：cache/archive_cache/{archiveName}/{internalPath}
         val cacheDir = File(context.cacheDir, "archive_cache")
         val destFile = File(cacheDir, "${session.archiveName}/${entry.path}")
 
-        // 缓存已存在，直接打开
         if (destFile.exists()) {
-            val newEntry = entry.copy(path = destFile.absolutePath)
-            openFile(context, newEntry, overrideImagePaths = imagePaths, archivePath = session.archivePath,
-                archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
-                archivePassword = password, archiveStartIndex = startIndex,
-                archivePermissionLevel = permissionLevel)
+            openFile(context, entry.copy(path = destFile.absolutePath))
             return
         }
 
         // 预览缓存就是本地目录目标，必须经过与复制/解压相同的密码门控。
         extractFromArchive(
             archivePath = session.archivePath,
-            entryPaths = imageEntryPaths,
+            entryPaths = listOf(entry.path),
             target = ArchiveExtractionTarget.Directory(cacheDir.absolutePath),
             onPasswordRequired = {
                 currentPanel.archivePasswordRequest = FileEntry(
@@ -3571,11 +3555,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             onProgress = { _, _, _ -> },
             onComplete = { successCount, _, error ->
                 if (successCount > 0 && destFile.exists()) {
-                    val newEntry = entry.copy(path = destFile.absolutePath)
-                    openFile(context, newEntry, overrideImagePaths = imagePaths, archivePath = session.archivePath,
-                        archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
-                        archivePassword = password, archiveStartIndex = startIndex,
-                        archivePermissionLevel = permissionLevel)
+                    openFile(context, entry.copy(path = destFile.absolutePath))
                 } else {
                     currentPanel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
                         title = "预览解压失败",
@@ -3622,24 +3602,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         if (ArchiveBrowser.isArchiveFile(entry.name)) {
-            // 7z 格式：检测加密状态，无密码则正常浏览，有密码/损坏则弹信息弹窗
-            if (entry.name.endsWith(".7z", ignoreCase = true)) {
-                val pending = entry
-                viewModelScope.launch(Dispatchers.IO) {
-                    val info = ArchiveBrowser.analyze7z(getApplication(), pending.path, permissionLevel)
-                    withContext(Dispatchers.Main) {
-                        sevenZipAnalyzing = false
-                        when {
-                            info.isCorrupted -> sevenZipInfo = info
-                            info.headerEncrypted -> currentPanel.archivePasswordRequest = pending
-                            else -> openArchive(pending)
-                        }
-                    }
-                }
-                sevenZipAnalyzing = true
-                sevenZipInfo = null
-                return
-            }
             if (isDebug) {
                 DiagnosticLog.log("OpenFile", "压缩包文件（Debug 模式），解析信息: ${entry.name}")
                 debugOpenArchive(entry)
@@ -4066,48 +4028,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 压缩包浏览 ──
 
-    /** 7z 整体解压到缓存目录 */
-    private suspend fun extract7zFull(
-        context: Context,
-        entry: FileEntry,
-        session: ArchiveBrowser.ArchiveSession,
-        password: String,
-        permLevel: String
-    ) {
-        val totalBytes = flattenFileSizes(session.root).sum()
-        val outputDir = CompressPreviewCache.getArchiveCacheDir(context, entry.name)
-
-        withContext(Dispatchers.Main) {
-            sevenZipExtracting = true
-            sevenZipExtractProgress = 0f
-            sevenZipExtractTotalBytes = totalBytes
-            sevenZipExtractBytesProcessed = 0L
-        }
-
-        kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
-            extractFromArchive(
-                archivePath = entry.path,
-                entryPaths = session.currentEntries.map { it.path },
-                target = ArchiveExtractionTarget.Directory(outputDir.absolutePath),
-                sourceSession = session,
-                archivePassword = password,
-                onProgress = { current, total, _ ->
-                    sevenZipExtractProgress = current.toFloat() / total.coerceAtLeast(1)
-                },
-                onComplete = { success, total, error ->
-                    sevenZipExtracting = false
-                    sevenZipExtractProgress = 0f
-                    if (success == total && total > 0) {
-                        CompressPreviewCache.updateRecord(context, entry.path, File(entry.path).lastModified(), File(entry.path).length())
-                    }
-                    if (cont.isActive) cont.resume(success == total && total > 0) {}
-                }
-            )
-            cont.invokeOnCancellation { cancelExtract() }
-        }
-    }
-
-
     /** 密码弹窗验证回调：带密码重试打开压缩包 */
     /** 带密码重试打开压缩包（挂起函数，供密码弹窗 onVerify 使用）。返回 true=成功 */
     suspend fun openArchiveWithPassword(entry: FileEntry, password: String): Boolean {
@@ -4130,10 +4050,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             result.fold(
                 onSuccess = { session ->
                     archivePasswordCache[entry.path] = password
-                    // 7z 需要整体解压（不支持单文件提取）
-                    if (entry.name.endsWith(".7z", ignoreCase = true)) {
-                        extract7zFull(context, entry, session, password, permLevel)
-                    }
                     withContext(Dispatchers.Main) {
                         enterArchiveMode(session)
                         panel.archivePasswordRequest = null

@@ -22,7 +22,7 @@ object ArchiveBrowser {
     /** 支持的压缩包扩展名 */
     private val ARCHIVE_EXTENSIONS = setOf(
         "zip", "7z", "rar", "tar", "gz", "bz2", "xz",
-        "lz4", "zst", "lzma", "cab", "iso", "dmg"
+        "lz4", "zst", "lzma", "cab", "iso", "dmg", "ar", "cpio", "wim", "xar"
     )
 
     /** 判断文件名是否为压缩包 */
