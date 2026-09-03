@@ -5086,11 +5086,35 @@ fun FileManagerScreen(
                             textStyle = MaterialTheme.typography.bodyMedium
                         )
                         if (extractPasswordError != null) {
-                            Text(
-                                text = extractPasswordError!!,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
+                            val errorLines = extractPasswordError!!.lines()
+                            val displayLines = errorLines.take(2)
+                            val hasMore = errorLines.size > 2
+
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    text = displayLines.joinToString("\n"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                if (hasMore) {
+                                    val context = LocalContext.current
+                                    TextButton(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                            val clip = android.content.ClipData.newPlainText("错误信息", extractPasswordError)
+                                            clipboard.setPrimaryClip(clip)
+                                            android.widget.Toast.makeText(context, "完整错误信息已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                                        },
+                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = "查看完整错误信息（点击复制）",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         Row(
