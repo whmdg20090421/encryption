@@ -210,13 +210,18 @@ object JBindingClient {
                     throw sinkFailure ?: e
                 }
                 if (result != ExtractOperationResult.OK) {
-                    val errorMsg = when (result) {
-                        ExtractOperationResult.DATA_ERROR -> {
-                            if (password.isNotEmpty()) "密码错误或数据损坏: $result"
-                            else "需要密码或数据损坏: $result"
-                        }
-                        ExtractOperationResult.WRONG_PASSWORD -> "密码错误: $result"
-                        else -> "提取失败: $result"
+                    // 根据结果类型和是否提供密码，推断可能的错误原因
+                    val resultStr = result.toString()
+                    val errorMsg = if (password.isNotEmpty() && (
+                        resultStr.contains("DATA", ignoreCase = true) ||
+                        resultStr.contains("PASSWORD", ignoreCase = true) ||
+                        resultStr.contains("CRC", ignoreCase = true)
+                    )) {
+                        "密码错误或数据损坏: $result"
+                    } else if (password.isEmpty() && resultStr.contains("DATA", ignoreCase = true)) {
+                        "需要密码或数据损坏: $result"
+                    } else {
+                        "提取失败: $result"
                     }
                     Log.e(TAG, "extractSingleFileToSink 失败: archive=${File(archivePath).name}, entry=$entryPath, result=$result, hasPassword=${password.isNotEmpty()}, passwordLength=${password.length}")
                     throw SevenZipException(errorMsg)
