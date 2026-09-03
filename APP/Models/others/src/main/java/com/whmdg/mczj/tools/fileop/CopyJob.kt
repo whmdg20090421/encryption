@@ -380,13 +380,16 @@ class CopyJob(
         if (accumulator.isEmpty()) return
         val saveDir = AppDataPaths.fileManager(context)
         val db = FolderSizeDb.load(saveDir)
+        val updatedSizes = mutableMapOf<String, Long>()
         for ((path, delta) in accumulator) {
             val existing = db.get(path)?.size ?: 0L
-            db.put(path, FolderSizeInfo(existing + delta, System.currentTimeMillis()))
+            val newSize = existing + delta
+            db.put(path, FolderSizeInfo(newSize, System.currentTimeMillis()))
+            updatedSizes[path] = newSize
         }
         db.save(saveDir)
-        // 通知 UI 局部刷新 FolderSizeDb
-        manager.notifyFolderSizeChanged(accumulator)
+        // 通知 UI 局部刷新 FolderSizeDb（传递更新后的完整大小，而非 delta）
+        manager.notifyFolderSizeChanged(updatedSizes)
     }
 
     // ═══════════════════════════════════════════════════════
