@@ -3711,7 +3711,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         entries: List<FileEntry>,
         outputDir: String,
         password: String,
-        onPasswordRequired: () -> Unit,
+        onPasswordRequired: (String?) -> Unit,
         onProgress: (CompressService.ProgressInfo) -> Unit,
         onComplete: (Boolean, String?, String?) -> Unit
     ) {
@@ -3734,7 +3734,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     when (passwordCheckResult) {
                         is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted,
                         is ArchiveBrowser.PasswordCheckResult.ContentEncrypted -> {
-                            withContext(Dispatchers.Main) { onPasswordRequired() }
+                            withContext(Dispatchers.Main) { onPasswordRequired(null) }
                             return@launch
                         }
                         is ArchiveBrowser.PasswordCheckResult.Error -> {
@@ -3782,7 +3782,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         target = ArchiveExtractionTarget.Directory(singleOutputDir),
                         sourceSession = session,
                         archivePassword = effectivePassword,
-                        onPasswordRequired = { onPasswordRequired() },
+                        onPasswordRequired = onPasswordRequired,
                         onProgress = { current, total, fileName ->
                             onProgress(
                                 CompressService.ProgressInfo(
@@ -3879,8 +3879,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             val allFiles = mutableListOf<String>()
-            for (entryPath in entryPaths) {
+            for (entryPathRaw in entryPaths) {
                 if (ctrl.extractCancelFlag.get()) break
+                val entryPath = normalizeArchiveEntryPath(entryPathRaw) ?: continue
                 if (entryPath.isEmpty()) continue
                 val node = findArchiveNode(session.root, entryPath, archivePath)
                 if (node?.isDirectory == true) collectArchiveFiles(node, entryPath, allFiles) else allFiles.add(entryPath)
@@ -4036,13 +4037,20 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val fullVirtualPath = "$archivePath/$internalPath"
         val relativePath = fullVirtualPath.removePrefix(archivePath).trimStart('/')
         if (relativePath.isBlank()) return root
-        val parts = relativePath.split('/').filter { it.isNotEmpty() }
+        val parts = normalizeArchiveEntryPath(relativePath)?.split('/') ?: return null
         var current = root
-        for (part in parts) {
-            val child = current.children.find { it.name == part && it.isDirectory } ?: return null
+        for ((index, part) in parts.withIndex()) {
+            val child = current.children.find { it.name == part } ?: return null
+            if (index < parts.lastIndex && !child.isDirectory) return null
             current = child
         }
         return current
+    }
+
+    /** 压缩包条目始终使用不带前导斜杠的正斜杠相对路径。 */
+    private fun normalizeArchiveEntryPath(path: String): String? {
+        val normalized = path.replace('\\', '/').trimStart('/')
+        return normalized.takeIf { it.isNotEmpty() && it.split('/').none { part -> part.isEmpty() || part == "." || part == ".." } }
     }
 
     /** 递归收集目录下所有文件的相对路径 */

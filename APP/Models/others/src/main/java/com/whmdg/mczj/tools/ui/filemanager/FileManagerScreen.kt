@@ -5008,10 +5008,10 @@ fun FileManagerScreen(
                                         entries = entries,
                                         outputDir = outputDir,
                                         password = "",
-                                        onPasswordRequired = {
+                                        onPasswordRequired = { error ->
                                             showExtractProgress = false
                                             extractPasswordInput = ""
-                                            extractPasswordError = null
+                                            extractPasswordError = error
                                             showExtractPasswordDialog = true
                                         },
                                         onProgress = { info ->
@@ -5119,9 +5119,9 @@ fun FileManagerScreen(
                                     entries = extractTargetEntries,
                                     outputDir = extractOutputPath,
                                     password = password,
-                                    onPasswordRequired = {
+                                    onPasswordRequired = { error ->
                                         showExtractProgress = false
-                                        extractPasswordError = "密码错误"
+                                        extractPasswordError = error
                                         showExtractPasswordDialog = true
                                     },
                                     onProgress = { info ->
