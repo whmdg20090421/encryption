@@ -153,7 +153,7 @@ object JBindingClient {
                 destFile.parentFile?.mkdirs()
                 val out = java.io.FileOutputStream(destFile)
                 try {
-                    inArchive.extract(intArrayOf(targetIndex), false, object : IArchiveExtractCallback {
+                    inArchive.extract(intArrayOf(targetIndex), false, object : IArchiveExtractCallback, ICryptoGetTextPassword {
                         override fun getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream {
                             return ISequentialOutStream { data ->
                                 if (cancelFlag?.get() == true) throw InterruptedIOException("用户取消")
@@ -169,6 +169,9 @@ object JBindingClient {
                         }
                         override fun setTotal(total: Long) {}
                         override fun setCompleted(complete: Long) {}
+
+                        // 提供密码（ZIP/RAR/TAR/7z 内容加密需要）
+                        override fun cryptoGetTextPassword(): String = password
                     })
                 } finally {
                     out.close()
@@ -192,23 +195,41 @@ object JBindingClient {
                     val path = inArchive.getStringProperty(index, PropID.PATH) ?: return@firstOrNull false
                     path == entryPath || path.replace('\\', '/') == entryPath.replace('\\', '/')
                 } ?: throw RuntimeException("文件不存在: $entryPath")
-                // extractSlow 是 JBinding 的单条目 API。相比 extract(indices, callback)，
-                // 它对加密/固实 7z 会返回具体条目状态，而不是通用 S_FALSE。
+
                 var sinkFailure: Exception? = null
-                val result = try {
-                    inArchive.extractSlow(targetIndex, ISequentialOutStream { data ->
-                        try {
-                            if (data.isNotEmpty()) onBytes(data)
-                        } catch (e: Exception) {
-                            sinkFailure = e
-                            throw e
-                        }
-                        data.size
-                    })
-                } catch (e: Exception) {
-                    Log.e(TAG, "extractSingleFileToSink 异常: archive=${File(archivePath).name}, entry=$entryPath", e)
-                    throw sinkFailure ?: e
-                }
+                var extractResult: ExtractOperationResult? = null
+
+                // 使用 extract + callback 提供密码（兼容 ZIP/RAR/TAR/7z 内容加密）
+                inArchive.extract(intArrayOf(targetIndex), false, object : IArchiveExtractCallback, ICryptoGetTextPassword {
+                    override fun getStream(index: Int, extractAskMode: ExtractAskMode): ISequentialOutStream? {
+                        return if (extractAskMode == ExtractAskMode.EXTRACT) {
+                            ISequentialOutStream { data ->
+                                try {
+                                    if (data.isNotEmpty()) onBytes(data)
+                                } catch (e: Exception) {
+                                    sinkFailure = e
+                                    throw e
+                                }
+                                data.size
+                            }
+                        } else null
+                    }
+
+                    override fun prepareOperation(extractAskMode: ExtractAskMode) {}
+
+                    override fun setOperationResult(result: ExtractOperationResult) {
+                        extractResult = result
+                    }
+
+                    override fun setTotal(total: Long) {}
+                    override fun setCompleted(complete: Long) {}
+
+                    // 提供密码（ZIP/RAR/TAR/7z 内容加密需要）
+                    override fun cryptoGetTextPassword(): String = password
+                })
+
+                val result = extractResult ?: throw RuntimeException("未返回解压结果")
+
                 if (result != ExtractOperationResult.OK) {
                     // 根据结果类型和是否提供密码，推断可能的错误原因
                     val resultStr = result.toString()
@@ -226,6 +247,10 @@ object JBindingClient {
                     Log.e(TAG, "extractSingleFileToSink 失败: archive=${File(archivePath).name}, entry=$entryPath, result=$result, hasPassword=${password.isNotEmpty()}, passwordLength=${password.length}")
                     throw SevenZipException(errorMsg)
                 }
+
+                if (sinkFailure != null) {
+                    throw sinkFailure!!
+                }
             }
             Log.d(TAG, "extractSingleFileToSink 成功: archive=${File(archivePath).name}, entry=$entryPath")
             ""
@@ -241,7 +266,7 @@ object JBindingClient {
             withInArchive(archivePath, password) { inArchive ->
                 val count = inArchive.numberOfItems
                 val indices = IntArray(count) { it }
-                inArchive.extract(indices, false, ExtractAllCallback(inArchive, outputDir))
+                inArchive.extract(indices, false, ExtractAllCallback(inArchive, outputDir, password))
             }
             ""
         }
@@ -372,7 +397,7 @@ object JBindingClient {
             withInArchive(archivePath, password) { inArchive ->
                 val count = inArchive.numberOfItems
                 val indices = IntArray(count) { it }
-                inArchive.extract(indices, false, ExtractAllCallback(inArchive, outputDir, onLine))
+                inArchive.extract(indices, false, ExtractAllCallback(inArchive, outputDir, password, onLine))
             }
             ""
         }
@@ -388,9 +413,19 @@ object JBindingClient {
         val raf = RandomAccessFile(File(archivePath), "r")
         val stream = RandomAccessFileInStream(raf)
         try {
-            val inArchive = if (password.isNotEmpty()) {
-                SevenZip.openInArchive(null, stream, password)
-            } else {
+            // 尝试用密码打开（仅 7z 头部加密需要）
+            val inArchive = try {
+                if (password.isNotEmpty()) {
+                    SevenZip.openInArchive(null, stream, password)
+                } else {
+                    SevenZip.openInArchive(null, stream)
+                }
+            } catch (e: SevenZipException) {
+                // 如果带密码打开失败，且异常提示加密，说明是头部加密
+                if (password.isNotEmpty() && e.message?.contains("encrypted", ignoreCase = true) == true) {
+                    throw e
+                }
+                // 否则尝试不带密码打开（ZIP/RAR/TAR 或 7z 内容加密）
                 SevenZip.openInArchive(null, stream)
             }
             try {
@@ -548,8 +583,9 @@ object JBindingClient {
     private class ExtractAllCallback(
         private val inArchive: IInArchive,
         private val outputDir: String,
+        private val password: String = "",
         private val onLine: ((String) -> Unit)? = null
-    ) : IArchiveExtractCallback {
+    ) : IArchiveExtractCallback, ICryptoGetTextPassword {
 
         private var totalItems = 0
         private var currentItem = 0
@@ -590,6 +626,9 @@ object JBindingClient {
         }
 
         override fun setCompleted(complete: Long) {}
+
+        // 提供密码（ZIP/RAR/TAR/7z 内容加密需要）
+        override fun cryptoGetTextPassword(): String = password
     }
 
     /** 文件输入流，用于压缩时读取源文件 */
