@@ -186,6 +186,7 @@ object JBindingClient {
         onBytes: (ByteArray) -> Unit
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            Log.d(TAG, "extractSingleFileToSink 开始: archive=${File(archivePath).name}, entry=$entryPath, hasPassword=${password.isNotEmpty()}, passwordLength=${password.length}")
             withInArchive(archivePath, password) { inArchive ->
                 val targetIndex = (0 until inArchive.numberOfItems).firstOrNull { index ->
                     val path = inArchive.getStringProperty(index, PropID.PATH) ?: return@firstOrNull false
@@ -205,12 +206,23 @@ object JBindingClient {
                         data.size
                     })
                 } catch (e: Exception) {
+                    Log.e(TAG, "extractSingleFileToSink 异常: archive=${File(archivePath).name}, entry=$entryPath", e)
                     throw sinkFailure ?: e
                 }
                 if (result != ExtractOperationResult.OK) {
-                    throw SevenZipException("提取失败: $result")
+                    val errorMsg = when (result) {
+                        ExtractOperationResult.DATA_ERROR -> {
+                            if (password.isNotEmpty()) "密码错误或数据损坏: $result"
+                            else "需要密码或数据损坏: $result"
+                        }
+                        ExtractOperationResult.WRONG_PASSWORD -> "密码错误: $result"
+                        else -> "提取失败: $result"
+                    }
+                    Log.e(TAG, "extractSingleFileToSink 失败: archive=${File(archivePath).name}, entry=$entryPath, result=$result, hasPassword=${password.isNotEmpty()}, passwordLength=${password.length}")
+                    throw SevenZipException(errorMsg)
                 }
             }
+            Log.d(TAG, "extractSingleFileToSink 成功: archive=${File(archivePath).name}, entry=$entryPath")
             ""
         }
     }

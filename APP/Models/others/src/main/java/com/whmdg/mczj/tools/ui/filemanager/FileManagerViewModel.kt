@@ -3894,6 +3894,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val password = archivePassword.ifEmpty {
                 session.password.ifEmpty { archivePasswordCache[archivePath] ?: "" }
             }
+            Log.d("FileManagerVM", "extractFromArchive: archive=${File(archivePath).name}, 总条目=${allFiles.size}, archivePassword=${archivePassword.isNotEmpty()}, session.password=${session.password.isNotEmpty()}, cached=${archivePasswordCache[archivePath]?.isNotEmpty()}, 最终password长度=${password.length}")
             if (password.isEmpty()) {
                 when (val check = ArchiveBrowser.checkPasswordRequired(context, archivePath, permLevel)) {
                     is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted,
@@ -3937,7 +3938,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         } catch (e: Exception) {
                             pending.delete()
                             val error = formatArchiveExtractionError(e)
+                            Log.e("FileManagerVM", "解压失败: archive=${File(archivePath).name}, entry=$entryPath, error=$error", e)
                             if (password.isNotEmpty() && isArchivePasswordError(e)) {
+                                Log.w("FileManagerVM", "检测到密码错误，触发重新输入")
                                 withContext(Dispatchers.Main) { onPasswordRequired(error) }
                                 return@launch
                             }
@@ -3958,7 +3961,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         } catch (e: Exception) {
                             writer.abort()
                             val error = formatArchiveExtractionError(e)
+                            Log.e("FileManagerVM", "解压到保险箱失败: archive=${File(archivePath).name}, entry=$entryPath, error=$error", e)
                             if (password.isNotEmpty() && isArchivePasswordError(e)) {
+                                Log.w("FileManagerVM", "检测到密码错误，触发重新输入")
                                 withContext(Dispatchers.Main) { onPasswordRequired(error) }
                                 return@launch
                             }
@@ -3970,8 +3975,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
             if (ctrl.extractCancelFlag.get() && lastError == null) lastError = "用户取消"
             if (successCount > 0 && password.isNotEmpty()) {
+                Log.d("FileManagerVM", "解压成功，缓存密码: archive=${File(archivePath).name}")
                 archivePasswordCache[archivePath] = password
             }
+            Log.d("FileManagerVM", "extractFromArchive 完成: 成功=$successCount/${allFiles.size}, lastError=$lastError")
             if (target is ArchiveExtractionTarget.Vault && target.disposeSessionWhenDone) target.session.dispose()
             withContext(Dispatchers.Main) {
                 when (target) {
@@ -4005,7 +4012,16 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             raw.contains("目标文件已存在") -> "目标位置已有同名文件"
             else -> "解压压缩包条目失败"
         }
-        return "$translated\n原文：$raw"
+        // 完整异常链
+        val fullError = buildString {
+            append(raw)
+            var cause = error.cause
+            while (cause != null) {
+                append("\n← caused by: ${cause.javaClass.simpleName}: ${cause.message}")
+                cause = cause.cause
+            }
+        }
+        return "$translated\n\n完整错误信息：\n$fullError"
     }
 
     private fun isArchivePasswordError(error: Throwable): Boolean {
