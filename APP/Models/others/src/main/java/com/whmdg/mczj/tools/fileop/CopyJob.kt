@@ -6,6 +6,8 @@ import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.encryption.services.CryptoService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
+import com.whmdg.mczj.tools.ui.SizeCalcManager
+import com.whmdg.mczj.tools.util.SizeTreeNode
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.IOException
@@ -370,7 +372,8 @@ class CopyJob(
     ) {
         var dir = encryptedFile.parentFile
         while (dir != null && dir.absolutePath.startsWith(vaultDir.absolutePath)) {
-            accumulator[dir.absolutePath] = (accumulator[dir.absolutePath] ?: 0L) + fileSize
+            val oldSize = accumulator[dir.absolutePath] ?: 0L
+            accumulator[dir.absolutePath] = oldSize + fileSize
             dir = dir.parentFile
         }
     }
@@ -390,6 +393,34 @@ class CopyJob(
         db.save(saveDir)
         // 通知 UI 局部刷新 FolderSizeDb（传递更新后的完整大小，而非 delta）
         manager.notifyFolderSizeChanged(updatedSizes)
+
+        // 构建树状图并弹出统计结果弹窗
+        val rootPath = vaultDir.absolutePath
+        val rootSize = updatedSizes[rootPath] ?: 0L
+        if (rootSize > 0) {
+            val tree = buildSizeTree(rootPath, updatedSizes)
+            SizeCalcManager.finish(size = rootSize, tree = tree)
+        }
+    }
+
+    /** 从 FolderSizeDb 构建树状图 */
+    private fun buildSizeTree(rootPath: String, sizeMap: Map<String, Long>): SizeTreeNode {
+        val root = SizeTreeNode(path = rootPath, size = sizeMap[rootPath] ?: 0L)
+        val pathToNode = mutableMapOf<String, SizeTreeNode>(rootPath to root)
+
+        // 按路径层级排序，确保父节点先创建
+        val sortedPaths = sizeMap.keys.filter { it.startsWith(rootPath) && it != rootPath }
+            .sortedBy { it.count { c -> c == '/' } }
+
+        for (path in sortedPaths) {
+            val parentPath = File(path).parent ?: continue
+            val parentNode = pathToNode[parentPath] ?: continue
+            val node = SizeTreeNode(path = path, size = sizeMap[path] ?: 0L)
+            parentNode.children.add(node)
+            pathToNode[path] = node
+        }
+
+        return root
     }
 
     // ═══════════════════════════════════════════════════════
