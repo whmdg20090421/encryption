@@ -3169,6 +3169,18 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
+        // 过滤保险箱系统文件（明文配置，不可打开）
+        val systemFiles = setOf(
+            "vault_config.json",
+            "vault_config.backup.json",
+            "name_mappings.json",
+            "folder_sizes.json"
+        )
+        if (entry.name in systemFiles) {
+            loadError = IllegalArgumentException("系统配置文件不可查看")
+            return
+        }
+
         // 生成 sessionId 并存入 VaultKeyHolder
         val sessionId = "vault_${System.currentTimeMillis()}_${entry.name.hashCode()}"
         VaultKeyHolder.put(sessionId, VaultViewContext(
