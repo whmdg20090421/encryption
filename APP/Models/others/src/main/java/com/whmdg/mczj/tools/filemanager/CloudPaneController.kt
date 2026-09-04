@@ -1835,11 +1835,25 @@ class CloudPaneController(
             } else {
                 // 文件：从 DB 查同步状态，优先用内存实时进度，回退到 DB 持久化进度
                 val dbEntry = syncDb.getEntry("local_entries", childRelativePath)
-                val status = dbEntry?.status ?: SyncStatus.PENDING
+                var status = dbEntry?.status ?: SyncStatus.PENDING
                 // 优先使用 DB 中的原始文件大小，避免读取加密文件的膨胀大小
                 val fileSize = dbEntry?.size ?: file.length()
                 val liveProgress = state.syncTask.fileProgress[childRelativePath]
-                val dbUploaded = dbEntry?.uploadedSize ?: 0L
+                var dbUploaded = dbEntry?.uploadedSize ?: 0L
+
+                // 健康检查：清理孤儿状态（意外中断导致的残留进度）
+                val isUploadActive = state.syncTask.phase == SyncPhase.SYNCING || state.syncTask.phase == SyncPhase.SCANNING
+                if (!isUploadActive && dbEntry != null) {
+                    val hasOrphanStatus = status == SyncStatus.UPLOADING || status == SyncStatus.QUEUED
+                    val hasOrphanProgress = dbUploaded > 0 && status != SyncStatus.COMPLETED
+                    if (hasOrphanStatus || hasOrphanProgress) {
+                        syncDb.updateEntry("local_entries", childRelativePath) { row ->
+                            row.copy(status = SyncStatus.PENDING, uploadedSize = 0)
+                        }
+                        status = SyncStatus.PENDING
+                        dbUploaded = 0L
+                    }
+                }
                 val greenSize = when {
                     status == SyncStatus.COMPLETED -> fileSize
                     liveProgress != null -> liveProgress.uploadedBytes

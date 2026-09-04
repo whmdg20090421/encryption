@@ -301,6 +301,7 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
         val values = ContentValues().apply {
             put("size", size)
             put("last_modified", lastModified)
+            put("uploaded_size", 0)  // 文件大小变化时重置已上传大小
         }
         db.update(table, values, "path = ?", arrayOf(path))
     }
