@@ -1054,46 +1054,75 @@ class CloudPaneController(
     /** 删除云端文件 + 从云端表移除 */
     fun deleteCloud(relativePath: String) {
         scope.launch {
-            withContext(Dispatchers.IO) {
-                val remotePath = "$remoteBasePath/${relativePath.trimStart('/')}"
-                try {
+            try {
+                withContext(Dispatchers.IO) {
+                    // 删除云端文件（WebDAV 支持递归删除文件夹）
+                    val remotePath = "$remoteBasePath/${relativePath.trimStart('/')}"
                     webdavClient.delete(remotePath)
-                } catch (_: Exception) {}
-                // 从云端表移除
-                syncDb.deleteEntry("cloud_entries", relativePath)
-                syncDb.deleteEntriesByPrefix("cloud_entries", relativePath)
-                // 本地状态重置为 PENDING
-                syncDb.updateStatus("local_entries", relativePath, SyncStatus.PENDING)
+
+                    // 从云端表移除（递归删除子条目）
+                    syncDb.deleteEntry("cloud_entries", relativePath)
+                    syncDb.deleteEntriesByPrefix("cloud_entries", relativePath)
+
+                    // 本地状态重置为 PENDING
+                    val localEntry = syncDb.getEntry("local_entries", relativePath)
+                    if (localEntry != null) {
+                        syncDb.updateStatus("local_entries", relativePath, SyncStatus.PENDING)
+                    }
+
+                    // 上传更新后的 cloud.db 到云端
+                    uploadCloudDb()
+                }
+                navigateTo(state.currentPath)
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "删除云端失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                }
             }
-            navigateTo(state.currentPath)
         }
     }
 
     /** 同时删除本地和云端 */
     fun deleteBoth(relativePath: String) {
         scope.launch {
-            withContext(Dispatchers.IO) {
-                // 删除本地文件
-                val localFile = File(vaultDir, relativePath.trimStart('/'))
-                if (localFile.exists()) {
-                    if (localFile.isDirectory) {
-                        localFile.deleteRecursively()
-                    } else {
-                        localFile.delete()
+            try {
+                withContext(Dispatchers.IO) {
+                    // 删除本地文件
+                    val localFile = File(vaultDir, relativePath.trimStart('/'))
+                    if (localFile.exists()) {
+                        if (localFile.isDirectory) {
+                            // 递归删除文件夹，但跳过排除文件（保险箱元数据）
+                            localFile.walkBottomUp().forEach { file ->
+                                if (file.name !in excludedFiles) {
+                                    file.delete()
+                                }
+                            }
+                        } else {
+                            // 文件：仅当不在排除列表时删除
+                            if (localFile.name !in excludedFiles) {
+                                localFile.delete()
+                            }
+                        }
                     }
-                }
-                // 删除云端文件
-                val remotePath = "$remoteBasePath/${relativePath.trimStart('/')}"
-                try {
+                    // 删除云端文件（WebDAV 支持递归删除文件夹）
+                    val remotePath = "$remoteBasePath/${relativePath.trimStart('/')}"
                     webdavClient.delete(remotePath)
-                } catch (_: Exception) {}
-                // 从两张表移除
-                syncDb.deleteEntry("local_entries", relativePath)
-                syncDb.deleteEntriesByPrefix("local_entries", relativePath)
-                syncDb.deleteEntry("cloud_entries", relativePath)
-                syncDb.deleteEntriesByPrefix("cloud_entries", relativePath)
+
+                    // 从两张表移除（递归删除子条目）
+                    syncDb.deleteEntry("local_entries", relativePath)
+                    syncDb.deleteEntriesByPrefix("local_entries", relativePath)
+                    syncDb.deleteEntry("cloud_entries", relativePath)
+                    syncDb.deleteEntriesByPrefix("cloud_entries", relativePath)
+
+                    // 上传更新后的 cloud.db 到云端
+                    uploadCloudDb()
+                }
+                navigateTo(state.currentPath)
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "删除失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                }
             }
-            navigateTo(state.currentPath)
         }
     }
 
