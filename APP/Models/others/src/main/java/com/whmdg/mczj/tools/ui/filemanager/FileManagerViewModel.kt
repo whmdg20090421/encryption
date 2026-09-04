@@ -3194,7 +3194,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val tempFile = File(context.cacheDir, "vault_open_${System.currentTimeMillis()}_${entry.name}")
+                // 去掉 .whm 后缀得到原始文件名
+                val originalName = if (entry.name.endsWith(".whm", ignoreCase = true)) {
+                    entry.name.substring(0, entry.name.length - 4)
+                } else {
+                    entry.name
+                }
+
+                val tempFile = File(context.cacheDir, "vault_open_${System.currentTimeMillis()}_${originalName}")
                 FileCodec.decrypt(
                     src = File(entry.path),
                     dst = tempFile,
@@ -3203,24 +3210,24 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 )
 
                 withContext(Dispatchers.Main) {
-                    val ext = entry.name.substringAfterLast('.').lowercase()
+                    val ext = originalName.substringAfterLast('.').lowercase()
                     val textExts = listOf("txt", "kt", "java", "xml", "json", "md", "py", "sh", "log", "csv", "html", "css", "js", "yml", "yaml", "toml", "ini", "cfg", "conf", "bat", "cmd", "c", "cpp", "h", "hpp", "go", "rs", "swift", "rb", "php", "sql", "r", "lua", "pl", "scala", "groovy", "properties")
                     val imageExts = listOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico", "tiff", "tif")
 
                     when {
                         ext in textExts -> {
-                            val textFile = File(context.cacheDir, "vault_text_${entry.name}")
+                            val textFile = File(context.cacheDir, "vault_text_${originalName}")
                             tempFile.copyTo(textFile, overwrite = true)
                             context.startActivity(ViewerActivity.createTextIntent(context, textFile.absolutePath, sessionId))
                         }
                         ext in imageExts -> {
-                            val imgFile = File(context.cacheDir, "vault_img_${entry.name}")
+                            val imgFile = File(context.cacheDir, "vault_img_${originalName}")
                             tempFile.copyTo(imgFile, overwrite = true)
                             context.startActivity(ViewerActivity.createImageIntent(context, imgFile.absolutePath, vaultSessionId = sessionId))
                         }
                         else -> {
                             VaultKeyHolder.clear(sessionId)
-                            openWithExternalApp(tempFile, entry.name)
+                            openWithExternalApp(tempFile, originalName)
                         }
                     }
                 }
