@@ -6072,7 +6072,10 @@ private fun CloudPanelContent(
                         )
                     }
                 }
-                items(cloudState.entries, key = { it.relativePath }) { cloudEntry ->
+                items(cloudState.entries, key = {
+                    // 冲突文件会有两个条目（local + cloud），需要用不同的 key 区分
+                    if (it.isCloudOnly) "cloud_${it.relativePath}" else "local_${it.relativePath}"
+                }) { cloudEntry ->
                     val fileEntry = FileEntry(
                         path = cloudEntry.relativePath,
                         name = cloudEntry.name,
