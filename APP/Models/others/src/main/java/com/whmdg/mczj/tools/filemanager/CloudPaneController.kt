@@ -1767,7 +1767,10 @@ class CloudPaneController(
                 // 文件夹大小：从 SyncDatabase 累加原始文件大小（避免 FolderSizeDb 的加密文件膨胀问题）
                 val prefix = if (childRelativePath.endsWith("/")) childRelativePath else "$childRelativePath/"
                 val folderSize = syncDb.getEntriesByParent("local_entries", childRelativePath)
-                    .filter { !it.path.endsWith("/") }  // 排除子文件夹自身
+                    .filter { entry ->
+                        // 只累加直接子文件（排除子文件夹和子孙文件）
+                        !entry.path.endsWith("/") && entry.path.substringBeforeLast('/') == childRelativePath.trimEnd('/')
+                    }
                     .sumOf { it.size }
                 // 同步状态：递归统计子树
                 val syncAgg = aggregateDirectChildren(childRelativePath)
@@ -2114,7 +2117,10 @@ class CloudPaneController(
             val old = entries[idx]
             val newEntry = if (old.isDirectory) {
                 val folderSize = syncDb.getEntriesByParent("local_entries", relativePath)
-                    .filter { !it.path.endsWith("/") }
+                    .filter { entry ->
+                        // 只累加直接子文件（排除子文件夹和子孙文件）
+                        !entry.path.endsWith("/") && entry.path.substringBeforeLast('/') == relativePath.trimEnd('/')
+                    }
                     .sumOf { it.size }
                 val syncAgg = aggregateDirectChildren(relativePath)
                 old.copy(totalSize = folderSize, uploadedSize = syncAgg.uploadedSize, uploadingSize = syncAgg.uploadingSize)
@@ -2157,7 +2163,10 @@ class CloudPaneController(
             val idx = entries.indexOfFirst { it.relativePath == parent && it.isDirectory }
             if (idx >= 0) {
                 val folderSize = syncDb.getEntriesByParent("local_entries", parent)
-                    .filter { !it.path.endsWith("/") }
+                    .filter { entry ->
+                        // 只累加直接子文件（排除子文件夹和子孙文件）
+                        !entry.path.endsWith("/") && entry.path.substringBeforeLast('/') == parent.trimEnd('/')
+                    }
                     .sumOf { it.size }
                 val syncAgg = aggregateDirectChildren(parent)
                 entries[idx] = entries[idx].copy(
