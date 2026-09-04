@@ -1802,7 +1802,10 @@ private fun DiffScanDialog(
             val vaultRecord = vaultService.vaults.find { it.id == vaultId }
             val remoteBasePath = vaultRecord?.let {
                 com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore.getAll(context)
-                    .firstOrNull()?.let { config -> "${config.serverUrl}/Android_tools/加密保险箱/${it.name}" }
+                    .firstOrNull()?.let { config ->
+                        val baseUrl = "${config.protocol}://${config.host}:${config.port}${if (config.relativePath.isNotEmpty()) "/${config.relativePath}" else ""}"
+                        "$baseUrl/Android_tools/加密保险箱/${it.name}"
+                    }
             } ?: ""
 
             if (remoteBasePath.isNotEmpty()) {
