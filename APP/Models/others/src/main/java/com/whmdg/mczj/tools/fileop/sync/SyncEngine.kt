@@ -67,10 +67,23 @@ class SyncEngine(
                 for ((relPath, localInfo) in localFiles) {
                     val entry = currentIndex.entries[relPath]
                     when {
-                        entry == null -> toUpload.add(localInfo)
-                        entry.uploadStatus == UploadStatus.PAUSED -> { /* 跳过 */ }
-                        entry.uploadStatus == UploadStatus.COMPLETED && entry.md5 == localInfo.md5 -> { /* 跳过 */ }
-                        else -> toUpload.add(localInfo)
+                        entry == null -> {
+                            // 新文件 → 需要上传（延迟计算 MD5）
+                            toUpload.add(localInfo)
+                        }
+                        entry.uploadStatus == UploadStatus.PAUSED -> {
+                            // 上次暂停 → 跳过
+                        }
+                        entry.uploadStatus == UploadStatus.COMPLETED -> {
+                            // 已完成 → 检查是否变化
+                            if (needsReupload(localInfo, entry)) {
+                                toUpload.add(localInfo)
+                            }
+                        }
+                        else -> {
+                            // PENDING / UPLOADING → 需要上传
+                            toUpload.add(localInfo)
+                        }
                     }
                 }
             }
@@ -89,7 +102,9 @@ class SyncEngine(
                     val entry = currentIndex.entries[relPath]
                     if (remoteInfo == null) {
                         toUpload.add(localInfo)
-                    } else if (entry == null || entry.uploadStatus != UploadStatus.COMPLETED || entry.md5 != localInfo.md5) {
+                    } else if (entry == null || entry.uploadStatus != UploadStatus.COMPLETED) {
+                        toUpload.add(localInfo)
+                    } else if (needsReupload(localInfo, entry)) {
                         toUpload.add(localInfo)
                     }
                 }
@@ -142,9 +157,12 @@ class SyncEngine(
             currentCoroutineContext().ensureActive()
             val relPath = localInfo.relativePath
 
+            // 延迟计算 MD5（仅在确定需要上传时）
+            val md5 = localInfo.md5 ?: calculateMd5(File(localInfo.absolutePath))
+
             // 更新状态为 UPLOADING
             fileProgress[relPath] = fileProgress[relPath]!!.copy(status = UploadStatus.UPLOADING)
-            currentIndex = updateIndexEntry(currentIndex, relPath, localInfo.md5, localInfo.size, UploadStatus.UPLOADING)
+            currentIndex = updateIndexEntry(currentIndex, relPath, md5, localInfo.size, UploadStatus.UPLOADING)
             onProgress(buildTaskState(mode, SyncPhase.SYNCING, totalFiles, completedFiles, totalBytes, transferredBytes, fileProgress, relPath))
 
             val remotePath = buildRemotePath(remoteBasePath, relPath)
@@ -174,13 +192,13 @@ class SyncEngine(
                     status = UploadStatus.COMPLETED,
                     uploadedBytes = localInfo.size
                 )
-                currentIndex = updateIndexEntry(currentIndex, relPath, localInfo.md5, localInfo.size, UploadStatus.COMPLETED)
+                currentIndex = updateIndexEntry(currentIndex, relPath, md5, localInfo.size, UploadStatus.COMPLETED)
                 completedFiles++
                 transferredBytes += localInfo.size
                 onFileComplete(relPath, true)
             } else {
                 fileProgress[relPath] = fileProgress[relPath]!!.copy(status = UploadStatus.PAUSED)
-                currentIndex = updateIndexEntry(currentIndex, relPath, localInfo.md5, localInfo.size, UploadStatus.PAUSED)
+                currentIndex = updateIndexEntry(currentIndex, relPath, md5, localInfo.size, UploadStatus.PAUSED)
                 onFileComplete(relPath, false)
             }
             onProgress(buildTaskState(mode, SyncPhase.SYNCING, totalFiles, completedFiles, totalBytes, transferredBytes, fileProgress, relPath))
@@ -305,12 +323,26 @@ class SyncEngine(
             } catch (_: Exception) {}
 
             if (cloudSize == fileSize) {
-                // 大小相同 → 比较 MD5
+                // 大小相同 → 检查本地 DB 记录的修改时间
+                val localEntry = syncDb.getEntry("local_entries", relativePath)
+                val lastModified = localFile.lastModified()
+                val lastModifiedStr = java.time.Instant.ofEpochMilli(lastModified).toString()
+
+                // 如果修改时间没变（比上次同步时间早或相同），跳过 MD5 计算
+                if (localEntry != null && localEntry.lastModified >= lastModifiedStr) {
+                    CloudSyncLogger.logSync("SyncEngine", "跳过上传（文件未修改）: $relativePath")
+                    syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
+                    onComplete(true, null)
+                    return@withContext
+                }
+
+                // 修改时间变了 → 比较 MD5 确认
                 val localMd5 = calculateMd5(localFile)
                 val cloudEntry = syncDb.getEntry("cloud_entries", relativePath)
                 if (cloudEntry != null && cloudEntry.md5 == localMd5) {
-                    // 完全相同 → 跳过
-                    CloudSyncLogger.logSync("SyncEngine", "跳过上传（文件相同）: $relativePath")
+                    // 完全相同 → 跳过（更新本地表的修改时间和 MD5）
+                    CloudSyncLogger.logSync("SyncEngine", "跳过上传（文件内容相同）: $relativePath")
+                    syncDb.updateSize("local_entries", relativePath, fileSize, lastModifiedStr)
                     syncDb.updateMd5("local_entries", relativePath, localMd5)
                     syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
                     onComplete(true, null)
@@ -423,6 +455,25 @@ class SyncEngine(
         onComplete(true, null)
     }
 
+    /** 判断文件是否需要重新上传（使用 size + lastModified 快速筛选 + MD5 确认） */
+    private fun needsReupload(localInfo: LocalFileInfo, entry: SyncEntry): Boolean {
+        // 1. 大小变了 → 一定变了
+        if (localInfo.size != entry.size) return true
+
+        // 2. 大小没变，检查修改时间（转 ISO8601 比较）
+        val localModifiedStr = java.time.Instant.ofEpochMilli(localInfo.lastModified).toString()
+        val lastSyncTime = entry.lastSyncTime
+
+        // 修改时间比上次同步时间晚 → 可能变了，计算 MD5 确认
+        if (lastSyncTime != null && localModifiedStr > lastSyncTime) {
+            val md5 = localInfo.md5 ?: calculateMd5(File(localInfo.absolutePath))
+            return md5 != entry.md5
+        }
+
+        // 3. 大小没变 + 修改时间没变（或比同步时间早）→ 没变
+        return false
+    }
+
     /** 判断异常是否可重试（网络错误、超时、5xx 可重试；401/403/404 不可重试） */
     private fun isRetryable(e: Exception): Boolean {
         val msg = e.message?.lowercase() ?: ""
@@ -439,8 +490,9 @@ class SyncEngine(
     private data class LocalFileInfo(
         val relativePath: String,
         val absolutePath: String,
-        val md5: String,
-        val size: Long
+        val md5: String?,           // 延迟计算，初始为 null
+        val size: Long,
+        val lastModified: Long      // 文件修改时间戳
     )
 
     private data class RemoteFileInfo(
@@ -449,7 +501,7 @@ class SyncEngine(
         val size: Long
     )
 
-    /** 扫描本地保险箱目录 */
+    /** 扫描本地保险箱目录（不计算 MD5，仅收集元数据） */
     private suspend fun scanLocalFiles(): Map<String, LocalFileInfo> = withContext(Dispatchers.IO) {
         val result = mutableMapOf<String, LocalFileInfo>()
         val dir = File(vaultDir)
@@ -459,12 +511,12 @@ class SyncEngine(
             val name = file.name
             if (name in excludedFiles) return@forEach
             val relativePath = "/" + file.relativeTo(dir).path.replace('\\', '/')
-            val md5 = calculateMd5(file)
             result[relativePath] = LocalFileInfo(
                 relativePath = relativePath,
                 absolutePath = file.absolutePath,
-                md5 = md5,
-                size = file.length()
+                md5 = null,  // 延迟计算
+                size = file.length(),
+                lastModified = file.lastModified()
             )
         }
         result

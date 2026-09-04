@@ -233,6 +233,25 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
         db.update(table, values, "path = ?", arrayOf(path))
     }
 
+    /** 通用的条目更新方法，使用 transform 函数更新指定字段 */
+    fun updateEntry(table: String, path: String, transform: (SyncEntryRow) -> SyncEntryRow) {
+        val db = writableDatabase
+        val entry = getEntry(table, path) ?: return
+        val updated = transform(entry)
+
+        val values = ContentValues().apply {
+            put("size", updated.size)
+            put("uploaded_size", updated.uploadedSize)
+            put("last_modified", updated.lastModified)
+            updated.md5?.let { put("md5", it) }
+            updated.cloudHash?.let { put("cloud_hash", it) }
+            put("status", updated.status.name)
+            updated.lastSyncTime?.let { put("last_sync_time", it) }
+            updated.failReason?.let { put("fail_reason", it) }
+        }
+        db.update(table, values, "path = ?", arrayOf(path))
+    }
+
     /** 重置所有 UPLOADING 状态为 PENDING（中断恢复用，WebDAV 不支持断点续传） */
     fun resetUploadingToPending(table: String) {
         val db = writableDatabase

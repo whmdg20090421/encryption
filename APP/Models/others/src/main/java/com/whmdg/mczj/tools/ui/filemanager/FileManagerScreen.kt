@@ -1555,6 +1555,20 @@ fun FileManagerScreen(
                         }
                     )
                 }
+                val conflictDialog = cloudStateForOverlay.uploadConflictDialog
+                if (conflictDialog != null) {
+                    UploadConflictDialog(
+                        conflicts = conflictDialog.conflicts,
+                        onCancel = {
+                            conflictDialog.onConfirm(false)
+                            cloudStateForOverlay.uploadConflictDialog = null
+                        },
+                        onOverwrite = {
+                            conflictDialog.onConfirm(true)
+                            cloudStateForOverlay.uploadConflictDialog = null
+                        }
+                    )
+                }
                 // 进度异常弹窗
                 val anomalyMsg = cloudStateForOverlay.anomalyDialogMessage
                 if (anomalyMsg != null) {
@@ -6412,6 +6426,115 @@ private fun DeletedFilesDialog(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         Text("忽略", fontSize = 13.sp, color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==================== 上传冲突确认对话框 ====================
+
+@Composable
+private fun UploadConflictDialog(
+    conflicts: List<com.whmdg.mczj.tools.filemanager.CloudPaneController.ConflictFileInfo>,
+    onCancel: () -> Unit,
+    onOverwrite: () -> Unit
+) {
+    val isDarkMode = LocalIsDarkMode.current
+    val cardColor = if (isDarkMode) Color(0xFF1E293B) else Color.White
+    val textColor = if (isDarkMode) Color(0xFFE2E8F0) else Color(0xFF1E293B)
+    val subTextColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val warningColor = Color(0xFFF59E0B)
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(0.85f),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = cardColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                Text(
+                    text = "检测到上传冲突",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = warningColor
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "以下文件本地已修改，云端也存在旧版本。上传将覆盖云端文件。",
+                    fontSize = 13.sp,
+                    color = subTextColor,
+                    lineHeight = 18.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 200.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    conflicts.take(5).forEach { conflict ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isDarkMode) Color(0xFF0F172A) else Color(0xFFF8FAFC)
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                Text(
+                                    text = conflict.path.substringAfterLast('/'),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = textColor
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "本地: ${com.whmdg.mczj.tools.util.FormatUtils.formatBytes(conflict.localSize)} · ${conflict.localModified.take(19).replace('T', ' ')}",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFFEF4444)
+                                )
+                                Text(
+                                    text = "云端: ${com.whmdg.mczj.tools.util.FormatUtils.formatBytes(conflict.cloudSize)} · ${conflict.cloudModified.take(19).replace('T', ' ')}",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF3B82F6)
+                                )
+                            }
+                        }
+                    }
+                    if (conflicts.size > 5) {
+                        Text(
+                            text = "及其他 ${conflicts.size - 5} 个文件...",
+                            fontSize = 11.sp,
+                            color = subTextColor,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onCancel) {
+                        Text("取消上传", fontSize = 13.sp, color = subTextColor)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = onOverwrite,
+                        colors = ButtonDefaults.buttonColors(containerColor = warningColor),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text("覆盖云端 (${conflicts.size})", fontSize = 13.sp, color = Color.White)
                     }
                 }
             }

@@ -63,6 +63,8 @@ class CloudPaneController(
         var isInitialized by mutableStateOf(false)
         /** 已删除文件确认对话框 */
         var deletedFilesDialog by mutableStateOf<DeletedFilesState?>(null)
+        /** 上传冲突确认对话框 */
+        var uploadConflictDialog by mutableStateOf<UploadConflictState?>(null)
         /** 进度异常弹窗（为 null 时隐藏） */
         var anomalyDialogMessage by mutableStateOf<String?>(null)
         /** 上传功能是否被禁用（用户取消下载覆盖时设置） */
@@ -91,6 +93,19 @@ class CloudPaneController(
         val completedCount: Int,
         val totalCount: Int,
         val onComplete: (reUploadAll: Boolean) -> Unit
+    )
+
+    data class ConflictFileInfo(
+        val path: String,
+        val localSize: Long,
+        val localModified: String,
+        val cloudSize: Long,
+        val cloudModified: String
+    )
+
+    data class UploadConflictState(
+        val conflicts: List<ConflictFileInfo>,
+        val onConfirm: (overwrite: Boolean) -> Unit
     )
 
     /** 文件/文件夹条目（带聚合同步状态） */
@@ -156,6 +171,11 @@ class CloudPaneController(
                 }
                 state.currentPath = path
                 state.entries = entries
+
+                // 后台异步检测文件变更（不阻塞 UI）
+                launch(Dispatchers.IO) {
+                    detectFileChanges(path)
+                }
             } catch (e: Exception) {
                 state.loadError = e
                 state.entries = emptyList()
@@ -462,7 +482,43 @@ class CloudPaneController(
                 }
             }
 
-            // ⑥ 若有已删除文件，询问用户
+            // ⑥ 检测上传冲突：local.status=PENDING 且 cloud.db 中存在
+            val conflicts = mutableListOf<ConflictFileInfo>()
+            withContext(Dispatchers.IO) {
+                for ((file, relPath) in toUpload) {
+                    val localEntry = syncDb.getEntry("local_entries", relPath)
+                    val cloudEntry = syncDb.getEntry("cloud_entries", relPath)
+
+                    if (localEntry != null && localEntry.status == SyncStatus.PENDING && cloudEntry != null) {
+                        conflicts.add(ConflictFileInfo(
+                            path = relPath,
+                            localSize = file.length(),
+                            localModified = Instant.ofEpochMilli(file.lastModified()).toString(),
+                            cloudSize = cloudEntry.size,
+                            cloudModified = cloudEntry.lastModified
+                        ))
+                    }
+                }
+            }
+
+            // 若有冲突，询问用户是否覆盖
+            if (conflicts.isNotEmpty()) {
+                val overwrite = suspendCancellableCoroutine<Boolean> { cont ->
+                    state.uploadConflictDialog = UploadConflictState(
+                        conflicts = conflicts,
+                        onConfirm = { overwrite -> cont.resume(overwrite) {} }
+                    )
+                }
+                if (!overwrite) {
+                    withContext(Dispatchers.Main) {
+                        android.widget.Toast.makeText(context, "已取消上传", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    closeProgressDialog()
+                    return@launch
+                }
+            }
+
+            // ⑦ 若有已删除文件，询问用户
             if (deletedPaths.isNotEmpty()) {
                 val deleteFromCloud = suspendCancellableCoroutine<Boolean> { cont ->
                     state.deletedFilesDialog = DeletedFilesState(
@@ -483,7 +539,7 @@ class CloudPaneController(
                 // 选择忽略：保持 DB 不动
             }
 
-            // ⑦ 检查是否有正在上传的文件
+            // ⑧ 检查是否有正在上传的文件
             if (withContext(Dispatchers.IO) {
                     syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING).isNotEmpty()
                 }) {
@@ -492,7 +548,7 @@ class CloudPaneController(
                 return@launch
             }
 
-            // ⑧ 询问用户：跳过已完成 or 全部重传
+            // ⑨ 询问用户：跳过已完成 or 全部重传
             val reUploadAll = if (completedFiles.isNotEmpty()) {
                 suspendCancellableCoroutine<Boolean> { cont ->
                     state.uploadConfirmDialog = UploadConfirmState(
@@ -503,7 +559,7 @@ class CloudPaneController(
                 }
             } else false
 
-            // ⑨ 构建最终队列
+            // ⑩ 构建最终队列
             val queue: List<Pair<File, String>> = if (reUploadAll) {
                 withContext(Dispatchers.IO) {
                     for ((file, relPath) in completedFiles) {
@@ -516,7 +572,7 @@ class CloudPaneController(
                 toUpload
             }
 
-            // ⑩ 将队列中未录入 DB 的文件写入
+            // ⑪ 将队列中未录入 DB 的文件写入
             withContext(Dispatchers.IO) {
                 for ((file, relPath) in queue) {
                     val existing = syncDb.getEntry("local_entries", relPath)
@@ -545,12 +601,12 @@ class CloudPaneController(
                 return@launch
             }
 
-            // ⑪ 静默刷新当前目录（不闪 loading）
+            // ⑫ 静默刷新当前目录（不闪 loading）
             silentRefresh()
 
             withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "开始上传 ${queue.size} 个文件", android.widget.Toast.LENGTH_SHORT).show() }
 
-            // ⑫ 预计算文件夹聚合值（避免上传过程中 O(n²) 全量遍历）
+            // ⑬ 预计算文件夹聚合值（避免上传过程中 O(n²) 全量遍历）
             val folderTotalSize = mutableMapOf<String, Long>()
             for ((file, relPath) in queue) {
                 val fileSize = file.length()
@@ -1717,7 +1773,7 @@ class CloudPaneController(
 
     /**
      * 从 cloud_entries 中查找当前目录下云端-only 的文件和文件夹，
-     * 合并到 entries 列表中。
+     * 以及与本地冲突的文件（local.status=PENDING 且云端存在），合并到 entries 列表中。
      */
     private fun mergeCloudOnlyEntries(
         relativePath: String,
@@ -1746,21 +1802,30 @@ class CloudPaneController(
             }
         }
 
-        // 添加云端-only 文件
+        // 添加云端文件（云端-only 或冲突）
         for ((name, cloudEntry) in cloudDirectFiles) {
-            if (name in localNames) continue
             val childRelativePath = if (relativePath == "/") "/$name" else "$relativePath/$name"
-            entries.add(CloudFileEntry(
-                name = name,
-                relativePath = childRelativePath,
-                isDirectory = false,
-                totalSize = cloudEntry.size,
-                uploadedSize = cloudEntry.size,  // 云端文件视为已上传
-                uploadingSize = 0,
-                lastModified = parseCloudLastModified(cloudEntry.lastModified),
-                syncStatus = SyncStatus.COMPLETED,
-                isCloudOnly = true
-            ))
+
+            // 检查本地是否存在且 status=PENDING（冲突）
+            val localEntry = syncDb.getEntry("local_entries", childRelativePath)
+            val isConflict = localEntry != null &&
+                             localEntry.status == SyncStatus.PENDING &&
+                             name in localNames
+
+            // 云端-only 或冲突时，添加云端条目
+            if (name !in localNames || isConflict) {
+                entries.add(CloudFileEntry(
+                    name = name,
+                    relativePath = childRelativePath,
+                    isDirectory = false,
+                    totalSize = cloudEntry.size,
+                    uploadedSize = cloudEntry.size,  // 云端文件视为已上传
+                    uploadingSize = 0,
+                    lastModified = parseCloudLastModified(cloudEntry.lastModified),
+                    syncStatus = SyncStatus.COMPLETED,
+                    isCloudOnly = true
+                ))
+            }
         }
 
         // 添加云端-only 文件夹
@@ -1985,4 +2050,99 @@ class CloudPaneController(
         val uploadedSize: Long = 0,
         val uploadingSize: Long = 0
     )
+
+    /**
+     * 异步检测文件变更：对当前目录下 status=COMPLETED 的文件，检查是否变化。
+     * 如果本地文件的 size/lastModified/MD5 变化，将 status 改为 PENDING。
+     */
+    private suspend fun detectFileChanges(relativePath: String) {
+        try {
+            val dir = File(vaultDir, relativePath.trimStart('/'))
+            if (!dir.exists() || !dir.isDirectory) return
+
+            val children = dir.listFiles() ?: return
+            var hasChanges = false
+
+            for (file in children) {
+                if (file.name in excludedFiles) continue
+                if (file.isDirectory) continue  // 只检测文件，不检测文件夹
+
+                val childRelativePath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
+                val dbEntry = syncDb.getEntry("local_entries", childRelativePath)
+
+                // 只检测 COMPLETED 状态的文件
+                if (dbEntry == null || dbEntry.status != SyncStatus.COMPLETED) continue
+
+                // 1. 检查大小是否变化
+                val currentSize = file.length()
+                if (currentSize != dbEntry.size) {
+                    // 大小变了 → 直接标记为 PENDING
+                    syncDb.updateStatus("local_entries", childRelativePath, SyncStatus.PENDING)
+                    com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync(
+                        "CloudPane",
+                        "检测到文件大小变化: $childRelativePath (${dbEntry.size} → $currentSize)"
+                    )
+                    hasChanges = true
+                    continue
+                }
+
+                // 2. 检查修改时间是否变化
+                val currentModified = file.lastModified()
+                val currentModifiedStr = java.time.Instant.ofEpochMilli(currentModified).toString()
+                val lastSyncTime = dbEntry.lastSyncTime
+
+                if (lastSyncTime != null && currentModifiedStr > lastSyncTime) {
+                    // 修改时间变了 → 计算 MD5 确认
+                    val currentMd5 = calculateMd5(file)
+                    if (currentMd5 != dbEntry.md5) {
+                        // MD5 不匹配 → 标记为 PENDING
+                        syncDb.updateEntry("local_entries", childRelativePath) { row ->
+                            row.copy(
+                                status = SyncStatus.PENDING,
+                                md5 = currentMd5,
+                                size = currentSize,
+                                lastModified = currentModifiedStr
+                                // 保留 last_sync_time，让用户知道之前上传过
+                            )
+                        }
+                        com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync(
+                            "CloudPane",
+                            "检测到文件内容变化: $childRelativePath (MD5: ${dbEntry.md5} → $currentMd5)"
+                        )
+                        hasChanges = true
+                    } else {
+                        // MD5 相同，只是 touch 了文件 → 更新 lastModified 即可
+                        syncDb.updateEntry("local_entries", childRelativePath) { row ->
+                            row.copy(lastModified = currentModifiedStr)
+                        }
+                    }
+                }
+            }
+
+            // 如果有变化，刷新 UI
+            if (hasChanges) {
+                withContext(Dispatchers.Main) {
+                    silentRefresh()
+                }
+            }
+        } catch (e: Exception) {
+            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync(
+                "CloudPane",
+                "文件变更检测失败: ${e.message}"
+            )
+        }
+    }
+
+    /** 计算文件的 MD5 哈希 */
+    private fun calculateMd5(file: File): String {
+        val digest = java.security.MessageDigest.getInstance("MD5")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(8192)
+            var read: Int
+            while (input.read(buffer).also { read = it } > 0) {
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 }
