@@ -1311,7 +1311,7 @@ class FilePaneController(
                     context, vaultSession!!.record.name
                 )
                 val entries = if (entry.isDirectory) {
-                    syncDb.getEntriesByPrefix("local_entries", "$relativePath/")
+                    syncDb.getEntriesByParent("local_entries", "$relativePath/")
                 } else {
                     listOfNotNull(syncDb.getEntry("local_entries", relativePath))
                 }
@@ -4035,7 +4035,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         val subDir = listOf(target.subDir.trim('/'), entryPath.substringBeforeLast('/', "").trim('/'))
                             .filter { it.isNotEmpty() }.joinToString("/")
                         val writer = try {
-                            CryptoService.openStreamIntoVault(context, target.session, entryPath.substringAfterLast('/'), subDir, cancelFlag = ctrl.extractCancelFlag)
+                            CryptoService.openStreamIntoVault(context, target.session, entryPath.substringAfterLast('/'), sourceSize = 0L, subDir = subDir, cancelFlag = ctrl.extractCancelFlag)
                         } catch (e: Exception) { lastError = formatArchiveExtractionError(e); break }
                         try {
                             JBindingClient.extractSingleFileToSink(archivePath, entryPath, password, writer.sink::write).getOrThrow()

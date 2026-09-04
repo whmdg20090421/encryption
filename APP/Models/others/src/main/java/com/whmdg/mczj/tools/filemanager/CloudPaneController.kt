@@ -242,7 +242,7 @@ class CloudPaneController(
         // 录入本地表（如果是新文件）
         if (existingEntry == null) {
             val originalSize = try {
-                val metadata = FileCodec.readMetadata(localFile, session.dek, session.config.customEncryption)
+                val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(localFile, vaultSession.dek, vaultSession.config.customEncryption)
                 metadata["size"]?.toLong() ?: localFile.length()
             } catch (e: Exception) {
                 localFile.length()
@@ -464,7 +464,7 @@ class CloudPaneController(
                     val localFile = localFileMap[dbEntry.path]
                     if (localFile != null) {
                         val currentSize = try {
-                            val metadata = FileCodec.readMetadata(localFile, session.dek, session.config.customEncryption)
+                            val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(localFile, vaultSession.dek, vaultSession.config.customEncryption)
                             metadata["size"]?.toLong() ?: localFile.length()
                         } catch (e: Exception) {
                             localFile.length()
@@ -597,7 +597,7 @@ class CloudPaneController(
                     val existing = syncDb.getEntry("local_entries", relPath)
                     if (existing == null) {
                         val originalSize = try {
-                            val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(file, session.dek, session.config.customEncryption)
+                            val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(file, vaultSession.dek, vaultSession.config.customEncryption)
                             metadata["size"]?.toLong() ?: file.length()
                         } catch (e: Exception) {
                             file.length()
@@ -688,7 +688,8 @@ class CloudPaneController(
             // ⑭ 并发动态上传（Channel 单写者模式，避免多线程竞态）
             val completedBytes = java.util.concurrent.atomic.AtomicLong(0)
             val activeFileBytes = java.util.concurrent.ConcurrentHashMap<String, Long>()
-            val fileSizes = queue.associate { (file, path) -> path to file.length() }
+            val fileSizes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+            queue.forEach { (file, path) -> fileSizes[path] = file.length() }
             var activeWorkers = 0
             var queueIndex = 0
             var completedFilesCount = 0  // 仅更新器协程访问
@@ -1071,7 +1072,7 @@ class CloudPaneController(
             withContext(Dispatchers.IO) {
                 // 统计删除前的数量和大小
                 val entries = if (relativePath.endsWith("/")) {
-                    syncDb.getEntriesByPrefix("local_entries", relativePath)
+                    syncDb.getEntriesByParent("local_entries", relativePath)
                 } else {
                     listOfNotNull(syncDb.getEntry("local_entries", relativePath))
                 }
@@ -1105,7 +1106,7 @@ class CloudPaneController(
                 withContext(Dispatchers.IO) {
                     // 统计删除前的数量和大小
                     val entries = if (relativePath.endsWith("/")) {
-                        syncDb.getEntriesByPrefix("cloud_entries", relativePath)
+                        syncDb.getEntriesByParent("cloud_entries", relativePath)
                     } else {
                         listOfNotNull(syncDb.getEntry("cloud_entries", relativePath))
                     }
@@ -1155,12 +1156,12 @@ class CloudPaneController(
                 withContext(Dispatchers.IO) {
                     // 统计删除前的数量和大小
                     val localEntries = if (relativePath.endsWith("/")) {
-                        syncDb.getEntriesByPrefix("local_entries", relativePath)
+                        syncDb.getEntriesByParent("local_entries", relativePath)
                     } else {
                         listOfNotNull(syncDb.getEntry("local_entries", relativePath))
                     }
                     val cloudEntries = if (relativePath.endsWith("/")) {
-                        syncDb.getEntriesByPrefix("cloud_entries", relativePath)
+                        syncDb.getEntriesByParent("cloud_entries", relativePath)
                     } else {
                         listOfNotNull(syncDb.getEntry("cloud_entries", relativePath))
                     }
@@ -1675,7 +1676,7 @@ class CloudPaneController(
             }
             // 更新 local_entries（使用原始文件大小）
             val originalSize = try {
-                val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(localFile, session.dek, session.config.customEncryption)
+                val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(localFile, vaultSession.dek, vaultSession.config.customEncryption)
                 metadata["size"]?.toLong() ?: localFile.length()
             } catch (e: Exception) {
                 localFile.length()
