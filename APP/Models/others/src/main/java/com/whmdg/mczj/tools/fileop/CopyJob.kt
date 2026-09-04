@@ -405,8 +405,20 @@ class CopyJob(
 
     /** 从 FolderSizeDb 构建树状图 */
     private fun buildSizeTree(rootPath: String, sizeMap: Map<String, Long>): SizeTreeNode {
-        val root = SizeTreeNode(path = rootPath, size = sizeMap[rootPath] ?: 0L)
-        val pathToNode = mutableMapOf<String, SizeTreeNode>(rootPath to root)
+        // 临时可变节点结构
+        data class TempNode(
+            val name: String,
+            val path: String,
+            val size: Long,
+            val children: MutableList<TempNode> = mutableListOf()
+        )
+
+        val tempRoot = TempNode(
+            name = File(rootPath).name,
+            path = rootPath,
+            size = sizeMap[rootPath] ?: 0L
+        )
+        val pathToNode = mutableMapOf<String, TempNode>(rootPath to tempRoot)
 
         // 按路径层级排序，确保父节点先创建
         val sortedPaths = sizeMap.keys.filter { it.startsWith(rootPath) && it != rootPath }
@@ -415,12 +427,26 @@ class CopyJob(
         for (path in sortedPaths) {
             val parentPath = File(path).parent ?: continue
             val parentNode = pathToNode[parentPath] ?: continue
-            val node = SizeTreeNode(path = path, size = sizeMap[path] ?: 0L)
+            val file = File(path)
+            val node = TempNode(
+                name = file.name,
+                path = path,
+                size = sizeMap[path] ?: 0L
+            )
             parentNode.children.add(node)
             pathToNode[path] = node
         }
 
-        return root
+        // 转换为不可变 SizeTreeNode
+        fun TempNode.toSizeTreeNode(): SizeTreeNode = SizeTreeNode(
+            name = name,
+            path = path,
+            isDir = true,
+            size = size,
+            children = children.map { it.toSizeTreeNode() }
+        )
+
+        return tempRoot.toSizeTreeNode()
     }
 
     // ═══════════════════════════════════════════════════════
