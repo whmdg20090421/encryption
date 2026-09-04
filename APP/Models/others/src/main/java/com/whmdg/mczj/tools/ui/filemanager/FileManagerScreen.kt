@@ -575,6 +575,31 @@ fun FileManagerScreen(
         FileOperationManager.setFolderSizeChangedCallback { sizes ->
             vm.updateFolderSizesAndRefresh(sizes)
         }
+        // 注册保险箱文件数和大小变更回调（更新 SyncDatabase 统计）
+        FileOperationManager.setVaultFileCountChangeCallback { vaultId, delta ->
+            vaultSession?.let { session ->
+                if (session.record.id == vaultId) {
+                    try {
+                        val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(
+                            context, session.record.name
+                        )
+                        syncDb.adjustLocalStats(delta, 0)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+        FileOperationManager.setVaultSizeChangeCallback { vaultId, delta ->
+            vaultSession?.let { session ->
+                if (session.record.id == vaultId) {
+                    try {
+                        val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(
+                            context, session.record.name
+                        )
+                        syncDb.adjustLocalStats(0, delta)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
     }
 
     // ── 处理滚动位置恢复（绑定跳转+渲染） ──

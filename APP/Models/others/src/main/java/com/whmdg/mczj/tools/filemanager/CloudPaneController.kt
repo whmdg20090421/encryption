@@ -241,9 +241,15 @@ class CloudPaneController(
 
         // 录入本地表（如果是新文件）
         if (existingEntry == null) {
+            val originalSize = try {
+                val metadata = FileCodec.readMetadata(localFile, session.dek, session.config.customEncryption)
+                metadata["size"]?.toLong() ?: localFile.length()
+            } catch (e: Exception) {
+                localFile.length()
+            }
             syncDb.upsertEntry("local_entries", SyncEntryRow(
                 path = relativePath,
-                size = localFile.length(),
+                size = originalSize,
                 lastModified = Instant.ofEpochMilli(localFile.lastModified()).toString(),
                 md5 = null,
                 cloudHash = null,
@@ -457,7 +463,12 @@ class CloudPaneController(
                 for (dbEntry in completedDbEntries) {
                     val localFile = localFileMap[dbEntry.path]
                     if (localFile != null) {
-                        val currentSize = localFile.length()
+                        val currentSize = try {
+                            val metadata = FileCodec.readMetadata(localFile, session.dek, session.config.customEncryption)
+                            metadata["size"]?.toLong() ?: localFile.length()
+                        } catch (e: Exception) {
+                            localFile.length()
+                        }
                         val currentLastModified = Instant.ofEpochMilli(localFile.lastModified()).toString()
                         if (dbEntry.size == currentSize && dbEntry.lastModified == currentLastModified) {
                             validCompletedPaths.add(dbEntry.path)
@@ -1041,6 +1052,15 @@ class CloudPaneController(
     fun deleteLocal(relativePath: String) {
         scope.launch {
             withContext(Dispatchers.IO) {
+                // 统计删除前的数量和大小
+                val entries = if (relativePath.endsWith("/")) {
+                    syncDb.getEntriesByPrefix("local_entries", relativePath)
+                } else {
+                    listOfNotNull(syncDb.getEntry("local_entries", relativePath))
+                }
+                val deletedCount = entries.count { !it.path.endsWith("/") }
+                val deletedSize = entries.filter { !it.path.endsWith("/") }.sumOf { it.size }
+
                 val localFile = File(vaultDir, relativePath.trimStart('/'))
                 if (localFile.exists()) {
                     if (localFile.isDirectory) {
@@ -1053,6 +1073,9 @@ class CloudPaneController(
                 syncDb.deleteEntry("local_entries", relativePath)
                 // 如果是目录，也移除子条目
                 syncDb.deleteEntriesByPrefix("local_entries", relativePath)
+
+                // 更新统计
+                syncDb.adjustLocalStats(-deletedCount, -deletedSize)
             }
             navigateTo(state.currentPath)
         }
@@ -1063,6 +1086,15 @@ class CloudPaneController(
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
+                    // 统计删除前的数量和大小
+                    val entries = if (relativePath.endsWith("/")) {
+                        syncDb.getEntriesByPrefix("cloud_entries", relativePath)
+                    } else {
+                        listOfNotNull(syncDb.getEntry("cloud_entries", relativePath))
+                    }
+                    val deletedCount = entries.count { !it.path.endsWith("/") }
+                    val deletedSize = entries.filter { !it.path.endsWith("/") }.sumOf { it.size }
+
                     // 删除云端文件（WebDAV 支持递归删除文件夹）
                     val remotePath = "$remoteBasePath/${relativePath.trimStart('/')}"
                     try {
@@ -1084,6 +1116,9 @@ class CloudPaneController(
                         syncDb.updateStatus("local_entries", relativePath, SyncStatus.PENDING)
                     }
 
+                    // 更新统计
+                    syncDb.adjustCloudStats(-deletedCount, -deletedSize)
+
                     // 上传更新后的 cloud.db 到云端
                     uploadCloudDb()
                 }
@@ -1101,6 +1136,22 @@ class CloudPaneController(
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
+                    // 统计删除前的数量和大小
+                    val localEntries = if (relativePath.endsWith("/")) {
+                        syncDb.getEntriesByPrefix("local_entries", relativePath)
+                    } else {
+                        listOfNotNull(syncDb.getEntry("local_entries", relativePath))
+                    }
+                    val cloudEntries = if (relativePath.endsWith("/")) {
+                        syncDb.getEntriesByPrefix("cloud_entries", relativePath)
+                    } else {
+                        listOfNotNull(syncDb.getEntry("cloud_entries", relativePath))
+                    }
+                    val deletedLocalCount = localEntries.count { !it.path.endsWith("/") }
+                    val deletedLocalSize = localEntries.filter { !it.path.endsWith("/") }.sumOf { it.size }
+                    val deletedCloudCount = cloudEntries.count { !it.path.endsWith("/") }
+                    val deletedCloudSize = cloudEntries.filter { !it.path.endsWith("/") }.sumOf { it.size }
+
                     // 删除本地文件
                     val localFile = File(vaultDir, relativePath.trimStart('/'))
                     if (localFile.exists()) {
@@ -1134,6 +1185,10 @@ class CloudPaneController(
                     syncDb.deleteEntriesByPrefix("local_entries", relativePath)
                     syncDb.deleteEntry("cloud_entries", relativePath)
                     syncDb.deleteEntriesByPrefix("cloud_entries", relativePath)
+
+                    // 更新统计
+                    syncDb.adjustLocalStats(-deletedLocalCount, -deletedLocalSize)
+                    syncDb.adjustCloudStats(-deletedCloudCount, -deletedCloudSize)
 
                     // 上传更新后的 cloud.db 到云端
                     uploadCloudDb()
@@ -1709,11 +1764,14 @@ class CloudPaneController(
             val childRelativePath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
 
             if (file.isDirectory) {
-                // 文件夹大小从 FolderSizeDb 缓存读取
-                val folderSize = folderSizeDb().get(File(vaultDir, childRelativePath.trimStart('/')).absolutePath)?.size ?: 0L
+                // 文件夹大小：从 SyncDatabase 累加原始文件大小（避免 FolderSizeDb 的加密文件膨胀问题）
+                val prefix = if (childRelativePath.endsWith("/")) childRelativePath else "$childRelativePath/"
+                val folderSize = syncDb.getEntriesByParent("local_entries", childRelativePath)
+                    .filter { !it.path.endsWith("/") }  // 排除子文件夹自身
+                    .sumOf { it.size }
                 // 同步状态：递归统计子树
                 val syncAgg = aggregateDirectChildren(childRelativePath)
-                // 检测异常：uploadedSize > totalSize 说明 FolderSizeDb 缓存过时
+                // 检测异常：uploadedSize > totalSize 说明 DB 缓存过时
                 if (folderSize > 0 && syncAgg.uploadedSize > folderSize) {
                     anomalyPaths.add(childRelativePath)
                 }
@@ -1730,7 +1788,8 @@ class CloudPaneController(
                 // 文件：从 DB 查同步状态，优先用内存实时进度，回退到 DB 持久化进度
                 val dbEntry = syncDb.getEntry("local_entries", childRelativePath)
                 val status = dbEntry?.status ?: SyncStatus.PENDING
-                val fileSize = file.length()
+                // 优先使用 DB 中的原始文件大小，避免读取加密文件的膨胀大小
+                val fileSize = dbEntry?.size ?: file.length()
                 val liveProgress = state.syncTask.fileProgress[childRelativePath]
                 val dbUploaded = dbEntry?.uploadedSize ?: 0L
                 val greenSize = when {
@@ -2054,7 +2113,9 @@ class CloudPaneController(
         if (idx >= 0) {
             val old = entries[idx]
             val newEntry = if (old.isDirectory) {
-                val folderSize = folderSizeDb().get(File(vaultDir, relativePath.trimStart('/')).absolutePath)?.size ?: old.totalSize
+                val folderSize = syncDb.getEntriesByParent("local_entries", relativePath)
+                    .filter { !it.path.endsWith("/") }
+                    .sumOf { it.size }
                 val syncAgg = aggregateDirectChildren(relativePath)
                 old.copy(totalSize = folderSize, uploadedSize = syncAgg.uploadedSize, uploadingSize = syncAgg.uploadingSize)
             } else {
@@ -2095,7 +2156,9 @@ class CloudPaneController(
         while (parent.isNotEmpty()) {
             val idx = entries.indexOfFirst { it.relativePath == parent && it.isDirectory }
             if (idx >= 0) {
-                val folderSize = folderSizeDb().get(File(vaultDir, parent.trimStart('/')).absolutePath)?.size ?: entries[idx].totalSize
+                val folderSize = syncDb.getEntriesByParent("local_entries", parent)
+                    .filter { !it.path.endsWith("/") }
+                    .sumOf { it.size }
                 val syncAgg = aggregateDirectChildren(parent)
                 entries[idx] = entries[idx].copy(
                     totalSize = folderSize,

@@ -18,7 +18,7 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
     SQLiteOpenHelper(context, dbPath, null, DB_VERSION) {
 
     companion object {
-        private const val DB_VERSION = 3
+        private const val DB_VERSION = 4
         private const val TAG = "SyncDatabase"
 
         private val instances = mutableMapOf<String, SyncDatabase>()
@@ -42,6 +42,7 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
 
         private const val TABLE_LOCAL = "local_entries"
         private const val TABLE_CLOUD = "cloud_entries"
+        private const val TABLE_STATS = "sync_stats"
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -75,17 +76,43 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
 
         db.execSQL("CREATE INDEX idx_local_status ON local_entries(status)")
         db.execSQL("CREATE INDEX idx_cloud_status ON cloud_entries(status)")
+
+        db.execSQL("""
+            CREATE TABLE sync_stats (
+                id                INTEGER PRIMARY KEY CHECK(id = 1),
+                local_file_count  INTEGER NOT NULL DEFAULT 0,
+                cloud_file_count  INTEGER NOT NULL DEFAULT 0,
+                local_size        INTEGER NOT NULL DEFAULT 0,
+                cloud_size        INTEGER NOT NULL DEFAULT 0,
+                diff_count        INTEGER NOT NULL DEFAULT 0,
+                last_update       TEXT
+            )
+        """.trimIndent())
+        db.execSQL("INSERT INTO sync_stats (id) VALUES (1)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             db.execSQL("ALTER TABLE local_entries ADD COLUMN uploaded_size INTEGER NOT NULL DEFAULT 0")
-            // 已完成的文件，uploaded_size = size
             db.execSQL("UPDATE local_entries SET uploaded_size = size WHERE status = 'COMPLETED'")
         }
         if (oldVersion < 3) {
             db.execSQL("ALTER TABLE cloud_entries ADD COLUMN uploaded_size INTEGER NOT NULL DEFAULT 0")
             db.execSQL("UPDATE cloud_entries SET uploaded_size = size WHERE status = 'COMPLETED'")
+        }
+        if (oldVersion < 4) {
+            db.execSQL("""
+                CREATE TABLE sync_stats (
+                    id                INTEGER PRIMARY KEY CHECK(id = 1),
+                    local_file_count  INTEGER NOT NULL DEFAULT 0,
+                    cloud_file_count  INTEGER NOT NULL DEFAULT 0,
+                    local_size        INTEGER NOT NULL DEFAULT 0,
+                    cloud_size        INTEGER NOT NULL DEFAULT 0,
+                    diff_count        INTEGER NOT NULL DEFAULT 0,
+                    last_update       TEXT
+                )
+            """.trimIndent())
+            db.execSQL("INSERT INTO sync_stats (id) VALUES (1)")
         }
     }
 
@@ -385,7 +412,72 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
             put("fail_reason", entry.failReason)
         }
     }
+
+    // ── 统计数据 ──
+
+    fun getStats(): SyncStatsRow {
+        val db = readableDatabase
+        val cursor = db.query(TABLE_STATS, null, "id = 1", null, null, null, null)
+        return cursor.use {
+            if (it.moveToFirst()) {
+                SyncStatsRow(
+                    localFileCount = it.getInt(it.getColumnIndexOrThrow("local_file_count")),
+                    cloudFileCount = it.getInt(it.getColumnIndexOrThrow("cloud_file_count")),
+                    localSize = it.getLong(it.getColumnIndexOrThrow("local_size")),
+                    cloudSize = it.getLong(it.getColumnIndexOrThrow("cloud_size")),
+                    diffCount = it.getInt(it.getColumnIndexOrThrow("diff_count")),
+                    lastUpdate = it.getString(it.getColumnIndexOrThrow("last_update"))
+                )
+            } else {
+                SyncStatsRow()
+            }
+        }
+    }
+
+    fun updateStats(stats: SyncStatsRow) {
+        val db = writableDatabase
+        val values = ContentValues().apply {
+            put("local_file_count", stats.localFileCount)
+            put("cloud_file_count", stats.cloudFileCount)
+            put("local_size", stats.localSize)
+            put("cloud_size", stats.cloudSize)
+            put("diff_count", stats.diffCount)
+            put("last_update", stats.lastUpdate)
+        }
+        db.update(TABLE_STATS, values, "id = 1", null)
+    }
+
+    fun adjustLocalStats(deltaFiles: Int, deltaSize: Long) {
+        val db = writableDatabase
+        db.execSQL("""
+            UPDATE $TABLE_STATS SET
+                local_file_count = MAX(0, local_file_count + ?),
+                local_size = MAX(0, local_size + ?),
+                last_update = ?
+            WHERE id = 1
+        """.trimIndent(), arrayOf(deltaFiles, deltaSize, java.time.Instant.now().toString()))
+    }
+
+    fun adjustCloudStats(deltaFiles: Int, deltaSize: Long) {
+        val db = writableDatabase
+        db.execSQL("""
+            UPDATE $TABLE_STATS SET
+                cloud_file_count = MAX(0, cloud_file_count + ?),
+                cloud_size = MAX(0, cloud_size + ?),
+                last_update = ?
+            WHERE id = 1
+        """.trimIndent(), arrayOf(deltaFiles, deltaSize, java.time.Instant.now().toString()))
+    }
 }
+
+data class SyncStatsRow(
+    val localFileCount: Int = 0,
+    val cloudFileCount: Int = 0,
+    val localSize: Long = 0L,
+    val cloudSize: Long = 0L,
+    val diffCount: Int = 0,
+    val lastUpdate: String? = null
+)
 
 /** 同步条目数据行 */
 data class SyncEntryRow(

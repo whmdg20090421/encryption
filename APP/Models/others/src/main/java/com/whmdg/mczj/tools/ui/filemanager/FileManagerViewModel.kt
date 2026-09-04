@@ -1300,6 +1300,26 @@ class FilePaneController(
      * 永久删除文件或文件夹。成功返回 null，失败返回错误信息。
      */
     fun deleteEntry(entry: FileEntry): String? {
+        // 保险箱模式：删除前统计影响的文件数和大小
+        var deletedCount = 0
+        var deletedSize = 0L
+        if (isVaultMode) {
+            try {
+                val vaultDir = vaultSession!!.vaultDir
+                val relativePath = entry.path.removePrefix(vaultDir.absolutePath).trimStart('/')
+                val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(
+                    context, vaultSession!!.record.name
+                )
+                val entries = if (entry.isDirectory) {
+                    syncDb.getEntriesByPrefix("local_entries", "$relativePath/")
+                } else {
+                    listOfNotNull(syncDb.getEntry("local_entries", relativePath))
+                }
+                deletedCount = entries.count { !it.path.endsWith("/") }
+                deletedSize = entries.filter { !it.path.endsWith("/") }.sumOf { it.size }
+            } catch (_: Exception) {}
+        }
+
         if (hasShellEngine()) {
             val escaped = ShellEscape.escape(entry.path)
             val flag = if (entry.isDirectory) "-rf" else "-f"
@@ -1307,7 +1327,18 @@ class FilePaneController(
                 executeShell("rm $flag $escaped")
             } catch (e: Exception) { return e.message ?: "删除失败" }
             if (exit == 0) {
-                if (isVaultMode) onVaultContentModified?.invoke(vaultSession!!.record.id)
+                if (isVaultMode) {
+                    onVaultContentModified?.invoke(vaultSession!!.record.id)
+                    // 更新统计
+                    if (deletedCount > 0 || deletedSize > 0) {
+                        try {
+                            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(
+                                context, vaultSession!!.record.name
+                            )
+                            syncDb.adjustLocalStats(-deletedCount, -deletedSize)
+                        } catch (_: Exception) {}
+                    }
+                }
                 return null
             }
             return "删除失败: $err"
@@ -1315,7 +1346,18 @@ class FilePaneController(
         val file = File(entry.path)
         return try {
             if (SpecialPermissionVerifier.safeDelete(file)) {
-                if (isVaultMode) onVaultContentModified?.invoke(vaultSession!!.record.id)
+                if (isVaultMode) {
+                    onVaultContentModified?.invoke(vaultSession!!.record.id)
+                    // 更新统计
+                    if (deletedCount > 0 || deletedSize > 0) {
+                        try {
+                            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(
+                                context, vaultSession!!.record.name
+                            )
+                            syncDb.adjustLocalStats(-deletedCount, -deletedSize)
+                        } catch (_: Exception) {}
+                    }
+                }
                 null
             } else "删除失败"
         } catch (e: Exception) { e.message ?: "删除失败" }
@@ -1334,7 +1376,18 @@ class FilePaneController(
                 executeShell(cmd)
             } catch (e: Exception) { return e.message ?: "创建失败" }
             if (exit == 0) {
-                if (isVaultMode) onVaultContentModified?.invoke(vaultSession!!.record.id)
+                if (isVaultMode) {
+                    onVaultContentModified?.invoke(vaultSession!!.record.id)
+                    // 创建文件时更新统计（空文件size=0，文件夹不计入）
+                    if (!isFolder) {
+                        try {
+                            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(
+                                context, vaultSession!!.record.name
+                            )
+                            syncDb.adjustLocalStats(1, 0)
+                        } catch (_: Exception) {}
+                    }
+                }
                 return null
             }
             return "创建失败: $err"
@@ -1344,7 +1397,18 @@ class FilePaneController(
         return try {
             val success = if (isFolder) target.mkdir() else target.createNewFile()
             if (success) {
-                if (isVaultMode) onVaultContentModified?.invoke(vaultSession!!.record.id)
+                if (isVaultMode) {
+                    onVaultContentModified?.invoke(vaultSession!!.record.id)
+                    // 创建文件时更新统计（空文件size=0，文件夹不计入）
+                    if (!isFolder) {
+                        try {
+                            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(
+                                context, vaultSession!!.record.name
+                            )
+                            syncDb.adjustLocalStats(1, 0)
+                        } catch (_: Exception) {}
+                    }
+                }
                 null
             } else "创建失败"
         } catch (e: Exception) { e.message ?: "创建失败" }

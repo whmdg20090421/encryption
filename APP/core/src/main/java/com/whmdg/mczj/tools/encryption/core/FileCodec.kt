@@ -31,6 +31,7 @@ object FileCodec {
         private val encryptMetadata: Boolean,
         private val customEncryption: Boolean,
         private val sourceModifiedAt: Long = System.currentTimeMillis(),
+        private val originalSize: Long = 0L,
         private val onProgress: (Long) -> Unit = {},
         private val cancelFlag: AtomicBoolean? = null
     ) {
@@ -44,8 +45,8 @@ object FileCodec {
         init {
             if (customEncryption) out.write(FileConstants.magicHeader)
             val metadata = if (encryptMetadata) {
-                "{\"mtime\":${sourceModifiedAt / 1000.0},\"ctime\":${sourceModifiedAt / 1000.0}}"
-            } else "{}"
+                "{\"mtime\":${sourceModifiedAt / 1000.0},\"ctime\":${sourceModifiedAt / 1000.0},\"size\":$originalSize}"
+            } else "{\"size\":$originalSize}"
             val encrypted = AesGcm256.encrypt(dek, metadata.toByteArray(Charsets.UTF_8), aad)
             out.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(encrypted.iv.size + encrypted.ciphertext.size).array())
             out.write(encrypted.iv)
@@ -116,6 +117,7 @@ object FileCodec {
 
             // ② metadata 块
             val metaMap = mutableMapOf<String, Double>()
+            metaMap["size"] = totalSize.toDouble()
             if (encryptMetadata) {
                 val mtime = src.lastModified() / 1000.0
                 metaMap["mtime"] = mtime
@@ -157,6 +159,45 @@ object FileCodec {
             }
         }
         onProgress(totalSize, totalSize)
+    }
+
+    fun readMetadata(
+        src: File,
+        dek: ByteArray,
+        customEncryption: Boolean
+    ): Map<String, Double> {
+        val aad = if (customEncryption) FileConstants.aadCustomObf else null
+
+        FileInputStream(src).use { `in` ->
+            if (customEncryption) {
+                val magic = ByteArray(FileConstants.magicHeader.size)
+                `in`.read(magic)
+                if (!magic.contentEquals(FileConstants.magicHeader)) {
+                    throw IllegalArgumentException("文件头损坏或未启用对应加密配置")
+                }
+            }
+
+            val metaLenBuf = ByteArray(4)
+            `in`.read(metaLenBuf)
+            val metaLen = ByteBuffer.wrap(metaLenBuf).order(ByteOrder.BIG_ENDIAN).int
+            val metaIv = ByteArray(12)
+            `in`.read(metaIv)
+            val metaCipher = ByteArray(metaLen - 12)
+            `in`.read(metaCipher)
+
+            val metaPlain = AesGcm256.decrypt(dek, metaIv, metaCipher, aad)
+            val metaStr = String(metaPlain, Charsets.UTF_8)
+
+            try {
+                val jsonElement = Json.parseToJsonElement(metaStr)
+                if (jsonElement is JsonObject) {
+                    return jsonElement.mapValues { it.value.jsonPrimitive.doubleOrNull ?: 0.0 }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        return emptyMap()
     }
 
     fun decrypt(

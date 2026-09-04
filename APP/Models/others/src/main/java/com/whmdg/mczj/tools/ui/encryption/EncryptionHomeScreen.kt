@@ -673,6 +673,22 @@ fun VaultsListTab(
             }
         }
     } else {
+        // 从 SyncDatabase 同步统计数据到 VaultService
+        LaunchedEffect(list) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                list.forEach { vault ->
+                    try {
+                        val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vault.name)
+                        val stats = syncDb.getStats()
+                        if (stats.localSize > 0 || stats.localFileCount > 0) {
+                            vaultService.setStorageSize(vault.id, stats.localSize)
+                            vaultService.setFileCount(vault.id, stats.localFileCount)
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+
         Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 12.dp)) {
             items(list) { vault ->

@@ -49,6 +49,7 @@ object CryptoService {
         context: Context,
         session: VaultSession,
         sourceName: String,
+        sourceSize: Long = 0L,
         subDir: String = "",
         onProgress: (Long) -> Unit = {},
         cancelFlag: AtomicBoolean? = null
@@ -71,6 +72,8 @@ object CryptoService {
             dek = session.dek,
             encryptMetadata = session.record.encryptMetadata,
             customEncryption = session.record.customEncryption,
+            sourceModifiedAt = System.currentTimeMillis(),
+            originalSize = sourceSize,
             onProgress = onProgress,
             cancelFlag = cancelFlag
         )
