@@ -2100,7 +2100,7 @@ private fun DiffResultDialog(
 
 // ── MD5 计算辅助函数 ──
 
-private fun calculateMd5(file: File): String {
+private fun calculateMd5(file: java.io.File): String {
     val md = java.security.MessageDigest.getInstance("MD5")
     file.inputStream().use { input ->
         val buffer = ByteArray(8192)
