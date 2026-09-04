@@ -5456,7 +5456,10 @@ private fun FileBrowserPanel(
                         )
                     }
                 }
-                items(entries, key = { it.path }) { entry ->
+                items(entries, key = {
+                    // 冲突文件会有两个条目（local + cloud），需要用不同的 key 区分
+                    if (it.isCloudOnly) "cloud_${it.path}" else "local_${it.path}"
+                }) { entry ->
                     val entryIndex = entries.indexOfFirst { it.path == entry.path }
 
                     val dirSize = if (entry.isDirectory) {

@@ -1813,6 +1813,7 @@ class CloudPaneController(
                              name in localNames
 
             // 云端-only 或冲突时，添加云端条目
+            // 冲突时：本地条目在 listLocalFiles 中已添加（显示在前），云端条目在此添加（显示在后）
             if (name !in localNames || isConflict) {
                 entries.add(CloudFileEntry(
                     name = name,
@@ -2076,8 +2077,16 @@ class CloudPaneController(
                 // 1. 检查大小是否变化
                 val currentSize = file.length()
                 if (currentSize != dbEntry.size) {
-                    // 大小变了 → 直接标记为 PENDING
-                    syncDb.updateStatus("local_entries", childRelativePath, SyncStatus.PENDING)
+                    // 大小变了 → 标记为 PENDING，重置上传进度
+                    syncDb.updateEntry("local_entries", childRelativePath) { row ->
+                        row.copy(
+                            status = SyncStatus.PENDING,
+                            size = currentSize,
+                            uploadedSize = 0,  // 重置已上传大小
+                            lastModified = java.time.Instant.ofEpochMilli(file.lastModified()).toString()
+                            // 保留 last_sync_time，让用户知道之前上传过
+                        )
+                    }
                     com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync(
                         "CloudPane",
                         "检测到文件大小变化: $childRelativePath (${dbEntry.size} → $currentSize)"
@@ -2095,12 +2104,13 @@ class CloudPaneController(
                     // 修改时间变了 → 计算 MD5 确认
                     val currentMd5 = calculateMd5(file)
                     if (currentMd5 != dbEntry.md5) {
-                        // MD5 不匹配 → 标记为 PENDING
+                        // MD5 不匹配 → 标记为 PENDING，重置上传进度
                         syncDb.updateEntry("local_entries", childRelativePath) { row ->
                             row.copy(
                                 status = SyncStatus.PENDING,
                                 md5 = currentMd5,
                                 size = currentSize,
+                                uploadedSize = 0,  // 重置已上传大小
                                 lastModified = currentModifiedStr
                                 // 保留 last_sync_time，让用户知道之前上传过
                             )
