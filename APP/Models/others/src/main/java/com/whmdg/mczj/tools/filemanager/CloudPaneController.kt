@@ -245,7 +245,7 @@ class CloudPaneController(
             val originalSize = vaultSession?.let { session ->
                 try {
                     val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
-                        localFile, session.dek, session.config.customEncryption
+                        localFile, session.dek, session.config.configFlags.customEncryption
                     )
                     metadata["size"]?.toLong() ?: localFile.length()
                 } catch (e: Exception) {
@@ -1695,7 +1695,7 @@ class CloudPaneController(
             val originalSize = vaultSession?.let { session ->
                 try {
                     val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
-                        localFile, session.dek, session.config.customEncryption
+                        localFile, session.dek, session.config.configFlags.customEncryption
                     )
                     metadata["size"]?.toLong() ?: localFile.length()
                 } catch (e: Exception) {
