@@ -81,6 +81,12 @@ private data class CatalogSyncProgress(
     val error: String? = null
 )
 
+private data class SyncSummary(
+    val localExisting: List<String>,    // 本地已有的保险箱
+    val cloudNew: List<String>,         // 从云端新增的保险箱
+    val uploaded: List<String>          // 上传到云端的保险箱
+)
+
 /**
  * 云盘同步事件接口 —— 加密模块通过此接口向云盘模块传递用户选择。
  * 云盘模块内部自行管理 syncItems 状态，外部只通过事件驱动。
@@ -131,23 +137,27 @@ fun CloudSyncScreen(
     var syncRunning by remember { mutableStateOf(false) }
     var syncJob by remember { mutableStateOf<Job?>(null) }
     var showCancelSyncConfirm by remember { mutableStateOf(false) }
+    var syncSummary by remember { mutableStateOf<SyncSummary?>(null) }
 
     /** 用户确认同步后，从云端清单恢复保险箱卡片与本地占位目录。 */
     suspend fun restoreCloudCatalog(
         config: WebDavServerConfig,
         onProgress: (CatalogSyncProgress) -> Unit = {}
-    ) {
+    ): Pair<List<String>, List<String>> {  // 返回 (本地已有, 云端新增)
         onProgress(CatalogSyncProgress("正在连接云端"))
         val client = WebDavFileClient(config)
         val cache = File(context.cacheDir, "vault_catalog.json")
         onProgress(CatalogSyncProgress("正在下载保险箱清单"))
         val catalog = CloudVaultCatalogSync.download(client, config.relativePath, cache)
         val total = catalog.vaults.size
+        val localExisting = mutableListOf<String>()
+        val cloudNew = mutableListOf<String>()
         if (total == 0) {
             // 云端还没有同步清单时，卡片视图应反映空的云端状态。
             syncItems.clear()
             processedVaultIds.clear()
             CloudSyncStore.save(context, emptyList())
+            return localExisting to cloudNew
         }
         for ((index, meta) in catalog.vaults.withIndex()) {
             // 登录阶段先恢复该保险箱的加密同步库，供卡片打开时直接显示云端目录。
@@ -160,7 +170,14 @@ fun CloudSyncScreen(
             }
             val record = meta.toVaultRecord(localPath)
             val restored = try {
-                vaultService.restoreCloudVault(record)
+                val existing = vaultService.getVault(meta.id)
+                if (existing != null) {
+                    localExisting.add(meta.name)
+                    existing
+                } else {
+                    cloudNew.add(meta.name)
+                    vaultService.restoreCloudVault(record)
+                }
             } catch (_: Exception) {
                 vaultService.getVault(meta.id)?.let { catalogConflict = meta to it }
                 continue
@@ -188,24 +205,32 @@ fun CloudSyncScreen(
         }
         CloudSyncStore.save(context, syncItems.toList())
         onProgress(CatalogSyncProgress("同步完成", total, total, completed = true))
+        return localExisting to cloudNew
     }
 
-    suspend fun publishCloudCatalog(config: WebDavServerConfig) {
+    suspend fun publishCloudCatalog(config: WebDavServerConfig): List<String> {
+        val localVaults = vaultService.vaults.toList()
         val ok = CloudVaultCatalogSync.upload(
             client = WebDavFileClient(config),
             configPath = config.relativePath,
-            vaults = vaultService.vaults.toList(),
+            vaults = localVaults,
             cacheFile = File(context.cacheDir, "vault_catalog_upload.json")
         )
         if (!ok) throw IllegalStateException("云端保险箱清单上传失败")
+        return localVaults.map { it.name }
     }
 
     suspend fun runCatalogSync(config: WebDavServerConfig) {
         try {
-            restoreCloudCatalog(config) { catalogSyncProgress = it }
+            val (localExisting, cloudNew) = restoreCloudCatalog(config) { catalogSyncProgress = it }
             catalogSyncProgress = CatalogSyncProgress("正在上传保险箱清单")
-            publishCloudCatalog(config)
+            val uploaded = publishCloudCatalog(config)
             catalogSyncProgress = CatalogSyncProgress("同步完成", completed = true)
+            syncSummary = SyncSummary(
+                localExisting = localExisting,
+                cloudNew = cloudNew,
+                uploaded = uploaded
+            )
         } catch (e: TimeoutCancellationException) {
             catalogSyncProgress = null
             syncErrorMessage = "同步超时：云端在两分钟内未响应，请检查网络后重试。"
@@ -805,6 +830,40 @@ fun CloudSyncScreen(
                 title = { Text("云端同步失败") },
                 text = { Text(message) },
                 confirmButton = { TextButton(onClick = { syncErrorMessage = null }) { Text("关闭") } }
+            )
+        }
+
+        syncSummary?.let { summary ->
+            AlertDialog(
+                onDismissRequest = { syncSummary = null },
+                title = { Text("云端同步完成") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (summary.cloudNew.isNotEmpty()) {
+                            Text("从云端新增 ${summary.cloudNew.size} 个保险箱：", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Column(Modifier.padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                summary.cloudNew.forEach { name ->
+                                    Text("• $name", fontSize = 13.sp)
+                                }
+                            }
+                        }
+                        if (summary.localExisting.isNotEmpty()) {
+                            Text("本地已有 ${summary.localExisting.size} 个保险箱：", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Column(Modifier.padding(start = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                summary.localExisting.forEach { name ->
+                                    Text("• $name", fontSize = 13.sp)
+                                }
+                            }
+                        }
+                        if (summary.uploaded.isNotEmpty()) {
+                            Text("已上传 ${summary.uploaded.size} 个保险箱到云端", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+                        if (summary.cloudNew.isEmpty() && summary.localExisting.isEmpty()) {
+                            Text("云端暂无保险箱", fontSize = 13.sp)
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { syncSummary = null }) { Text("关闭") } }
             )
         }
 

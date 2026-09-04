@@ -19,8 +19,8 @@ object CloudVaultCatalogSync {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = false }
 
     private fun remotePath(configPath: String): String {
-        val base = configPath.trim('/').trimEnd('/')
-        return if (base.isEmpty()) "/.sync_meta/$FILE_NAME" else "/$base/.sync_meta/$FILE_NAME"
+        // 元数据固定放在根目录的 .sync_meta/ 下，不受 configPath 影响
+        return "/.sync_meta/$FILE_NAME"
     }
 
     suspend fun download(client: WebDavFileClient, configPath: String, cacheFile: File): CloudVaultCatalog {
