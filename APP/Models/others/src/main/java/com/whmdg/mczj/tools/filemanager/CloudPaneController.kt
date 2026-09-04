@@ -1058,7 +1058,14 @@ class CloudPaneController(
                 withContext(Dispatchers.IO) {
                     // 删除云端文件（WebDAV 支持递归删除文件夹）
                     val remotePath = "$remoteBasePath/${relativePath.trimStart('/')}"
-                    webdavClient.delete(remotePath)
+                    try {
+                        webdavClient.delete(remotePath)
+                    } catch (e: Exception) {
+                        // 404 说明文件不存在，跳过即可（已达到删除目的）
+                        if (e.message?.contains("404") != true) {
+                            throw e  // 其他错误继续抛出
+                        }
+                    }
 
                     // 从云端表移除（递归删除子条目）
                     syncDb.deleteEntry("cloud_entries", relativePath)
@@ -1106,7 +1113,14 @@ class CloudPaneController(
                     }
                     // 删除云端文件（WebDAV 支持递归删除文件夹）
                     val remotePath = "$remoteBasePath/${relativePath.trimStart('/')}"
-                    webdavClient.delete(remotePath)
+                    try {
+                        webdavClient.delete(remotePath)
+                    } catch (e: Exception) {
+                        // 404 说明文件不存在，跳过即可（已达到删除目的）
+                        if (e.message?.contains("404") != true) {
+                            throw e  // 其他错误继续抛出
+                        }
+                    }
 
                     // 从两张表移除（递归删除子条目）
                     syncDb.deleteEntry("local_entries", relativePath)
