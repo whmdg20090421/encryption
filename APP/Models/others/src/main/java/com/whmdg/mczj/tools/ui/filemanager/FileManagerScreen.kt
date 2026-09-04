@@ -6099,7 +6099,8 @@ private fun CloudPanelContent(
                                     totalSize = cloudEntry.totalSize,
                                     uploadedSize = cloudEntry.uploadedSize,
                                     uploadingSize = cloudEntry.uploadingSize,
-                                    isCloudOnly = cloudEntry.isCloudOnly
+                                    isCloudOnly = cloudEntry.isCloudOnly,
+                                    isVerifying = cloudEntry.isVerifying
                                 )
                             }
                         } else null
@@ -6555,43 +6556,60 @@ private fun SyncStatusBar(
     totalSize: Long,
     uploadedSize: Long,
     uploadingSize: Long,
-    isCloudOnly: Boolean = false
+    isCloudOnly: Boolean = false,
+    isVerifying: Boolean = false
 ) {
     val skyBlue = Color(0xFF03A9F4)
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 进度条（自适应剩余空间）
-        Row(
-            modifier = Modifier
-                .weight(1f)
-                .height(3.dp)
-                .clip(RoundedCornerShape(1.5.dp))
-        ) {
-            if (isCloudOnly) {
-                // 云端-only：全天蓝色
-                Box(Modifier.weight(1f).fillMaxHeight().background(skyBlue))
-            } else {
-                val remaining = totalSize - uploadedSize - uploadingSize
-                val minWeight = totalSize * 0.01f
-                val greenW = if (uploadedSize > 0) maxOf(uploadedSize.toFloat(), minWeight) else 0f
-                val yellowW = if (uploadingSize > 0) maxOf(uploadingSize.toFloat(), minWeight) else 0f
-                val redW = if (remaining > 0) maxOf(remaining.toFloat(), minWeight) else 0f
-                if (greenW > 0f) Box(Modifier.weight(greenW).fillMaxHeight().background(Color(0xFF4CAF50)))
-                if (yellowW > 0f) Box(Modifier.weight(yellowW).fillMaxHeight().background(Color(0xFFFFC107)))
-                if (redW > 0f) Box(Modifier.weight(redW).fillMaxHeight().background(Color(0xFFE57373)))
-                if (totalSize <= 0L) Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE57373)))
+        if (isVerifying) {
+            // 校验中：显示滚动进度条
+            CircularProgressIndicator(
+                modifier = Modifier.size(12.dp),
+                strokeWidth = 1.5.dp,
+                color = Color(0xFF3B82F6)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = "校验中...",
+                fontSize = 10.sp,
+                color = Color(0xFF94A3B8),
+                maxLines = 1
+            )
+        } else {
+            // 进度条（自适应剩余空间）
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(1.5.dp))
+            ) {
+                if (isCloudOnly) {
+                    // 云端-only：全天蓝色
+                    Box(Modifier.weight(1f).fillMaxHeight().background(skyBlue))
+                } else {
+                    val remaining = totalSize - uploadedSize - uploadingSize
+                    val minWeight = totalSize * 0.01f
+                    val greenW = if (uploadedSize > 0) maxOf(uploadedSize.toFloat(), minWeight) else 0f
+                    val yellowW = if (uploadingSize > 0) maxOf(uploadingSize.toFloat(), minWeight) else 0f
+                    val redW = if (remaining > 0) maxOf(remaining.toFloat(), minWeight) else 0f
+                    if (greenW > 0f) Box(Modifier.weight(greenW).fillMaxHeight().background(Color(0xFF4CAF50)))
+                    if (yellowW > 0f) Box(Modifier.weight(yellowW).fillMaxHeight().background(Color(0xFFFFC107)))
+                    if (redW > 0f) Box(Modifier.weight(redW).fillMaxHeight().background(Color(0xFFE57373)))
+                    if (totalSize <= 0L) Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE57373)))
+                }
             }
+            // 百分比（自适应宽度）
+            val pct = if (isCloudOnly) 100.0 else if (totalSize > 0) uploadedSize * 100.0 / totalSize else 0.0
+            Text(
+                text = "${String.format("%.1f", pct)}%",
+                modifier = Modifier.padding(start = 4.dp),
+                fontSize = 10.sp,
+                color = if (isCloudOnly) skyBlue else Color(0xFF94A3B8),
+                maxLines = 1
+            )
         }
-        // 百分比（自适应宽度）
-        val pct = if (isCloudOnly) 100.0 else if (totalSize > 0) uploadedSize * 100.0 / totalSize else 0.0
-        Text(
-            text = "${String.format("%.1f", pct)}%",
-            modifier = Modifier.padding(start = 4.dp),
-            fontSize = 10.sp,
-            color = if (isCloudOnly) skyBlue else Color(0xFF94A3B8),
-            maxLines = 1
-        )
     }
 }

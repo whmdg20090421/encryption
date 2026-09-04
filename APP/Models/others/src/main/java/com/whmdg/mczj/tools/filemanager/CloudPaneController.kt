@@ -38,6 +38,9 @@ class CloudPaneController(
     private val folderSizeDb: () -> FolderSizeDb,
     private val recalculateFolderSize: suspend (String) -> Unit
 ) {
+    /** MD5 同步计算阈值：小于此值的文件在渲染时同步计算 MD5，大于此值则异步计算 */
+    private val MD5_SYNC_THRESHOLD = 10 * 1024 * 1024L  // 10MB
+
     val state = CloudPanelState()
     private val webdavClient = WebDavFileClient(webdavConfig)
     private var syncJob: Job? = null
@@ -123,7 +126,9 @@ class CloudPaneController(
         /** 文件的单个同步状态（文件夹为 null，用聚合字段代替） */
         val syncStatus: SyncStatus? = null,
         /** 仅存在于云端，本地无对应文件（纯内存标识，不持久化） */
-        val isCloudOnly: Boolean = false
+        val isCloudOnly: Boolean = false,
+        /** 正在校验 MD5（冲突文件合并检测中） */
+        val isVerifying: Boolean = false
     )
 
     /** 排除的系统文件 */
@@ -361,13 +366,15 @@ class CloudPaneController(
                         if (!success && error != null) {
                             android.widget.Toast.makeText(context, "上传失败: $error，请查看日志", android.widget.Toast.LENGTH_LONG).show()
                         }
-                        updateSingleEntry(relativePath)
 
                         // 关闭进度弹窗，上传 cloud.db（自带弹窗）
                         closeProgressDialog()
                         uploadCloudDbWithUI()
                         // 无论成功失败都删除锁文件
                         com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
+
+                        // 上传完成后刷新当前目录，重新判断冲突状态，合并本地+云端条目
+                        navigateTo(state.currentPath)
                     }
                 },
                 onStatusChange = {
@@ -1855,7 +1862,58 @@ class CloudPaneController(
                              localEntry.status == SyncStatus.PENDING &&
                              name in localNames
 
-            // 云端-only 或冲突时，添加云端条目
+            if (isConflict) {
+                // 冲突文件：检查 MD5 是否相同（智能合并）
+                val localFile = File(vaultDir, childRelativePath.trimStart('/'))
+
+                if (localFile.exists() && cloudEntry.md5 != null) {
+                    if (localFile.length() < MD5_SYNC_THRESHOLD) {
+                        // 小文件：同步计算 MD5，现场合并或显示冲突
+                        val localMd5 = com.whmdg.mczj.tools.encryption.services.CryptoService.calculateMd5(localFile)
+                        if (localMd5 == cloudEntry.md5) {
+                            // MD5 相同，合并：更新 local_entries 为 COMPLETED
+                            syncDb.updateEntry("local_entries", childRelativePath) { row ->
+                                row.copy(
+                                    status = SyncStatus.COMPLETED,
+                                    md5 = localMd5,
+                                    uploadedSize = localFile.length(),
+                                    lastSyncTime = java.time.Instant.now().toString()
+                                )
+                            }
+                            // 不添加云端条目（已合并，只显示本地绿色条目）
+                            continue
+                        }
+                        // MD5 不同，继续下面的逻辑添加两个冲突条目
+                    } else {
+                        // 大文件：添加"校验中"状态的两个条目，后台异步计算 MD5
+                        val localIdx = entries.indexOfFirst { it.relativePath == childRelativePath && !it.isCloudOnly }
+                        if (localIdx >= 0) {
+                            // 更新本地条目为"校验中"
+                            entries[localIdx] = entries[localIdx].copy(isVerifying = true)
+                        }
+                        // 添加云端条目（也标记为"校验中"）
+                        entries.add(CloudFileEntry(
+                            name = name,
+                            relativePath = childRelativePath,
+                            isDirectory = false,
+                            totalSize = cloudEntry.size,
+                            uploadedSize = cloudEntry.size,
+                            uploadingSize = 0,
+                            lastModified = parseCloudLastModified(cloudEntry.lastModified),
+                            syncStatus = SyncStatus.COMPLETED,
+                            isCloudOnly = true,
+                            isVerifying = true
+                        ))
+                        // 启动异步校验
+                        scope.launch(Dispatchers.IO) {
+                            verifyAndMergeConflict(childRelativePath, localFile, cloudEntry.md5)
+                        }
+                        continue
+                    }
+                }
+            }
+
+            // 云端-only 或冲突（MD5 不同）时，添加云端条目
             // 冲突时：本地条目在 listLocalFiles 中已添加（显示在前），云端条目在此添加（显示在后）
             if (name !in localNames || isConflict) {
                 entries.add(CloudFileEntry(
@@ -1912,6 +1970,37 @@ class CloudPaneController(
             java.time.Instant.parse(lastModified).toEpochMilli()
         } catch (_: Exception) {
             0L
+        }
+    }
+
+    /** 异步校验冲突文件 MD5 并合并（大文件后台校验） */
+    private suspend fun verifyAndMergeConflict(
+        relativePath: String,
+        localFile: File,
+        cloudMd5: String
+    ) {
+        try {
+            val localMd5 = com.whmdg.mczj.tools.encryption.services.CryptoService.calculateMd5(localFile)
+
+            if (localMd5 == cloudMd5) {
+                // MD5 相同，合并：更新 local_entries 为 COMPLETED
+                syncDb.updateEntry("local_entries", relativePath) { row ->
+                    row.copy(
+                        status = SyncStatus.COMPLETED,
+                        md5 = localMd5,
+                        uploadedSize = localFile.length(),
+                        lastSyncTime = java.time.Instant.now().toString()
+                    )
+                }
+            }
+            // MD5 不同则不操作，保持 PENDING 状态
+
+            // 刷新列表（移除校验状态，显示最终颜色）
+            withContext(Dispatchers.Main) {
+                navigateTo(state.currentPath)
+            }
+        } catch (e: Exception) {
+            // 校验失败，保持原状（不刷新，避免死循环）
         }
     }
 
