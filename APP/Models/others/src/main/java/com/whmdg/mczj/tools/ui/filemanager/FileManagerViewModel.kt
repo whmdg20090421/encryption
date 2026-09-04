@@ -1104,6 +1104,14 @@ class FilePaneController(
         val back = panel.navState.back() ?: return null
         panel.navState = back
         val backPath = back.current
+
+        // 主动检查：如果从 Vault 类型切换到 FileSystem 类型，说明已退出保险箱，立即清理 session
+        val currentPath = panel.path
+        if (currentPath is PanelPath.Vault && backPath is PanelPath.FileSystem) {
+            vaultSession?.dispose()
+            vaultSession = null
+        }
+
         navigateToPanelPath(backPath, panel)
         return backPath
     }
@@ -1137,7 +1145,18 @@ class FilePaneController(
     }
 
     /** 返回上级目录，返回目标 PanelPath，null 表示已在根目录 */
-    fun goUp(): PanelPath? = state.path.goUp()
+    fun goUp(): PanelPath? {
+        val currentPath = state.path
+        val parentPath = currentPath.goUp()
+
+        // 主动检查：如果从 Vault 类型切换到 FileSystem 类型，说明已退出保险箱，立即清理 session
+        if (currentPath is PanelPath.Vault && parentPath is PanelPath.FileSystem) {
+            vaultSession?.dispose()
+            vaultSession = null
+        }
+
+        return parentPath
+    }
 
     /** 当前聚焦面板是否在保险箱根目录 */
     fun isAtVaultRoot(): Boolean {
@@ -2895,7 +2914,15 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 导航后检查指定面板是否离开了 vault，若是则销毁该面板的密钥 */
     private fun checkVaultPanelExit(ctrl: FilePaneController) {
         if (!ctrl.isVaultMode) return
-        if (ctrl.state.path !is PanelPath.Vault) {
+        val currentPath = ctrl.state.path
+        val shouldExit = when (currentPath) {
+            is PanelPath.Vault -> {
+                // 检查路径是否真的在保险箱内
+                !currentPath.isInsideVault(currentPath.path)
+            }
+            else -> true  // 非 Vault 类型，已退出
+        }
+        if (shouldExit) {
             ctrl.vaultSession?.dispose()
             ctrl.vaultSession = null
             cleanupVaultTempFiles()
@@ -2982,9 +3009,27 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ═══ Phase 3: 委托方法（转发到 Controller） ═══
     fun navigateToWithScroll(path: PanelPath, scrollToIndex: Int = 0, scrollToOffset: Int = 0) = focusedController.navigateToWithScroll(path, scrollToIndex, scrollToOffset)
-    fun goBack(): PanelPath? = focusedController.goBack()
+    fun goBack(): PanelPath? {
+        val ctrl = focusedController
+        val currentPath = ctrl.state.path
+        val result = ctrl.goBack()
+        // 主动检查：如果从 Vault 退出到 FileSystem，清理临时文件
+        if (currentPath is PanelPath.Vault && result is PanelPath.FileSystem) {
+            cleanupVaultTempFiles()
+        }
+        return result
+    }
     fun goForward(): PanelPath? = focusedController.goForward()
-    fun goUp(): PanelPath? = focusedController.goUp()
+    fun goUp(): PanelPath? {
+        val ctrl = focusedController
+        val currentPath = ctrl.state.path
+        val result = ctrl.goUp()
+        // 主动检查：如果从 Vault 退出到 FileSystem，清理临时文件
+        if (currentPath is PanelPath.Vault && result is PanelPath.FileSystem) {
+            cleanupVaultTempFiles()
+        }
+        return result
+    }
     fun isAtVaultRoot(): Boolean = focusedController.isAtVaultRoot()
     /** String 便捷重载，供 Screen 层直接传路径字符串使用 */
     fun navigateToWithScroll(path: String, scrollToIndex: Int = 0, scrollToOffset: Int = 0) =

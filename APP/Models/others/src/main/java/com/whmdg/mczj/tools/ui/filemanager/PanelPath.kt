@@ -77,7 +77,15 @@ sealed class PanelPath {
         override fun goUp(): PanelPath? {
             if (path == vaultDir || !path.contains('/')) return null
             val parent = path.substringBeforeLast('/').ifEmpty { "/" }
-            return if (parent != path) copy(path = parent) else null
+            if (parent == path) return null
+
+            // 如果父目录在保险箱外，切换回 FileSystem 类型
+            if (parent != vaultDir && !parent.startsWith("$vaultDir/")) {
+                return FileSystem(parent)
+            }
+
+            // 父目录仍在保险箱内，保持 Vault 类型
+            return copy(path = parent)
         }
 
         fun isInsideVault(realPath: String): Boolean =
