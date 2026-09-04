@@ -259,7 +259,7 @@ fun FileManagerScreen(
     // 云盘模式初始化
     LaunchedEffect(cloudMode) {
         if (cloudMode && webdavConfig != null && cloudVaultDir != null) {
-            vm.panels.enterCloudMode(webdavConfig, cloudVaultDir, cloudVaultId, cloudVaultName, vm::recalculateFolderSize)
+            vm.panels.enterCloudMode(webdavConfig, cloudVaultDir, cloudVaultId, cloudVaultName, vaultSession, vm::recalculateFolderSize)
         }
     }
 

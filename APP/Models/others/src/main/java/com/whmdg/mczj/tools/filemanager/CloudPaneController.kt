@@ -242,18 +242,16 @@ class CloudPaneController(
 
         // 录入本地表（如果是新文件）
         if (existingEntry == null) {
-            val originalSize = if (vaultSession != null) {
+            val originalSize = vaultSession?.let { session ->
                 try {
                     val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
-                        localFile, vaultSession.dek, vaultSession.config.customEncryption
+                        localFile, session.dek, session.config.customEncryption
                     )
                     metadata["size"]?.toLong() ?: localFile.length()
                 } catch (e: Exception) {
                     localFile.length()
                 }
-            } else {
-                localFile.length()
-            }
+            } ?: localFile.length()
             syncDb.upsertEntry("local_entries", SyncEntryRow(
                 path = relativePath,
                 size = originalSize,
@@ -1694,18 +1692,16 @@ class CloudPaneController(
                 onProgress(DownloadProgress(index + 1, files.size, fileName, downloadedBytes, totalBytes))
             }
             // 更新 local_entries（使用原始文件大小）
-            val originalSize = if (vaultSession != null) {
+            val originalSize = vaultSession?.let { session ->
                 try {
                     val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
-                        localFile, vaultSession.dek, vaultSession.config.customEncryption
+                        localFile, session.dek, session.config.customEncryption
                     )
                     metadata["size"]?.toLong() ?: localFile.length()
                 } catch (e: Exception) {
                     localFile.length()
                 }
-            } else {
-                localFile.length()
-            }
+            } ?: localFile.length()
             syncDb.upsertEntry("local_entries", com.whmdg.mczj.tools.encryption.data.SyncEntryRow(
                 path = file.path,
                 size = originalSize,
