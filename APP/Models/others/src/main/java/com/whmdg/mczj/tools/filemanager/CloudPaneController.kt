@@ -42,6 +42,19 @@ class CloudPaneController(
     private val MD5_SYNC_THRESHOLD = 10 * 1024 * 1024L  // 10MB
 
     val state = CloudPanelState()
+
+    /** 计算文件的 MD5 哈希值 */
+    private fun calculateMd5(file: File): String {
+        val md = java.security.MessageDigest.getInstance("MD5")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(8192)
+            var read: Int
+            while (input.read(buffer).also { read = it } != -1) {
+                md.update(buffer, 0, read)
+            }
+        }
+        return md.digest().joinToString("") { "%02x".format(it) }
+    }
     private val webdavClient = WebDavFileClient(webdavConfig)
     private var syncJob: Job? = null
     // 构造时即打开本地同步库，支持 init 前的云端索引恢复。
@@ -1866,11 +1879,12 @@ class CloudPaneController(
                 // 冲突文件：检查 MD5 是否相同（智能合并）
                 val localFile = File(vaultDir, childRelativePath.trimStart('/'))
 
-                if (localFile.exists() && cloudEntry.md5 != null) {
+                val cloudMd5 = cloudEntry.md5
+                if (localFile.exists() && cloudMd5 != null) {
                     if (localFile.length() < MD5_SYNC_THRESHOLD) {
                         // 小文件：同步计算 MD5，现场合并或显示冲突
-                        val localMd5 = com.whmdg.mczj.tools.encryption.services.CryptoService.calculateMd5(localFile)
-                        if (localMd5 == cloudEntry.md5) {
+                        val localMd5 = calculateMd5(localFile)
+                        if (localMd5 == cloudMd5) {
                             // MD5 相同，合并：更新 local_entries 为 COMPLETED
                             syncDb.updateEntry("local_entries", childRelativePath) { row ->
                                 row.copy(
@@ -1906,7 +1920,7 @@ class CloudPaneController(
                         ))
                         // 启动异步校验
                         scope.launch(Dispatchers.IO) {
-                            verifyAndMergeConflict(childRelativePath, localFile, cloudEntry.md5)
+                            verifyAndMergeConflict(childRelativePath, localFile, cloudMd5)
                         }
                         continue
                     }
@@ -1980,7 +1994,7 @@ class CloudPaneController(
         cloudMd5: String
     ) {
         try {
-            val localMd5 = com.whmdg.mczj.tools.encryption.services.CryptoService.calculateMd5(localFile)
+            val localMd5 = calculateMd5(localFile)
 
             if (localMd5 == cloudMd5) {
                 // MD5 相同，合并：更新 local_entries 为 COMPLETED

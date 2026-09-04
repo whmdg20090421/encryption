@@ -359,10 +359,7 @@ fun MainAppContainer() {
     val calcStatus = SizeCalcManager.statusMessage
     val calcIsCalculating = SizeCalcManager.isCalculating
     if (calcIsCalculating || calcStatus != null) {
-        val bgColor = if (calcIsCalculating)
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
-        else
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f)
+        val bgColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
