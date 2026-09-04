@@ -470,7 +470,7 @@ fun CloudSyncScreen(
                 var showConfirmDialog by remember { mutableStateOf<CloudSyncItem?>(null) }
                 var showConcurrencyDialog by remember { mutableStateOf(false) }
                 var showDiffDialog by remember { mutableStateOf(false) }
-                var diffResult by remember { mutableStateOf<Int?>(null) }
+                var diffResult by remember { mutableStateOf<DiffScanResult?>(null) }
                 var showDeleteWarning by remember { mutableStateOf<CloudSyncItem?>(null) }
                 var showDeleteOptions by remember { mutableStateOf<CloudSyncItem?>(null) }
                 var deleteScope by remember { mutableStateOf<String?>(null) }
@@ -522,9 +522,10 @@ fun CloudSyncScreen(
                             context = context,
                             vaultDir = vaultRecord?.relativePath ?: "",
                             vaultName = vaultItem?.vaultName ?: "",
-                            onComplete = { count ->
+                            vaultId = vaultItem?.vaultId ?: 0,
+                            onComplete = { result ->
                                 showDiffDialog = false
-                                diffResult = count
+                                diffResult = result
                             }
                         )
                     }
@@ -532,13 +533,19 @@ fun CloudSyncScreen(
                     // 差异结果对话框
                     if (diffResult != null) {
                         DiffResultDialog(
-                            diffCount = diffResult!!,
+                            result = diffResult!!,
                             onConfirm = {
                                 // 更新卡片
                                 val vaultId = syncItems.firstOrNull { it.type == "保险箱" }?.vaultId ?: 0
                                 val idx = syncItems.indexOfFirst { it.id == "vault_$vaultId" }
                                 if (idx >= 0) {
-                                    syncItems[idx] = syncItems[idx].copy(diffFileCount = diffResult!!)
+                                    syncItems[idx] = syncItems[idx].copy(
+                                        diffFileCount = diffResult!!.diffCount,
+                                        localFileCount = diffResult!!.localFileCount,
+                                        cloudFileCount = diffResult!!.cloudFileCount,
+                                        vaultSize = diffResult!!.localSize,
+                                        cloudSize = diffResult!!.cloudSize
+                                    )
                                     CloudSyncStore.save(context, syncItems.toList())
                                 }
                                 diffResult = null
@@ -1693,56 +1700,274 @@ private fun DiffScanDialog(
     context: Context,
     vaultDir: String,
     vaultName: String,
-    onComplete: (Int) -> Unit
+    vaultId: Int,
+    onComplete: (DiffScanResult) -> Unit
 ) {
     val isDarkMode = LocalIsDarkMode.current
     val cardColor = if (isDarkMode) Color(0xFF1E293B) else Color.White
     val textColor = if (isDarkMode) Color(0xFFE2E8F0) else Color(0xFF1E293B)
     val subTextColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
 
-    var localProgress by remember { mutableFloatStateOf(0f) }
-    var dbProgress by remember { mutableFloatStateOf(0f) }
-    var compareProgress by remember { mutableFloatStateOf(0f) }
-    var localDone by remember { mutableStateOf(false) }
-    var dbDone by remember { mutableStateOf(false) }
+    var step1Progress by remember { mutableFloatStateOf(0f) }
+    var step2Progress by remember { mutableFloatStateOf(0f) }
+    var step3Progress by remember { mutableFloatStateOf(0f) }
+    var step1Text by remember { mutableStateOf("扫描本地文件") }
+    var step2Text by remember { mutableStateOf("检查云端数据库") }
+    var step3Text by remember { mutableStateOf("计算差异") }
 
-    // 异步扫描
+    // 三步扫描流程
     LaunchedEffect(Unit) {
         val vaultDirFile = java.io.File(vaultDir)
         val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vaultName)
+        val excludedFiles = setOf(
+            "vault_config.json",
+            "vault_config.backup.json",
+            "vault_sync_index.json",
+            "name_mappings.json",
+            "folder_sizes.json"
+        )
 
-        kotlinx.coroutines.coroutineScope {
-            // 并行扫描本地和DB
-            val localDeferred = async(Dispatchers.IO) {
-                val files = mutableListOf<String>()
-                if (vaultDirFile.exists()) {
-                    vaultDirFile.walkTopDown().filter { it.isFile }.forEach { file ->
-                        val relPath = "/" + file.relativeTo(vaultDirFile).path.replace('\\', '/')
-                        files.add(relPath)
-                        localProgress = 0.5f
+        try {
+            // ── 第一步：扫描本地文件，更新 local_entries ──
+            step1Progress = 0.1f
+            step1Text = "扫描本地文件 (0/0)"
+
+            val localFiles = mutableListOf<java.io.File>()
+            if (vaultDirFile.exists()) {
+                vaultDirFile.walkTopDown()
+                    .filter { it.isFile && it.name !in excludedFiles }
+                    .forEach { localFiles.add(it) }
+            }
+
+            val totalFiles = localFiles.size
+            var processedFiles = 0
+            var updatedCount = 0
+
+            for (file in localFiles) {
+                val relPath = "/" + file.relativeTo(vaultDirFile).path.replace('\\', '/')
+                val currentSize = file.length()
+                val currentModified = java.time.Instant.ofEpochMilli(file.lastModified()).toString()
+
+                val existingEntry = syncDb.getEntry("local_entries", relPath)
+
+                if (existingEntry == null) {
+                    // 新文件：插入 PENDING
+                    syncDb.upsertEntry("local_entries", com.whmdg.mczj.tools.encryption.data.SyncEntryRow(
+                        path = relPath,
+                        size = currentSize,
+                        uploadedSize = 0,
+                        lastModified = currentModified,
+                        md5 = null,
+                        cloudHash = null,
+                        status = com.whmdg.mczj.tools.encryption.data.SyncStatus.PENDING,
+                        lastSyncTime = null,
+                        failReason = null
+                    ))
+                    updatedCount++
+                } else if (existingEntry.size != currentSize || existingEntry.lastModified != currentModified) {
+                    // 文件变化：重置为 PENDING，清空 MD5 和 uploadedSize
+                    syncDb.updateEntry("local_entries", relPath) { row ->
+                        row.copy(
+                            size = currentSize,
+                            uploadedSize = 0,
+                            lastModified = currentModified,
+                            md5 = null,
+                            status = com.whmdg.mczj.tools.encryption.data.SyncStatus.PENDING,
+                            failReason = null
+                        )
+                    }
+                    updatedCount++
+                }
+                // 时间戳和大小都没变：跳过
+
+                processedFiles++
+                step1Progress = 0.1f + (processedFiles.toFloat() / totalFiles * 0.9f)
+                step1Text = "扫描本地文件 ($processedFiles/$totalFiles, 更新 $updatedCount 个)"
+            }
+
+            step1Progress = 1f
+            step1Text = "扫描本地文件完成 (共 $totalFiles 个，更新 $updatedCount 个)"
+
+            // ── 第二步：检查并同步云端 Cloud DB ──
+            step2Progress = 0.1f
+            step2Text = "检查云端数据库元数据"
+
+            val vaultRecord = com.whmdg.mczj.tools.encryption.services.VaultService.getInstance(context).getVault(vaultId)
+            val remoteBasePath = vaultRecord?.let {
+                com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore.load(context)
+                    .firstOrNull()?.serverUrl?.let { url -> "$url/Android_tools/加密保险箱/${it.name}" }
+            } ?: ""
+
+            if (remoteBasePath.isNotEmpty()) {
+                val webdavConfig = com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore.load(context).firstOrNull()
+                if (webdavConfig != null) {
+                    val webdavClient = com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient(
+                        serverUrl = webdavConfig.serverUrl,
+                        username = webdavConfig.username,
+                        password = webdavConfig.password
+                    )
+
+                    val remotePath = "$remoteBasePath/.sync_meta/${vaultName}_vault_sync.db.7z"
+                    val metaFile = java.io.File(com.whmdg.mczj.tools.AppDataPaths.cloudDbMeta(context), "${vaultName}_meta.json")
+
+                    val needsSync = try {
+                        val remoteMeta = webdavClient.getFileMetadata(remotePath)
+                        if (remoteMeta == null) {
+                            step2Text = "云端数据库不存在"
+                            false
+                        } else if (!metaFile.exists()) {
+                            step2Text = "本地无缓存，需要同步"
+                            true
+                        } else {
+                            val localMeta = org.json.JSONObject(metaFile.readText())
+                            val changed = remoteMeta.size != localMeta.getLong("size") ||
+                                         remoteMeta.lastModified != localMeta.getLong("lastModified")
+                            step2Text = if (changed) "云端数据库已更新，需要同步" else "云端数据库未变化"
+                            changed
+                        }
+                    } catch (e: Exception) {
+                        step2Text = "检查失败: ${e.message}"
+                        false
+                    }
+
+                    if (needsSync) {
+                        step2Progress = 0.3f
+                        step2Text = "下载云端数据库"
+
+                        try {
+                            val zipFile = java.io.File(context.cacheDir, "${vaultName}_diff_scan.db.7z")
+                            webdavClient.downloadFile(remotePath, zipFile) { }
+
+                            step2Progress = 0.6f
+                            step2Text = "解压云端数据库"
+
+                            val extractDir = java.io.File(context.cacheDir, "diff_scan_${vaultName}")
+                            extractDir.mkdirs()
+                            com.whmdg.mczj.tools.util.JBindingClient.extractAll(
+                                archivePath = zipFile.absolutePath,
+                                outputDir = extractDir.absolutePath,
+                                password = "mczj"
+                            ).getOrThrow()
+
+                            step2Progress = 0.8f
+                            step2Text = "合并云端数据"
+
+                            val remoteDbFile = java.io.File(extractDir, "vault_sync.db")
+                            if (remoteDbFile.exists()) {
+                                val remoteDb = android.database.sqlite.SQLiteDatabase.openDatabase(
+                                    remoteDbFile.absolutePath, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+                                )
+                                try {
+                                    val cursor = remoteDb.query("cloud_entries", null, null, null, null, null, null)
+                                    var mergedCount = 0
+                                    cursor.use {
+                                        while (it.moveToNext()) {
+                                            val path = it.getString(it.getColumnIndexOrThrow("path"))
+                                            val size = it.getLong(it.getColumnIndexOrThrow("size"))
+                                            val uploadedSize = it.getLong(it.getColumnIndexOrThrow("uploaded_size"))
+                                            val lastModified = it.getString(it.getColumnIndexOrThrow("last_modified"))
+                                            val md5 = it.getString(it.getColumnIndexOrThrow("md5"))
+                                            val cloudHash = it.getString(it.getColumnIndexOrThrow("cloud_hash"))
+                                            val status = com.whmdg.mczj.tools.encryption.data.SyncStatus.valueOf(
+                                                it.getString(it.getColumnIndexOrThrow("status"))
+                                            )
+                                            val lastSyncTime = it.getString(it.getColumnIndexOrThrow("last_sync_time"))
+                                            val failReason = it.getString(it.getColumnIndexOrThrow("fail_reason"))
+
+                                            val localEntry = syncDb.getEntry("cloud_entries", path)
+                                            if (localEntry == null || (lastSyncTime ?: "") > (localEntry.lastSyncTime ?: "")) {
+                                                syncDb.upsertEntry("cloud_entries", com.whmdg.mczj.tools.encryption.data.SyncEntryRow(
+                                                    path, size, uploadedSize, lastModified, md5, cloudHash, status, lastSyncTime, failReason
+                                                ))
+                                                mergedCount++
+                                            }
+                                        }
+                                    }
+                                    step2Text = "合并云端数据完成 (更新 $mergedCount 个)"
+                                } finally {
+                                    remoteDb.close()
+                                }
+
+                                // 更新元数据缓存
+                                val remoteMeta = webdavClient.getFileMetadata(remotePath)
+                                if (remoteMeta != null) {
+                                    metaFile.writeText("""{"size":${remoteMeta.size},"lastModified":${remoteMeta.lastModified}}""")
+                                }
+                            }
+
+                            zipFile.delete()
+                            extractDir.deleteRecursively()
+                        } catch (e: Exception) {
+                            step2Text = "同步失败: ${e.message}"
+                        }
+                    }
+                } else {
+                    step2Text = "未配置 WebDAV"
+                }
+            } else {
+                step2Text = "未找到保险箱配置"
+            }
+
+            step2Progress = 1f
+
+            // ── 第三步：计算差异 ──
+            step3Progress = 0.2f
+            step3Text = "读取本地数据库"
+
+            val localEntries = syncDb.getAllEntries("local_entries")
+            val localMap = localEntries.filter { !it.path.endsWith("/") }.associateBy { it.path }
+
+            step3Progress = 0.4f
+            step3Text = "读取云端数据库"
+
+            val cloudEntries = syncDb.getAllEntries("cloud_entries")
+            val cloudMap = cloudEntries.filter { !it.path.endsWith("/") }.associateBy { it.path }
+
+            step3Progress = 0.6f
+            step3Text = "计算差异"
+
+            val allPaths = (localMap.keys + cloudMap.keys).toSet()
+            var diffCount = 0
+
+            for (path in allPaths) {
+                val local = localMap[path]
+                val cloud = cloudMap[path]
+
+                when {
+                    local == null && cloud != null -> diffCount++  // 云端独有
+                    local != null && cloud == null -> diffCount++  // 本地独有
+                    local != null && cloud != null -> {
+                        // 都有：检查是否是同一个文件
+                        val isSameFile = local.md5 != null && cloud.md5 != null && local.md5 == cloud.md5
+                        if (!isSameFile) diffCount++  // 冲突
                     }
                 }
-                localProgress = 1f
-                localDone = true
-                files.toSet()
             }
 
-            val dbDeferred = async(Dispatchers.IO) {
-                val entries = syncDb.getEntriesByStatus("local_entries", com.whmdg.mczj.tools.encryption.data.SyncStatus.COMPLETED)
-                dbProgress = 1f
-                dbDone = true
-                entries.map { it.path }.toSet()
-            }
+            step3Progress = 0.8f
+            step3Text = "统计文件数和大小"
 
-            val localSet = localDeferred.await()
-            val dbSet = dbDeferred.await()
+            val localFileCount = localMap.size
+            val cloudFileCount = cloudMap.size
+            val localSize = localMap.values.sumOf { it.size }
+            val cloudSize = cloudMap.values.sumOf { it.size }
 
-            // 对比差异
-            compareProgress = 0.5f
-            val diffCount = (localSet union dbSet).size - (localSet intersect dbSet).size
-            compareProgress = 1f
+            step3Progress = 1f
+            step3Text = "计算完成 (差异 $diffCount 个)"
 
-            onComplete(diffCount)
+            kotlinx.coroutines.delay(300)
+
+            onComplete(DiffScanResult(
+                diffCount = diffCount,
+                localFileCount = localFileCount,
+                cloudFileCount = cloudFileCount,
+                localSize = localSize,
+                cloudSize = cloudSize
+            ))
+        } catch (e: Exception) {
+            step1Text = "扫描失败: ${e.message}"
+            kotlinx.coroutines.delay(2000)
+            onComplete(DiffScanResult(0, 0, 0, 0, 0))
         }
     }
 
@@ -1765,33 +1990,33 @@ private fun DiffScanDialog(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // 扫描本地
-                Text("扫描本地文件", fontSize = 13.sp, color = subTextColor)
+                // 第一步：扫描本地文件
+                Text(step1Text, fontSize = 13.sp, color = subTextColor)
                 Spacer(modifier = Modifier.height(4.dp))
                 LinearProgressIndicator(
-                    progress = { localProgress },
+                    progress = { step1Progress },
                     modifier = Modifier.fillMaxWidth().height(4.dp),
                     color = Color(0xFF3B82F6),
                     trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 扫描DB
-                Text("扫描已上传记录", fontSize = 13.sp, color = subTextColor)
+                // 第二步：检查云端数据库
+                Text(step2Text, fontSize = 13.sp, color = subTextColor)
                 Spacer(modifier = Modifier.height(4.dp))
                 LinearProgressIndicator(
-                    progress = { dbProgress },
+                    progress = { step2Progress },
                     modifier = Modifier.fillMaxWidth().height(4.dp),
                     color = Color(0xFF3B82F6),
                     trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 对比差异
-                Text("对比差异", fontSize = 13.sp, color = subTextColor)
+                // 第三步：计算差异
+                Text(step3Text, fontSize = 13.sp, color = subTextColor)
                 Spacer(modifier = Modifier.height(4.dp))
                 LinearProgressIndicator(
-                    progress = { compareProgress },
+                    progress = { step3Progress },
                     modifier = Modifier.fillMaxWidth().height(4.dp),
                     color = Color(0xFF3B82F6),
                     trackColor = if (isDarkMode) Color(0xFF334155) else Color(0xFFE2E8F0)
@@ -1801,11 +2026,21 @@ private fun DiffScanDialog(
     }
 }
 
+// ── 差异扫描结果数据类 ──
+
+data class DiffScanResult(
+    val diffCount: Int,
+    val localFileCount: Int,
+    val cloudFileCount: Int,
+    val localSize: Long,
+    val cloudSize: Long
+)
+
 // ── 差异结果对话框 ──
 
 @Composable
 private fun DiffResultDialog(
-    diffCount: Int,
+    result: DiffScanResult,
     onConfirm: () -> Unit
 ) {
     val isDarkMode = LocalIsDarkMode.current
@@ -1831,11 +2066,15 @@ private fun DiffResultDialog(
                     color = textColor
                 )
                 Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "差异文件：${diffCount} 个",
-                    fontSize = 14.sp,
-                    color = subTextColor
-                )
+
+                Text("差异文件：${result.diffCount} 个", fontSize = 14.sp, color = subTextColor)
+                Spacer(modifier = Modifier.height(6.dp))
+                Text("本地文件：${result.localFileCount} 个 (${com.whmdg.mczj.tools.util.FormatUtils.formatBytes(result.localSize)})",
+                    fontSize = 14.sp, color = subTextColor)
+                Spacer(modifier = Modifier.height(6.dp))
+                Text("云端文件：${result.cloudFileCount} 个 (${com.whmdg.mczj.tools.util.FormatUtils.formatBytes(result.cloudSize)})",
+                    fontSize = 14.sp, color = subTextColor)
+
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1847,6 +2086,12 @@ private fun DiffResultDialog(
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Text("确认", color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
                     }
                 }
             }
