@@ -454,6 +454,15 @@ fun CloudSyncScreen(
                 var showConcurrencyDialog by remember { mutableStateOf(false) }
                 var showDiffDialog by remember { mutableStateOf(false) }
                 var diffResult by remember { mutableStateOf<Int?>(null) }
+                var showDeleteWarning by remember { mutableStateOf<CloudSyncItem?>(null) }
+                var showDeleteOptions by remember { mutableStateOf<CloudSyncItem?>(null) }
+                var deleteScope by remember { mutableStateOf<String?>(null) }
+                var showDeleteProgress by remember { mutableStateOf(false) }
+                var deleteLocalProgress by remember { mutableFloatStateOf(0f) }
+                var deleteCloudProgress by remember { mutableFloatStateOf(0f) }
+                var deletePhase by remember { mutableStateOf("") }
+                var deleteComplete by remember { mutableStateOf(false) }
+                var activeDeletingScope by remember { mutableStateOf<String?>(null) }
                 val currentConcurrency = remember {
                     context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
                         .getInt("max_concurrency", 3)
@@ -469,7 +478,8 @@ fun CloudSyncScreen(
                                 item = item,
                                 onClick = { showConfirmDialog = item },
                                 onConcurrencyChange = { showConcurrencyDialog = true },
-                                onDiffRefresh = { showDiffDialog = true }
+                                onDiffRefresh = { showDiffDialog = true },
+                                onDeleteVault = { showDeleteWarning = item }
                             )
                         }
                     }
@@ -515,6 +525,226 @@ fun CloudSyncScreen(
                                     CloudSyncStore.save(context, syncItems.toList())
                                 }
                                 diffResult = null
+                        }
+                    )
+                }
+
+                // 删除云盘警告弹窗（第一次确认）
+                showDeleteWarning?.let { item ->
+                    AlertDialog(
+                        onDismissRequest = { showDeleteWarning = null },
+                        title = { Text("删除云盘") },
+                        text = { Text("确定要删除云盘「${item.vaultName}」吗？此操作将根据您的选择删除本地或云端数据。") },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                showDeleteWarning = null
+                                showDeleteOptions = item
+                            }) { Text("确认") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showDeleteWarning = null }) { Text("取消") }
+                        }
+                    )
+                }
+
+                // 删除云盘选项弹窗（第二次确认，选择删除范围）
+                showDeleteOptions?.let { item ->
+                    AlertDialog(
+                        onDismissRequest = { showDeleteOptions = null },
+                        title = { Text("选择删除范围") },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("请选择要删除的范围：", fontSize = 14.sp)
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { deleteScope = "local" }
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(
+                                        selected = deleteScope == "local",
+                                        onClick = { deleteScope = "local" }
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("仅删除本地", fontSize = 14.sp)
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { deleteScope = "both" }
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(
+                                        selected = deleteScope == "both",
+                                        onClick = { deleteScope = "both" }
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("本地和云端一起删除", fontSize = 14.sp)
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { deleteScope = "cloud" }
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(
+                                        selected = deleteScope == "cloud",
+                                        onClick = { deleteScope = "cloud" }
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("仅删除云端", fontSize = 14.sp)
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(
+                                enabled = deleteScope != null,
+                                onClick = {
+                                    val selectedScope = deleteScope ?: return@TextButton
+                                    val itemToDelete = item
+                                    showDeleteOptions = null
+                                    deleteScope = null
+
+                                    // 显示删除进度弹窗
+                                    showDeleteProgress = true
+                                    activeDeletingScope = selectedScope
+                                    deleteLocalProgress = 0f
+                                    deleteCloudProgress = 0f
+                                    deleteComplete = false
+
+                                    // 执行删除操作
+                                    scope.launch {
+                                        try {
+                                            when (selectedScope) {
+                                                "local" -> {
+                                                    // 仅删除本地（保留保险箱记录，删除文件和 Local DB）
+                                                    deletePhase = "正在删除本地数据"
+                                                    if (itemToDelete.type == "保险箱") {
+                                                        withContext(Dispatchers.IO) {
+                                                            deleteLocalProgress = 0.2f
+                                                            // 删除保险箱文件
+                                                            vaultService.removeVault(itemToDelete.vaultId, deleteFiles = true)
+                                                            deleteLocalProgress = 0.6f
+                                                            // 清理 Local DB（保留 Cloud DB）
+                                                            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, itemToDelete.vaultName)
+                                                            syncDb.writableDatabase.delete("local_entries", null, null)
+                                                            deleteLocalProgress = 1f
+                                                        }
+                                                    }
+                                                    syncItems.removeIf { it.id == itemToDelete.id }
+                                                    processedVaultIds.remove(itemToDelete.vaultId)
+                                                    CloudSyncStore.save(context, syncItems.toList())
+                                                    deleteComplete = true
+                                                    deletePhase = "本地数据删除完成"
+                                                }
+                                                "cloud" -> {
+                                                    // 仅删除云端（清理 Cloud DB，保留 Local DB）
+                                                    deletePhase = "正在删除云端数据"
+                                                    val config = accountState.config
+                                                    if (config != null && itemToDelete.type == "保险箱") {
+                                                        withContext(Dispatchers.IO) {
+                                                            val client = WebDavFileClient(config)
+                                                            val vaultCloudPath = "${config.relativePath}/${itemToDelete.vaultName}"
+                                                            deleteCloudProgress = 0.2f
+                                                            client.delete(vaultCloudPath)
+                                                            deleteCloudProgress = 0.5f
+                                                            // 从云端清单中移除
+                                                            publishCloudCatalog(config)
+                                                            deleteCloudProgress = 0.8f
+                                                            // 清理 Cloud DB（保留 Local DB）
+                                                            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, itemToDelete.vaultName)
+                                                            syncDb.writableDatabase.delete("cloud_entries", null, null)
+                                                            deleteCloudProgress = 1f
+                                                        }
+                                                    }
+                                                    deleteComplete = true
+                                                    deletePhase = "云端数据删除完成"
+                                                }
+                                                "both" -> {
+                                                    // 本地和云端一起删除（删除所有，包括整个同步数据库）
+                                                    if (itemToDelete.type == "保险箱") {
+                                                        // 删除本地
+                                                        deletePhase = "正在删除本地数据"
+                                                        withContext(Dispatchers.IO) {
+                                                            deleteLocalProgress = 0.3f
+                                                            vaultService.removeVault(itemToDelete.vaultId, deleteFiles = true)
+                                                            deleteLocalProgress = 1f
+                                                        }
+
+                                                        // 删除云端
+                                                        deletePhase = "正在删除云端数据"
+                                                        val config = accountState.config
+                                                        if (config != null) {
+                                                            withContext(Dispatchers.IO) {
+                                                                val client = WebDavFileClient(config)
+                                                                val vaultCloudPath = "${config.relativePath}/${itemToDelete.vaultName}"
+                                                                deleteCloudProgress = 0.3f
+                                                                client.delete(vaultCloudPath)
+                                                                deleteCloudProgress = 0.6f
+                                                                // 更新云端清单
+                                                                publishCloudCatalog(config)
+                                                                deleteCloudProgress = 1f
+                                                            }
+                                                        }
+
+                                                        // 清理整个同步数据库目录
+                                                        deletePhase = "正在清理同步数据"
+                                                        withContext(Dispatchers.IO) {
+                                                            val syncDir = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/${itemToDelete.vaultName}")
+                                                            if (syncDir.exists()) {
+                                                                syncDir.deleteRecursively()
+                                                            }
+                                                        }
+                                                    }
+                                                    syncItems.removeIf { it.id == itemToDelete.id }
+                                                    processedVaultIds.remove(itemToDelete.vaultId)
+                                                    CloudSyncStore.save(context, syncItems.toList())
+                                                    deleteComplete = true
+                                                    deletePhase = "本地和云端数据删除完成"
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            deleteComplete = true
+                                            deletePhase = "删除失败：${e.message}"
+                                            com.whmdg.mczj.tools.util.DiagnosticLog.exportCrashReport(
+                                                context, e, "云盘删除操作失败"
+                                            )
+                                        }
+                                    }
+                                }
+                            ) { Text("确认") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                showDeleteOptions = null
+                                deleteScope = null
+                            }) { Text("取消") }
+                        }
+                    )
+                }
+
+                // 删除进度弹窗
+                if (showDeleteProgress) {
+                    DeleteProgressDialog(
+                        phase = deletePhase,
+                        localProgress = deleteLocalProgress,
+                        cloudProgress = deleteCloudProgress,
+                        showLocalProgress = activeDeletingScope == "local" || activeDeletingScope == "both",
+                        showCloudProgress = activeDeletingScope == "cloud" || activeDeletingScope == "both",
+                        isComplete = deleteComplete,
+                        onDismiss = {
+                            if (deleteComplete) {
+                                showDeleteProgress = false
+                                deleteLocalProgress = 0f
+                                deleteCloudProgress = 0f
+                                activeDeletingScope = null
+                            }
                         }
                     )
                 }
@@ -1129,7 +1359,8 @@ private fun CloudSyncCard(
     item: CloudSyncItem,
     onClick: () -> Unit = {},
     onConcurrencyChange: (() -> Unit)? = null,
-    onDiffRefresh: (() -> Unit)? = null
+    onDiffRefresh: (() -> Unit)? = null,
+    onDeleteVault: (() -> Unit)? = null
 ) {
     val isDarkMode = LocalIsDarkMode.current
     val glowEnabled = true
@@ -1259,6 +1490,13 @@ private fun CloudSyncCard(
                                     onClick = {
                                         showMenu = false
                                         onDiffRefresh?.invoke()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("删除云盘") },
+                                    onClick = {
+                                        showMenu = false
+                                        onDeleteVault?.invoke()
                                     }
                                 )
                             }
