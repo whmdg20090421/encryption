@@ -1797,20 +1797,18 @@ private fun DiffScanDialog(
             step2Progress = 0.1f
             step2Text = "检查云端数据库元数据"
 
-            val vaultRecord = com.whmdg.mczj.tools.encryption.services.VaultService.getInstance(context).getVault(vaultId)
+            val vaultService = com.whmdg.mczj.tools.encryption.services.VaultService(context)
+            vaultService.load()
+            val vaultRecord = vaultService.vaults.find { it.id == vaultId }
             val remoteBasePath = vaultRecord?.let {
-                com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore.load(context)
-                    .firstOrNull()?.serverUrl?.let { url -> "$url/Android_tools/加密保险箱/${it.name}" }
+                com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore.getAll(context)
+                    .firstOrNull()?.let { config -> "${config.serverUrl}/Android_tools/加密保险箱/${it.name}" }
             } ?: ""
 
             if (remoteBasePath.isNotEmpty()) {
-                val webdavConfig = com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore.load(context).firstOrNull()
+                val webdavConfig = com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore.getAll(context).firstOrNull()
                 if (webdavConfig != null) {
-                    val webdavClient = com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient(
-                        serverUrl = webdavConfig.serverUrl,
-                        username = webdavConfig.username,
-                        password = webdavConfig.password
-                    )
+                    val webdavClient = com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient(webdavConfig)
 
                     val remotePath = "$remoteBasePath/.sync_meta/${vaultName}_vault_sync.db.7z"
                     val metaFile = java.io.File(com.whmdg.mczj.tools.AppDataPaths.cloudDbMeta(context), "${vaultName}_meta.json")
