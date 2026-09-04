@@ -43,18 +43,6 @@ class CloudPaneController(
 
     val state = CloudPanelState()
 
-    /** 计算文件的 MD5 哈希值 */
-    private fun calculateMd5(file: File): String {
-        val md = java.security.MessageDigest.getInstance("MD5")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(8192)
-            var read: Int
-            while (input.read(buffer).also { read = it } != -1) {
-                md.update(buffer, 0, read)
-            }
-        }
-        return md.digest().joinToString("") { "%02x".format(it) }
-    }
     private val webdavClient = WebDavFileClient(webdavConfig)
     private var syncJob: Job? = null
     // 构造时即打开本地同步库，支持 init 前的云端索引恢复。
