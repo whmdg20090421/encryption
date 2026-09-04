@@ -2627,7 +2627,8 @@ class PanelCoordinator(
             vaultId = vaultId,
             vaultName = vaultName,
             folderSizeDb = folderSizeDb,
-            recalculateFolderSize = recalculateFolderSize
+            recalculateFolderSize = recalculateFolderSize,
+            vaultSession = session
         )
 
         // 登录/手动刷新阶段已经恢复云端数据库；进入保险箱只读取本地索引，避免重复联网同步。

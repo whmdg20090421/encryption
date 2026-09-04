@@ -36,7 +36,8 @@ class CloudPaneController(
     private val vaultId: Int,
     private val vaultName: String,
     private val folderSizeDb: () -> FolderSizeDb,
-    private val recalculateFolderSize: suspend (String) -> Unit
+    private val recalculateFolderSize: suspend (String) -> Unit,
+    private val vaultSession: com.whmdg.mczj.tools.encryption.services.VaultSession? = null
 ) {
     /** MD5 同步计算阈值：小于此值的文件在渲染时同步计算 MD5，大于此值则异步计算 */
     private val MD5_SYNC_THRESHOLD = 10 * 1024 * 1024L  // 10MB
@@ -241,10 +242,16 @@ class CloudPaneController(
 
         // 录入本地表（如果是新文件）
         if (existingEntry == null) {
-            val originalSize = try {
-                val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(localFile, vaultSession.dek, vaultSession.config.customEncryption)
-                metadata["size"]?.toLong() ?: localFile.length()
-            } catch (e: Exception) {
+            val originalSize = if (vaultSession != null) {
+                try {
+                    val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
+                        localFile, vaultSession.dek, vaultSession.config.customEncryption
+                    )
+                    metadata["size"]?.toLong() ?: localFile.length()
+                } catch (e: Exception) {
+                    localFile.length()
+                }
+            } else {
                 localFile.length()
             }
             syncDb.upsertEntry("local_entries", SyncEntryRow(
@@ -463,10 +470,16 @@ class CloudPaneController(
                 for (dbEntry in completedDbEntries) {
                     val localFile = localFileMap[dbEntry.path]
                     if (localFile != null) {
-                        val currentSize = try {
-                            val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(localFile, vaultSession.dek, vaultSession.config.customEncryption)
-                            metadata["size"]?.toLong() ?: localFile.length()
-                        } catch (e: Exception) {
+                        val currentSize = if (vaultSession != null) {
+                            try {
+                                val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
+                                    localFile, vaultSession.dek, vaultSession.config.customEncryption
+                                )
+                                metadata["size"]?.toLong() ?: localFile.length()
+                            } catch (e: Exception) {
+                                localFile.length()
+                            }
+                        } else {
                             localFile.length()
                         }
                         val currentLastModified = Instant.ofEpochMilli(localFile.lastModified()).toString()
@@ -596,10 +609,16 @@ class CloudPaneController(
                 for ((file, relPath) in queue) {
                     val existing = syncDb.getEntry("local_entries", relPath)
                     if (existing == null) {
-                        val originalSize = try {
-                            val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(file, vaultSession.dek, vaultSession.config.customEncryption)
-                            metadata["size"]?.toLong() ?: file.length()
-                        } catch (e: Exception) {
+                        val originalSize = if (vaultSession != null) {
+                            try {
+                                val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
+                                    file, vaultSession.dek, vaultSession.config.customEncryption
+                                )
+                                metadata["size"]?.toLong() ?: file.length()
+                            } catch (e: Exception) {
+                                file.length()
+                            }
+                        } else {
                             file.length()
                         }
                         syncDb.upsertEntry("local_entries", SyncEntryRow(
@@ -1675,10 +1694,16 @@ class CloudPaneController(
                 onProgress(DownloadProgress(index + 1, files.size, fileName, downloadedBytes, totalBytes))
             }
             // 更新 local_entries（使用原始文件大小）
-            val originalSize = try {
-                val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(localFile, vaultSession.dek, vaultSession.config.customEncryption)
-                metadata["size"]?.toLong() ?: localFile.length()
-            } catch (e: Exception) {
+            val originalSize = if (vaultSession != null) {
+                try {
+                    val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
+                        localFile, vaultSession.dek, vaultSession.config.customEncryption
+                    )
+                    metadata["size"]?.toLong() ?: localFile.length()
+                } catch (e: Exception) {
+                    localFile.length()
+                }
+            } else {
                 localFile.length()
             }
             syncDb.upsertEntry("local_entries", com.whmdg.mczj.tools.encryption.data.SyncEntryRow(
