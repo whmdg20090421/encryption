@@ -343,6 +343,18 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
         }
     }
 
+    /** 统计已完成的文件数量（排除文件夹，文件夹路径以 / 结尾） */
+    fun getCompletedFileCount(table: String): Int {
+        val db = readableDatabase
+        val cursor = db.rawQuery(
+            "SELECT COUNT(*) FROM $table WHERE status = ? AND path NOT LIKE '%/'",
+            arrayOf(SyncStatus.COMPLETED.name)
+        )
+        return cursor.use {
+            if (it.moveToFirst()) it.getInt(0) else 0
+        }
+    }
+
     // ── 内部工具 ──
 
     private fun cursorToRow(cursor: android.database.Cursor): SyncEntryRow {

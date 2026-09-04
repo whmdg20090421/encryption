@@ -185,6 +185,10 @@ fun CloudSyncScreen(
             VaultPaths.resolveVault(context, restored.location, restored.relativePath).mkdirs()
             val itemId = "vault_${restored.id}"
             if (syncItems.none { it.id == itemId }) {
+                // 从同步数据库统计实际文件数（排除文件夹）
+                val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, restored.name)
+                val localFileCount = syncDb.getCompletedFileCount("local_entries")
+                val cloudFileCount = syncDb.getCompletedFileCount("cloud_entries")
                 syncItems.add(
                     CloudSyncItem(
                         id = itemId,
@@ -196,7 +200,8 @@ fun CloudSyncScreen(
                         cloudSize = 0,
                         diffFileCount = 0,
                         webdavPath = config.relativePath,
-                        localFileCount = restored.fileCount
+                        localFileCount = localFileCount,
+                        cloudFileCount = cloudFileCount
                     )
                 )
             }
@@ -278,10 +283,17 @@ fun CloudSyncScreen(
             val refreshed = saved.map { item ->
                 if (item.type == "保险箱" && item.vaultId > 0) {
                     val vault = vaultService.getVault(item.vaultId)
-                    if (vault != null) item.copy(
-                        vaultSize = vault.storageSize,
-                        localFileCount = vault.fileCount
-                    ) else item
+                    if (vault != null) {
+                        // 从同步数据库统计实际文件数（排除文件夹）
+                        val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, item.vaultName)
+                        val localFileCount = syncDb.getCompletedFileCount("local_entries")
+                        val cloudFileCount = syncDb.getCompletedFileCount("cloud_entries")
+                        item.copy(
+                            vaultSize = vault.storageSize,
+                            localFileCount = localFileCount,
+                            cloudFileCount = cloudFileCount
+                        )
+                    } else item
                 } else item
             }
             syncItems.clear()
@@ -322,6 +334,10 @@ fun CloudSyncScreen(
         val vault = events.addVaultRequest ?: return@LaunchedEffect
         if (vault.id !in processedVaultIds) {
             processedVaultIds.add(vault.id)
+            // 从同步数据库统计实际文件数（排除文件夹）
+            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vault.name)
+            val localFileCount = syncDb.getCompletedFileCount("local_entries")
+            val cloudFileCount = syncDb.getCompletedFileCount("cloud_entries")
             val item = CloudSyncItem(
                 id = "vault_${vault.id}",
                 vaultId = vault.id,
@@ -331,7 +347,8 @@ fun CloudSyncScreen(
                 lastSyncTime = "未同步",
                 cloudSize = 0,
                 diffFileCount = 0,
-                localFileCount = vault.fileCount
+                localFileCount = localFileCount,
+                cloudFileCount = cloudFileCount
             )
             syncItems.add(item)
             CloudSyncStore.save(context, syncItems.toList())

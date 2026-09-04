@@ -1018,8 +1018,7 @@ class CloudPaneController(
             // ⑯ 更新云盘卡片数据（云端大小、文件数、同步时间）
             withContext(Dispatchers.IO) {
                 val cloudSize = syncDb.getSyncedSize("cloud_entries")
-                val cloudCounts = syncDb.getStatusCounts("cloud_entries")
-                val cloudFileCount = cloudCounts[SyncStatus.COMPLETED] ?: 0
+                val cloudFileCount = syncDb.getCompletedFileCount("cloud_entries")
                 val now = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
                 com.whmdg.mczj.tools.ui.encryption.CloudSyncStore.update(context, "vault_$vaultId") { item ->
                     item.copy(
