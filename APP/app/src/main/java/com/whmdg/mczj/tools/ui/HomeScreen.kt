@@ -358,7 +358,7 @@ fun MainAppContainer() {
     // ── 大小统计状态面板（底部悬浮，工具栏上方，全局显示） ──
     val calcStatus = SizeCalcManager.statusMessage
     val calcIsCalculating = SizeCalcManager.isCalculating
-    if (calcIsCalculating || calcStatus != null) {
+    if (calcIsCalculating) {
         val bgColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
         Box(
             modifier = Modifier
@@ -414,35 +414,18 @@ fun MainAppContainer() {
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                } else {
-                    // 阶段三：已统计完成
-                    Text(
-                        text = calcStatus!!,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
                 }
-                // 取消/保存按钮（仅计算中显示）
-                if (calcIsCalculating) {
-                    Spacer(Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        TextButton(onClick = { SizeCalcManager.requestCancel() }) {
-                            Text("取消", style = MaterialTheme.typography.labelMedium)
-                        }
-                        TextButton(onClick = { SizeCalcManager.save() }) {
-                            Text("保存", style = MaterialTheme.typography.labelMedium)
-                        }
+                // 取消/保存按钮
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    TextButton(onClick = { SizeCalcManager.requestCancel() }) {
+                        Text("取消", style = MaterialTheme.typography.labelMedium)
                     }
-                } else {
-                    // 完成状态：关闭按钮
-                    Spacer(Modifier.height(4.dp))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = { SizeCalcManager.dismissStatus() }) {
-                            Text("关闭", style = MaterialTheme.typography.labelMedium)
-                        }
+                    TextButton(onClick = { SizeCalcManager.save() }) {
+                        Text("保存", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
