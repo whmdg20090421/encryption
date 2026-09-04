@@ -6437,7 +6437,7 @@ private fun DeletedFilesDialog(
 
 @Composable
 private fun UploadConflictDialog(
-    conflicts: List<com.whmdg.mczj.tools.filemanager.CloudPaneController.ConflictFileInfo>,
+    conflicts: List<CloudPaneController.ConflictFileInfo>,
     onCancel: () -> Unit,
     onOverwrite: () -> Unit
 ) {
@@ -6496,12 +6496,12 @@ private fun UploadConflictDialog(
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "本地: ${com.whmdg.mczj.tools.util.FormatUtils.formatBytes(conflict.localSize)} · ${conflict.localModified.take(19).replace('T', ' ')}",
+                                    text = "本地: ${FormatUtils.formatBytes(conflict.localSize)} · ${conflict.localModified.take(19).replace('T', ' ')}",
                                     fontSize = 11.sp,
                                     color = Color(0xFFEF4444)
                                 )
                                 Text(
-                                    text = "云端: ${com.whmdg.mczj.tools.util.FormatUtils.formatBytes(conflict.cloudSize)} · ${conflict.cloudModified.take(19).replace('T', ' ')}",
+                                    text = "云端: ${FormatUtils.formatBytes(conflict.cloudSize)} · ${conflict.cloudModified.take(19).replace('T', ' ')}",
                                     fontSize = 11.sp,
                                     color = Color(0xFF3B82F6)
                                 )
