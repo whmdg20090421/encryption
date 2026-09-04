@@ -596,9 +596,15 @@ class CloudPaneController(
                 for ((file, relPath) in queue) {
                     val existing = syncDb.getEntry("local_entries", relPath)
                     if (existing == null) {
+                        val originalSize = try {
+                            val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(file, session.dek, session.config.customEncryption)
+                            metadata["size"]?.toLong() ?: file.length()
+                        } catch (e: Exception) {
+                            file.length()
+                        }
                         syncDb.upsertEntry("local_entries", SyncEntryRow(
                             path = relPath,
-                            size = file.length(),
+                            size = originalSize,
                             lastModified = Instant.ofEpochMilli(file.lastModified()).toString(),
                             md5 = null,
                             cloudHash = null,
@@ -869,6 +875,7 @@ class CloudPaneController(
                                 val oldUploaded = activeFileBytes[event.path] ?: 0L
                                 val remaining = event.fileSize - oldUploaded
                                 activeFileBytes.remove(event.path)
+                                fileSizes.remove(event.path)  // 清除文件大小记录
                                 completedFilesCount++
                                 if (event.success) {
                                     successCount++
@@ -957,15 +964,25 @@ class CloudPaneController(
                                 if (!event.success && event.error != null) {
                                     com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败: ${event.path} - ${event.error}")
                                 }
-                                // 增量更新父文件夹（余量从黄色移到绿色）
-                                if (event.success && remaining > 0) updateFolderAggregates(event.path, addGreen = remaining, addYellow = -remaining)
+                                // 增量更新父文件夹：完成时清零黄色，增加绿色
+                                // 从 fileSizes 获取原始文件大小（StatusChange 时记录的）
+                                val originalSize = fileSizes[event.path] ?: event.fileSize
+                                if (event.success) {
+                                    // 成功：黄色全部转绿色
+                                    updateFolderAggregates(event.path, addGreen = originalSize, addYellow = -originalSize)
+                                } else {
+                                    // 失败：黄色清零（不增加绿色）
+                                    updateFolderAggregates(event.path, addYellow = -originalSize)
+                                }
+                                fileSizes.remove(event.path)  // 清理
                                 // 完整更新文件状态（含 DB 读取）
                                 updateSingleEntry(event.path)
                             }
                             is UploadEvent.StatusChange -> {
-                                // 文件开始上传：设置文件夹的黄色进度条
+                                // 文件开始上传：设置文件夹的黄色进度条，记录文件大小
                                 val fileEntry = state.entries.find { it.relativePath == event.path }
                                 if (fileEntry != null) {
+                                    fileSizes[event.path] = fileEntry.totalSize  // 记录原始大小
                                     updateFolderAggregates(event.path, addYellow = fileEntry.totalSize)
                                 }
                                 updateSingleEntry(event.path)
@@ -1656,10 +1673,16 @@ class CloudPaneController(
                 downloadedBytes += delta
                 onProgress(DownloadProgress(index + 1, files.size, fileName, downloadedBytes, totalBytes))
             }
-            // 更新 local_entries
+            // 更新 local_entries（使用原始文件大小）
+            val originalSize = try {
+                val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(localFile, session.dek, session.config.customEncryption)
+                metadata["size"]?.toLong() ?: localFile.length()
+            } catch (e: Exception) {
+                localFile.length()
+            }
             syncDb.upsertEntry("local_entries", com.whmdg.mczj.tools.encryption.data.SyncEntryRow(
                 path = file.path,
-                size = localFile.length(),
+                size = originalSize,
                 lastModified = java.time.Instant.ofEpochMilli(localFile.lastModified()).toString(),
                 md5 = null,
                 cloudHash = null,
