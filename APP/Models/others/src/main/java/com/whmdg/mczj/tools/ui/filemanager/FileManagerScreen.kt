@@ -6660,13 +6660,13 @@ private fun SwipeToDeleteShortcut(
 
     Box(modifier = Modifier.fillMaxWidth()) {
         // 底层：红色删除按钮
-        Row(
+        Box(
             modifier = Modifier
+                .width(deleteButtonWidth)
                 .matchParentSize()
                 .background(Color(0xFFE53935))
-                .clickable { onDelete() }
-                .padding(start = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .clickable { onDelete() },
+            contentAlignment = Alignment.Center
         ) {
             Icon(
                 Icons.Default.Delete,

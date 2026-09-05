@@ -1203,19 +1203,30 @@ class FilePaneController(
     /**
      * 进入 WebDAV 浏览模式。
      */
+    /**
+     * 连接到 WebDAV 服务器并加载根目录。
+     * 在 IO 线程执行网络操作，在主线程更新 UI 状态。
+     */
     fun navigateToWebDav(config: WebDavServerConfig) {
         val panel = state
-        try {
-            val client = WebDavFileClient(config)
-            panel.webDavClient = client
-            panel.webDavConfig = config
-            panel.webDavCurrentPath = config.relativePath.ifEmpty { "/" }
-            loadWebDavEntries(panel)
-        } catch (e: Exception) {
-            val serverInfo = "${config.protocol}://${config.host}:${config.port}${config.relativePath}"
-            val errorDetail = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-            DiagnosticLog.log("WebDAV", "连接失败: $serverInfo, error=$errorDetail\n${e.stackTraceToString()}")
-            panel.loadError = RuntimeException("连接 WebDAV 失败 ($serverInfo): $errorDetail", e)
+        viewModelScope.launch {
+            try {
+                // 在 IO 线程创建客户端并测试连接
+                val client = withContext(Dispatchers.IO) {
+                    WebDavFileClient(config).also { it.testConnection() }
+                }
+
+                // 在主线程更新面板状态
+                panel.webDavClient = client
+                panel.webDavConfig = config
+                panel.webDavCurrentPath = config.relativePath.ifEmpty { "/" }
+
+                // 加载目录内容
+                loadWebDavEntries(panel)
+
+            } catch (e: Exception) {
+                handleWebDavError(panel, config, e, "连接")
+            }
         }
     }
 
@@ -1248,47 +1259,90 @@ class FilePaneController(
 
     /**
      * 加载当前 WebDAV 路径的文件列表到指定面板。
+     * 在 IO 线程执行网络操作，在主线程更新 UI 状态。
      */
     internal fun loadWebDavEntries(panel: FilePaneController.VmPanelState = state) {
         val client = panel.webDavClient ?: return
-        try {
-            val files = client.listChildren(panel.webDavCurrentPath)
-            if (files != null) {
-                panel.entries = files.map { info ->
-                    FileEntry(
-                        path = info.remotePath,
-                        name = info.name,
-                        isDirectory = info.isDirectory,
-                        permission = "",
-                        size = info.size,
-                        lastModified = info.lastModified,
-                        createdAt = 0
-                    )
-                }.let { entries ->
-                    when (sortField()) {
-                        SortField.NAME -> when (sortOrder()) {
-                            SortOrder.ASC -> entries.sortedBy { it.name.lowercase() }
-                            SortOrder.DESC -> entries.sortedByDescending { it.name.lowercase() }
-                        }
-                        SortField.SIZE -> when (sortOrder()) {
-                            SortOrder.ASC -> entries.sortedBy { it.size }
-                            SortOrder.DESC -> entries.sortedByDescending { it.size }
-                        }
-                        SortField.MODIFIED -> when (sortOrder()) {
-                            SortOrder.ASC -> entries.sortedBy { it.lastModified }
-                            SortOrder.DESC -> entries.sortedByDescending { it.lastModified }
-                        }
-                        SortField.CREATED -> entries
-                    }
+        val config = panel.webDavConfig
+
+        viewModelScope.launch {
+            try {
+                // 在 IO 线程获取文件列表
+                val files = withContext(Dispatchers.IO) {
+                    client.listChildren(panel.webDavCurrentPath)
                 }
-                panel.loadError = null
+
+                // 在主线程处理和排序文件列表
+                if (files != null) {
+                    val entries = files.map { info ->
+                        FileEntry(
+                            path = info.remotePath,
+                            name = info.name,
+                            isDirectory = info.isDirectory,
+                            permission = "",
+                            size = info.size,
+                            lastModified = info.lastModified,
+                            createdAt = 0
+                        )
+                    }
+
+                    panel.entries = sortEntries(entries)
+                    panel.loadError = null
+                }
+
+            } catch (e: Exception) {
+                handleWebDavError(panel, config, e, "加载")
             }
-        } catch (e: Exception) {
-            val config = panel.webDavConfig
-            val serverInfo = if (config != null) "${config.protocol}://${config.host}:${config.port}${config.relativePath}" else "未知服务器"
-            val errorDetail = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-            DiagnosticLog.log("WebDAV", "加载失败: $serverInfo, path=${panel.webDavCurrentPath}, error=$errorDetail\n${e.stackTraceToString()}")
-            panel.loadError = RuntimeException("WebDAV 加载失败 ($serverInfo): $errorDetail", e)
+        }
+    }
+
+    /**
+     * 统一处理 WebDAV 错误，生成详细的错误信息。
+     */
+    private fun handleWebDavError(
+        panel: FilePaneController.VmPanelState,
+        config: WebDavServerConfig?,
+        exception: Exception,
+        operation: String
+    ) {
+        val serverInfo = if (config != null) {
+            "${config.protocol}://${config.host}:${config.port}${config.relativePath}"
+        } else {
+            "未知服务器"
+        }
+
+        val errorDetail = exception.message?.takeIf { it.isNotBlank() }
+            ?: exception.javaClass.simpleName
+
+        DiagnosticLog.log(
+            "WebDAV",
+            "${operation}失败: $serverInfo, path=${panel.webDavCurrentPath}, error=$errorDetail\n${exception.stackTraceToString()}"
+        )
+
+        panel.loadError = RuntimeException(
+            "WebDAV ${operation}失败 ($serverInfo): $errorDetail",
+            exception
+        )
+    }
+
+    /**
+     * 根据当前排序设置对文件列表排序。
+     */
+    private fun sortEntries(entries: List<FileEntry>): List<FileEntry> {
+        return when (sortField()) {
+            SortField.NAME -> when (sortOrder()) {
+                SortOrder.ASC -> entries.sortedBy { it.name.lowercase() }
+                SortOrder.DESC -> entries.sortedByDescending { it.name.lowercase() }
+            }
+            SortField.SIZE -> when (sortOrder()) {
+                SortOrder.ASC -> entries.sortedBy { it.size }
+                SortOrder.DESC -> entries.sortedByDescending { it.size }
+            }
+            SortField.MODIFIED -> when (sortOrder()) {
+                SortOrder.ASC -> entries.sortedBy { it.lastModified }
+                SortOrder.DESC -> entries.sortedByDescending { it.lastModified }
+            }
+            SortField.CREATED -> entries
         }
     }
 
