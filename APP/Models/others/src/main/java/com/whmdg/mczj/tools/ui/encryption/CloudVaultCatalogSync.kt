@@ -35,7 +35,7 @@ object CloudVaultCatalogSync {
     ): List<String> = withContext(Dispatchers.IO) {
         try {
             val metaDir = metaDirPath(configPath)
-            val files = withTimeout(30_000L) {
+            val files: List<String> = withTimeout(30_000L) {
                 runInterruptible { client.listFiles(metaDir) }
             }
             files.filter { it.endsWith("_vault_sync.db.7z") }
@@ -44,6 +44,7 @@ object CloudVaultCatalogSync {
             // .sync_meta 目录不存在或为空
             emptyList()
         }
+    }
     }
 
     /**

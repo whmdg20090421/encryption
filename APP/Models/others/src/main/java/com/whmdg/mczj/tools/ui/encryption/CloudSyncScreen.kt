@@ -1915,11 +1915,11 @@ private fun DiffScanDialog(
                                 }
                             }
                         }
-                    } else {
-                        withContext(Dispatchers.Main) { step2Text = "未配置 WebDAV" }
                     }
                 } else {
-                    withContext(Dispatchers.Main) { step2Text = "未找到保险箱配置" }
+                    withContext(Dispatchers.Main) {
+                        step2Text = if (webdavConfig == null) "未配置 WebDAV" else "未找到保险箱配置"
+                    }
                 }
 
                 withContext(Dispatchers.Main) { step2Progress = 1f }

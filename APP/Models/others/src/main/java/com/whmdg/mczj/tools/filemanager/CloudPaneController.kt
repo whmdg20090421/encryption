@@ -547,20 +547,24 @@ class CloudPaneController(
                                 val currentLastModified = Instant.ofEpochMilli(file.lastModified()).toString()
                                 if (localSize != cloudEntry.size || currentLastModified != cloudEntry.lastModified) {
                                     // 更新数据库：刷新大小和时间戳
-                                    syncDb.updateEntry("local_entries", relPath, mapOf(
-                                        "status" to SyncStatus.COMPLETED.name,
-                                        "size" to localSize,
-                                        "last_modified" to currentLastModified,
-                                        "md5" to localMd5,
-                                        "uploaded_at" to Instant.now().toString()
-                                    ))
+                                    syncDb.updateEntry("local_entries", relPath) { entry ->
+                                        entry.copy(
+                                            status = SyncStatus.COMPLETED,
+                                            size = localSize,
+                                            lastModified = currentLastModified,
+                                            md5 = localMd5,
+                                            lastSyncTime = Instant.now().toString()
+                                        )
+                                    }
                                 } else {
                                     // 大小、时间、哈希都相同，仅确保状态为 COMPLETED
-                                    syncDb.updateEntry("local_entries", relPath, mapOf(
-                                        "status" to SyncStatus.COMPLETED.name,
-                                        "md5" to localMd5,
-                                        "uploaded_at" to Instant.now().toString()
-                                    ))
+                                    syncDb.updateEntry("local_entries", relPath) { entry ->
+                                        entry.copy(
+                                            status = SyncStatus.COMPLETED,
+                                            md5 = localMd5,
+                                            lastSyncTime = Instant.now().toString()
+                                        )
+                                    }
                                 }
                                 skippedByHash.add(relPath)
                                 continue
