@@ -33,6 +33,8 @@ import com.whmdg.mczj.tools.encryption.data.VaultPaths
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.encryption.data.CloudVaultMetadata
 import com.whmdg.mczj.tools.encryption.services.VaultService
+import com.whmdg.mczj.tools.encryption.services.VaultSessionManager
+import com.whmdg.mczj.tools.encryption.services.VaultSession
 import com.whmdg.mczj.tools.fileop.webdav.WebDavConnectionStatus
 import com.whmdg.mczj.tools.fileop.webdav.WebDavAccountState
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
@@ -1807,9 +1809,9 @@ private fun DiffScanDialog(
                     load()
                     vaults.find { it.id == vaultId }
                 }
-                val vaultSession = vaultRecord?.let {
-                    val sessionManager = com.whmdg.mczj.tools.encryption.services.VaultSessionManager.getInstance()
-                    sessionManager.getSession(it.id)
+                val vaultSession: VaultSession? = vaultRecord?.let { record ->
+                    val sessionManager = VaultSessionManager.getInstance()
+                    sessionManager.getSession(record.id)
                 }
 
                 for (file in localFiles) {
@@ -1819,7 +1821,7 @@ private fun DiffScanDialog(
                     val currentModified = java.time.Instant.ofEpochMilli(file.lastModified()).toString()
 
                     // 读取原始文件大小（从加密元数据中获取，避免膨胀）
-                    val currentSize = vaultSession?.let { session ->
+                    val currentSize: Long = vaultSession?.let { session ->
                         try {
                             val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
                                 file, session.dek, session.config.configFlags.customEncryption
