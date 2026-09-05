@@ -515,6 +515,7 @@ class CloudPaneController(
             // ⑥ 检测上传冲突：local.status=PENDING 且 cloud.db 中存在且内容不同
             // 优先级判定：哈希相同（绝对权威）→ 大小不同（次要）→ 时间不同（最弱参考）
             val conflicts = mutableListOf<ConflictFileInfo>()
+            val skippedByHash = mutableSetOf<String>()  // 哈希相同自动跳过的文件
             withContext(Dispatchers.IO) {
                 for ((file, relPath) in toUpload) {
                     val localEntry = syncDb.getEntry("local_entries", relPath)
@@ -541,7 +542,27 @@ class CloudPaneController(
                         if (cloudMd5 != null) {
                             val localMd5 = calculateMd5(file)
                             if (localMd5 == cloudMd5) {
-                                // 哈希相同 → 文件100%相同，不是冲突，跳过
+                                // 哈希相同 → 文件100%相同
+                                // 检查大小或时间是否不同，若不同则更新数据库
+                                val currentLastModified = Instant.ofEpochMilli(file.lastModified()).toString()
+                                if (localSize != cloudEntry.size || currentLastModified != cloudEntry.lastModified) {
+                                    // 更新数据库：刷新大小和时间戳
+                                    syncDb.updateEntry("local_entries", relPath, mapOf(
+                                        "status" to SyncStatus.COMPLETED.name,
+                                        "size" to localSize,
+                                        "last_modified" to currentLastModified,
+                                        "md5" to localMd5,
+                                        "uploaded_at" to Instant.now().toString()
+                                    ))
+                                } else {
+                                    // 大小、时间、哈希都相同，仅确保状态为 COMPLETED
+                                    syncDb.updateEntry("local_entries", relPath, mapOf(
+                                        "status" to SyncStatus.COMPLETED.name,
+                                        "md5" to localMd5,
+                                        "uploaded_at" to Instant.now().toString()
+                                    ))
+                                }
+                                skippedByHash.add(relPath)
                                 continue
                             } else {
                                 // 哈希不同 → 真冲突
@@ -628,7 +649,7 @@ class CloudPaneController(
                 }
             } else false
 
-            // ⑩ 构建最终队列
+            // ⑩ 构建最终队列（排除哈希相同自动跳过的文件）
             val queue: List<Pair<File, String>> = if (reUploadAll) {
                 withContext(Dispatchers.IO) {
                     for ((file, relPath) in completedFiles) {
@@ -636,9 +657,9 @@ class CloudPaneController(
                         syncDb.updateUploadedSize("local_entries", relPath, 0)
                     }
                 }
-                completedFiles + toUpload
+                completedFiles + toUpload.filter { (_, relPath) -> relPath !in skippedByHash }
             } else {
-                toUpload
+                toUpload.filter { (_, relPath) -> relPath !in skippedByHash }
             }
 
             // ⑪ 将队列中未录入 DB 的文件写入
