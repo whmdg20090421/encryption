@@ -33,8 +33,6 @@ import com.whmdg.mczj.tools.encryption.data.VaultPaths
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.encryption.data.CloudVaultMetadata
 import com.whmdg.mczj.tools.encryption.services.VaultService
-import com.whmdg.mczj.tools.encryption.services.VaultSessionManager
-import com.whmdg.mczj.tools.encryption.services.VaultSession
 import com.whmdg.mczj.tools.fileop.webdav.WebDavConnectionStatus
 import com.whmdg.mczj.tools.fileop.webdav.WebDavAccountState
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
@@ -1804,33 +1802,12 @@ private fun DiffScanDialog(
 
                 totalState.set(localFiles.size)
 
-                // 获取 VaultSession 用于读取加密元数据
-                val vaultRecord = com.whmdg.mczj.tools.encryption.services.VaultService(context).run {
-                    load()
-                    vaults.find { it.id == vaultId }
-                }
-                val vaultSession: VaultSession? = vaultRecord?.let { record ->
-                    val sessionManager = VaultSessionManager.getInstance()
-                    sessionManager.getSession(record.id)
-                }
-
                 for (file in localFiles) {
                     ensureActive()  // 检查取消
 
                     val relPath = "/" + file.relativeTo(vaultDirFile).path.replace('\\', '/')
                     val currentModified = java.time.Instant.ofEpochMilli(file.lastModified()).toString()
-
-                    // 读取原始文件大小（从加密元数据中获取，避免膨胀）
-                    val currentSize: Long = vaultSession?.let { session ->
-                        try {
-                            val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
-                                file, session.dek, session.config.configFlags.customEncryption
-                            )
-                            metadata["size"]?.toLong() ?: file.length()
-                        } catch (e: Exception) {
-                            file.length()
-                        }
-                    } ?: file.length()
+                    val currentSize = file.length()  // 使用加密文件的实际大小
 
                     val existingEntry = syncDb.getEntry("local_entries", relPath)
 
