@@ -1365,46 +1365,36 @@ class CloudPaneController(
         val result = withContext(Dispatchers.IO) {
             try {
                 val dbFile = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/$vaultName/vault_sync.db")
-                if (!dbFile.exists()) return@withContext CloudDbResult.Failure("数据库文件不存在")
 
-                val zipFile = File(context.cacheDir, "${vaultName}_vault_sync.db.7z")
-                try {
-                    com.whmdg.mczj.tools.util.JBindingClient.compress(
-                        sourcePaths = listOf(dbFile.absolutePath),
-                        outputPath = zipFile.absolutePath,
-                        format = "7z", level = 9,
-                        password = "mczj", useAes = true, encryptNames = true
-                    ).getOrThrow()
-
-                    // 切换状态：正在上传
-                    withContext(Dispatchers.Main) {
-                        state.cloudDbSyncState = state.cloudDbSyncState?.copy(phase = "正在上传")
-                    }
-
-                    val metaDir = "${remoteBasePath}/.sync_meta"
-                    try { webdavClient.mkdir(metaDir) } catch (_: Exception) {}
-
-                    val remotePath = "$metaDir/${vaultName}_vault_sync.db.7z"
-                    webdavClient.uploadFile(zipFile, remotePath) { _ -> }
-
-                    // 切换状态：正在验证
-                    withContext(Dispatchers.Main) {
-                        state.cloudDbSyncState = state.cloudDbSyncState?.copy(phase = "正在验证")
-                    }
-
-                    val exists = webdavClient.exists(remotePath)
-                    if (!exists) {
-                        return@withContext CloudDbResult.Failure("云端文件验证失败")
-                    }
-                    // 保存远程元数据
-                    val remoteMeta = webdavClient.getFileMetadata(remotePath)
-                    if (remoteMeta != null) {
-                        saveCloudDbMeta(remoteMeta.size, remoteMeta.lastModified)
-                    }
-                    CloudDbResult.Success
-                } finally {
-                    zipFile.delete()
+                // 切换状态：正在上传
+                withContext(Dispatchers.Main) {
+                    state.cloudDbSyncState = state.cloudDbSyncState?.copy(phase = "正在上传")
                 }
+
+                // 使用封装的上传函数
+                com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.uploadVaultDatabase(
+                    context = context,
+                    client = webdavClient,
+                    configPath = webdavConfig.relativePath,
+                    vaultName = vaultName,
+                    dbFile = dbFile
+                )
+
+                // 切换状态：正在验证
+                withContext(Dispatchers.Main) {
+                    state.cloudDbSyncState = state.cloudDbSyncState?.copy(phase = "正在验证")
+                }
+
+                // 保存远程元数据
+                val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
+                    if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
+                    else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
+                }
+                val remoteMeta = webdavClient.getFileMetadata(remotePath)
+                if (remoteMeta != null) {
+                    saveCloudDbMeta(remoteMeta.size, remoteMeta.lastModified)
+                }
+                CloudDbResult.Success
             } catch (e: Exception) {
                 CloudDbResult.Failure(e.message ?: "未知错误")
             }
@@ -1446,34 +1436,26 @@ class CloudPaneController(
     suspend fun uploadCloudDb(): Boolean = withContext(Dispatchers.IO) {
         try {
             val dbFile = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/$vaultName/vault_sync.db")
-            if (!dbFile.exists()) return@withContext false
 
-            val zipFile = File(context.cacheDir, "${vaultName}_vault_sync.db.7z")
-            try {
-                com.whmdg.mczj.tools.util.JBindingClient.compress(
-                    sourcePaths = listOf(dbFile.absolutePath),
-                    outputPath = zipFile.absolutePath,
-                    format = "7z", level = 9,
-                    password = "mczj", useAes = true, encryptNames = true
-                ).getOrThrow()
+            // 使用封装的上传函数
+            com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.uploadVaultDatabase(
+                context = context,
+                client = webdavClient,
+                configPath = webdavConfig.relativePath,
+                vaultName = vaultName,
+                dbFile = dbFile
+            )
 
-                val metaDir = "${remoteBasePath}/.sync_meta"
-                try { webdavClient.mkdir(metaDir) } catch (_: Exception) {}
-
-                val remotePath = "$metaDir/${vaultName}_vault_sync.db.7z"
-                webdavClient.uploadFile(zipFile, remotePath) { _ -> }
-
-                val exists = webdavClient.exists(remotePath)
-                if (exists) {
-                    val remoteMeta = webdavClient.getFileMetadata(remotePath)
-                    if (remoteMeta != null) {
-                        saveCloudDbMeta(remoteMeta.size, remoteMeta.lastModified)
-                    }
-                }
-                exists
-            } finally {
-                zipFile.delete()
+            // 保存远程元数据
+            val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
+                if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
+                else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
             }
+            val remoteMeta = webdavClient.getFileMetadata(remotePath)
+            if (remoteMeta != null) {
+                saveCloudDbMeta(remoteMeta.size, remoteMeta.lastModified)
+            }
+            true
         } catch (e: Exception) {
             com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "cloud.db 上传失败: ${e.message}")
             false
@@ -1498,7 +1480,10 @@ class CloudPaneController(
             val localSize = localMeta.getLong("size")
             val localLastModified = localMeta.getLong("lastModified")
 
-            val remotePath = "${remoteBasePath}/.sync_meta/${vaultName}_vault_sync.db.7z"
+            val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
+                if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
+                else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
+            }
             val remoteMeta = webdavClient.getFileMetadata(remotePath) ?: return@withContext false
 
             remoteMeta.size == localSize && remoteMeta.lastModified == localLastModified
@@ -1512,7 +1497,10 @@ class CloudPaneController(
         if (isCloudDbConsistent()) return@withContext
 
         // 云端 db 被更新过，下载并合并
-        val remotePath = "${remoteBasePath}/.sync_meta/${vaultName}_vault_sync.db.7z"
+        val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
+            if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
+            else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
+        }
         val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_remote.db.7z")
         try {
             webdavClient.downloadFile(remotePath, zipFile) { _ -> }
@@ -1557,29 +1545,30 @@ class CloudPaneController(
 
     /** 下载并解压云端同步数据库，将 cloud_entries 导入当前本地数据库。 */
     suspend fun restoreCloudDbFromCloud(): Boolean = withContext(Dispatchers.IO) {
-        val remotePath = "${remoteBasePath}/.sync_meta/${vaultName}_vault_sync.db.7z"
-        val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_restore.db.7z")
-        val extractDir = File(context.cacheDir, "cloud_db_restore_${vaultName}")
         try {
-            if (!webdavClient.exists(remotePath)) return@withContext false
-            webdavClient.downloadFile(remotePath, zipFile) { }
-            extractDir.mkdirs()
-            com.whmdg.mczj.tools.util.JBindingClient.extractAll(
-                archivePath = zipFile.absolutePath,
-                outputDir = extractDir.absolutePath,
-                password = "mczj"
-            ).getOrThrow()
-            val sourceDb = File(extractDir, "vault_sync.db")
-            if (!sourceDb.exists()) return@withContext false
-            syncDb.importCloudEntriesFromFile(sourceDb)
-            webdavClient.getFileMetadata(remotePath)?.let { saveCloudDbMeta(it.size, it.lastModified) }
-            true
+            // 使用封装的下载函数
+            val success = com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.downloadVaultDatabase(
+                context = context,
+                client = webdavClient,
+                configPath = webdavConfig.relativePath,
+                vaultName = vaultName,
+                targetDb = syncDb
+            )
+
+            if (success) {
+                // 保存远程元数据
+                val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
+                    if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
+                    else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
+                }
+                webdavClient.getFileMetadata(remotePath)?.let {
+                    saveCloudDbMeta(it.size, it.lastModified)
+                }
+            }
+            success
         } catch (e: Exception) {
             com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "云端索引恢复失败: ${e.message}")
             false
-        } finally {
-            zipFile.delete()
-            extractDir.deleteRecursively()
         }
     }
 
@@ -1608,7 +1597,10 @@ class CloudPaneController(
     suspend fun downloadAndCompareCloudDb(
         onPhaseChange: (String) -> Unit = {}
     ): CloudDiffResult = withContext(Dispatchers.IO) {
-        val remotePath = "${remoteBasePath}/.sync_meta/${vaultName}_vault_sync.db.7z"
+        val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
+            if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
+            else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
+        }
         val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_remote.db.7z")
         try {
             onPhaseChange("正在下载云端数据库...")

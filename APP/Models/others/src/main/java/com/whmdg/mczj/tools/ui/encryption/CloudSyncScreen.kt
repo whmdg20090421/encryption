@@ -31,7 +31,6 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.whmdg.mczj.tools.encryption.data.VaultPaths
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
-import com.whmdg.mczj.tools.encryption.data.CloudVaultMetadata
 import com.whmdg.mczj.tools.encryption.services.VaultService
 import com.whmdg.mczj.tools.fileop.webdav.WebDavConnectionStatus
 import com.whmdg.mczj.tools.fileop.webdav.WebDavAccountState
@@ -133,9 +132,6 @@ fun CloudSyncScreen(
     var recoveryVaultName by remember { mutableStateOf("") }
     var recoveryVaultDir by remember { mutableStateOf("") }
     var recoveryConfig by remember { mutableStateOf<com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig?>(null) }
-    var catalogConflict by remember { mutableStateOf<Pair<CloudVaultMetadata, VaultRecord>?>(null) }
-    var renameConflict by remember { mutableStateOf<Pair<CloudVaultMetadata, VaultRecord>?>(null) }
-    var renameFolderName by remember { mutableStateOf("") }
     var showManualSyncConfirm by remember { mutableStateOf(false) }
     var catalogSyncProgress by remember { mutableStateOf<CatalogSyncProgress?>(null) }
     var syncRunning by remember { mutableStateOf(false) }
@@ -143,73 +139,71 @@ fun CloudSyncScreen(
     var showCancelSyncConfirm by remember { mutableStateOf(false) }
     var syncSummary by remember { mutableStateOf<SyncSummary?>(null) }
 
-    /** 用户确认同步后，从云端清单恢复保险箱卡片与本地占位目录。 */
+    /** 用户确认同步后，从云端扫描保险箱列表，恢复保险箱卡片与本地占位目录。 */
     suspend fun restoreCloudCatalog(
         config: WebDavServerConfig,
         onProgress: (CatalogSyncProgress) -> Unit = {}
     ): Pair<List<String>, List<String>> {  // 返回 (本地已有, 云端新增)
         onProgress(CatalogSyncProgress("正在连接云端"))
         val client = WebDavFileClient(config)
-        val cache = File(context.cacheDir, "vault_catalog.json")
-        onProgress(CatalogSyncProgress("正在下载保险箱清单"))
-        val catalog = CloudVaultCatalogSync.download(client, config.relativePath, cache)
-        val total = catalog.vaults.size
+
+        onProgress(CatalogSyncProgress("正在扫描云端保险箱"))
+        val vaultNames = CloudVaultCatalogSync.listCloudVaults(client, config.relativePath)
+        val total = vaultNames.size
         val localExisting = mutableListOf<String>()
         val cloudNew = mutableListOf<String>()
+
         if (total == 0) {
-            // 云端还没有同步清单时，卡片视图应反映空的云端状态。
+            // 云端还没有任何保险箱时，卡片视图应反映空的云端状态。
             syncItems.clear()
             processedVaultIds.clear()
             CloudSyncStore.save(context, emptyList())
             return localExisting to cloudNew
         }
-        for ((index, meta) in catalog.vaults.withIndex()) {
-            // 登录阶段先恢复该保险箱的加密同步库，供卡片打开时直接显示云端目录。
-            onProgress(CatalogSyncProgress("正在恢复保险箱同步数据库：${meta.name}", index, total))
-            if (!CloudVaultCatalogSync.restoreVaultDatabase(context, client, config.relativePath, meta)) {
-                throw IllegalStateException("保险箱「${meta.name}」同步数据库恢复失败")
+
+        for ((index, vaultName) in vaultNames.withIndex()) {
+            onProgress(CatalogSyncProgress("正在恢复保险箱同步数据库：${vaultName}", index, total))
+
+            // 下载同步数据库
+            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vaultName)
+            if (!CloudVaultCatalogSync.downloadVaultDatabase(context, client, config.relativePath, vaultName, syncDb)) {
+                throw IllegalStateException("保险箱「${vaultName}」同步数据库恢复失败")
             }
-            val localPath = meta.relativePath.ifBlank {
-                VaultPaths.resolveVault(context, meta.location, meta.name).absolutePath
-            }
-            val record = meta.toVaultRecord(localPath)
-            val restored = try {
-                val existing = vaultService.getVault(meta.id)
-                if (existing != null) {
-                    localExisting.add(meta.name)
-                    existing
-                } else {
-                    cloudNew.add(meta.name)
-                    vaultService.restoreCloudVault(record)
-                }
-            } catch (_: Exception) {
-                vaultService.getVault(meta.id)?.let { catalogConflict = meta to it }
-                continue
-            }
-            VaultPaths.resolveVault(context, restored.location, restored.relativePath).mkdirs()
-            val itemId = "vault_${restored.id}"
-            if (syncItems.none { it.id == itemId }) {
-                val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, restored.name)
-                val stats = syncDb.getStats()
-                syncItems.add(
-                    CloudSyncItem(
-                        id = itemId,
-                        vaultId = restored.id,
-                        vaultName = restored.name,
-                        type = "保险箱",
-                        vaultSize = stats.localSize,
-                        lastSyncTime = stats.lastUpdate ?: "未同步",
-                        cloudSize = stats.cloudSize,
-                        diffFileCount = stats.diffCount,
-                        webdavPath = config.relativePath,
-                        localFileCount = stats.localFileCount,
-                        cloudFileCount = stats.cloudFileCount
+
+            // 检查本地是否已存在该保险箱
+            val existing = vaultService.vaults.find { it.name == vaultName }
+            if (existing != null) {
+                localExisting.add(vaultName)
+                // 更新卡片
+                val itemId = "vault_${existing.id}"
+                if (syncItems.none { it.id == itemId }) {
+                    val stats = syncDb.getStats()
+                    syncItems.add(
+                        CloudSyncItem(
+                            id = itemId,
+                            vaultId = existing.id,
+                            vaultName = existing.name,
+                            type = "保险箱",
+                            vaultSize = stats.localSize,
+                            lastSyncTime = stats.lastUpdate ?: "未同步",
+                            cloudSize = stats.cloudSize,
+                            diffFileCount = stats.diffCount,
+                            webdavPath = config.relativePath,
+                            localFileCount = stats.localFileCount,
+                            cloudFileCount = stats.cloudFileCount
+                        )
                     )
-                )
+                }
+                processedVaultIds.add(existing.id)
+            } else {
+                cloudNew.add(vaultName)
+                // 创建本地占位保险箱（需要用户稍后手动设置密码并打开）
+                // 这里暂不自动创建，等用户手动恢复
             }
-            processedVaultIds.add(restored.id)
-            onProgress(CatalogSyncProgress("正在创建保险箱卡片：${meta.name}", index + 1, total))
+
+            onProgress(CatalogSyncProgress("正在处理保险箱：${vaultName}", index + 1, total))
         }
+
         CloudSyncStore.save(context, syncItems.toList())
         onProgress(CatalogSyncProgress("同步完成", total, total, completed = true))
         return localExisting to cloudNew
@@ -217,13 +211,7 @@ fun CloudSyncScreen(
 
     suspend fun publishCloudCatalog(config: WebDavServerConfig): List<String> {
         val localVaults = vaultService.vaults.toList()
-        val ok = CloudVaultCatalogSync.upload(
-            client = WebDavFileClient(config),
-            configPath = config.relativePath,
-            vaults = localVaults,
-            cacheFile = File(context.cacheDir, "vault_catalog_upload.json")
-        )
-        if (!ok) throw IllegalStateException("云端保险箱清单上传失败")
+        // 不再需要上传 vault_catalog.json，保险箱列表通过扫描 .7z 文件获取
         return localVaults.map { it.name }
     }
 
@@ -981,78 +969,7 @@ fun CloudSyncScreen(
             }
         }
 
-        // ── WebDAV 设置弹窗 ──
-        catalogConflict?.let { (meta, local) ->
-            AlertDialog(
-                onDismissRequest = { catalogConflict = null },
-                title = { Text("保险箱 ID 冲突") },
-                text = { Text("本地已有 ID 为 ${meta.id} 的保险箱「${local.name}」，但云端记录为「${meta.name}」。请选择处理方式。") },
-                confirmButton = {
-                    TextButton(onClick = {
-                        catalogConflict = null
-                        renameFolderName = java.io.File(local.relativePath).name
-                        renameConflict = meta to local
-                    }) { Text("重命名本地文件夹") }
-                },
-                dismissButton = {
-                    TextButton(onClick = {
-                        catalogConflict = null
-                        scope.launch {
-                            vaultService.overwriteVaultId(local.id, meta.toVaultRecord(local.relativePath.ifBlank { meta.name }))
-                            accountState.config?.let(::startCatalogSync)
-                        }
-                    }) { Text("使用云端 ID") }
-                }
-            )
-        }
-
-        renameConflict?.let { (meta, local) ->
-            val originalFolderName = File(local.relativePath).name
-            val candidateFolderName = renameFolderName.trim()
-            val siblingTarget = File(File(local.relativePath).parentFile ?: File(local.relativePath), candidateFolderName)
-            val renameError = when {
-                candidateFolderName.isBlank() -> "名称不能为空"
-                candidateFolderName == originalFolderName -> "新名称不能与原名称相同"
-                candidateFolderName == "." || candidateFolderName == ".." -> "名称不合法"
-                candidateFolderName.contains('/') || candidateFolderName.contains('\\') -> "名称不能包含路径分隔符"
-                siblingTarget.exists() -> "同级目录已存在"
-                else -> null
-            }
-            AlertDialog(
-                onDismissRequest = { renameConflict = null },
-                title = { Text("重命名本地文件夹") },
-                text = {
-                    OutlinedTextField(
-                        value = renameFolderName,
-                        onValueChange = { renameFolderName = it },
-                        label = { Text("文件夹名称") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (renameError != null) {
-                        Text(renameError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        enabled = renameError == null,
-                        onClick = {
-                            renameConflict = null
-                            scope.launch {
-                                try {
-                                    vaultService.renameVaultForConflict(local.id, renameFolderName)
-                                    accountState.config?.let(::startCatalogSync)
-                                } catch (e: Exception) {
-                                    android.widget.Toast.makeText(context, e.message ?: "重命名失败", android.widget.Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
-                    ) { Text("确认") }
-                },
-                dismissButton = { TextButton(onClick = { renameConflict = null }) { Text("取消") } }
-            )
-        }
-
+        // ── 同步确认对话框 ──
         if (showManualSyncConfirm) {
             AlertDialog(
                 onDismissRequest = { showManualSyncConfirm = false },
@@ -1884,21 +1801,16 @@ private fun DiffScanDialog(
                 val vaultService = com.whmdg.mczj.tools.encryption.services.VaultService(context)
                 vaultService.load()
                 val vaultRecord = vaultService.vaults.find { it.id == vaultId }
-                val remoteBasePath = vaultRecord?.let {
-                    com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore.getAll(context)
-                        .firstOrNull()?.let { config ->
-                            val baseUrl = "${config.protocol}://${config.host}:${config.port}${if (config.relativePath.isNotEmpty()) "/${config.relativePath}" else ""}"
-                            "$baseUrl/Android_tools/加密保险箱/${it.name}"
-                        }
-                } ?: ""
+                val webdavConfig = com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore.getAll(context).firstOrNull()
 
-                if (remoteBasePath.isNotEmpty()) {
-                    val webdavConfig = com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore.getAll(context).firstOrNull()
-                    if (webdavConfig != null) {
-                        val webdavClient = com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient(webdavConfig)
+                if (webdavConfig != null && vaultRecord != null) {
+                    val webdavClient = com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient(webdavConfig)
 
-                        val remotePath = "$remoteBasePath/.sync_meta/${vaultName}_vault_sync.db.7z"
-                        val metaFile = java.io.File(com.whmdg.mczj.tools.AppDataPaths.cloudDbMeta(context), "${vaultName}_meta.json")
+                    val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
+                        if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
+                        else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
+                    }
+                    val metaFile = java.io.File(com.whmdg.mczj.tools.AppDataPaths.cloudDbMeta(context), "${vaultName}_meta.json")
 
                         val needsSync = try {
                             val remoteMeta = webdavClient.getFileMetadata(remotePath)

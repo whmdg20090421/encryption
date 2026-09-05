@@ -1,134 +1,200 @@
 package com.whmdg.mczj.tools.ui.encryption
 
 import android.content.Context
-import com.whmdg.mczj.tools.encryption.data.CloudVaultCatalog
-import com.whmdg.mczj.tools.encryption.data.CloudVaultMetadata
 import com.whmdg.mczj.tools.encryption.data.SyncDatabase
-import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
-import kotlinx.serialization.json.Json
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.File
 
-/** WebDAV 上保险箱清单的读写。 */
+/** WebDAV 上保险箱同步数据库的管理（不再使用 JSON 索引文件）。 */
 object CloudVaultCatalogSync {
-    private const val FILE_NAME = "vault_catalog.json"
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = false }
 
-    private fun remotePath(configPath: String): String {
-        // 元数据固定放在根目录的 .sync_meta/ 下，不受 configPath 影响
-        return "/.sync_meta/$FILE_NAME"
+    /** 构建云端 .sync_meta 目录路径 */
+    private fun metaDirPath(configPath: String): String {
+        val base = configPath.trimEnd('/').let { if (it.isBlank()) "" else "/$it" }
+        return "$base/.sync_meta"
     }
 
-    suspend fun download(client: WebDavFileClient, configPath: String, cacheFile: File): CloudVaultCatalog {
-        return withContext(Dispatchers.IO) {
-            try {
-                withTimeout(120_000L) {
-                    runInterruptible { client.downloadFile(remotePath(configPath), cacheFile) { } }
-                    json.decodeFromString<CloudVaultCatalog>(cacheFile.readText())
-                }
-            } catch (e: Throwable) {
-                // 首次使用时 .sync_meta/vault_catalog.json 尚不存在，应视为空云端清单。
-                if (isNotFound(e)) CloudVaultCatalog() else throw e
-            } finally {
-                cacheFile.delete()
-            }
-        }
-    }
+    /** 构建云端同步数据库路径 */
+    private fun vaultDbPath(configPath: String, vaultName: String): String =
+        "${metaDirPath(configPath)}/${vaultName}_vault_sync.db.7z"
 
-    suspend fun upload(
+    /**
+     * 列出云端所有保险箱（通过扫描 .sync_meta/ 下的 .7z 文件）。
+     *
+     * @param client WebDAV 客户端
+     * @param configPath WebDAV 配置路径
+     * @return 保险箱名称列表
+     */
+    suspend fun listCloudVaults(
         client: WebDavFileClient,
-        configPath: String,
-        vaults: List<VaultRecord>,
-        cacheFile: File
-    ): Boolean {
-        return withContext(Dispatchers.IO) {
-            try {
-                val metaDir = remotePath(configPath).substringBeforeLast('/')
-                try { client.mkdir(metaDir) } catch (_: Exception) {}
-                val remote = try { download(client, configPath, cacheFile) } catch (_: Exception) { null }
-                // 云端记录优先，避免另一台设备的同 ID 本地记录覆盖云端权威元数据。
-                val merged = (vaults.map { it.toCloudMetadata() } + remote?.vaults.orEmpty())
-                    .associateBy { it.id }
-                    .values
-                    .sortedBy { it.id }
-                cacheFile.writeText(json.encodeToString(CloudVaultCatalog(vaults = merged)))
-                withTimeout(120_000L) {
-                    runInterruptible { client.uploadFile(cacheFile, remotePath(configPath)) { } }
-                }
-                true
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                throw IllegalStateException("上传云端保险箱清单失败: ${e.message}", e)
-            } finally {
-                cacheFile.delete()
+        configPath: String
+    ): List<String> = withContext(Dispatchers.IO) {
+        try {
+            val metaDir = metaDirPath(configPath)
+            val files = withTimeout(30_000L) {
+                runInterruptible { client.listFiles(metaDir) }
             }
+            files.filter { it.endsWith("_vault_sync.db.7z") }
+                .map { it.removeSuffix("_vault_sync.db.7z") }
+        } catch (e: Exception) {
+            // .sync_meta 目录不存在或为空
+            emptyList()
         }
     }
 
-    /** 登录阶段恢复某个保险箱的加密同步数据库。 */
-    suspend fun restoreVaultDatabase(
+    /**
+     * 上传保险箱同步数据库到云端根目录 .sync_meta/。
+     *
+     * @param context 上下文
+     * @param client WebDAV 客户端
+     * @param configPath WebDAV 配置路径
+     * @param vaultName 保险箱名称（用于命名 7z 文件）
+     * @param dbFile 本地同步数据库文件
+     * @return 成功返回 true，失败抛出异常
+     */
+    suspend fun uploadVaultDatabase(
         context: Context,
         client: WebDavFileClient,
         configPath: String,
-        meta: CloudVaultMetadata
-    ): Boolean {
-        val remoteBase = configPath.trimEnd('/').let { base ->
-            if (base.isBlank()) "/${meta.remoteFolder}" else "/$base/${meta.remoteFolder}"
+        vaultName: String,
+        dbFile: File
+    ): Boolean = withContext(Dispatchers.IO) {
+        val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_upload.db.7z")
+        try {
+            if (!dbFile.exists()) throw IllegalStateException("数据库文件不存在: ${dbFile.absolutePath}")
+
+            // 压缩数据库
+            com.whmdg.mczj.tools.util.JBindingClient.compress(
+                sourcePaths = listOf(dbFile.absolutePath),
+                outputPath = zipFile.absolutePath,
+                format = "7z", level = 9,
+                password = "mczj", useAes = true, encryptNames = true
+            ).getOrThrow()
+
+            // 确保云端元数据目录存在
+            val metaDir = metaDirPath(configPath)
+            try { client.mkdir(metaDir) } catch (_: Exception) {}
+
+            // 上传到云端根目录 .sync_meta/
+            val remotePath = vaultDbPath(configPath, vaultName)
+            withTimeout(120_000L) {
+                runInterruptible { client.uploadFile(zipFile, remotePath) { } }
+            }
+            true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw IllegalStateException("上传保险箱「${vaultName}」同步数据库失败: ${e.message}", e)
+        } finally {
+            zipFile.delete()
         }
-        val remotePath = "$remoteBase/.sync_meta/${meta.name}_vault_sync.db.7z"
-        val zipFile = File(context.cacheDir, "${meta.id}_vault_sync_restore.db.7z")
-        val extractDir = File(context.cacheDir, "cloud_db_restore_${meta.id}")
+    }
+
+    /**
+     * 从云端根目录 .sync_meta/ 下载保险箱同步数据库。
+     *
+     * 下载时检查本地缓存：若本地已有相同大小的文件，则跳过下载直接解压。
+     *
+     * @param context 上下文
+     * @param client WebDAV 客户端
+     * @param configPath WebDAV 配置路径
+     * @param vaultName 保险箱名称（指定下载哪个保险箱的数据库）
+     * @param targetDb 目标数据库实例（用于导入 cloud_entries）
+     * @return 成功返回 true，文件不存在返回 false，失败抛出异常
+     */
+    suspend fun downloadVaultDatabase(
+        context: Context,
+        client: WebDavFileClient,
+        configPath: String,
+        vaultName: String,
+        targetDb: SyncDatabase
+    ): Boolean {
+        val remotePath = vaultDbPath(configPath, vaultName)
+        val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_download.db.7z")
+        val extractDir = File(context.cacheDir, "vault_db_download_${vaultName}")
         return withContext(Dispatchers.IO) {
             try {
+                // 检查云端文件是否存在
                 val exists = withTimeout(30_000L) { runInterruptible { client.exists(remotePath) } }
                 if (!exists) return@withContext false
-                withTimeout(120_000L) { runInterruptible { client.downloadFile(remotePath, zipFile) { } } }
+
+                // 获取云端文件元数据
+                val remoteMeta = withTimeout(30_000L) { runInterruptible { client.getFileMetadata(remotePath) } }
+
+                // 如果本地缓存文件存在且大小一致，跳过下载
+                val needDownload = !zipFile.exists() || zipFile.length() != remoteMeta?.size
+                if (needDownload) {
+                    // 下载 7z 文件
+                    withTimeout(120_000L) { runInterruptible { client.downloadFile(remotePath, zipFile) { } } }
+                }
+
+                // 解压
                 extractDir.mkdirs()
-                withTimeout(120_000L) { com.whmdg.mczj.tools.util.JBindingClient.extractAll(
-                    archivePath = zipFile.absolutePath,
-                    outputDir = extractDir.absolutePath,
-                    password = "mczj"
-                ).getOrThrow() }
+                withTimeout(120_000L) {
+                    com.whmdg.mczj.tools.util.JBindingClient.extractAll(
+                        archivePath = zipFile.absolutePath,
+                        outputDir = extractDir.absolutePath,
+                        password = "mczj"
+                    ).getOrThrow()
+                }
+
+                // 导入 cloud_entries 到目标数据库
                 val sourceDb = File(extractDir, "vault_sync.db")
-                if (!sourceDb.exists()) return@withContext false
-                SyncDatabase.getInstance(context, meta.name).importCloudEntriesFromFile(sourceDb)
+                if (!sourceDb.exists()) throw IllegalStateException("解压后未找到 vault_sync.db")
+                targetDb.importCloudEntriesFromFile(sourceDb)
                 true
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                throw IllegalStateException("恢复保险箱「${meta.name}」的同步数据库失败: ${e.message}", e)
+                throw IllegalStateException("下载保险箱「${vaultName}」同步数据库失败: ${e.message}", e)
             } finally {
-                zipFile.delete()
                 extractDir.deleteRecursively()
+                // 注意：不删除 zipFile，保留作为缓存供下次检查
             }
         }
     }
 
-    private fun VaultRecord.toCloudMetadata() = CloudVaultMetadata(
-        id = id,
-        name = name,
-        remoteFolder = name,
-        relativePath = relativePath,
-        createdAt = createdAt,
-        location = location,
-        encryptFilename = encryptFilename,
-        encryptMetadata = encryptMetadata,
-        customEncryption = customEncryption,
-        algorithm = algorithm,
-        lastModifiedAt = lastModifiedAt
-    )
-
-    private fun isNotFound(error: Throwable): Boolean {
-        var current: Throwable? = error
-        while (current != null) {
-            if (current.message?.contains("HTTP 404") == true) return true
-            current = current.cause
+    /**
+     * 批量下载所有保险箱同步数据库。
+     *
+     * @param context 上下文
+     * @param client WebDAV 客户端
+     * @param configPath WebDAV 配置路径
+     * @param vaultNames 要下载的保险箱名称列表（若为空则下载全部）
+     * @param onProgress 进度回调 (当前索引, 总数, 保险箱名称)
+     * @return 成功下载的数量
+     */
+    suspend fun downloadAllVaultDatabases(
+        context: Context,
+        client: WebDavFileClient,
+        configPath: String,
+        vaultNames: List<String> = emptyList(),
+        onProgress: (current: Int, total: Int, vaultName: String) -> Unit = { _, _, _ -> }
+    ): Int = withContext(Dispatchers.IO) {
+        // 如果未指定保险箱列表，则列出所有云端保险箱
+        val vaultsToDownload = if (vaultNames.isEmpty()) {
+            listCloudVaults(client, configPath)
+        } else {
+            vaultNames
         }
-        return false
+
+        var successCount = 0
+        vaultsToDownload.forEachIndexed { index, vaultName ->
+            onProgress(index + 1, vaultsToDownload.size, vaultName)
+            val targetDb = SyncDatabase.getInstance(context, vaultName)
+            try {
+                if (downloadVaultDatabase(context, client, configPath, vaultName, targetDb)) {
+                    successCount++
+                }
+            } catch (_: Exception) {
+                // 单个失败不影响其他保险箱下载
+            }
+        }
+        successCount
     }
 }
+
