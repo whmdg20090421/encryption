@@ -513,6 +513,7 @@ class CloudPaneController(
             }
 
             // ⑥ 检测上传冲突：local.status=PENDING 且 cloud.db 中存在
+            // 优先级判定：哈希相同（绝对权威）→ 大小不同（次要）→ 时间不同（最弱参考）
             val conflicts = mutableListOf<ConflictFileInfo>()
             withContext(Dispatchers.IO) {
                 for ((file, relPath) in toUpload) {
@@ -520,13 +521,47 @@ class CloudPaneController(
                     val cloudEntry = syncDb.getEntry("cloud_entries", relPath)
 
                     if (localEntry != null && localEntry.status == SyncStatus.PENDING && cloudEntry != null) {
-                        conflicts.add(ConflictFileInfo(
-                            path = relPath,
-                            localSize = file.length(),
-                            localModified = Instant.ofEpochMilli(file.lastModified()).toString(),
-                            cloudSize = cloudEntry.size,
-                            cloudModified = cloudEntry.lastModified
-                        ))
+                        val localSize = file.length()
+                        val cloudSize = cloudEntry.size
+
+                        // 1. 优先检查大小：大小不同 → 文件必定不同
+                        if (localSize != cloudSize) {
+                            conflicts.add(ConflictFileInfo(
+                                path = relPath,
+                                localSize = localSize,
+                                localModified = Instant.ofEpochMilli(file.lastModified()).toString(),
+                                cloudSize = cloudSize,
+                                cloudModified = cloudEntry.lastModified
+                            ))
+                            continue
+                        }
+
+                        // 2. 大小相同，检查哈希（绝对权威）
+                        val cloudMd5 = cloudEntry.md5
+                        if (cloudMd5 != null) {
+                            val localMd5 = calculateMd5(file)
+                            if (localMd5 == cloudMd5) {
+                                // 哈希相同 → 文件100%相同，跳过冲突检查，直接标记为已完成
+                                syncDb.updateEntry("local_entries", relPath, mapOf(
+                                    "status" to SyncStatus.COMPLETED.name,
+                                    "md5" to localMd5,
+                                    "uploaded_at" to Instant.now().toString()
+                                ))
+                                continue
+                            }
+                        }
+
+                        // 3. 大小相同但哈希不同（或云端无哈希记录），且时间不同 → 真冲突
+                        val localModified = Instant.ofEpochMilli(file.lastModified()).toString()
+                        if (localModified != cloudEntry.lastModified) {
+                            conflicts.add(ConflictFileInfo(
+                                path = relPath,
+                                localSize = localSize,
+                                localModified = localModified,
+                                cloudSize = cloudSize,
+                                cloudModified = cloudEntry.lastModified
+                            ))
+                        }
                     }
                 }
             }
