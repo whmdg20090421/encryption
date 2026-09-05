@@ -1759,7 +1759,17 @@ class CloudPaneController(
             if (file.isFile) {
                 val existing = syncDb.getEntry("local_entries", relativePath)
                 val currentLastModified = Instant.ofEpochMilli(file.lastModified()).toString()
-                val currentSize = file.length()
+                // 读取原始文件大小（从加密元数据中获取，避免膨胀）
+                val currentSize = vaultSession?.let { session ->
+                    try {
+                        val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
+                            file, session.dek, session.config.configFlags.customEncryption
+                        )
+                        metadata["size"]?.toLong() ?: file.length()
+                    } catch (e: Exception) {
+                        file.length()
+                    }
+                } ?: file.length()
 
                 if (existing == null) {
                     // 新文件 → 录入
@@ -1809,13 +1819,10 @@ class CloudPaneController(
             val childRelativePath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
 
             if (file.isDirectory) {
-                // 文件夹大小：从 SyncDatabase 累加原始文件大小（避免 FolderSizeDb 的加密文件膨胀问题）
+                // 文件夹大小：从 SyncDatabase 递归累加整个子树的原始文件大小（避免 FolderSizeDb 的加密文件膨胀问题）
                 val prefix = if (childRelativePath.endsWith("/")) childRelativePath else "$childRelativePath/"
                 val folderSize = syncDb.getEntriesByParent("local_entries", childRelativePath)
-                    .filter { entry ->
-                        // 只累加直接子文件（排除子文件夹和子孙文件）
-                        !entry.path.endsWith("/") && entry.path.substringBeforeLast('/') == childRelativePath.trimEnd('/')
-                    }
+                    .filter { entry -> !entry.path.endsWith("/") }  // 累加整个子树的所有文件，不只是直接子文件
                     .sumOf { it.size }
                 // 同步状态：递归统计子树
                 val syncAgg = aggregateDirectChildren(childRelativePath)
@@ -1921,7 +1928,8 @@ class CloudPaneController(
                 uploadingSize += childAgg.uploadingSize
             } else {
                 val dbEntry = syncDb.getEntry("local_entries", childPath)
-                val fileSize = file.length()
+                // 使用 DB 中的原始文件大小（与 folderSize 统计口径一致），避免加密文件膨胀导致的误判
+                val fileSize = dbEntry?.size ?: file.length()
                 val liveProgress = state.syncTask.fileProgress[childPath]
                 val dbUploaded = dbEntry?.uploadedSize ?: 0L
                 when (dbEntry?.status) {
