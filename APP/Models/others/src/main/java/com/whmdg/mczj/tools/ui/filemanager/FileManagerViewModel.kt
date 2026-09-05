@@ -1209,7 +1209,7 @@ class FilePaneController(
      */
     fun navigateToWebDav(config: WebDavServerConfig) {
         val panel = state
-        viewModelScope.launch {
+        scope.launch {
             try {
                 // 在 IO 线程创建客户端并测试连接
                 val client = withContext(Dispatchers.IO) {
@@ -1225,7 +1225,10 @@ class FilePaneController(
                 loadWebDavEntries(panel)
 
             } catch (e: Exception) {
-                handleWebDavError(panel, config, e, "连接")
+                val serverInfo = "${config.protocol}://${config.host}:${config.port}${config.relativePath}"
+                val errorDetail = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+                DiagnosticLog.log("WebDAV", "连接失败: $serverInfo, error=$errorDetail\n${e.stackTraceToString()}")
+                panel.loadError = RuntimeException("连接 WebDAV 失败 ($serverInfo): $errorDetail", e)
             }
         }
     }
@@ -1265,7 +1268,7 @@ class FilePaneController(
         val client = panel.webDavClient ?: return
         val config = panel.webDavConfig
 
-        viewModelScope.launch {
+        scope.launch {
             try {
                 // 在 IO 线程获取文件列表
                 val files = withContext(Dispatchers.IO) {
@@ -1291,58 +1294,15 @@ class FilePaneController(
                 }
 
             } catch (e: Exception) {
-                handleWebDavError(panel, config, e, "加载")
+                val serverInfo = if (config != null) {
+                    "${config.protocol}://${config.host}:${config.port}${config.relativePath}"
+                } else {
+                    "未知服务器"
+                }
+                val errorDetail = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+                DiagnosticLog.log("WebDAV", "加载失败: $serverInfo, path=${panel.webDavCurrentPath}, error=$errorDetail\n${e.stackTraceToString()}")
+                panel.loadError = RuntimeException("WebDAV 加载失败 ($serverInfo): $errorDetail", e)
             }
-        }
-    }
-
-    /**
-     * 统一处理 WebDAV 错误，生成详细的错误信息。
-     */
-    private fun handleWebDavError(
-        panel: FilePaneController.VmPanelState,
-        config: WebDavServerConfig?,
-        exception: Exception,
-        operation: String
-    ) {
-        val serverInfo = if (config != null) {
-            "${config.protocol}://${config.host}:${config.port}${config.relativePath}"
-        } else {
-            "未知服务器"
-        }
-
-        val errorDetail = exception.message?.takeIf { it.isNotBlank() }
-            ?: exception.javaClass.simpleName
-
-        DiagnosticLog.log(
-            "WebDAV",
-            "${operation}失败: $serverInfo, path=${panel.webDavCurrentPath}, error=$errorDetail\n${exception.stackTraceToString()}"
-        )
-
-        panel.loadError = RuntimeException(
-            "WebDAV ${operation}失败 ($serverInfo): $errorDetail",
-            exception
-        )
-    }
-
-    /**
-     * 根据当前排序设置对文件列表排序。
-     */
-    private fun sortEntries(entries: List<FileEntry>): List<FileEntry> {
-        return when (sortField()) {
-            SortField.NAME -> when (sortOrder()) {
-                SortOrder.ASC -> entries.sortedBy { it.name.lowercase() }
-                SortOrder.DESC -> entries.sortedByDescending { it.name.lowercase() }
-            }
-            SortField.SIZE -> when (sortOrder()) {
-                SortOrder.ASC -> entries.sortedBy { it.size }
-                SortOrder.DESC -> entries.sortedByDescending { it.size }
-            }
-            SortField.MODIFIED -> when (sortOrder()) {
-                SortOrder.ASC -> entries.sortedBy { it.lastModified }
-                SortOrder.DESC -> entries.sortedByDescending { it.lastModified }
-            }
-            SortField.CREATED -> entries
         }
     }
 
