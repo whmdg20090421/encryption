@@ -2137,9 +2137,12 @@ fun FileManagerScreen(
                                         // 自定义快捷访问
                                         quickAccessList.forEach { entry ->
                                             HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth().clickable { vm.navigateToWithScroll(entry.path); showDrawer = false }.padding(horizontal = 12.dp, vertical = 8.dp),
-                                                verticalAlignment = Alignment.CenterVertically
+                                            SwipeToDeleteShortcut(
+                                                onDelete = {
+                                                    quickAccessList = quickAccessList.filter { it != entry }
+                                                    saveQuickAccess()
+                                                },
+                                                onClick = { vm.navigateToWithScroll(entry.path); showDrawer = false }
                                             ) {
                                                 Icon(Icons.Default.SubdirectoryArrowRight, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                                 Spacer(Modifier.width(8.dp))
@@ -2149,9 +2152,12 @@ fun FileManagerScreen(
                                         // WebDAV 快捷访问
                                         webDavServers.forEach { server ->
                                             HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth().clickable { vm.navigateToWebDav(server); showDrawer = false }.padding(horizontal = 12.dp, vertical = 8.dp),
-                                                verticalAlignment = Alignment.CenterVertically
+                                            SwipeToDeleteShortcut(
+                                                onDelete = {
+                                                    WebDavServerStore.remove(context, server.id)
+                                                    webDavServers = webDavServers.filter { it.id != server.id }
+                                                },
+                                                onClick = { vm.navigateToWebDav(server); showDrawer = false }
                                             ) {
                                                 Icon(Icons.Default.Cloud, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
                                                 Spacer(Modifier.width(8.dp))
@@ -6636,5 +6642,69 @@ private fun SyncStatusBar(
                 maxLines = 1
             )
         }
+    }
+}
+
+// ── 可滑动删除的快捷访问项 ──
+@Composable
+private fun SwipeToDeleteShortcut(
+    onDelete: () -> Unit,
+    onClick: () -> Unit,
+    content: @Composable RowScope.() -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val offsetX = remember { androidx.compose.animation.core.Animatable(0f) }
+    val deleteButtonWidth = 80.dp
+    val maxOffset = with(androidx.compose.ui.platform.LocalDensity.current) { deleteButtonWidth.toPx() }
+    val threshold = maxOffset * 0.7f
+
+    Box(modifier = Modifier.fillMaxWidth()) {
+        // 底层：红色删除按钮
+        Row(
+            modifier = Modifier
+                .matchParentSize()
+                .background(Color(0xFFE53935))
+                .clickable { onDelete() }
+                .padding(start = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Delete,
+                contentDescription = "删除",
+                tint = Color.White,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+
+        // 顶层：可滑动的内容
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+                .background(MaterialTheme.colorScheme.surface)
+                .clickable(enabled = offsetX.value < 5f) { onClick() }
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            scope.launch {
+                                if (offsetX.value >= threshold) {
+                                    offsetX.animateTo(maxOffset, androidx.compose.animation.core.tween(200))
+                                } else {
+                                    offsetX.animateTo(0f, androidx.compose.animation.core.tween(200))
+                                }
+                            }
+                        },
+                        onHorizontalDrag = { _, dragAmount ->
+                            scope.launch {
+                                val newOffset = (offsetX.value + dragAmount).coerceIn(0f, maxOffset)
+                                offsetX.snapTo(newOffset)
+                            }
+                        }
+                    )
+                }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            content = content
+        )
     }
 }

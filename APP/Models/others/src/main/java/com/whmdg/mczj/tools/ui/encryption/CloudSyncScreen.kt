@@ -1,5 +1,6 @@
 package com.whmdg.mczj.tools.ui.encryption
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -1201,6 +1202,7 @@ fun CloudSyncScreen(
 }
 
 // ── WebDAV 设置弹窗 ──
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun WebDavSettingsDialog(
     initialConfig: WebDavServerConfig?,
@@ -1211,6 +1213,7 @@ private fun WebDavSettingsDialog(
     var username by remember { mutableStateOf(initialConfig?.username ?: "") }
     var password by remember { mutableStateOf(initialConfig?.password ?: "") }
     var path by remember { mutableStateOf(initialConfig?.relativePath ?: "") }
+    var authType by remember { mutableStateOf(initialConfig?.authType ?: "password") }
     var passwordVisible by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
     var testSuccess by remember { mutableStateOf(false) }
@@ -1231,32 +1234,77 @@ private fun WebDavSettingsDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                // 账户
-                OutlinedTextField(
-                    value = username,
-                    onValueChange = { username = it },
-                    label = { Text("账户") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                // 密码
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text("密码") },
-                    singleLine = true,
-                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        IconButton(onClick = { passwordVisible = !passwordVisible }, modifier = Modifier.size(24.dp)) {
-                            Icon(
-                                if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
+
+                // 认证类型
+                var authExpanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(
+                    expanded = authExpanded,
+                    onExpandedChange = { authExpanded = it }
+                ) {
+                    val authLabel = when (authType) {
+                        "password" -> "密码"
+                        "token" -> "访问令牌"
+                        else -> "无"
+                    }
+                    OutlinedTextField(
+                        value = authLabel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("认证类型") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(authExpanded) },
+                        modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = authExpanded,
+                        onDismissRequest = { authExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("密码") },
+                            onClick = { authType = "password"; authExpanded = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("访问令牌") },
+                            onClick = { authType = "token"; authExpanded = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("无") },
+                            onClick = { authType = "none"; authExpanded = false }
+                        )
+                    }
+                }
+
+                // 账户（仅密码认证需要）
+                AnimatedVisibility(authType == "password") {
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it },
+                        label = { Text("账户") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                // 密码/令牌
+                AnimatedVisibility(authType != "none") {
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text(if (authType == "token") "访问令牌" else "密码") },
+                        singleLine = true,
+                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }, modifier = Modifier.size(24.dp)) {
+                                Icon(
+                                    if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
                 // 路径（可选）
                 OutlinedTextField(
                     value = path,
@@ -1287,6 +1335,7 @@ private fun WebDavSettingsDialog(
                             port = parsed.third,
                             username = username.trim(),
                             password = password,
+                            authType = authType,
                             relativePath = effectivePath
                         )
                         dialogScope.launch {
@@ -1310,7 +1359,7 @@ private fun WebDavSettingsDialog(
                             isTesting = false
                         }
                     },
-                    enabled = !isTesting && url.isNotBlank() && username.isNotBlank(),
+                    enabled = !isTesting && url.isNotBlank() && (authType != "password" || username.isNotBlank()),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     if (isTesting) {
@@ -1343,6 +1392,7 @@ private fun WebDavSettingsDialog(
                             port = parsed.third,
                             username = username.trim(),
                             password = password,
+                            authType = authType,
                             relativePath = effectivePath
                         ))
                     }

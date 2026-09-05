@@ -1212,7 +1212,10 @@ class FilePaneController(
             panel.webDavCurrentPath = config.relativePath.ifEmpty { "/" }
             loadWebDavEntries(panel)
         } catch (e: Exception) {
-            panel.loadError = RuntimeException("连接 WebDAV 失败: ${e.message}")
+            val serverInfo = "${config.protocol}://${config.host}:${config.port}${config.relativePath}"
+            val errorDetail = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+            DiagnosticLog.log("WebDAV", "连接失败: $serverInfo, error=$errorDetail\n${e.stackTraceToString()}")
+            panel.loadError = RuntimeException("连接 WebDAV 失败 ($serverInfo): $errorDetail", e)
         }
     }
 
@@ -1281,7 +1284,11 @@ class FilePaneController(
                 panel.loadError = null
             }
         } catch (e: Exception) {
-            panel.loadError = RuntimeException("WebDAV 加载失败: ${e.message}")
+            val config = panel.webDavConfig
+            val serverInfo = if (config != null) "${config.protocol}://${config.host}:${config.port}${config.relativePath}" else "未知服务器"
+            val errorDetail = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+            DiagnosticLog.log("WebDAV", "加载失败: $serverInfo, path=${panel.webDavCurrentPath}, error=$errorDetail\n${e.stackTraceToString()}")
+            panel.loadError = RuntimeException("WebDAV 加载失败 ($serverInfo): $errorDetail", e)
         }
     }
 
