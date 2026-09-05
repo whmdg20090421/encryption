@@ -54,13 +54,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import java.io.File
 
 /** 云盘同步项（UI 数据模型 + 持久化字段） */
