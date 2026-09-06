@@ -334,7 +334,7 @@ class VaultService(private val context: Context) {
             customEncryption = cfg.configFlags.customEncryption,
             algorithm = cfg.algorithm,
             createdAt = sdf.format(Date()),
-            uuid = uuid ?: cfg.uuid  // 使用传入的 UUID 或配置文件中的 UUID
+            uuid = uuid ?: (cfg.uuid ?: "")  // 使用传入的 UUID，或配置文件中的 UUID，或空字符串
         )
         val assigned = _db.addVault(rec)
         _db.save(context)
@@ -434,7 +434,7 @@ class VaultService(private val context: Context) {
             customEncryption = cfg.configFlags.customEncryption,
             algorithm = cfg.algorithm,
             createdAt = sdf.format(Date()),
-            uuid = uuid ?: cfg.uuid  // 使用传入的 UUID 或配置文件中的 UUID
+            uuid = uuid ?: (cfg.uuid ?: "")  // 使用传入的 UUID，或配置文件中的 UUID，或空字符串
         )
         val assigned = _db.addVault(rec)
         _db.save(context)
