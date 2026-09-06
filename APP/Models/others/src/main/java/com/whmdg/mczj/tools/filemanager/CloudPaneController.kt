@@ -46,8 +46,11 @@ class CloudPaneController(
 
     private val webdavClient = WebDavFileClient(webdavConfig)
     private var syncJob: Job? = null
-    // 构造时即打开本地同步库，支持 init 前的云端索引恢复。
-    private val syncDb: SyncDatabase = SyncDatabase.getInstance(context, vaultName)
+    // 构造时即打开本地同步库，支持 init 前的云端索引恢复。使用 UUID 作为数据库标识，与云端同步数据一致
+    private val syncDb: SyncDatabase = SyncDatabase.getInstance(
+        context,
+        vaultSession?.record?.uuid ?: throw IllegalStateException("云端同步需要保险箱 UUID，但 vaultSession 为空")
+    )
 
     /** 云盘面板状态（完全独立，使用 mutableStateOf 驱动 Compose recomposition） */
     class CloudPanelState {
@@ -153,18 +156,33 @@ class CloudPaneController(
     /** 初始化：打开 DB + 注册日志写入器 + 首次扫描 + 列出根目录 */
     fun init() {
         state.vaultFolderName = vaultName
-        // 中断恢复：WebDAV 不支持断点续传，所有 UPLOADING 重置为 PENDING
-        syncDb.resetUploadingToPending("local_entries")
-        // 注册云盘日志写入器
-        com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.externalWriter = { tag, message ->
-            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.log(context, tag, message)
+        try {
+            // 中断恢复：WebDAV 不支持断点续传，所有 UPLOADING 重置为 PENDING
+            syncDb.resetUploadingToPending("local_entries")
+            // 注册云盘日志写入器
+            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.externalWriter = { tag, message ->
+                com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.log(context, tag, message)
+            }
+            // 仅首次初始化时全量扫描
+            if (!state.isInitialized) {
+                syncLocalFiles()
+                state.isInitialized = true
+            }
+            navigateTo("/")
+        } catch (e: Exception) {
+            // 捕获数据库不存在或损坏错误
+            val message = e.message ?: ""
+            if (message.contains("no such table", ignoreCase = true) ||
+                message.contains("not exist", ignoreCase = true) ||
+                message.contains("unable to open", ignoreCase = true)) {
+                state.loadError = IllegalStateException(
+                    "云端数据库损坏，无法查找到文件，无法打开保险箱「$vaultName」。" +
+                    "请尝试重新从云端同步或联系开发者。"
+                )
+            } else {
+                state.loadError = e
+            }
         }
-        // 仅首次初始化时全量扫描
-        if (!state.isInitialized) {
-            syncLocalFiles()
-            state.isInitialized = true
-        }
-        navigateTo("/")
     }
 
     /** 导航到本地保险箱内的相对路径 */
