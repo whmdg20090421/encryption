@@ -273,11 +273,21 @@ class VaultService(private val context: Context) {
     fun importVaultWithPassword(
         name: String,
         vaultPath: String,
-        password: String
+        password: String,
+        uuid: String? = null
     ): VaultRecord {
         if (_db.isNameTaken(name)) {
             throw IllegalArgumentException("保险箱名称已存在: $name")
         }
+
+        // 如果指定了 UUID，检查是否与现有保险箱冲突
+        if (uuid != null) {
+            val existing = _db.vaults.find { it.uuid == uuid }
+            if (existing != null) {
+                throw IllegalArgumentException("保险箱 UUID 已存在: $uuid (保险箱名称: ${existing.name})")
+            }
+        }
+
         val dir = File(vaultPath)
         if (!dir.exists()) {
             throw IllegalArgumentException("目录不存在: $vaultPath")
@@ -323,7 +333,8 @@ class VaultService(private val context: Context) {
             encryptMetadata = cfg.configFlags.encryptMetadata,
             customEncryption = cfg.configFlags.customEncryption,
             algorithm = cfg.algorithm,
-            createdAt = sdf.format(Date())
+            createdAt = sdf.format(Date()),
+            uuid = uuid ?: cfg.uuid  // 使用传入的 UUID 或配置文件中的 UUID
         )
         val assigned = _db.addVault(rec)
         _db.save(context)
@@ -341,10 +352,19 @@ class VaultService(private val context: Context) {
     fun importVaultWithPasswordSaf(
         name: String,
         treeUri: Uri,
-        password: String
+        password: String,
+        uuid: String? = null
     ): VaultRecord {
         if (_db.isNameTaken(name)) {
             throw IllegalArgumentException("保险箱名称已存在: $name")
+        }
+
+        // 如果指定了 UUID，检查是否与现有保险箱冲突
+        if (uuid != null) {
+            val existing = _db.vaults.find { it.uuid == uuid }
+            if (existing != null) {
+                throw IllegalArgumentException("保险箱 UUID 已存在: $uuid (保险箱名称: ${existing.name})")
+            }
         }
 
         // 构建 vault_config.json 的 child URI
@@ -413,7 +433,8 @@ class VaultService(private val context: Context) {
             encryptMetadata = cfg.configFlags.encryptMetadata,
             customEncryption = cfg.configFlags.customEncryption,
             algorithm = cfg.algorithm,
-            createdAt = sdf.format(Date())
+            createdAt = sdf.format(Date()),
+            uuid = uuid ?: cfg.uuid  // 使用传入的 UUID 或配置文件中的 UUID
         )
         val assigned = _db.addVault(rec)
         _db.save(context)

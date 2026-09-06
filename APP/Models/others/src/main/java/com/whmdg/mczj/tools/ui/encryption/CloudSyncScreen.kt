@@ -2484,11 +2484,11 @@ private suspend fun createVaultFromPending(
         dir.absolutePath
     }
 
-    // 3. 调用 VaultService 导入（验证密码）
+    // 3. 调用 VaultService 导入（验证密码，指定 UUID）
     val vaultRecord = if (useSaf) {
-        vaultService.importVaultWithPasswordSaf(pending.vaultName, Uri.parse(vaultDir), password)
+        vaultService.importVaultWithPasswordSaf(pending.vaultName, Uri.parse(vaultDir), password, pending.uuid)
     } else {
-        vaultService.importVaultWithPassword(pending.vaultName, vaultDir, password)
+        vaultService.importVaultWithPassword(pending.vaultName, vaultDir, password, pending.uuid)
     }
 
     // 4. 创建云盘同步卡片
