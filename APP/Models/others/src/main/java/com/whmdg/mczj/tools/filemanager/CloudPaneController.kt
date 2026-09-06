@@ -1436,12 +1436,14 @@ class CloudPaneController(
                 }
 
                 // 使用封装的上传函数
+                val configFile = File(vaultDir, "vault_config.json")
                 com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.uploadVaultDatabase(
                     context = context,
                     client = webdavClient,
                     configPath = webdavConfig.relativePath,
                     vaultName = vaultName,
-                    dbFile = dbFile
+                    dbFile = dbFile,
+                    configFile = configFile
                 )
 
                 // 切换状态：正在验证
@@ -1502,12 +1504,14 @@ class CloudPaneController(
             val dbFile = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/$vaultName/vault_sync.db")
 
             // 使用封装的上传函数
+            val configFile = File(vaultDir, "vault_config.json")
             com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.uploadVaultDatabase(
                 context = context,
                 client = webdavClient,
                 configPath = webdavConfig.relativePath,
                 vaultName = vaultName,
-                dbFile = dbFile
+                dbFile = dbFile,
+                configFile = configFile
             )
 
             // 保存远程元数据

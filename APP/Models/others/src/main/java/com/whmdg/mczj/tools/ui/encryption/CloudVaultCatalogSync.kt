@@ -54,6 +54,7 @@ object CloudVaultCatalogSync {
      * @param configPath WebDAV 配置路径
      * @param vaultName 保险箱名称（用于命名 7z 文件）
      * @param dbFile 本地同步数据库文件
+     * @param configFile 保险箱配置文件（vault_config.json）
      * @return 成功返回 true，失败抛出异常
      */
     suspend fun uploadVaultDatabase(
@@ -61,15 +62,16 @@ object CloudVaultCatalogSync {
         client: WebDavFileClient,
         configPath: String,
         vaultName: String,
-        dbFile: File
+        dbFile: File,
+        configFile: File
     ): Boolean = withContext(Dispatchers.IO) {
         val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_upload.db.7z")
         try {
             if (!dbFile.exists()) throw IllegalStateException("数据库文件不存在: ${dbFile.absolutePath}")
 
-            // 压缩数据库
+            // 压缩数据库和配置文件
             com.whmdg.mczj.tools.util.JBindingClient.compress(
-                sourcePaths = listOf(dbFile.absolutePath),
+                sourcePaths = listOf(dbFile.absolutePath, configFile.absolutePath),
                 outputPath = zipFile.absolutePath,
                 format = "7z", level = 9,
                 password = "mczj", useAes = true, encryptNames = true
@@ -104,7 +106,7 @@ object CloudVaultCatalogSync {
      * @param configPath WebDAV 配置路径
      * @param vaultName 保险箱名称（指定下载哪个保险箱的数据库）
      * @param targetDb 目标数据库实例（用于导入 cloud_entries）
-     * @return 成功返回 true，文件不存在返回 false，失败抛出异常
+     * @return Pair<成功标志, vault_config.json 文件路径?>，文件不存在返回 Pair(false, null)，失败抛出异常
      */
     suspend fun downloadVaultDatabase(
         context: Context,
@@ -112,7 +114,7 @@ object CloudVaultCatalogSync {
         configPath: String,
         vaultName: String,
         targetDb: SyncDatabase
-    ): Boolean {
+    ): Pair<Boolean, File?> {
         val remotePath = vaultDbPath(configPath, vaultName)
         val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_download.db.7z")
         val extractDir = File(context.cacheDir, "vault_db_download_${vaultName}")
@@ -120,7 +122,7 @@ object CloudVaultCatalogSync {
             try {
                 // 检查云端文件是否存在
                 val exists = withTimeout(30_000L) { runInterruptible { client.exists(remotePath) } }
-                if (!exists) return@withContext false
+                if (!exists) return@withContext Pair(false, null)
 
                 // 获取云端文件元数据
                 val remoteMeta = withTimeout(30_000L) { runInterruptible { client.getFileMetadata(remotePath) } }
@@ -144,9 +146,21 @@ object CloudVaultCatalogSync {
 
                 // 导入 cloud_entries 到目标数据库
                 val sourceDb = File(extractDir, "vault_sync.db")
+                val sourceConfig = File(extractDir, "vault_config.json")
+
                 if (!sourceDb.exists()) throw IllegalStateException("解压后未找到 vault_sync.db")
                 targetDb.importCloudEntriesFromFile(sourceDb)
-                true
+
+                // 持久化 vault_config.json
+                val configFile = if (sourceConfig.exists()) {
+                    val pendingDir = File(context.cacheDir, "pending_vault_configs")
+                    pendingDir.mkdirs()
+                    val targetFile = File(pendingDir, "${vaultName}.json")
+                    sourceConfig.copyTo(targetFile, overwrite = true)
+                    targetFile
+                } else null
+
+                Pair(true, configFile)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -187,7 +201,8 @@ object CloudVaultCatalogSync {
             onProgress(index + 1, vaultsToDownload.size, vaultName)
             val targetDb = SyncDatabase.getInstance(context, vaultName)
             try {
-                if (downloadVaultDatabase(context, client, configPath, vaultName, targetDb)) {
+                val (success, _) = downloadVaultDatabase(context, client, configPath, vaultName, targetDb)
+                if (success) {
                     successCount++
                 }
             } catch (_: Exception) {

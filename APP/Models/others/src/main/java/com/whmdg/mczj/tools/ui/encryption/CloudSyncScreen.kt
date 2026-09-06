@@ -41,6 +41,11 @@ import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.components.glowEffect
 import com.whmdg.mczj.tools.util.FormatUtils
 import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.platform.LocalContext
@@ -74,6 +79,14 @@ data class CloudSyncItem(
     val webdavPath: String = "", // 云端目标路径
     val localFileCount: Int? = null, // 本地文件数量（仅保险箱类型）
     val cloudFileCount: Int? = null  // 云端文件数量
+)
+
+/** 待创建的云端保险箱信息 */
+private data class PendingVaultInfo(
+    val vaultName: String,
+    val configFile: java.io.File,  // 缓存的 vault_config.json 路径
+    val syncDb: com.whmdg.mczj.tools.encryption.data.SyncDatabase,  // 已下载的同步数据库
+    val stats: com.whmdg.mczj.tools.encryption.data.SyncStatsRow  // 云端统计数据
 )
 
 private data class CatalogSyncProgress(
@@ -138,12 +151,41 @@ fun CloudSyncScreen(
     var syncJob by remember { mutableStateOf<Job?>(null) }
     var showCancelSyncConfirm by remember { mutableStateOf(false) }
     var syncSummary by remember { mutableStateOf<SyncSummary?>(null) }
+    var pendingVaults by remember { mutableStateOf<List<PendingVaultInfo>>(emptyList()) }
+    var currentPendingIndex by remember { mutableStateOf(0) }
+    var showCreateVaultDialog by remember { mutableStateOf(false) }
+    var creatingVault by remember { mutableStateOf<PendingVaultInfo?>(null) }
+    var selectedDirectory by remember { mutableStateOf<android.net.Uri?>(null) }
+    var showPasswordDialog by remember { mutableStateOf(false) }
+    var creationError by remember { mutableStateOf<String?>(null) }
+    var useSaf by remember { mutableStateOf(false) }
+
+    // 目录选择器
+    val folderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            selectedDirectory = uri
+            showPasswordDialog = true
+        } else {
+            // 用户取消 → 跳过当前保险箱
+            creatingVault?.configFile?.delete()
+            creatingVault = null
+            currentPendingIndex++
+            if (currentPendingIndex < pendingVaults.size) {
+                showCreateVaultDialog = true
+            } else {
+                pendingVaults = emptyList()
+                currentPendingIndex = 0
+            }
+        }
+    }
 
     /** 用户确认同步后，从云端扫描保险箱列表，恢复保险箱卡片与本地占位目录。 */
     suspend fun restoreCloudCatalog(
         config: WebDavServerConfig,
         onProgress: (CatalogSyncProgress) -> Unit = {}
-    ): Pair<List<String>, List<String>> {  // 返回 (本地已有, 云端新增)
+    ): Triple<List<String>, List<String>, List<PendingVaultInfo>> {  // 返回 (本地已有, 云端新增, 待处理)
         onProgress(CatalogSyncProgress("正在连接云端"))
         val client = WebDavFileClient(config)
 
@@ -152,21 +194,26 @@ fun CloudSyncScreen(
         val total = vaultNames.size
         val localExisting = mutableListOf<String>()
         val cloudNew = mutableListOf<String>()
+        val pendingVaults = mutableListOf<PendingVaultInfo>()
 
         if (total == 0) {
             // 云端还没有任何保险箱时，卡片视图应反映空的云端状态。
             syncItems.clear()
             processedVaultIds.clear()
             CloudSyncStore.save(context, emptyList())
-            return localExisting to cloudNew
+            return Triple(localExisting, cloudNew, pendingVaults)
         }
 
         for ((index, vaultName) in vaultNames.withIndex()) {
             onProgress(CatalogSyncProgress("正在恢复保险箱同步数据库：${vaultName}", index, total))
 
-            // 下载同步数据库
+            // 下载同步数据库和配置文件
             val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vaultName)
-            if (!CloudVaultCatalogSync.downloadVaultDatabase(context, client, config.relativePath, vaultName, syncDb)) {
+            val (success, configFile) = CloudVaultCatalogSync.downloadVaultDatabase(
+                context, client, config.relativePath, vaultName, syncDb
+            )
+
+            if (!success) {
                 throw IllegalStateException("保险箱「${vaultName}」同步数据库恢复失败")
             }
 
@@ -197,8 +244,11 @@ fun CloudSyncScreen(
                 processedVaultIds.add(existing.id)
             } else {
                 cloudNew.add(vaultName)
-                // 创建本地占位保险箱（需要用户稍后手动设置密码并打开）
-                // 这里暂不自动创建，等用户手动恢复
+                // 构建待处理信息
+                if (configFile != null) {
+                    val stats = syncDb.getStats()
+                    pendingVaults.add(PendingVaultInfo(vaultName, configFile, syncDb, stats))
+                }
             }
 
             onProgress(CatalogSyncProgress("正在处理保险箱：${vaultName}", index + 1, total))
@@ -206,7 +256,7 @@ fun CloudSyncScreen(
 
         CloudSyncStore.save(context, syncItems.toList())
         onProgress(CatalogSyncProgress("同步完成", total, total, completed = true))
-        return localExisting to cloudNew
+        return Triple(localExisting, cloudNew, pendingVaults)
     }
 
     suspend fun publishCloudCatalog(config: WebDavServerConfig): List<String> {
@@ -217,7 +267,7 @@ fun CloudSyncScreen(
 
     suspend fun runCatalogSync(config: WebDavServerConfig) {
         try {
-            val (localExisting, cloudNew) = restoreCloudCatalog(config) { catalogSyncProgress = it }
+            val (localExisting, cloudNew, pendingVaultsList) = restoreCloudCatalog(config) { catalogSyncProgress = it }
             catalogSyncProgress = CatalogSyncProgress("正在上传保险箱清单")
             val uploaded = publishCloudCatalog(config)
             catalogSyncProgress = CatalogSyncProgress("同步完成", completed = true)
@@ -226,6 +276,7 @@ fun CloudSyncScreen(
                 cloudNew = cloudNew,
                 uploaded = uploaded
             )
+            pendingVaults = pendingVaultsList
         } catch (e: TimeoutCancellationException) {
             catalogSyncProgress = null
             syncErrorMessage = "同步超时：云端在两分钟内未响应，请检查网络后重试。"
@@ -327,19 +378,36 @@ fun CloudSyncScreen(
             processedVaultIds.add(vault.id)
             val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vault.name)
             val stats = syncDb.getStats()
-            val item = CloudSyncItem(
-                id = "vault_${vault.id}",
-                vaultId = vault.id,
-                vaultName = vault.name,
-                type = "保险箱",
-                vaultSize = stats.localSize,
-                lastSyncTime = stats.lastUpdate ?: "未同步",
-                cloudSize = stats.cloudSize,
-                diffFileCount = stats.diffCount,
-                localFileCount = stats.localFileCount,
-                cloudFileCount = stats.cloudFileCount
-            )
-            syncItems.add(item)
+
+            // 检查是否存在同名的占位卡片（vaultId=0）
+            val pendingIndex = syncItems.indexOfFirst { it.vaultName == vault.name && it.vaultId == 0 }
+            if (pendingIndex >= 0) {
+                // 升级占位卡片为正式卡片
+                syncItems[pendingIndex] = syncItems[pendingIndex].copy(
+                    id = "vault_${vault.id}",
+                    vaultId = vault.id,
+                    vaultSize = stats.localSize,
+                    localFileCount = stats.localFileCount,
+                    cloudSize = stats.cloudSize,
+                    diffFileCount = stats.diffCount,
+                    lastSyncTime = stats.lastUpdate ?: syncItems[pendingIndex].lastSyncTime
+                )
+            } else {
+                // 新增卡片
+                val item = CloudSyncItem(
+                    id = "vault_${vault.id}",
+                    vaultId = vault.id,
+                    vaultName = vault.name,
+                    type = "保险箱",
+                    vaultSize = stats.localSize,
+                    lastSyncTime = stats.lastUpdate ?: "未同步",
+                    cloudSize = stats.cloudSize,
+                    diffFileCount = stats.diffCount,
+                    localFileCount = stats.localFileCount,
+                    cloudFileCount = stats.cloudFileCount
+                )
+                syncItems.add(item)
+            }
             CloudSyncStore.save(context, syncItems.toList())
         }
     }
@@ -781,6 +849,17 @@ fun CloudSyncScreen(
                                     return@TextButton
                                 }
                                 if (item.type != "保险箱") return@TextButton
+
+                                // 检查是否是云端新增的占位卡片
+                                if (item.vaultId == 0) {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "此保险箱仅存在于云端，请先在「保险箱」标签页中创建同名保险箱「${item.vaultName}」并设置密码",
+                                        android.widget.Toast.LENGTH_LONG
+                                    ).show()
+                                    return@TextButton
+                                }
+
                                 val vaultRecord = vaultService.getVault(item.vaultId)
                                 if (vaultRecord == null) {
                                     android.widget.Toast.makeText(context, "保险箱不存在，请重新添加", android.widget.Toast.LENGTH_SHORT).show()
@@ -1039,7 +1118,16 @@ fun CloudSyncScreen(
                         }
                     }
                 },
-                confirmButton = { TextButton(onClick = { syncSummary = null }) { Text("关闭") } }
+                confirmButton = {
+                    TextButton(onClick = {
+                        syncSummary = null
+                        // 如果有待处理的保险箱，触发逐个询问流程
+                        if (pendingVaults.isNotEmpty()) {
+                            currentPendingIndex = 0
+                            showCreateVaultDialog = true
+                        }
+                    }) { Text("关闭") }
+                }
             )
         }
 
@@ -1110,6 +1198,138 @@ fun CloudSyncScreen(
                             syncErrorMessage = "无法连接云端，请检查服务器地址、账号、密码和网络后重试。"
                         }
                     }
+                }
+            )
+        }
+
+        // 逐个询问创建保险箱
+        if (showCreateVaultDialog && currentPendingIndex < pendingVaults.size) {
+            val pending = pendingVaults[currentPendingIndex]
+
+            AlertDialog(
+                onDismissRequest = { /* 不允许点击外部关闭 */ },
+                title = { Text("创建保险箱「${pending.vaultName}」") },
+                text = {
+                    Text("云端检测到此保险箱，需要在本地创建以访问加密文件。\n\n" +
+                         "云端文件数：${pending.stats.cloudFileCount}\n" +
+                         "云端大小：${FormatUtils.formatBytes(pending.stats.cloudSize)}")
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        creatingVault = pending
+                        showCreateVaultDialog = false
+
+                        // 检查权限并选择模式
+                        useSaf = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            !Environment.isExternalStorageManager()
+                        } else {
+                            false
+                        }
+
+                        folderPicker.launch(null)
+                    }) { Text("创建") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        // 跳过：删除临时文件
+                        pending.configFile.delete()
+                        currentPendingIndex++
+                        if (currentPendingIndex < pendingVaults.size) {
+                            showCreateVaultDialog = true
+                        } else {
+                            showCreateVaultDialog = false
+                            pendingVaults = emptyList()
+                            currentPendingIndex = 0
+                        }
+                    }) { Text("跳过") }
+                }
+            )
+        }
+
+        // 密码输入弹窗
+        if (showPasswordDialog && creatingVault != null && selectedDirectory != null) {
+            var password by remember { mutableStateOf("") }
+            var isCreating by remember { mutableStateOf(false) }
+
+            AlertDialog(
+                onDismissRequest = { /* 不允许点击外部关闭 */ },
+                title = { Text("验证密码") },
+                text = {
+                    Column {
+                        Text("请输入保险箱密码以验证并导入")
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text("密码") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            singleLine = true
+                        )
+                        if (creationError != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(creationError!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (password.isBlank()) {
+                                creationError = "密码不能为空"
+                                return@TextButton
+                            }
+
+                            isCreating = true
+                            creationError = null
+                            scope.launch {
+                                try {
+                                    createVaultFromPending(
+                                        context, vaultService,
+                                        creatingVault!!, selectedDirectory!!, password, useSaf,
+                                        syncItems, accountState.config?.relativePath ?: ""
+                                    )
+
+                                    // 成功 → 清理并移动到下一个
+                                    showPasswordDialog = false
+                                    creatingVault = null
+                                    selectedDirectory = null
+                                    password = ""
+                                    creationError = null
+                                    currentPendingIndex++
+                                    if (currentPendingIndex < pendingVaults.size) {
+                                        showCreateVaultDialog = true
+                                    } else {
+                                        pendingVaults = emptyList()
+                                        currentPendingIndex = 0
+                                    }
+                                } catch (e: Exception) {
+                                    creationError = e.message ?: "创建失败"
+                                    isCreating = false
+                                }
+                            }
+                        },
+                        enabled = !isCreating
+                    ) { Text(if (isCreating) "创建中..." else "确认") }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            showPasswordDialog = false
+                            creatingVault?.configFile?.delete()
+                            creatingVault = null
+                            selectedDirectory = null
+                            password = ""
+                            creationError = null
+                            currentPendingIndex++
+                            if (currentPendingIndex < pendingVaults.size) {
+                                showCreateVaultDialog = true
+                            } else {
+                                pendingVaults = emptyList()
+                                currentPendingIndex = 0
+                            }
+                        },
+                        enabled = !isCreating
+                    ) { Text("跳过") }
                 }
             )
         }
@@ -2129,7 +2349,7 @@ private fun DiffResultDialog(
             }
         }
     }
-}
+
 
 // ── MD5 计算辅助函数 ──
 
