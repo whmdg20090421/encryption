@@ -45,7 +45,6 @@ object CloudVaultCatalogSync {
             emptyList()
         }
     }
-    }
 
     /**
      * 上传保险箱同步数据库到云端根目录 .sync_meta/。
