@@ -163,6 +163,79 @@ fun CloudSyncScreen(
     var creationError by remember { mutableStateOf<String?>(null) }
     var useSaf by remember { mutableStateOf(false) }
 
+    // UUID 迁移状态（简化）
+    var migrationInProgress by remember { mutableStateOf(false) }
+    var migrationProgress by remember { mutableStateOf("") }
+
+    // 启动时检查并执行迁移
+    LaunchedEffect(Unit) {
+        val flagFile = com.whmdg.mczj.tools.AppDataPaths.vaultUuidMigrationFlag(context)
+        if (!flagFile.exists()) {
+            migrationInProgress = true
+            try {
+                withContext(Dispatchers.IO) {
+                    val vaults = vaultService.vaults.toList()
+                    if (vaults.isEmpty()) {
+                        flagFile.apply { parentFile?.mkdirs() }.writeText("completed")
+                        return@withContext
+                    }
+
+                    // 阶段 1: 补全 UUID 和 name
+                    migrationProgress = "正在升级保险箱配置..."
+                    val json = Json { ignoreUnknownKeys = true; prettyPrint = true; prettyPrintIndent = "    " }
+
+                    for (vault in vaults) {
+                        val vaultDir = VaultPaths.resolveVault(context, vault.location, vault.relativePath)
+                        val configFile = File(vaultDir, "vault_config.json")
+                        if (!configFile.exists()) continue
+
+                        val config = json.decodeFromString<VaultConfig>(configFile.readText())
+                        if (config.uuid.isNullOrBlank() || config.name.isNullOrBlank()) {
+                            val newUuid = config.uuid?.takeIf { it.isNotBlank() }
+                                ?: com.whmdg.mczj.tools.encryption.core.UuidGenerator.generate(
+                                    vault.createdAt, vault.name, vault.relativePath
+                                )
+                            val updatedConfig = config.copy(uuid = newUuid, name = vault.name)
+                            updatedConfig.saveWithBackup(context, vaultDir)
+
+                            val updatedRecord = vault.copy(uuid = newUuid)
+                            vaultService._db.replaceVault(updatedRecord)
+                            delay(10) // 避免时间戳冲突
+                        }
+                    }
+
+                    vaultService._db.save(context)
+                    vaultService.vaults.clear()
+                    vaultService.vaults.addAll(vaultService._db.vaults)
+
+                    // 阶段 2: 上传到云端（如果有配置）
+                    val webdavConfig = WebDavServerStore.load(context).firstOrNull()
+                    if (webdavConfig != null) {
+                        migrationProgress = "正在同步到云端..."
+                        val client = WebDavFileClient(webdavConfig)
+                        for (vault in vaultService.vaults) {
+                            val vaultDir = VaultPaths.resolveVault(context, vault.location, vault.relativePath)
+                            val dbFile = File(vaultDir, "vault_sync.db")
+                            val configFile = File(vaultDir, "vault_config.json")
+                            if (dbFile.exists()) {
+                                CloudVaultCatalogSync.uploadVaultDatabase(
+                                    context, client, webdavConfig.relativePath, dbFile, configFile
+                                )
+                            }
+                        }
+                    }
+
+                    // 创建标志文件
+                    flagFile.apply { parentFile?.mkdirs() }.writeText("completed")
+                }
+                migrationInProgress = false
+            } catch (e: Exception) {
+                migrationProgress = "升级失败: ${e.message}"
+                // 保持 migrationInProgress = true 阻止进入
+            }
+        }
+    }
+
     // 目录选择器
     val folderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -1338,6 +1411,11 @@ fun CloudSyncScreen(
         }
     }
 
+    // UUID 迁移阻塞弹窗
+    if (migrationInProgress) {
+        MigrationBlockingDialog(progress = migrationProgress)
+    }
+
     com.whmdg.mczj.tools.ui.ErrorDialog(
         error = confirmError,
         onDismiss = { confirmError = null }
@@ -2444,6 +2522,50 @@ private fun calculateMd5(file: java.io.File): String {
         }
     }
     return md.digest().joinToString("") { "%02x".format(it) }
+}
+
+// ── UUID 迁移全屏弹窗（简化版）──
+
+@Composable
+private fun MigrationBlockingDialog(progress: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.9f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.padding(32.dp),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(48.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "正在升级保险箱数据",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = progress,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (!progress.contains("失败")) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "请勿退出应用",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+    }
 }
 
 // ── WebDAV 设置弹窗 ──

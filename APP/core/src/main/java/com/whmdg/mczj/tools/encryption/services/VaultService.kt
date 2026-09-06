@@ -23,7 +23,7 @@ import java.util.*
  * 全局保险箱清单服务。
  */
 class VaultService(private val context: Context) {
-    private var _db = VaultDb.empty()
+    internal var _db = VaultDb.empty()  // 改为 internal 供 VaultUuidMigration 访问
     private var _loaded = false
 
     val loaded: Boolean get() = _loaded

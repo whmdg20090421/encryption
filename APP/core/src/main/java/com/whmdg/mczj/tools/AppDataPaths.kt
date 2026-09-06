@@ -96,6 +96,10 @@ object AppDataPaths {
         return dir
     }
 
+    /** UUID 迁移完成标志文件 */
+    fun vaultUuidMigrationFlag(context: Context): File =
+        File(encryption(context), ".vault_uuid_migration_completed")
+
     /** 云盘进度异常日志目录 */
     fun cloudSyncAnomalies(context: Context): File {
         val dir = File(cloudSync(context), "进度异常")
