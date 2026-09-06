@@ -31,7 +31,9 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.whmdg.mczj.tools.encryption.data.VaultPaths
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
+import com.whmdg.mczj.tools.encryption.data.VaultConfig
 import com.whmdg.mczj.tools.encryption.services.VaultService
+import kotlinx.serialization.json.Json
 import com.whmdg.mczj.tools.fileop.webdav.WebDavConnectionStatus
 import com.whmdg.mczj.tools.fileop.webdav.WebDavAccountState
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
@@ -83,6 +85,7 @@ data class CloudSyncItem(
 
 /** 待创建的云端保险箱信息 */
 private data class PendingVaultInfo(
+    val uuid: String,
     val vaultName: String,
     val configFile: java.io.File,  // 缓存的 vault_config.json 路径
     val syncDb: com.whmdg.mczj.tools.encryption.data.SyncDatabase,  // 已下载的同步数据库
@@ -188,10 +191,11 @@ fun CloudSyncScreen(
     ): Triple<List<String>, List<String>, List<PendingVaultInfo>> {  // 返回 (本地已有, 云端新增, 待处理)
         onProgress(CatalogSyncProgress("正在连接云端"))
         val client = WebDavFileClient(config)
+        val json = Json { ignoreUnknownKeys = true }
 
         onProgress(CatalogSyncProgress("正在扫描云端保险箱"))
-        val vaultNames = CloudVaultCatalogSync.listCloudVaults(client, config.relativePath)
-        val total = vaultNames.size
+        val cloudUuids = CloudVaultCatalogSync.listCloudVaults(client, config.relativePath)
+        val total = cloudUuids.size
         val localExisting = mutableListOf<String>()
         val cloudNew = mutableListOf<String>()
         val pendingVaults = mutableListOf<PendingVaultInfo>()
@@ -204,23 +208,23 @@ fun CloudSyncScreen(
             return Triple(localExisting, cloudNew, pendingVaults)
         }
 
-        for ((index, vaultName) in vaultNames.withIndex()) {
-            onProgress(CatalogSyncProgress("正在恢复保险箱同步数据库：${vaultName}", index, total))
+        for ((index, uuid) in cloudUuids.withIndex()) {
+            onProgress(CatalogSyncProgress("正在恢复保险箱同步数据库：${uuid.take(8)}...", index, total))
 
             // 下载同步数据库和配置文件
-            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vaultName)
-            val (success, configFile) = CloudVaultCatalogSync.downloadVaultDatabase(
-                context, client, config.relativePath, vaultName, syncDb
+            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, uuid)
+            val (success, configFile, vaultName) = CloudVaultCatalogSync.downloadVaultDatabase(
+                context, client, config.relativePath, uuid, syncDb
             )
 
-            if (!success) {
-                throw IllegalStateException("保险箱「${vaultName}」同步数据库恢复失败")
+            if (!success || configFile == null) {
+                throw IllegalStateException("保险箱「${uuid}」同步数据库恢复失败")
             }
 
-            // 检查本地是否已存在该保险箱
-            val existing = vaultService.vaults.find { it.name == vaultName }
+            // 检查本地是否已存在该 UUID 的保险箱
+            val existing = vaultService.vaults.find { it.uuid == uuid }
             if (existing != null) {
-                localExisting.add(vaultName)
+                localExisting.add(existing.name)
                 // 更新卡片
                 val itemId = "vault_${existing.id}"
                 if (syncItems.none { it.id == itemId }) {
@@ -245,10 +249,8 @@ fun CloudSyncScreen(
             } else {
                 cloudNew.add(vaultName)
                 // 构建待处理信息
-                if (configFile != null) {
-                    val stats = syncDb.getStats()
-                    pendingVaults.add(PendingVaultInfo(vaultName, configFile, syncDb, stats))
-                }
+                val stats = syncDb.getStats()
+                pendingVaults.add(PendingVaultInfo(uuid, vaultName, configFile, syncDb, stats))
             }
 
             onProgress(CatalogSyncProgress("正在处理保险箱：${vaultName}", index + 1, total))

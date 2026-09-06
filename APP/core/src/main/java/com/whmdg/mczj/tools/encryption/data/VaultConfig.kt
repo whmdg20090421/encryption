@@ -39,6 +39,8 @@ data class ConfigFlags(
 @Serializable
 data class VaultConfig(
     val version: Int = 2,
+    val uuid: String? = null,
+    val name: String? = null,
     @SerialName("kdf_type") val kdfType: KdfType,
     val salt: String, // Hex string
     @SerialName("argon_params") val argonParams: Argon2Params,

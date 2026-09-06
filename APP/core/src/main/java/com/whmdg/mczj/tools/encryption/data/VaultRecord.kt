@@ -9,6 +9,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class VaultRecord(
     val id: Int,
+    val uuid: String = "",
     val name: String,
     val location: StorageLocation,
     val relativePath: String,

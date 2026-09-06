@@ -1435,13 +1435,12 @@ class CloudPaneController(
                     state.cloudDbSyncState = state.cloudDbSyncState?.copy(phase = "正在上传")
                 }
 
-                // 使用封装的上传函数
+                // 使用封装的上传函数（基于 UUID）
                 val configFile = File(vaultDir, "vault_config.json")
                 com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.uploadVaultDatabase(
                     context = context,
                     client = webdavClient,
                     configPath = webdavConfig.relativePath,
-                    vaultName = vaultName,
                     dbFile = dbFile,
                     configFile = configFile
                 )
@@ -1451,10 +1450,15 @@ class CloudPaneController(
                     state.cloudDbSyncState = state.cloudDbSyncState?.copy(phase = "正在验证")
                 }
 
+                // 读取 UUID 用于构建远程路径
+                val vaultConfig = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                    .decodeFromString<com.whmdg.mczj.tools.encryption.data.VaultConfig>(configFile.readText())
+                val uuid = vaultConfig.uuid ?: throw IllegalStateException("配置文件缺少 UUID")
+
                 // 保存远程元数据
                 val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
-                    if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
-                    else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
+                    if (base.isEmpty()) "/.sync_meta/${uuid}_vault_sync.db.7z"
+                    else "$base/.sync_meta/${uuid}_vault_sync.db.7z"
                 }
                 val remoteMeta = webdavClient.getFileMetadata(remotePath)
                 if (remoteMeta != null) {
@@ -1503,21 +1507,25 @@ class CloudPaneController(
         try {
             val dbFile = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/$vaultName/vault_sync.db")
 
-            // 使用封装的上传函数
+            // 使用封装的上传函数（基于 UUID）
             val configFile = File(vaultDir, "vault_config.json")
             com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.uploadVaultDatabase(
                 context = context,
                 client = webdavClient,
                 configPath = webdavConfig.relativePath,
-                vaultName = vaultName,
                 dbFile = dbFile,
                 configFile = configFile
             )
 
+            // 读取 UUID 用于构建远程路径
+            val vaultConfig = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                .decodeFromString<com.whmdg.mczj.tools.encryption.data.VaultConfig>(configFile.readText())
+            val uuid = vaultConfig.uuid ?: throw IllegalStateException("配置文件缺少 UUID")
+
             // 保存远程元数据
             val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
-                if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
-                else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
+                if (base.isEmpty()) "/.sync_meta/${uuid}_vault_sync.db.7z"
+                else "$base/.sync_meta/${uuid}_vault_sync.db.7z"
             }
             val remoteMeta = webdavClient.getFileMetadata(remotePath)
             if (remoteMeta != null) {

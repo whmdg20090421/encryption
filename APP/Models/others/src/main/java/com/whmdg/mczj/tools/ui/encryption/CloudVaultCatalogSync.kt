@@ -2,15 +2,19 @@ package com.whmdg.mczj.tools.ui.encryption
 
 import android.content.Context
 import com.whmdg.mczj.tools.encryption.data.SyncDatabase
+import com.whmdg.mczj.tools.encryption.data.VaultConfig
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
 import java.io.File
 
-/** WebDAV 上保险箱同步数据库的管理（不再使用 JSON 索引文件）。 */
+/** WebDAV 上保险箱同步数据库的管理（基于 UUID 文件名）。 */
 object CloudVaultCatalogSync {
+
+    private val json = Json { ignoreUnknownKeys = true }
 
     /** 构建云端 .sync_meta 目录路径 */
     private fun metaDirPath(configPath: String): String {
@@ -18,16 +22,16 @@ object CloudVaultCatalogSync {
         return "$base/.sync_meta"
     }
 
-    /** 构建云端同步数据库路径 */
-    private fun vaultDbPath(configPath: String, vaultName: String): String =
-        "${metaDirPath(configPath)}/${vaultName}_vault_sync.db.7z"
+    /** 构建云端同步数据库路径（基于 UUID） */
+    private fun vaultDbPath(configPath: String, uuid: String): String =
+        "${metaDirPath(configPath)}/${uuid}_vault_sync.db.7z"
 
     /**
      * 列出云端所有保险箱（通过扫描 .sync_meta/ 下的 .7z 文件）。
      *
      * @param client WebDAV 客户端
      * @param configPath WebDAV 配置路径
-     * @return 保险箱名称列表
+     * @return UUID 列表
      */
     suspend fun listCloudVaults(
         client: WebDavFileClient,
@@ -52,20 +56,28 @@ object CloudVaultCatalogSync {
      * @param context 上下文
      * @param client WebDAV 客户端
      * @param configPath WebDAV 配置路径
-     * @param vaultName 保险箱名称（用于命名 7z 文件）
      * @param dbFile 本地同步数据库文件
-     * @param configFile 保险箱配置文件（vault_config.json）
+     * @param configFile 保险箱配置文件（vault_config.json，包含 UUID 和 name）
      * @return 成功返回 true，失败抛出异常
      */
     suspend fun uploadVaultDatabase(
         context: Context,
         client: WebDavFileClient,
         configPath: String,
-        vaultName: String,
         dbFile: File,
         configFile: File
     ): Boolean = withContext(Dispatchers.IO) {
-        val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_upload.db.7z")
+        // 读取配置文件提取 UUID
+        val cfg = try {
+            json.decodeFromString<VaultConfig>(configFile.readText())
+        } catch (e: Exception) {
+            throw IllegalStateException("无法读取配置文件: ${e.message}", e)
+        }
+
+        val uuid = cfg.uuid ?: throw IllegalStateException("配置文件缺少 UUID 字段")
+        val vaultName = cfg.name ?: uuid
+
+        val zipFile = File(context.cacheDir, "${uuid}_vault_sync_upload.db.7z")
         try {
             if (!dbFile.exists()) throw IllegalStateException("数据库文件不存在: ${dbFile.absolutePath}")
 
@@ -82,7 +94,7 @@ object CloudVaultCatalogSync {
             try { client.mkdir(metaDir) } catch (_: Exception) {}
 
             // 上传到云端根目录 .sync_meta/
-            val remotePath = vaultDbPath(configPath, vaultName)
+            val remotePath = vaultDbPath(configPath, uuid)
             withTimeout(120_000L) {
                 runInterruptible { client.uploadFile(zipFile, remotePath) { } }
             }
@@ -104,25 +116,25 @@ object CloudVaultCatalogSync {
      * @param context 上下文
      * @param client WebDAV 客户端
      * @param configPath WebDAV 配置路径
-     * @param vaultName 保险箱名称（指定下载哪个保险箱的数据库）
+     * @param uuid 保险箱 UUID（指定下载哪个保险箱的数据库）
      * @param targetDb 目标数据库实例（用于导入 cloud_entries）
-     * @return Pair<成功标志, vault_config.json 文件路径?>，文件不存在返回 Pair(false, null)，失败抛出异常
+     * @return Triple<成功标志, vault_config.json 文件路径?, 保险箱名称>，文件不存在返回 Triple(false, null, "")，失败抛出异常
      */
     suspend fun downloadVaultDatabase(
         context: Context,
         client: WebDavFileClient,
         configPath: String,
-        vaultName: String,
+        uuid: String,
         targetDb: SyncDatabase
-    ): Pair<Boolean, File?> {
-        val remotePath = vaultDbPath(configPath, vaultName)
-        val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_download.db.7z")
-        val extractDir = File(context.cacheDir, "vault_db_download_${vaultName}")
+    ): Triple<Boolean, File?, String> {
+        val remotePath = vaultDbPath(configPath, uuid)
+        val zipFile = File(context.cacheDir, "${uuid}_vault_sync_download.db.7z")
+        val extractDir = File(context.cacheDir, "vault_db_download_${uuid}")
         return withContext(Dispatchers.IO) {
             try {
                 // 检查云端文件是否存在
                 val exists = withTimeout(30_000L) { runInterruptible { client.exists(remotePath) } }
-                if (!exists) return@withContext Pair(false, null)
+                if (!exists) return@withContext Triple(false, null, "")
 
                 // 获取云端文件元数据
                 val remoteMeta = withTimeout(30_000L) { runInterruptible { client.getFileMetadata(remotePath) } }
@@ -155,16 +167,28 @@ object CloudVaultCatalogSync {
                 val configFile = if (sourceConfig.exists()) {
                     val pendingDir = File(context.cacheDir, "pending_vault_configs")
                     pendingDir.mkdirs()
-                    val targetFile = File(pendingDir, "${vaultName}.json")
+                    val targetFile = File(pendingDir, "${uuid}.json")
                     sourceConfig.copyTo(targetFile, overwrite = true)
                     targetFile
                 } else null
 
-                Pair(true, configFile)
+                // 从配置文件读取保险箱名称
+                val vaultName = if (configFile != null) {
+                    try {
+                        val cfg = json.decodeFromString<VaultConfig>(configFile.readText())
+                        cfg.name ?: uuid // fallback 使用 UUID
+                    } catch (e: Exception) {
+                        uuid // 解析失败，使用 UUID
+                    }
+                } else {
+                    uuid // 配置文件不存在，使用 UUID
+                }
+
+                Triple(true, configFile, vaultName)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                throw IllegalStateException("下载保险箱「${vaultName}」同步数据库失败: ${e.message}", e)
+                throw IllegalStateException("下载保险箱同步数据库失败: ${e.message}", e)
             } finally {
                 extractDir.deleteRecursively()
                 // 注意：不删除 zipFile，保留作为缓存供下次检查
@@ -178,30 +202,30 @@ object CloudVaultCatalogSync {
      * @param context 上下文
      * @param client WebDAV 客户端
      * @param configPath WebDAV 配置路径
-     * @param vaultNames 要下载的保险箱名称列表（若为空则下载全部）
-     * @param onProgress 进度回调 (当前索引, 总数, 保险箱名称)
+     * @param uuids 要下载的保险箱 UUID 列表（若为空则下载全部）
+     * @param onProgress 进度回调 (当前索引, 总数, UUID)
      * @return 成功下载的数量
      */
     suspend fun downloadAllVaultDatabases(
         context: Context,
         client: WebDavFileClient,
         configPath: String,
-        vaultNames: List<String> = emptyList(),
-        onProgress: (current: Int, total: Int, vaultName: String) -> Unit = { _, _, _ -> }
+        uuids: List<String> = emptyList(),
+        onProgress: (current: Int, total: Int, uuid: String) -> Unit = { _, _, _ -> }
     ): Int = withContext(Dispatchers.IO) {
-        // 如果未指定保险箱列表，则列出所有云端保险箱
-        val vaultsToDownload = if (vaultNames.isEmpty()) {
+        // 如果未指定 UUID 列表，则列出所有云端保险箱
+        val uuidsToDownload = if (uuids.isEmpty()) {
             listCloudVaults(client, configPath)
         } else {
-            vaultNames
+            uuids
         }
 
         var successCount = 0
-        vaultsToDownload.forEachIndexed { index, vaultName ->
-            onProgress(index + 1, vaultsToDownload.size, vaultName)
-            val targetDb = SyncDatabase.getInstance(context, vaultName)
+        uuidsToDownload.forEachIndexed { index, uuid ->
+            onProgress(index + 1, uuidsToDownload.size, uuid)
+            val targetDb = SyncDatabase.getInstance(context, uuid)
             try {
-                val (success, _) = downloadVaultDatabase(context, client, configPath, vaultName, targetDb)
+                val (success, _, _) = downloadVaultDatabase(context, client, configPath, uuid, targetDb)
                 if (success) {
                     successCount++
                 }

@@ -8,6 +8,7 @@ import java.io.File
 
 @Serializable
 data class VaultDb(
+    val version: Int = 1,
     val vaults: MutableList<VaultRecord> = mutableListOf(),
     @SerialName("name_mappings") val nameMappings: MutableMap<String, String> = mutableMapOf()
 ) {
@@ -60,7 +61,8 @@ data class VaultDb(
     }
 
     fun addVault(record: VaultRecord): VaultRecord {
-        val assigned = record.copy(id = vaults.size + 1)
+        val nextId = (vaults.maxOfOrNull { it.id } ?: 0) + 1
+        val assigned = record.copy(id = nextId)
         vaults.add(assigned)
         return assigned
     }

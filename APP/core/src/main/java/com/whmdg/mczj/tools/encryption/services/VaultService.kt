@@ -13,6 +13,7 @@ import com.whmdg.mczj.tools.encryption.core.AesGcm256
 import com.whmdg.mczj.tools.encryption.core.HexCodec
 import com.whmdg.mczj.tools.encryption.core.KeyDerivation
 import com.whmdg.mczj.tools.encryption.core.SecureRandom
+import com.whmdg.mczj.tools.encryption.core.UuidGenerator
 import com.whmdg.mczj.tools.encryption.data.*
 import java.io.File
 import java.text.SimpleDateFormat
@@ -65,14 +66,27 @@ class VaultService(private val context: Context) {
         val salt = SecureRandom.bytes(16)
         val dek = SecureRandom.bytes(32)
         val kek = KeyDerivation.derive(password, salt, kdfType, argonParams)
-        
+
         val enc = AesGcm256.encrypt(kek, dek)
-        
+
         // 清零 kek
         kek.fill(0)
 
+        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+        sdf.timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+        val createdAt = sdf.format(Date())
+
+        // 生成 UUID
+        val uuid = UuidGenerator.generate(
+            salt = HexCodec.encode(salt),
+            encDek = HexCodec.encode(enc.ciphertext),
+            timestamp = System.currentTimeMillis()
+        )
+
         val cfg = VaultConfig(
             version = 2,
+            uuid = uuid,
+            name = name,
             kdfType = kdfType,
             salt = HexCodec.encode(salt),
             argonParams = argonParams,
@@ -87,11 +101,9 @@ class VaultService(private val context: Context) {
         )
         cfg.saveWithBackup(context, dir)
 
-        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
-        sdf.timeZone = TimeZone.getTimeZone("Asia/Shanghai")
-
         val rec = VaultRecord(
             id = 0,
+            uuid = uuid,
             name = name,
             location = location,
             relativePath = relativePath,
@@ -99,7 +111,7 @@ class VaultService(private val context: Context) {
             encryptMetadata = encryptMetadata,
             customEncryption = customEncryption,
             algorithm = algorithm,
-            createdAt = sdf.format(Date())
+            createdAt = createdAt
         )
         val assigned = _db.addVault(rec)
         _db.save(context)
