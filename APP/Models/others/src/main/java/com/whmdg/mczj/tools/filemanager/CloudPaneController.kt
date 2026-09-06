@@ -1622,20 +1622,32 @@ class CloudPaneController(
     /** 下载并解压云端同步数据库，将 cloud_entries 导入当前本地数据库。 */
     suspend fun restoreCloudDbFromCloud(): Boolean = withContext(Dispatchers.IO) {
         try {
+            // 获取保险箱配置以读取 UUID
+            val vaultDir = File(vaultService.vaults.find { it.id == vaultId }?.let {
+                VaultPaths.resolveVault(context, it.location, it.relativePath)
+            } ?: throw IllegalStateException("保险箱不存在"))
+            val configFile = File(vaultDir, "vault_config.json")
+            if (!configFile.exists()) {
+                throw IllegalStateException("配置文件不存在")
+            }
+            val vaultConfig = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                .decodeFromString<com.whmdg.mczj.tools.encryption.data.VaultConfig>(configFile.readText())
+            val uuid = vaultConfig.uuid ?: throw IllegalStateException("配置文件缺少 UUID 字段")
+
             // 使用封装的下载函数
-            val (success, _) = com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.downloadVaultDatabase(
+            val (success, _, _) = com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.downloadVaultDatabase(
                 context = context,
                 client = webdavClient,
                 configPath = webdavConfig.relativePath,
-                vaultName = vaultName,
+                uuid = uuid,
                 targetDb = syncDb
             )
 
             if (success) {
                 // 保存远程元数据
                 val remotePath = webdavConfig.relativePath.trimEnd('/').let { base ->
-                    if (base.isEmpty()) "/.sync_meta/${vaultName}_vault_sync.db.7z"
-                    else "$base/.sync_meta/${vaultName}_vault_sync.db.7z"
+                    if (base.isEmpty()) "/.sync_meta/${uuid}_vault_sync.db.7z"
+                    else "$base/.sync_meta/${uuid}_vault_sync.db.7z"
                 }
                 webdavClient.getFileMetadata(remotePath)?.let {
                     saveCloudDbMeta(it.size, it.lastModified)
