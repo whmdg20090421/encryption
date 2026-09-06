@@ -610,9 +610,10 @@ fun CloudSyncScreen(
                                     CloudSyncStore.save(context, syncItems.toList())
                                 }
                                 diffResult = null
-                        }
-                    )
-                }
+                            },
+                            confirmError = confirmError
+                        )
+                    }
 
                 // 删除云盘警告弹窗（第一次确认）
                 showDeleteWarning?.let { item ->
@@ -2299,7 +2300,8 @@ data class DiffScanResult(
 @Composable
 private fun DiffResultDialog(
     result: DiffScanResult,
-    onConfirm: () -> Unit
+    onConfirm: () -> Unit,
+    confirmError: Throwable?
 ) {
     val isDarkMode = LocalIsDarkMode.current
     val cardColor = if (isDarkMode) Color(0xFF1E293B) else Color.White
@@ -2349,11 +2351,6 @@ private fun DiffResultDialog(
             }
         }
     }
-
-    com.whmdg.mczj.tools.ui.ErrorDialog(
-        error = confirmError,
-        onDismiss = { confirmError = null }
-    )
 }
 
 /** 从待处理信息创建本地保险箱 */
