@@ -199,14 +199,12 @@ fun CloudSyncScreen(
                             updatedConfig.saveWithBackup(context, vaultDir)
 
                             val updatedRecord = vault.copy(uuid = newUuid)
-                            vaultService._db.replaceVault(updatedRecord)
+                            vaultService.updateVault(updatedRecord)
                             delay(10) // 避免时间戳冲突
                         }
                     }
 
-                    vaultService._db.save(context)
-                    vaultService.vaults.clear()
-                    vaultService.vaults.addAll(vaultService._db.vaults)
+                    vaultService.saveAndRefresh()
 
                     // 阶段 2: 上传到云端（如果有配置）
                     val webdavConfigs = WebDavServerStore.getAll(context)

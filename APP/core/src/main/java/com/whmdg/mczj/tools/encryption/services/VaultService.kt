@@ -661,4 +661,16 @@ class VaultService(private val context: Context) {
     fun refreshAllFolderSizes(vaultDir: File) {
         refreshFolderSize(vaultDir, "")
     }
+
+    /** 更新保险箱记录（用于 UUID 迁移等场景） */
+    fun updateVault(record: VaultRecord) {
+        _db.replaceVault(record)
+    }
+
+    /** 保存保险箱数据库并刷新内存列表 */
+    fun saveAndRefresh() {
+        _db.save(context)
+        vaults.clear()
+        vaults.addAll(_db.vaults)
+    }
 }
