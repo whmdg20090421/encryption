@@ -1622,10 +1622,7 @@ class CloudPaneController(
     /** 下载并解压云端同步数据库，将 cloud_entries 导入当前本地数据库。 */
     suspend fun restoreCloudDbFromCloud(): Boolean = withContext(Dispatchers.IO) {
         try {
-            // 获取保险箱配置以读取 UUID
-            val vaultDir = File(vaultService.vaults.find { it.id == vaultId }?.let {
-                VaultPaths.resolveVault(context, it.location, it.relativePath)
-            } ?: throw IllegalStateException("保险箱不存在"))
+            // 从保险箱配置文件读取 UUID
             val configFile = File(vaultDir, "vault_config.json")
             if (!configFile.exists()) {
                 throw IllegalStateException("配置文件不存在")
