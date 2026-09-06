@@ -2472,9 +2472,14 @@ private suspend fun createVaultFromPending(
         val dir = java.io.File(basePath, pending.vaultName)
         dir.mkdirs()
 
-        // 复制 vault_config.json
+        // 复制 vault_config.json 并创建备份副本
         val targetConfig = java.io.File(dir, "vault_config.json")
         pending.configFile.copyTo(targetConfig, overwrite = true)
+
+        // 读取配置并使用 saveWithBackup 创建三份副本（主配置 + 箱内备份 + 私有备份）
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val config = json.decodeFromString<com.whmdg.mczj.tools.encryption.data.VaultConfig>(targetConfig.readText())
+        config.saveWithBackup(context, dir)
 
         dir.absolutePath
     }
