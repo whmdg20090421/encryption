@@ -193,7 +193,7 @@ fun CloudSyncScreen(
                         if (config.uuid.isNullOrBlank() || config.name.isNullOrBlank()) {
                             val newUuid = config.uuid?.takeIf { it.isNotBlank() }
                                 ?: com.whmdg.mczj.tools.encryption.core.UuidGenerator.generate(
-                                    vault.createdAt, vault.name, vault.relativePath
+                                    config.salt, config.encDek, System.currentTimeMillis()
                                 )
                             val updatedConfig = config.copy(uuid = newUuid, name = vault.name)
                             updatedConfig.saveWithBackup(context, vaultDir)
@@ -209,8 +209,9 @@ fun CloudSyncScreen(
                     vaultService.vaults.addAll(vaultService._db.vaults)
 
                     // 阶段 2: 上传到云端（如果有配置）
-                    val webdavConfig = WebDavServerStore.load(context).firstOrNull()
-                    if (webdavConfig != null) {
+                    val webdavConfigs = WebDavServerStore.getAll(context)
+                    if (webdavConfigs.isNotEmpty()) {
+                        val webdavConfig = webdavConfigs.first()
                         migrationProgress = "正在同步到云端..."
                         val client = WebDavFileClient(webdavConfig)
                         for (vault in vaultService.vaults) {
