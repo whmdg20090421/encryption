@@ -1615,7 +1615,7 @@ class CloudPaneController(
     suspend fun restoreCloudDbFromCloud(): Boolean = withContext(Dispatchers.IO) {
         try {
             // 使用封装的下载函数
-            val success = com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.downloadVaultDatabase(
+            val (success, _) = com.whmdg.mczj.tools.ui.encryption.CloudVaultCatalogSync.downloadVaultDatabase(
                 context = context,
                 client = webdavClient,
                 configPath = webdavConfig.relativePath,

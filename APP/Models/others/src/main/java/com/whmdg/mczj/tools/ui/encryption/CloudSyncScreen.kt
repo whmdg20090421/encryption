@@ -2350,6 +2350,88 @@ private fun DiffResultDialog(
         }
     }
 
+    com.whmdg.mczj.tools.ui.ErrorDialog(
+        error = confirmError,
+        onDismiss = { confirmError = null }
+    )
+}
+
+/** 从待处理信息创建本地保险箱 */
+private suspend fun createVaultFromPending(
+    context: Context,
+    vaultService: VaultService,
+    pending: PendingVaultInfo,
+    directoryUri: Uri,
+    password: String,
+    useSaf: Boolean,
+    syncItems: androidx.compose.runtime.snapshots.SnapshotStateList<CloudSyncItem>,
+    webdavPath: String
+) = withContext(Dispatchers.IO) {
+    // 1. 解析目录路径
+    val basePath = if (useSaf) {
+        directoryUri.toString()
+    } else {
+        com.whmdg.mczj.tools.AppDataPaths.safUriToAbsolutePath(context, directoryUri)
+            ?: throw Exception("无法解析目录路径，请授予所有文件访问权限")
+    }
+
+    // 2. 创建保险箱文件夹
+    val vaultDir = if (useSaf) {
+        // SAF 模式：通过 DocumentFile 创建
+        val docTree = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, directoryUri)
+            ?: throw Exception("无法访问目录")
+        val vaultFolder = docTree.createDirectory(pending.vaultName)
+            ?: throw Exception("无法创建保险箱文件夹")
+
+        // 复制 vault_config.json
+        val configDoc = vaultFolder.createFile("application/json", "vault_config.json")
+            ?: throw Exception("无法创建配置文件")
+        context.contentResolver.openOutputStream(configDoc.uri)?.use { out ->
+            pending.configFile.inputStream().use { inp -> inp.copyTo(out) }
+        }
+
+        vaultFolder.uri.toString()
+    } else {
+        // 文件路径模式
+        val dir = java.io.File(basePath, pending.vaultName)
+        dir.mkdirs()
+
+        // 复制 vault_config.json
+        val targetConfig = java.io.File(dir, "vault_config.json")
+        pending.configFile.copyTo(targetConfig, overwrite = true)
+
+        dir.absolutePath
+    }
+
+    // 3. 调用 VaultService 导入（验证密码）
+    val vaultRecord = if (useSaf) {
+        vaultService.importVaultWithPasswordSaf(pending.vaultName, Uri.parse(vaultDir), password)
+    } else {
+        vaultService.importVaultWithPassword(pending.vaultName, vaultDir, password)
+    }
+
+    // 4. 创建云盘同步卡片
+    withContext(Dispatchers.Main) {
+        val stats = pending.stats
+        syncItems.add(CloudSyncItem(
+            id = "vault_${vaultRecord.id}",
+            vaultId = vaultRecord.id,
+            vaultName = pending.vaultName,
+            type = "保险箱",
+            vaultSize = 0L,
+            lastSyncTime = stats.lastUpdate ?: "未同步",
+            cloudSize = stats.cloudSize,
+            diffFileCount = stats.diffCount,
+            webdavPath = webdavPath,
+            localFileCount = 0,
+            cloudFileCount = stats.cloudFileCount
+        ))
+        CloudSyncStore.save(context, syncItems.toList())
+    }
+
+    // 5. 删除临时配置文件
+    pending.configFile.delete()
+}
 
 // ── MD5 计算辅助函数 ──
 
@@ -2364,3 +2446,5 @@ private fun calculateMd5(file: java.io.File): String {
     }
     return md.digest().joinToString("") { "%02x".format(it) }
 }
+
+// ── WebDAV 设置弹窗 ──
