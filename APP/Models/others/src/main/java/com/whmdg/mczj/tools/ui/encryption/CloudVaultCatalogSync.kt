@@ -35,11 +35,11 @@ object CloudVaultCatalogSync {
     ): List<String> = withContext(Dispatchers.IO) {
         try {
             val metaDir = metaDirPath(configPath)
-            val files: List<String> = withTimeout(30_000L) {
-                runInterruptible { client.listFiles(metaDir) }
-            }
-            files.filter { it.endsWith("_vault_sync.db.7z") }
-                .map { it.removeSuffix("_vault_sync.db.7z") }
+            val files = withTimeout(30_000L) {
+                runInterruptible { client.listChildren(metaDir) }
+            } ?: emptyList()
+            files.filter { it.name.endsWith("_vault_sync.db.7z") }
+                .map { it.name.removeSuffix("_vault_sync.db.7z") }
         } catch (e: Exception) {
             // .sync_meta 目录不存在或为空
             emptyList()
