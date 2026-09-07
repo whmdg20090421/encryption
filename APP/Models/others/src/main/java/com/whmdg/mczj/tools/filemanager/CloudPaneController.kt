@@ -1866,12 +1866,17 @@ class CloudPaneController(
      */
     private fun listLocalFiles(relativePath: String): List<CloudFileEntry> {
         val dir = File(vaultDir, relativePath.trimStart('/'))
-        if (!dir.exists() || !dir.isDirectory) return emptyList()
-
-        val children = dir.listFiles() ?: return emptyList()
         val entries = mutableListOf<CloudFileEntry>()
         val localNames = mutableSetOf<String>()
         val anomalyPaths = mutableSetOf<String>()
+
+        // 本地目录不存在时跳过本地扫描，但仍继续合并云端条目（本地与云端是并列关系）
+        val children = if (dir.exists() && dir.isDirectory) dir.listFiles() else null
+        if (children == null) {
+            // 本地不存在，直接走云端合并
+            mergeCloudOnlyEntries(relativePath, localNames, entries)
+            return entries.sortedWith(naturalOrderComparator())
+        }
 
         for (file in children) {
             if (file.name in excludedFiles) continue

@@ -29,9 +29,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.whmdg.mczj.tools.encryption.data.VaultConfig
 import com.whmdg.mczj.tools.encryption.data.VaultPaths
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.encryption.services.VaultService
+import kotlinx.serialization.json.Json
 import com.whmdg.mczj.tools.fileop.webdav.WebDavConnectionStatus
 import com.whmdg.mczj.tools.fileop.webdav.WebDavAccountState
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
@@ -207,8 +209,13 @@ fun CloudSyncScreen(
         for ((index, vaultName) in vaultNames.withIndex()) {
             onProgress(CatalogSyncProgress("正在恢复保险箱同步数据库：${vaultName}", index, total))
 
-            // 下载同步数据库和配置文件
+            // 下载同步数据库和配置文件（内部完成 cloud_entries 导入）
             val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vaultName)
+
+            // 导入前记录旧的云端统计
+            val oldCloudFileCount = syncDb.getCompletedFileCount("cloud_entries")
+            val oldCloudSize = syncDb.getTotalSize("cloud_entries")
+
             val (success, configFile) = CloudVaultCatalogSync.downloadVaultDatabase(
                 context, client, config.relativePath, vaultName, syncDb
             )
@@ -220,28 +227,9 @@ fun CloudSyncScreen(
             // 检查本地是否已存在该保险箱
             val existing = vaultService.vaults.find { it.name == vaultName }
             if (existing != null) {
+                // 本地已有：对比云端统计，有变化则更新同步卡片
+                syncCloudDbAndUpdateCard(syncDb, vaultName, oldCloudFileCount, oldCloudSize)
                 localExisting.add(vaultName)
-                // 更新卡片
-                val itemId = "vault_${existing.id}"
-                if (syncItems.none { it.id == itemId }) {
-                    val stats = syncDb.getStats()
-                    syncItems.add(
-                        CloudSyncItem(
-                            id = itemId,
-                            vaultId = existing.id,
-                            vaultName = existing.name,
-                            type = "保险箱",
-                            vaultSize = stats.localSize,
-                            lastSyncTime = stats.lastUpdate ?: "未同步",
-                            cloudSize = stats.cloudSize,
-                            diffFileCount = stats.diffCount,
-                            webdavPath = config.relativePath,
-                            localFileCount = stats.localFileCount,
-                            cloudFileCount = stats.cloudFileCount
-                        )
-                    )
-                }
-                processedVaultIds.add(existing.id)
             } else {
                 cloudNew.add(vaultName)
                 // 构建待处理信息
@@ -263,6 +251,35 @@ fun CloudSyncScreen(
         val localVaults = vaultService.vaults.toList()
         // 不再需要上传 vault_catalog.json，保险箱列表通过扫描 .7z 文件获取
         return localVaults.map { it.name }
+    }
+
+    /**
+     * 对比并更新本地 cloud_entries：传入旧统计和最新的 syncDb，自动完成对比、替换、刷新同步卡片。
+     * 本地无该保险箱时仅做导入，不更新卡片。
+     */
+    private fun syncCloudDbAndUpdateCard(
+        syncDb: com.whmdg.mczj.tools.encryption.data.SyncDatabase,
+        vaultName: String,
+        oldCloudFileCount: Int,
+        oldCloudSize: Long
+    ) {
+        val newCloudFileCount = syncDb.getCompletedFileCount("cloud_entries")
+        val newCloudSize = syncDb.getTotalSize("cloud_entries")
+
+        if (newCloudFileCount == oldCloudFileCount && newCloudSize == oldCloudSize) return
+
+        // 云端统计有变化，更新同步卡片
+        val existing = vaultService.vaults.find { it.name == vaultName } ?: return
+        val itemId = "vault_${existing.id}"
+        val idx = syncItems.indexOfFirst { it.id == itemId }
+        if (idx >= 0) {
+            val old = syncItems[idx]
+            syncItems[idx] = old.copy(
+                cloudFileCount = newCloudFileCount,
+                cloudSize = newCloudSize,
+                lastSyncTime = syncDb.getStats().lastUpdate ?: old.lastSyncTime
+            )
+        }
     }
 
     suspend fun runCatalogSync(config: WebDavServerConfig) {
@@ -2364,70 +2381,97 @@ private suspend fun createVaultFromPending(
     syncItems: androidx.compose.runtime.snapshots.SnapshotStateList<CloudSyncItem>,
     webdavPath: String
 ) = withContext(Dispatchers.IO) {
-    // 1. 解析目录路径
-    val basePath = if (useSaf) {
-        directoryUri.toString()
-    } else {
-        com.whmdg.mczj.tools.AppDataPaths.safUriToAbsolutePath(context, directoryUri)
-            ?: throw Exception("无法解析目录路径，请授予所有文件访问权限")
-    }
+    try {
+        if (useSaf) {
+            // SAF 模式
+            val docTree = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, directoryUri)
+                ?: throw Exception("无法访问目录")
+            val vaultFolder = docTree.createDirectory(pending.vaultName)
+                ?: throw Exception("无法创建保险箱文件夹")
 
-    // 2. 创建保险箱文件夹
-    val vaultDir = if (useSaf) {
-        // SAF 模式：通过 DocumentFile 创建
-        val docTree = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, directoryUri)
-            ?: throw Exception("无法访问目录")
-        val vaultFolder = docTree.createDirectory(pending.vaultName)
-            ?: throw Exception("无法创建保险箱文件夹")
+            // 复制 vault_config.json 到保险箱文件夹
+            val configDoc = vaultFolder.createFile("application/json", "vault_config.json")
+                ?: throw Exception("无法创建配置文件")
+            context.contentResolver.openOutputStream(configDoc.uri)?.use { out ->
+                pending.configFile.inputStream().use { inp -> inp.copyTo(out) }
+            }
 
-        // 复制 vault_config.json
-        val configDoc = vaultFolder.createFile("application/json", "vault_config.json")
-            ?: throw Exception("无法创建配置文件")
-        context.contentResolver.openOutputStream(configDoc.uri)?.use { out ->
-            pending.configFile.inputStream().use { inp -> inp.copyTo(out) }
+            // 验证密码 + 注册保险箱
+            val vaultRecord = vaultService.importVaultWithPasswordSaf(
+                pending.vaultName, vaultFolder.uri, password
+            )
+
+            // 写入备份副本（箱内备份 + 私有备份）
+            val cfgText = pending.configFile.readText()
+            // 箱内备份：通过 SAF DocumentFile 创建
+            val backupDoc = vaultFolder.createFile("application/json", "vault_config.backup.json")
+                ?: throw Exception("无法创建箱内备份")
+            context.contentResolver.openOutputStream(backupDoc.uri)?.use { it.write(cfgText.toByteArray()) }
+            // 私有备份：app 私有目录，可用 File API
+            val privateBackupDir = VaultPaths.appPrivateBackupDir(context)
+            privateBackupDir.mkdirs()
+            val h = VaultPaths.pathHash(vaultFolder.uri.path ?: "")
+            java.io.File(privateBackupDir, "vault_config_$h.json").writeText(cfgText)
+
+            // 创建云盘同步卡片
+            withContext(Dispatchers.Main) {
+                syncItems.add(CloudSyncItem(
+                    id = "vault_${vaultRecord.id}",
+                    vaultId = vaultRecord.id,
+                    vaultName = pending.vaultName,
+                    type = "保险箱",
+                    vaultSize = 0L,
+                    lastSyncTime = pending.stats.lastUpdate ?: "未同步",
+                    cloudSize = pending.stats.cloudSize,
+                    diffFileCount = pending.stats.diffCount,
+                    webdavPath = webdavPath,
+                    localFileCount = 0,
+                    cloudFileCount = pending.stats.cloudFileCount
+                ))
+                CloudSyncStore.save(context, syncItems.toList())
+            }
+        } else {
+            // 文件路径模式
+            val basePath = com.whmdg.mczj.tools.AppDataPaths.safUriToAbsolutePath(context, directoryUri)
+                ?: throw Exception("无法解析目录路径，请授予所有文件访问权限")
+            val vaultDir = java.io.File(basePath, pending.vaultName)
+            vaultDir.mkdirs()
+
+            // 复制 vault_config.json 到保险箱文件夹
+            val targetConfig = java.io.File(vaultDir, "vault_config.json")
+            pending.configFile.copyTo(targetConfig, overwrite = true)
+
+            // 验证密码 + 注册保险箱
+            val vaultRecord = vaultService.importVaultWithPassword(
+                pending.vaultName, vaultDir.absolutePath, password
+            )
+
+            // 写入备份副本（箱内备份 + 私有备份）
+            val cfgJson = Json { ignoreUnknownKeys = true }
+                .decodeFromString<VaultConfig>(pending.configFile.readText())
+            cfgJson.saveWithBackup(context, vaultDir)
+
+            // 创建云盘同步卡片
+            withContext(Dispatchers.Main) {
+                syncItems.add(CloudSyncItem(
+                    id = "vault_${vaultRecord.id}",
+                    vaultId = vaultRecord.id,
+                    vaultName = pending.vaultName,
+                    type = "保险箱",
+                    vaultSize = 0L,
+                    lastSyncTime = pending.stats.lastUpdate ?: "未同步",
+                    cloudSize = pending.stats.cloudSize,
+                    diffFileCount = pending.stats.diffCount,
+                    webdavPath = webdavPath,
+                    localFileCount = 0,
+                    cloudFileCount = pending.stats.cloudFileCount
+                ))
+                CloudSyncStore.save(context, syncItems.toList())
+            }
         }
-
-        vaultFolder.uri.toString()
-    } else {
-        // 文件路径模式
-        val dir = java.io.File(basePath, pending.vaultName)
-        dir.mkdirs()
-
-        // 复制 vault_config.json
-        val targetConfig = java.io.File(dir, "vault_config.json")
-        pending.configFile.copyTo(targetConfig, overwrite = true)
-
-        dir.absolutePath
+    } finally {
+        pending.configFile.delete()
     }
-
-    // 3. 调用 VaultService 导入（验证密码）
-    val vaultRecord = if (useSaf) {
-        vaultService.importVaultWithPasswordSaf(pending.vaultName, Uri.parse(vaultDir), password)
-    } else {
-        vaultService.importVaultWithPassword(pending.vaultName, vaultDir, password)
-    }
-
-    // 4. 创建云盘同步卡片
-    withContext(Dispatchers.Main) {
-        val stats = pending.stats
-        syncItems.add(CloudSyncItem(
-            id = "vault_${vaultRecord.id}",
-            vaultId = vaultRecord.id,
-            vaultName = pending.vaultName,
-            type = "保险箱",
-            vaultSize = 0L,
-            lastSyncTime = stats.lastUpdate ?: "未同步",
-            cloudSize = stats.cloudSize,
-            diffFileCount = stats.diffCount,
-            webdavPath = webdavPath,
-            localFileCount = 0,
-            cloudFileCount = stats.cloudFileCount
-        ))
-        CloudSyncStore.save(context, syncItems.toList())
-    }
-
-    // 5. 删除临时配置文件
-    pending.configFile.delete()
 }
 
 // ── MD5 计算辅助函数 ──
