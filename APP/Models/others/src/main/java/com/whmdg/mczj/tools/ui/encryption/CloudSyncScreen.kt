@@ -183,6 +183,35 @@ fun CloudSyncScreen(
         }
     }
 
+    /**
+     * 对比并更新本地 cloud_entries：传入旧统计和最新的 syncDb，自动完成对比、替换、刷新同步卡片。
+     * 本地无该保险箱时仅做导入，不更新卡片。
+     */
+    fun syncCloudDbAndUpdateCard(
+        syncDb: com.whmdg.mczj.tools.encryption.data.SyncDatabase,
+        vaultName: String,
+        oldCloudFileCount: Int,
+        oldCloudSize: Long
+    ) {
+        val newCloudFileCount = syncDb.getCompletedFileCount("cloud_entries")
+        val newCloudSize = syncDb.getTotalSize("cloud_entries")
+
+        if (newCloudFileCount == oldCloudFileCount && newCloudSize == oldCloudSize) return
+
+        // 云端统计有变化，更新同步卡片
+        val existing = vaultService.vaults.find { it.name == vaultName } ?: return
+        val itemId = "vault_${existing.id}"
+        val idx = syncItems.indexOfFirst { it.id == itemId }
+        if (idx >= 0) {
+            val old = syncItems[idx]
+            syncItems[idx] = old.copy(
+                cloudFileCount = newCloudFileCount,
+                cloudSize = newCloudSize,
+                lastSyncTime = syncDb.getStats().lastUpdate ?: old.lastSyncTime
+            )
+        }
+    }
+
     /** 用户确认同步后，从云端扫描保险箱列表，恢复保险箱卡片与本地占位目录。 */
     suspend fun restoreCloudCatalog(
         config: WebDavServerConfig,
@@ -251,35 +280,6 @@ fun CloudSyncScreen(
         val localVaults = vaultService.vaults.toList()
         // 不再需要上传 vault_catalog.json，保险箱列表通过扫描 .7z 文件获取
         return localVaults.map { it.name }
-    }
-
-    /**
-     * 对比并更新本地 cloud_entries：传入旧统计和最新的 syncDb，自动完成对比、替换、刷新同步卡片。
-     * 本地无该保险箱时仅做导入，不更新卡片。
-     */
-    private fun syncCloudDbAndUpdateCard(
-        syncDb: com.whmdg.mczj.tools.encryption.data.SyncDatabase,
-        vaultName: String,
-        oldCloudFileCount: Int,
-        oldCloudSize: Long
-    ) {
-        val newCloudFileCount = syncDb.getCompletedFileCount("cloud_entries")
-        val newCloudSize = syncDb.getTotalSize("cloud_entries")
-
-        if (newCloudFileCount == oldCloudFileCount && newCloudSize == oldCloudSize) return
-
-        // 云端统计有变化，更新同步卡片
-        val existing = vaultService.vaults.find { it.name == vaultName } ?: return
-        val itemId = "vault_${existing.id}"
-        val idx = syncItems.indexOfFirst { it.id == itemId }
-        if (idx >= 0) {
-            val old = syncItems[idx]
-            syncItems[idx] = old.copy(
-                cloudFileCount = newCloudFileCount,
-                cloudSize = newCloudSize,
-                lastSyncTime = syncDb.getStats().lastUpdate ?: old.lastSyncTime
-            )
-        }
     }
 
     suspend fun runCatalogSync(config: WebDavServerConfig) {
