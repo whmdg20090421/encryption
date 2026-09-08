@@ -242,16 +242,7 @@ class CloudPaneController(
 
         // 录入本地表（如果是新文件）
         if (existingEntry == null) {
-            val originalSize = vaultSession?.let { session ->
-                try {
-                    val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
-                        localFile, session.dek, session.config.configFlags.customEncryption
-                    )
-                    metadata["size"]?.toLong() ?: localFile.length()
-                } catch (e: Exception) {
-                    localFile.length()
-                }
-            } ?: localFile.length()
+            val originalSize = localFile.length()
             syncDb.upsertEntry("local_entries", SyncEntryRow(
                 path = relativePath,
                 size = originalSize,
@@ -468,18 +459,7 @@ class CloudPaneController(
                 for (dbEntry in completedDbEntries) {
                     val localFile = localFileMap[dbEntry.path]
                     if (localFile != null) {
-                        val currentSize = if (vaultSession != null) {
-                            try {
-                                val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
-                                    localFile, vaultSession.dek, vaultSession.config.configFlags.customEncryption
-                                )
-                                metadata["size"]?.toLong() ?: localFile.length()
-                            } catch (e: Exception) {
-                                localFile.length()
-                            }
-                        } else {
-                            localFile.length()
-                        }
+                        val currentSize = localFile.length()
                         val currentLastModified = Instant.ofEpochMilli(localFile.lastModified()).toString()
                         if (dbEntry.size == currentSize && dbEntry.lastModified == currentLastModified) {
                             validCompletedPaths.add(dbEntry.path)
@@ -671,18 +651,7 @@ class CloudPaneController(
                 for ((file, relPath) in queue) {
                     val existing = syncDb.getEntry("local_entries", relPath)
                     if (existing == null) {
-                        val originalSize = if (vaultSession != null) {
-                            try {
-                                val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
-                                    file, vaultSession.dek, vaultSession.config.configFlags.customEncryption
-                                )
-                                metadata["size"]?.toLong() ?: file.length()
-                            } catch (e: Exception) {
-                                file.length()
-                            }
-                        } else {
-                            file.length()
-                        }
+                        val originalSize = file.length()
                         syncDb.upsertEntry("local_entries", SyncEntryRow(
                             path = relPath,
                             size = originalSize,
@@ -1751,17 +1720,8 @@ class CloudPaneController(
                 downloadedBytes += delta
                 onProgress(DownloadProgress(index + 1, files.size, fileName, downloadedBytes, totalBytes))
             }
-            // 更新 local_entries（使用原始文件大小）
-            val originalSize = vaultSession?.let { session ->
-                try {
-                    val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
-                        localFile, session.dek, session.config.configFlags.customEncryption
-                    )
-                    metadata["size"]?.toLong() ?: localFile.length()
-                } catch (e: Exception) {
-                    localFile.length()
-                }
-            } ?: localFile.length()
+            // 更新 local_entries（使用加密后的实际文件大小）
+            val originalSize = localFile.length()
             syncDb.upsertEntry("local_entries", com.whmdg.mczj.tools.encryption.data.SyncEntryRow(
                 path = file.path,
                 size = originalSize,
@@ -1819,17 +1779,8 @@ class CloudPaneController(
             if (file.isFile) {
                 val existing = syncDb.getEntry("local_entries", relativePath)
                 val currentLastModified = Instant.ofEpochMilli(file.lastModified()).toString()
-                // 读取原始文件大小（从加密元数据中获取，避免膨胀）
-                val currentSize = vaultSession?.let { session ->
-                    try {
-                        val metadata = com.whmdg.mczj.tools.encryption.core.FileCodec.readMetadata(
-                            file, session.dek, session.config.configFlags.customEncryption
-                        )
-                        metadata["size"]?.toLong() ?: file.length()
-                    } catch (e: Exception) {
-                        file.length()
-                    }
-                } ?: file.length()
+                // 使用加密后的实际文件大小
+                val currentSize = file.length()
 
                 if (existing == null) {
                     // 新文件 → 录入
