@@ -116,7 +116,18 @@ class VaultService(private val context: Context) {
 
         val rec = _db.vaults.find { it.id == id } ?: throw IllegalArgumentException("保险箱不存在: id=$id")
         val dir = VaultPaths.resolveVault(context, rec.location, rec.relativePath)
-        val cfg = VaultConfig.readWithFallback(context, dir)
+
+        // 检测旧格式：先读 raw JSON，如果有 encrypt_metadata 则绕过 HMAC 用 ignoreUnknownKeys 解析
+        val configFile = File(dir, "vault_config.json")
+        var needsMigration = false
+        val cfg: VaultConfig
+        if (configFile.exists() && configFile.readText().contains("\"encrypt_metadata\"")) {
+            needsMigration = true
+            cfg = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                .decodeFromString<VaultConfig>(configFile.readText())
+        } else {
+            cfg = VaultConfig.readWithFallback(context, dir)
+        }
 
         val saltBytes = HexCodec.decode(cfg.salt)
         val kekIvBytes = HexCodec.decode(cfg.kekIv)
@@ -143,13 +154,6 @@ class VaultService(private val context: Context) {
                 throw Exception("密码错误或保险箱数据损坏")
             }
         }
-
-        // 检测旧格式：JSON 中是否存在 encrypt_metadata 字段
-        val needsMigration = try {
-            val configFile = File(dir, "vault_config.json")
-            val rawJson = configFile.readText()
-            rawJson.contains("\"encrypt_metadata\"")
-        } catch (_: Exception) { false }
 
         // 记录最后打开时间
         val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
@@ -195,17 +199,8 @@ class VaultService(private val context: Context) {
             onProgress(index + 1, total)
         }
 
-        // 从 JSON 中删除 encrypt_metadata 字段
-        val configFile = File(vaultDir, "vault_config.json")
-        val rawJson = configFile.readText()
-        val cleaned = rawJson.replace(Regex(",\\s*\"encrypt_metadata\"\\s*:\\s*(true|false)"), "")
-            .replace(Regex("\"encrypt_metadata\"\\s*:\\s*(true|false),\\s*"), "")
-            .replace(Regex("\"encrypt_metadata\"\\s*:\\s*(true|false)"), "")
-        configFile.writeText(cleaned)
-        // 同步更新备份
-        File(vaultDir, "vault_config.backup.json").let {
-            if (it.exists()) it.writeText(cleaned)
-        }
+        // 重新序列化 config（自动去掉 encrypt_metadata），重新计算 HMAC 并保存
+        session.config.saveWithBackup(context, vaultDir)
     }
 
     /** 获取指定 ID 的保险箱记录 */
