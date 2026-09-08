@@ -2380,6 +2380,8 @@ fun FileManagerScreen(
                                                 )
                                             }
                                         }
+                                        // 右列留空（后续放其他功能）
+                                        Box(modifier = Modifier.weight(1f))
                                     }
                                     HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
                                     // 第二行：删除
@@ -2405,6 +2407,7 @@ fun FileManagerScreen(
                                             }
                                         }
                                         // 右列留空（后续放其他功能）
+                                        Box(modifier = Modifier.weight(1f))
                                     }
                                 }
                             } else {

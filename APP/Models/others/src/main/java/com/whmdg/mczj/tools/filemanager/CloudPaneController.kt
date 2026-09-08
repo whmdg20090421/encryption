@@ -454,7 +454,7 @@ class CloudPaneController(
                     .filter { it.path.startsWith(prefix) || it.path == folderRelativePath }
             }
 
-            // ④ 前置校验：本地与 DB 已上传文件的大小/时间戳一致性检查
+            // ④ 前置校验：本地与 DB 已上传文件的一致性检查（size → time → MD5）
             val localFileMap = localFiles.associateBy {
                 "/" + it.relativeTo(File(vaultDir)).path.replace('\\', '/')
             }
@@ -465,11 +465,28 @@ class CloudPaneController(
                     if (localFile != null) {
                         val currentSize = localFile.length()
                         val currentLastModified = Instant.ofEpochMilli(localFile.lastModified()).toString()
-                        if (dbEntry.size == currentSize && dbEntry.lastModified == currentLastModified) {
-                            validCompletedPaths.add(dbEntry.path)
-                        } else {
-                            // 大小或时间戳不一致 → 重置为 PENDING
+                        if (dbEntry.size != currentSize) {
+                            // size 不同 → 直接判定改变
                             syncDb.updateStatus("local_entries", dbEntry.path, SyncStatus.PENDING)
+                        } else if (dbEntry.lastModified != currentLastModified) {
+                            // size 相同 + time 不同 → 计算 MD5 对比
+                            val localMd5 = calculateMd5(localFile)
+                            if (localMd5 == dbEntry.md5) {
+                                // MD5 相同 → 没改变，仅刷新时间戳
+                                syncDb.updateEntry("local_entries", dbEntry.path) { it.copy(lastModified = currentLastModified) }
+                                validCompletedPaths.add(dbEntry.path)
+                            } else {
+                                // MD5 不同 → 改变了
+                                syncDb.updateEntry("local_entries", dbEntry.path) { it.copy(
+                                    lastModified = currentLastModified,
+                                    md5 = localMd5,
+                                    status = SyncStatus.PENDING,
+                                    uploadedSize = 0
+                                ) }
+                            }
+                        } else {
+                            // size 和 time 都相同 → 没改变
+                            validCompletedPaths.add(dbEntry.path)
                         }
                     }
                     // 本地不存在的不在这里处理，后面删除检测会处理
@@ -637,31 +654,7 @@ class CloudPaneController(
                 }
             } else false
 
-            // ⑩ 跳过已完成时：检查已完成文件的 MD5，不同的重置为 PENDING
-            if (!reUploadAll && completedFiles.isNotEmpty()) {
-                withContext(Dispatchers.IO) {
-                    for ((file, relPath) in completedFiles) {
-                        val cloudEntry = syncDb.getEntry("cloud_entries", relPath)
-                        if (cloudEntry != null) {
-                            val localMd5 = calculateMd5(file)
-                            if (localMd5 != cloudEntry.md5) {
-                                // MD5 不同，重置为 PENDING
-                                syncDb.updateEntry("local_entries", relPath) { row ->
-                                    row.copy(
-                                        size = file.length(),
-                                        lastModified = Instant.ofEpochMilli(file.lastModified()).toString(),
-                                        md5 = localMd5,
-                                        status = SyncStatus.PENDING,
-                                        uploadedSize = 0
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ⑪ 构建最终队列
+            // ⑩ 构建最终队列
             val finalQueue: List<Pair<File, String>>
             if (reUploadAll) {
                 // 全部重传：completedFiles + toUpload
@@ -687,7 +680,7 @@ class CloudPaneController(
                     .mapNotNull { entry -> localFileMap[entry.path]?.let { it to entry.path } }
             }
 
-            // ⑫ 将队列中未录入 DB 的文件写入
+            // ⑪ 将队列中未录入 DB 的文件写入
             withContext(Dispatchers.IO) {
                 for ((file, relPath) in finalQueue) {
                     val existing = syncDb.getEntry("local_entries", relPath)
@@ -717,12 +710,12 @@ class CloudPaneController(
                 return@launch
             }
 
-            // ⑬ 静默刷新当前目录（不闪 loading）
+            // ⑫ 静默刷新当前目录（不闪 loading）
             silentRefresh()
 
             withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "开始上传 ${finalQueue.size} 个文件", android.widget.Toast.LENGTH_SHORT).show() }
 
-            // ⑭ 预计算文件夹聚合值（避免上传过程中 O(n²) 全量遍历）
+            // ⑬ 预计算文件夹聚合值（避免上传过程中 O(n²) 全量遍历）
             val folderTotalSize = mutableMapOf<String, Long>()
             for ((file, relPath) in finalQueue) {
                 val fileSize = file.length()
@@ -748,7 +741,7 @@ class CloudPaneController(
                 if (changed) state.entries = entries
             }
 
-            // ⑬ 创建日志文件 + SyncEngine
+            // ⑭ 创建日志文件 + SyncEngine
             val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSyncLogs(context)
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val logFileName = "${vaultName}_batch_${timestamp}.log"
@@ -1130,11 +1123,11 @@ class CloudPaneController(
             eventChannel.close()
             updaterJob.join()
 
-            // ⑮ Toast 提示
+            // ⑰ Toast 提示
             val msg = "文件夹上传完成: 成功${successCount}个" + if (failCount > 0) "，失败${failCount}个" else ""
             withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_LONG).show() }
 
-            // ⑯ 更新云盘卡片数据（云端大小、文件数、同步时间）
+            // ⑱ 更新云盘卡片数据（云端大小、文件数、同步时间）
             withContext(Dispatchers.IO) {
                 val cloudSize = syncDb.getSyncedSize("cloud_entries")
                 val cloudFileCount = syncDb.getCompletedFileCount("cloud_entries")
@@ -1148,7 +1141,7 @@ class CloudPaneController(
                 }
             }
 
-            // ⑰ 关闭进度弹窗，上传 cloud.db（自带弹窗）
+            // ⑲ 关闭进度弹窗，上传 cloud.db（自带弹窗）
             closeProgressDialog()
             uploadCloudDbWithUI()
             // 无论成功失败都删除锁文件
