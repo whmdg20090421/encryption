@@ -13,8 +13,7 @@ class VaultSession(
     val record: VaultRecord,
     val vaultDir: File,
     val config: VaultConfig,
-    val dek: ByteArray,
-    val needsMigration: Boolean = false
+    val dek: ByteArray
 ) {
     private var _names: NameMapping = NameMapping.empty()
 

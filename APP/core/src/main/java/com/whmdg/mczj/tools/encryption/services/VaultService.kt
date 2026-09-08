@@ -119,10 +119,8 @@ class VaultService(private val context: Context) {
 
         // 检测旧格式：先读 raw JSON，如果有 encrypt_metadata 则绕过 HMAC 用 ignoreUnknownKeys 解析
         val configFile = File(dir, "vault_config.json")
-        var needsMigration = false
         val cfg: VaultConfig
         if (configFile.exists() && configFile.readText().contains("\"encrypt_metadata\"")) {
-            needsMigration = true
             cfg = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
                 .decodeFromString<VaultConfig>(configFile.readText())
         } else {
@@ -168,8 +166,7 @@ class VaultService(private val context: Context) {
             record = rec.copy(lastOpenedAt = now),
             vaultDir = dir,
             config = cfg,
-            dek = dek,
-            needsMigration = needsMigration
+            dek = dek
         )
     }
 

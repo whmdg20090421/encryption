@@ -607,7 +607,10 @@ fun VaultsListTab(
             }
             pendingVaultUnlock = null
             isVaultOpening = false
-            if (session.needsMigration) {
+            val needsMigration = try {
+                File(session.vaultDir, "vault_config.json").readText().contains("\"encrypt_metadata\"")
+            } catch (_: Exception) { false }
+            if (needsMigration) {
                 pendingMigrationSession = session
             } else {
                 onNavigate(Screen.FileManager(session))
