@@ -2380,7 +2380,13 @@ fun FileManagerScreen(
                                                 )
                                             }
                                         }
-                                        VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
+                                    }
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                                    // 第二行：删除
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
                                         Box(
                                             modifier = Modifier
                                                 .weight(1f)
@@ -2398,8 +2404,8 @@ fun FileManagerScreen(
                                                 Text("删除", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
                                             }
                                         }
+                                        // 右列留空（后续放其他功能）
                                     }
-                                    // 第二行留空（后续放其他功能）
                                 }
                             } else {
                             val disabledColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
