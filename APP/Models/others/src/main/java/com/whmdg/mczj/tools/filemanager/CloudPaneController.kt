@@ -1019,13 +1019,13 @@ class CloudPaneController(
                                 }
                                 // 增量更新父文件夹
                                 // 从 fileSizes 获取剩余字节数（StatusChange 时记录的）
-                                val remaining = fileSizes[event.path] ?: event.fileSize
+                                val completedRemaining = fileSizes[event.path] ?: event.fileSize
                                 if (event.success) {
                                     // 成功：绿色增加（文件从 yellow 移到 green）
-                                    updateFolderAggregates(event.path, addGreen = remaining)
+                                    updateFolderAggregates(event.path, addGreen = completedRemaining)
                                 } else {
                                     // 失败：红色增加（文件回到"待上传"状态）
-                                    updateFolderAggregates(event.path, addRed = remaining)
+                                    updateFolderAggregates(event.path, addRed = completedRemaining)
                                 }
                                 fileSizes.remove(event.path)  // 清理
                                 // 完整更新文件状态（含 DB 读取）
@@ -2181,14 +2181,14 @@ class CloudPaneController(
             (dbEntry?.uploadedSize ?: 0L) > 0 -> dbEntry!!.uploadedSize
             else -> 0L
         }
-        val yellowSize = when {
+        val redSize = when {
             dbEntry?.status == SyncStatus.COMPLETED -> 0L
-            liveProgress != null -> fileSize - liveProgress.uploadedBytes
-            else -> 0L
+            dbEntry?.status == SyncStatus.UPLOADING -> 0L
+            else -> fileSize
         }
         val newEntry = old.copy(
             uploadedSize = greenSize,
-            uploadingSize = yellowSize,
+            redSize = redSize,
             syncStatus = dbEntry?.status ?: old.syncStatus
         )
         val newEntries = entries.toMutableList()
@@ -2213,7 +2213,10 @@ class CloudPaneController(
                     }
                     .sumOf { it.size }
                 val syncAgg = aggregateDirectChildren(relativePath)
-                old.copy(totalSize = folderSize, uploadedSize = syncAgg.uploadedSize, uploadingSize = syncAgg.uploadingSize)
+                val cloudOnlyFolderSize = syncDb.getEntriesByParent("cloud_entries", relativePath)
+                    .filter { !it.path.endsWith("/") }
+                    .sumOf { it.size }
+                old.copy(totalSize = folderSize + cloudOnlyFolderSize, uploadedSize = syncAgg.uploadedSize, redSize = syncAgg.redSize, cloudOnlySize = cloudOnlyFolderSize)
             } else {
                 val dbEntry = syncDb.getEntry("local_entries", relativePath)
                 val liveProgress = state.syncTask.fileProgress[relativePath]
@@ -2224,14 +2227,14 @@ class CloudPaneController(
                     (dbEntry?.uploadedSize ?: 0L) > 0 -> dbEntry!!.uploadedSize
                     else -> 0L
                 }
-                val yellowSize = when {
+                val redSize = when {
                     dbEntry?.status == SyncStatus.COMPLETED -> 0L
-                    liveProgress != null -> fileSize - liveProgress.uploadedBytes
-                    else -> 0L
+                    dbEntry?.status == SyncStatus.UPLOADING -> 0L
+                    else -> fileSize
                 }
                 old.copy(
                     uploadedSize = greenSize,
-                    uploadingSize = yellowSize,
+                    redSize = redSize,
                     syncStatus = dbEntry?.status ?: old.syncStatus
                 )
             }
@@ -2259,10 +2262,14 @@ class CloudPaneController(
                     }
                     .sumOf { it.size }
                 val syncAgg = aggregateDirectChildren(parent)
+                val cloudOnlyFolderSize = syncDb.getEntriesByParent("cloud_entries", parent)
+                    .filter { !it.path.endsWith("/") }
+                    .sumOf { it.size }
                 entries[idx] = entries[idx].copy(
-                    totalSize = folderSize,
+                    totalSize = folderSize + cloudOnlyFolderSize,
                     uploadedSize = syncAgg.uploadedSize,
-                    uploadingSize = syncAgg.uploadingSize
+                    redSize = syncAgg.redSize,
+                    cloudOnlySize = cloudOnlyFolderSize
                 )
                 changed = true
             }
