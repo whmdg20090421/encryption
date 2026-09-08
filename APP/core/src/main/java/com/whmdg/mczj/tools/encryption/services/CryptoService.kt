@@ -70,10 +70,8 @@ object CryptoService {
         val sink = FileCodec.EncryptingSink(
             dst = pending,
             dek = session.dek,
-            encryptMetadata = session.record.encryptMetadata,
             customEncryption = session.record.customEncryption,
             sourceModifiedAt = System.currentTimeMillis(),
-            originalSize = sourceSize,
             onProgress = onProgress,
             cancelFlag = cancelFlag
         )
@@ -122,7 +120,6 @@ object CryptoService {
             src = srcFile,
             dst = outFile,
             dek = session.dek,
-            encryptMetadata = session.record.encryptMetadata,
             customEncryption = session.record.customEncryption,
             onProgress = onProgress,
             cancelFlag = cancelFlag

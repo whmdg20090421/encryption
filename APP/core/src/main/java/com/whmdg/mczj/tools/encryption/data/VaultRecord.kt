@@ -13,7 +13,6 @@ data class VaultRecord(
     val location: StorageLocation,
     val relativePath: String,
     @SerialName("encrypt_filename") val encryptFilename: Boolean,
-    @SerialName("encrypt_metadata") val encryptMetadata: Boolean,
     @SerialName("custom_encryption") val customEncryption: Boolean,
     val algorithm: String = "AES-256-GCM",
     val createdAt: String, // 存 ISO8601 字符串

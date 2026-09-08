@@ -233,7 +233,7 @@ object EncryptionTaskManager {
                             location = StorageLocation.INTERNAL,
                             relativePath = taskArgs.vaultDir,
                             encryptFilename = taskArgs.encryptFilename,
-                            encryptMetadata = config.configFlags.encryptMetadata,
+
                             customEncryption = taskArgs.customEncryption,
                             createdAt = ""
                         )

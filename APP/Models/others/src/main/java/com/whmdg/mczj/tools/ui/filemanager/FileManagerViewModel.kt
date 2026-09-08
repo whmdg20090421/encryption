@@ -3320,7 +3320,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             vaultDir = session.vaultDir.absolutePath,
             originalEncryptedPath = entry.path,
             customEncryption = session.record.customEncryption,
-            encryptMetadata = session.record.encryptMetadata,
+
             vaultId = session.record.id
         ))
 

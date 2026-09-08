@@ -10,6 +10,7 @@ import com.whmdg.mczj.tools.auth.Feature
 import com.whmdg.mczj.tools.auth.SecurityEnforcer
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.encryption.core.AesGcm256
+import com.whmdg.mczj.tools.encryption.core.FileCodec
 import com.whmdg.mczj.tools.encryption.core.HexCodec
 import com.whmdg.mczj.tools.encryption.core.KeyDerivation
 import com.whmdg.mczj.tools.encryption.core.SecureRandom
@@ -43,7 +44,6 @@ class VaultService(private val context: Context) {
         relativePath: String,
         password: String,
         encryptFilename: Boolean,
-        encryptMetadata: Boolean,
         customEncryption: Boolean,
         kdfType: KdfType,
         argonParams: Argon2Params,
@@ -80,7 +80,6 @@ class VaultService(private val context: Context) {
             encDek = HexCodec.encode(enc.ciphertext),
             configFlags = ConfigFlags(
                 encryptFilename = encryptFilename,
-                encryptMetadata = encryptMetadata,
                 customEncryption = customEncryption
             ),
             algorithm = algorithm
@@ -96,7 +95,6 @@ class VaultService(private val context: Context) {
             location = location,
             relativePath = relativePath,
             encryptFilename = encryptFilename,
-            encryptMetadata = encryptMetadata,
             customEncryption = customEncryption,
             algorithm = algorithm,
             createdAt = sdf.format(Date())
@@ -146,6 +144,13 @@ class VaultService(private val context: Context) {
             }
         }
 
+        // 检测旧格式：JSON 中是否存在 encrypt_metadata 字段
+        val needsMigration = try {
+            val configFile = File(dir, "vault_config.json")
+            val rawJson = configFile.readText()
+            rawJson.contains("\"encrypt_metadata\"")
+        } catch (_: Exception) { false }
+
         // 记录最后打开时间
         val now = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
             timeZone = TimeZone.getTimeZone("Asia/Shanghai")
@@ -159,8 +164,48 @@ class VaultService(private val context: Context) {
             record = rec.copy(lastOpenedAt = now),
             vaultDir = dir,
             config = cfg,
-            dek = dek
+            dek = dek,
+            needsMigration = needsMigration
         )
+    }
+
+    /**
+     * 迁移旧格式保险箱：裁剪所有 .whm 文件的 metadata 块，然后从 JSON 中删除 encrypt_metadata 字段。
+     * 由 UI 层在显示进度条时调用。
+     */
+    fun migrateVaultFormat(session: VaultSession, onProgress: (Int, Int) -> Unit) {
+        val vaultDir = session.vaultDir
+        val customEnc = session.record.customEncryption
+        val files = vaultDir.walkTopDown().filter { it.isFile && it.name.endsWith(".whm") }.toList()
+        val total = files.size
+        onProgress(0, total)
+
+        for ((index, file) in files.withIndex()) {
+            val tmp = File(file.parentFile, ".${file.name}.migrate")
+            try {
+                FileCodec.stripMetadata(file, tmp, customEnc)
+                if (!tmp.renameTo(file)) {
+                    tmp.delete()
+                    throw Exception("文件重命名失败: ${file.name}")
+                }
+            } catch (e: Exception) {
+                tmp.delete()
+                throw Exception("迁移失败 (${file.name}): ${e.message}")
+            }
+            onProgress(index + 1, total)
+        }
+
+        // 从 JSON 中删除 encrypt_metadata 字段
+        val configFile = File(vaultDir, "vault_config.json")
+        val rawJson = configFile.readText()
+        val cleaned = rawJson.replace(Regex(",\\s*\"encrypt_metadata\"\\s*:\\s*(true|false)"), "")
+            .replace(Regex("\"encrypt_metadata\"\\s*:\\s*(true|false),\\s*"), "")
+            .replace(Regex("\"encrypt_metadata\"\\s*:\\s*(true|false)"), "")
+        configFile.writeText(cleaned)
+        // 同步更新备份
+        File(vaultDir, "vault_config.backup.json").let {
+            if (it.exists()) it.writeText(cleaned)
+        }
     }
 
     /** 获取指定 ID 的保险箱记录 */
@@ -308,7 +353,6 @@ class VaultService(private val context: Context) {
             location = StorageLocation.EXTERNAL,
             relativePath = vaultPath,
             encryptFilename = cfg.configFlags.encryptFilename,
-            encryptMetadata = cfg.configFlags.encryptMetadata,
             customEncryption = cfg.configFlags.customEncryption,
             algorithm = cfg.algorithm,
             createdAt = sdf.format(Date())
@@ -398,7 +442,6 @@ class VaultService(private val context: Context) {
             location = StorageLocation.EXTERNAL,
             relativePath = treeUri.toString(),  // 存 SAF URI 字符串
             encryptFilename = cfg.configFlags.encryptFilename,
-            encryptMetadata = cfg.configFlags.encryptMetadata,
             customEncryption = cfg.configFlags.customEncryption,
             algorithm = cfg.algorithm,
             createdAt = sdf.format(Date())

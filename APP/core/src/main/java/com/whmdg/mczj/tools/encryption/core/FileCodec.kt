@@ -3,11 +3,6 @@ package com.whmdg.mczj.tools.encryption.core
 import com.whmdg.mczj.tools.encryption.core.AesGcm256
 import com.whmdg.mczj.tools.encryption.core.FileConstants
 import com.whmdg.mczj.tools.encryption.core.NailObfuscation
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -17,7 +12,11 @@ import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 单个加密文件的二进制编解码器，与 Python 工具完全互通。
+ * 单个加密文件的二进制编解码器。
+ *
+ * 新格式（无 metadata 块）：
+ *   [magic header] (仅 customEncryption)
+ *   [4B chunk_len] [12B IV] [cipher] × N
  */
 object FileCodec {
 
@@ -28,10 +27,8 @@ object FileCodec {
     class EncryptingSink(
         private val dst: File,
         private val dek: ByteArray,
-        private val encryptMetadata: Boolean,
         private val customEncryption: Boolean,
         private val sourceModifiedAt: Long = System.currentTimeMillis(),
-        private val originalSize: Long = 0L,
         private val onProgress: (Long) -> Unit = {},
         private val cancelFlag: AtomicBoolean? = null
     ) {
@@ -44,13 +41,6 @@ object FileCodec {
 
         init {
             if (customEncryption) out.write(FileConstants.magicHeader)
-            val metadata = if (encryptMetadata) {
-                "{\"mtime\":${sourceModifiedAt / 1000.0},\"ctime\":${sourceModifiedAt / 1000.0},\"size\":$originalSize}"
-            } else "{\"size\":$originalSize}"
-            val encrypted = AesGcm256.encrypt(dek, metadata.toByteArray(Charsets.UTF_8), aad)
-            out.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(encrypted.iv.size + encrypted.ciphertext.size).array())
-            out.write(encrypted.iv)
-            out.write(encrypted.ciphertext)
         }
 
         fun write(data: ByteArray) {
@@ -101,7 +91,6 @@ object FileCodec {
         src: File,
         dst: File,
         dek: ByteArray,
-        encryptMetadata: Boolean,
         customEncryption: Boolean,
         onProgress: (Long, Long) -> Unit = { _, _ -> },
         cancelFlag: AtomicBoolean? = null
@@ -110,32 +99,10 @@ object FileCodec {
         val totalSize = src.length()
 
         FileOutputStream(dst).use { out ->
-            // ① MAGIC 头（标识加密文件）
             if (customEncryption) {
                 out.write(FileConstants.magicHeader)
             }
 
-            // ② metadata 块
-            val metaMap = mutableMapOf<String, Double>()
-            metaMap["size"] = totalSize.toDouble()
-            if (encryptMetadata) {
-                val mtime = src.lastModified() / 1000.0
-                metaMap["mtime"] = mtime
-                metaMap["ctime"] = mtime
-            }
-            // 使用简单的 JSON 序列化
-            val metaJson = metaMap.entries.joinToString(",", "{", "}") { 
-                "\"${it.key}\":${it.value}" 
-            }
-            val metaBytes = metaJson.toByteArray(Charsets.UTF_8)
-            val metaEnc = AesGcm256.encrypt(dek, metaBytes, aad)
-            val metaLen = metaEnc.iv.size + metaEnc.ciphertext.size
-            
-            out.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(metaLen).array())
-            out.write(metaEnc.iv)
-            out.write(metaEnc.ciphertext)
-
-            // ③ 数据块
             var bytesDone = 0L
             FileInputStream(src).use { `in` ->
                 val buffer = ByteArray(FileConstants.CHUNK_SIZE)
@@ -161,55 +128,15 @@ object FileCodec {
         onProgress(totalSize, totalSize)
     }
 
-    fun readMetadata(
-        src: File,
-        dek: ByteArray,
-        customEncryption: Boolean
-    ): Map<String, Double> {
-        val aad = if (customEncryption) FileConstants.aadCustomObf else null
-
-        FileInputStream(src).use { `in` ->
-            if (customEncryption) {
-                val magic = ByteArray(FileConstants.magicHeader.size)
-                `in`.read(magic)
-                if (!magic.contentEquals(FileConstants.magicHeader)) {
-                    throw IllegalArgumentException("文件头损坏或未启用对应加密配置")
-                }
-            }
-
-            val metaLenBuf = ByteArray(4)
-            `in`.read(metaLenBuf)
-            val metaLen = ByteBuffer.wrap(metaLenBuf).order(ByteOrder.BIG_ENDIAN).int
-            val metaIv = ByteArray(12)
-            `in`.read(metaIv)
-            val metaCipher = ByteArray(metaLen - 12)
-            `in`.read(metaCipher)
-
-            val metaPlain = AesGcm256.decrypt(dek, metaIv, metaCipher, aad)
-            val metaStr = String(metaPlain, Charsets.UTF_8)
-
-            try {
-                val jsonElement = Json.parseToJsonElement(metaStr)
-                if (jsonElement is JsonObject) {
-                    return jsonElement.mapValues { it.value.jsonPrimitive.doubleOrNull ?: 0.0 }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-        return emptyMap()
-    }
-
     fun decrypt(
         src: File,
         dst: File,
         dek: ByteArray,
         customEncryption: Boolean,
         onProgress: (Long, Long) -> Unit = { _, _ -> }
-    ): Map<String, Double> {
+    ) {
         val aad = if (customEncryption) FileConstants.aadCustomObf else null
         val totalSize = src.length()
-        var metadata = mapOf<String, Double>()
 
         FileInputStream(src).use { `in` ->
             if (customEncryption) {
@@ -220,31 +147,8 @@ object FileCodec {
                 }
             }
 
-            // metadata
-            val metaLenBuf = ByteArray(4)
-            `in`.read(metaLenBuf)
-            val metaLen = ByteBuffer.wrap(metaLenBuf).order(ByteOrder.BIG_ENDIAN).int
-            val metaIv = ByteArray(12)
-            `in`.read(metaIv)
-            val metaCipher = ByteArray(metaLen - 12)
-            `in`.read(metaCipher)
-            
-            val metaPlain = AesGcm256.decrypt(dek, metaIv, metaCipher, aad)
-            val metaStr = String(metaPlain, Charsets.UTF_8)
-            // 简单解析 JSON (或者使用 kotlinx-serialization)
-            try {
-                val jsonElement = Json.parseToJsonElement(metaStr)
-                if (jsonElement is JsonObject) {
-                    metadata = jsonElement.mapValues { it.value.jsonPrimitive.doubleOrNull ?: 0.0 }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
-            // 数据区
             val dataEnd = totalSize
             var currentPos = if (customEncryption) FileConstants.magicHeader.size.toLong() else 0L
-            currentPos += 4 + metaLen // metaLenBuf(4) + iv(12) + cipher(metaLen-12)
 
             FileOutputStream(dst).use { out ->
                 var bytesDone = 0L
@@ -273,11 +177,49 @@ object FileCodec {
                 }
             }
         }
-
-        metadata["mtime"]?.let {
-            dst.setLastModified((it * 1000).toLong())
-        }
         onProgress(totalSize, totalSize)
-        return metadata
+    }
+
+    /**
+     * 将旧格式加密文件（含 metadata 块）迁移到新格式（无 metadata 块）。
+     * 纯字节级操作，不需要 DEK 也不需要重新加密。
+     */
+    fun stripMetadata(src: File, dst: File, customEncryption: Boolean) {
+        FileInputStream(src).use { `in` ->
+            FileOutputStream(dst).use { out ->
+                if (customEncryption) {
+                    val magic = ByteArray(FileConstants.magicHeader.size)
+                    `in`.read(magic)
+                    if (!magic.contentEquals(FileConstants.magicHeader)) {
+                        throw IllegalArgumentException("文件头损坏: ${src.name}")
+                    }
+                    out.write(magic)
+                }
+
+                val metaLenBuf = ByteArray(4)
+                if (`in`.read(metaLenBuf) < 4) throw IllegalArgumentException("文件过短: ${src.name}")
+                val metaLen = ByteBuffer.wrap(metaLenBuf).order(ByteOrder.BIG_ENDIAN).int
+                val headerSize = (if (customEncryption) FileConstants.magicHeader.size else 0) + 4
+                if (metaLen < 0 || metaLen > src.length() - headerSize) {
+                    throw IllegalArgumentException("metadata 长度异常: $metaLen, 文件: ${src.name}")
+                }
+
+                var skipped = 0L
+                val skipBuf = ByteArray(8192)
+                while (skipped < metaLen) {
+                    val toRead = minOf(skipBuf.size.toLong(), metaLen - skipped).toInt()
+                    val read = `in`.read(skipBuf, 0, toRead)
+                    if (read <= 0) throw IllegalArgumentException("metadata 块读取不完整: ${src.name}")
+                    skipped += read
+                }
+
+                val copyBuf = ByteArray(65536)
+                while (true) {
+                    val read = `in`.read(copyBuf)
+                    if (read <= 0) break
+                    out.write(copyBuf, 0, read)
+                }
+            }
+        }
     }
 }

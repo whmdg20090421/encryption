@@ -45,6 +45,7 @@ import com.whmdg.mczj.tools.encryption.data.VaultConfig
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import com.whmdg.mczj.tools.encryption.services.VaultService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
+import com.whmdg.mczj.tools.encryption.core.FileCodec
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -513,6 +514,13 @@ fun VaultsListTab(
     var pendingVaultUnlock by remember { mutableStateOf<Pair<VaultRecord, String>?>(null) }
     var pendingCachedVaultUnlock by remember { mutableStateOf<VaultRecord?>(null) }
     var isVaultOpening by remember { mutableStateOf(false) }
+    // 旧格式迁移
+    var pendingMigrationSession by remember { mutableStateOf<VaultSession?>(null) }
+    var isMigrating by remember { mutableStateOf(false) }
+    var migrationProgress by remember { mutableIntStateOf(0) }
+    var migrationTotal by remember { mutableIntStateOf(0) }
+    var migrationSession by remember { mutableStateOf<VaultSession?>(null) }
+    var startMigration by remember { mutableStateOf(false) }
 
     var alsoDeleteFiles by remember { mutableStateOf(false) }
     var showWarningDialog by remember { mutableStateOf<Pair<VaultRecord, VaultConfig.VerifyResult>?>(null) }
@@ -599,11 +607,38 @@ fun VaultsListTab(
             }
             pendingVaultUnlock = null
             isVaultOpening = false
-            onNavigate(Screen.FileManager(session))
+            if (session.needsMigration) {
+                pendingMigrationSession = session
+            } else {
+                onNavigate(Screen.FileManager(session))
+            }
         } catch (e: Exception) {
             pendingVaultUnlock = null
             isVaultOpening = false
             vaultListError = e
+        }
+    }
+
+    // 旧格式迁移执行
+    LaunchedEffect(startMigration) {
+        if (!startMigration) return@LaunchedEffect
+        startMigration = false
+        val session = migrationSession ?: return@LaunchedEffect
+        migrationSession = null
+        isMigrating = true
+        migrationProgress = 0
+        try {
+            withContext(Dispatchers.IO) {
+                vaultService.migrateVaultFormat(session) { done, total ->
+                    migrationProgress = done
+                    migrationTotal = total
+                }
+            }
+            isMigrating = false
+            onNavigate(Screen.FileManager(VaultSession(session.record, session.vaultDir, session.config, session.dek)))
+        } catch (e: Exception) {
+            isMigrating = false
+            vaultListError = Exception("迁移失败: ${e.message}")
         }
     }
 
@@ -656,6 +691,51 @@ fun VaultsListTab(
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                     Spacer(modifier = Modifier.width(16.dp))
                     Text("请稍候，正在派生密钥…")
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    // 旧格式迁移确认弹窗
+    pendingMigrationSession?.let { session ->
+        AlertDialog(
+            onDismissRequest = { pendingMigrationSession = null },
+            title = { Text("需要迁移加密格式") },
+            text = { Text("检测到旧版加密格式，需要迁移以兼容新版本。迁移将调整文件结构，不会丢失数据。是否继续？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val s = pendingMigrationSession ?: return@TextButton
+                    pendingMigrationSession = null
+                    migrationSession = s
+                    startMigration = true
+                }) { Text("开始迁移") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingMigrationSession = null }) { Text("取消") }
+            }
+        )
+    }
+
+    // 迁移进度弹窗
+    if (isMigrating) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("正在迁移加密格式") },
+            text = {
+                Column {
+                    Text("正在处理文件…")
+                    Spacer(modifier = Modifier.height(12.dp))
+                    if (migrationTotal > 0) {
+                        LinearProgressIndicator(
+                            progress = { migrationProgress.toFloat() / migrationTotal },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("$migrationProgress / $migrationTotal", style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
                 }
             },
             confirmButton = {}

@@ -59,7 +59,6 @@ fun VaultCreateScreen(
     var pwd2 by remember { mutableStateOf("") }
 
     var encryptFilename by remember { mutableStateOf(true) }
-    var encryptMetadata by remember { mutableStateOf(true) }
     var customEncryption by remember { mutableStateOf(false) }
     var algorithm by remember { mutableStateOf("AES-256-GCM") }
 
@@ -226,7 +225,6 @@ fun VaultCreateScreen(
                     relativePath = relativePath,
                     password = pwd1,
                     encryptFilename = encryptFilename,
-                    encryptMetadata = encryptMetadata,
                     customEncryption = customEncryption,
                     kdfType = KdfType.ARGON2ID,
                     argonParams = finalParams,
@@ -306,13 +304,6 @@ fun VaultCreateScreen(
                     supportingContent = { Text(algorithm) },
                     trailingContent = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
                     modifier = Modifier.clickable { showAlgoDialog = true }
-                )
-                ListItem(
-                    headlineContent = { Text("加密元数据") },
-                    supportingContent = { Text("文件的创建/修改时间随密文一起加密") },
-                    trailingContent = {
-                        Switch(checked = encryptMetadata, onCheckedChange = { encryptMetadata = it })
-                    }
                 )
                 ListItem(
                     headlineContent = { Text("自定义混淆") },

@@ -48,7 +48,7 @@ fun TextEditorScreen(
                             src = file,
                             dst = File(ctx.originalEncryptedPath),
                             dek = ctx.dek,
-                            encryptMetadata = ctx.encryptMetadata,
+
                             customEncryption = ctx.customEncryption
                         )
                     } else {
