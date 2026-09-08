@@ -1120,7 +1120,7 @@ class CloudPaneController(
     }
 
     /** 删除本地文件 + 从本地表移除 */
-    fun deleteLocal(relativePath: String) {
+    fun deleteLocal(relativePath: String, onComplete: (() -> Unit)? = null) {
         scope.launch {
             withContext(Dispatchers.IO) {
                 // 统计删除前的数量和大小
@@ -1149,11 +1149,12 @@ class CloudPaneController(
                 syncDb.adjustLocalStats(-deletedCount, -deletedSize)
             }
             navigateTo(state.currentPath)
+            onComplete?.invoke()
         }
     }
 
     /** 删除云端文件 + 从云端表移除 */
-    fun deleteCloud(relativePath: String) {
+    fun deleteCloud(relativePath: String, onComplete: (() -> Unit)? = null) {
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -1194,16 +1195,18 @@ class CloudPaneController(
                     uploadCloudDb()
                 }
                 navigateTo(state.currentPath)
+                onComplete?.invoke()
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     android.widget.Toast.makeText(context, "删除云端失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
                 }
+                onComplete?.invoke()
             }
         }
     }
 
     /** 同时删除本地和云端 */
-    fun deleteBoth(relativePath: String) {
+    fun deleteBoth(relativePath: String, onComplete: (() -> Unit)? = null) {
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -1265,10 +1268,12 @@ class CloudPaneController(
                     uploadCloudDb()
                 }
                 navigateTo(state.currentPath)
+                onComplete?.invoke()
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     android.widget.Toast.makeText(context, "删除失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
                 }
+                onComplete?.invoke()
             }
         }
     }
