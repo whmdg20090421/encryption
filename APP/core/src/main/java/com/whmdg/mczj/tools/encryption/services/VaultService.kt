@@ -108,7 +108,7 @@ class VaultService(private val context: Context) {
         return assigned
     }
 
-    fun open(id: Int, password: String): VaultSession {
+    fun open(id: Int, password: String, onMigrationProgress: ((Int, Int) -> Unit)? = null): VaultSession {
         // 业务层权限检查（第二道防线）
         if (!SecurityEnforcer.checkOrDie(context, Feature.ENCRYPTION_VAULT, "VaultService.open")) {
             throw SecurityException("权限不足：无法打开保险箱")
@@ -117,15 +117,18 @@ class VaultService(private val context: Context) {
         val rec = _db.vaults.find { it.id == id } ?: throw IllegalArgumentException("保险箱不存在: id=$id")
         val dir = VaultPaths.resolveVault(context, rec.location, rec.relativePath)
 
-        // 检测旧格式：先读 raw JSON，如果有 encrypt_metadata 则绕过 HMAC 用 ignoreUnknownKeys 解析
+        // 检测旧格式：如果有 encrypt_metadata，先迁移文件+重算 HMAC，再正常 readWithFallback
         val configFile = File(dir, "vault_config.json")
-        val cfg: VaultConfig
         if (configFile.exists() && configFile.readText().contains("\"encrypt_metadata\"")) {
-            cfg = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            // 临时用 ignoreUnknownKeys 解析旧 config，仅用于派生 DEK
+            val oldCfg = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
                 .decodeFromString<VaultConfig>(configFile.readText())
-        } else {
-            cfg = VaultConfig.readWithFallback(context, dir)
+            val tmpSession = VaultSession(rec, dir, oldCfg, ByteArray(0))
+            // 迁移文件 + 从 JSON 删除 encrypt_metadata + 重算 HMAC 并保存
+            migrateVaultFormat(tmpSession) { done, total -> onMigrationProgress?.invoke(done, total) }
         }
+
+        val cfg = VaultConfig.readWithFallback(context, dir)
 
         val saltBytes = HexCodec.decode(cfg.salt)
         val kekIvBytes = HexCodec.decode(cfg.kekIv)
