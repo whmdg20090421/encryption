@@ -1011,47 +1011,82 @@ fun VaultsListTab(
                                                 } else {
                                                     clearDeadline(v.id.toString())
                                                     val vaultDir = File(v.relativePath)
-                                                    val verifyResult = try {
-                                                        VaultConfig.verifyAllCopies(context, vaultDir)
-                                                    } catch (e: Exception) {
-                                                        VaultConfig.VerifyResult(null, true)
-                                                    }
-                                                    if (verifyResult.isTampered) {
-                                                        showWarningDialog = Pair(v, verifyResult)
-                                                    } else if (settings.enableTeeQuickUnlock &&
-                                                        com.whmdg.mczj.tools.security.TeeManager.isVaultPasswordSaved(context, v.id)) {
-                                                        val cipher = com.whmdg.mczj.tools.security.TeeManager.getDecryptCipher(context, v.id)
-                                                        if (cipher != null) {
-                                                            val activity = context as android.app.Activity
-                                                            val crypto = android.hardware.biometrics.BiometricPrompt.CryptoObject(cipher as javax.crypto.Cipher)
-                                                            com.whmdg.mczj.tools.security.TeeManager.showBiometricPrompt(
-                                                                activity = activity,
-                                                                cryptoObject = crypto,
-                                                                title = "快速解锁「${v.name}」",
-                                                                description = "请验证指纹以安全解锁保险箱",
-                                                                onSuccess = { result ->
-                                                                    val authenticatedCipher = result.cryptoObject!!.cipher!!
-                                                                    val decrypted = com.whmdg.mczj.tools.security.TeeManager.decryptPassword(context, v.id, authenticatedCipher)
-                                                                    if (!decrypted.isNullOrEmpty()) {
-                                                                        openVault(v, decrypted)
-                                                                    } else {
-                                                                        Toast.makeText(context, "指纹密匙读取失败，请手动解锁", Toast.LENGTH_SHORT).show()
+
+                                                    fun verifyAndProceed() {
+                                                        val verifyResult = try {
+                                                            VaultConfig.verifyAllCopies(context, vaultDir)
+                                                        } catch (e: Exception) {
+                                                            VaultConfig.VerifyResult(null, true)
+                                                        }
+                                                        if (verifyResult.validConfig == null) {
+                                                            // 所有副本均不可读，用警告弹窗而非报错弹窗
+                                                            showWarningDialog = Pair(v, verifyResult)
+                                                        } else if (verifyResult.isTampered) {
+                                                            showWarningDialog = Pair(v, verifyResult)
+                                                        } else if (settings.enableTeeQuickUnlock &&
+                                                            com.whmdg.mczj.tools.security.TeeManager.isVaultPasswordSaved(context, v.id)) {
+                                                            val cipher = com.whmdg.mczj.tools.security.TeeManager.getDecryptCipher(context, v.id)
+                                                            if (cipher != null) {
+                                                                val activity = context as android.app.Activity
+                                                                val crypto = android.hardware.biometrics.BiometricPrompt.CryptoObject(cipher as javax.crypto.Cipher)
+                                                                com.whmdg.mczj.tools.security.TeeManager.showBiometricPrompt(
+                                                                    activity = activity,
+                                                                    cryptoObject = crypto,
+                                                                    title = "快速解锁「${v.name}」",
+                                                                    description = "请验证指纹以安全解锁保险箱",
+                                                                    onSuccess = { result ->
+                                                                        val authenticatedCipher = result.cryptoObject!!.cipher!!
+                                                                        val decrypted = com.whmdg.mczj.tools.security.TeeManager.decryptPassword(context, v.id, authenticatedCipher)
+                                                                        if (!decrypted.isNullOrEmpty()) {
+                                                                            openVault(v, decrypted)
+                                                                        } else {
+                                                                            Toast.makeText(context, "指纹密匙读取失败，请手动解锁", Toast.LENGTH_SHORT).show()
+                                                                            showPasswordDialog = v
+                                                                        }
+                                                                    },
+                                                                    onFailure = { err ->
+                                                                        if (err != "用户取消") {
+                                                                            Toast.makeText(context, "快速解锁失败: $err", Toast.LENGTH_SHORT).show()
+                                                                        }
                                                                         showPasswordDialog = v
                                                                     }
-                                                                },
-                                                                onFailure = { err ->
-                                                                    if (err != "用户取消") {
-                                                                        Toast.makeText(context, "快速解锁失败: $err", Toast.LENGTH_SHORT).show()
-                                                                    }
-                                                                    showPasswordDialog = v
-                                                                }
-                                                            )
+                                                                )
+                                                            } else {
+                                                                Toast.makeText(context, "安全环境发生变化，指纹密钥已失效，请手动解锁以重新绑定", Toast.LENGTH_LONG).show()
+                                                                showPasswordDialog = v
+                                                            }
                                                         } else {
-                                                            Toast.makeText(context, "安全环境发生变化，指纹密钥已失效，请手动解锁以重新绑定", Toast.LENGTH_LONG).show()
                                                             showPasswordDialog = v
                                                         }
+                                                    }
+
+                                                    // 先检测旧格式，迁移完成后再做 HMAC 校验
+                                                    if (vaultService.needsMigration(vaultDir)) {
+                                                        isVaultOpening = true
+                                                        kotlinx.coroutines.MainScope().launch {
+                                                            try {
+                                                                withContext(Dispatchers.IO) {
+                                                                    val oldCfg = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                                                                        .decodeFromString<VaultConfig>(vaultDir.resolve("vault_config.json").readText())
+                                                                    val tmpSession = VaultSession(v, vaultDir, oldCfg, ByteArray(0))
+                                                                    vaultService.migrateVaultFormat(tmpSession) { done, total ->
+                                                                        isMigrating = true
+                                                                        migrationProgress = done
+                                                                        migrationTotal = total
+                                                                    }
+                                                                }
+                                                            } catch (e: Exception) {
+                                                                isVaultOpening = false
+                                                                isMigrating = false
+                                                                vaultListError = Exception("迁移失败: ${e.message}")
+                                                                return@launch
+                                                            }
+                                                            isMigrating = false
+                                                            isVaultOpening = false
+                                                            verifyAndProceed()
+                                                        }
                                                     } else {
-                                                        showPasswordDialog = v
+                                                        verifyAndProceed()
                                                     }
                                                 }
                                             },
@@ -1076,21 +1111,37 @@ fun VaultsListTab(
 
     // Warnings Dialog
     showWarningDialog?.let { (vault, verify) ->
+        val configUnreadable = verify.validConfig == null
         AlertDialog(
             onDismissRequest = { showWarningDialog = null },
             title = { Text("配置完整性警告") },
-            text = { Text("检测到配置文件被篡改或损坏，可以使用备份文件进行解密，但存在安全问题，是否继续解密？") },
+            text = {
+                Text(
+                    if (configUnreadable)
+                        "所有配置文件副本均损坏或丢失，无法打开此保险箱。"
+                    else
+                        "检测到配置文件被篡改或损坏，可以使用备份文件进行解密，但存在安全问题，是否继续解密？"
+                )
+            },
             confirmButton = {
-                Button(onClick = {
-                    showWarningDialog = null
-                    showPasswordDialog = vault
-                }) {
-                    Text("继续")
+                if (configUnreadable) {
+                    Button(onClick = { showWarningDialog = null }) {
+                        Text("关闭")
+                    }
+                } else {
+                    Button(onClick = {
+                        showWarningDialog = null
+                        showPasswordDialog = vault
+                    }) {
+                        Text("继续")
+                    }
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showWarningDialog = null }) {
-                    Text("取消")
+                if (!configUnreadable) {
+                    TextButton(onClick = { showWarningDialog = null }) {
+                        Text("取消")
+                    }
                 }
             }
         )

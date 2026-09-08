@@ -118,12 +118,16 @@ class CloudPaneController(
         val name: String,
         val relativePath: String,
         val isDirectory: Boolean,
-        /** 文件：自身大小；文件夹：下所有文件总大小 */
+        /** 文件：自身大小；文件夹：下所有文件总大小（含云端独有） */
         val totalSize: Long,
-        /** 文件：自身大小（如已完成）；文件夹：下所有已完成文件总大小 */
+        /** 已上传完成的文件大小（绿色） */
         val uploadedSize: Long,
-        /** 文件夹：下所有正在上传文件总大小 */
+        /** 正在上传的剩余字节（黄色，自动计算：total - uploaded - red - blue） */
         val uploadingSize: Long,
+        /** 本地未上传的文件大小（红色） */
+        val redSize: Long = 0,
+        /** 云端独有文件大小（蓝色） */
+        val cloudOnlySize: Long = 0,
         val lastModified: Long = 0,
         /** 文件的单个同步状态（文件夹为 null，用聚合字段代替） */
         val syncStatus: SyncStatus? = null,
@@ -862,9 +866,7 @@ class CloudPaneController(
                                     speed = currentSpeed,
                                     concurrency = maxConcurrency
                                 )
-                                // 增量更新父文件夹（使用本次单次 delta）
-                                if (delta > 0) updateFolderAggregates(event.path, addGreen = delta, addYellow = -delta)
-                                // 只更新文件自身进度条（不触发 aggregateFolder）
+                                // 只更新文件自身进度条（文件夹聚合在 Complete 时更新）
                                 updateFileProgressOnly(event.path)
                                 // 进度异常检测：单文件渲染帧增量 > 128KB
                                 for ((path, uploaded) in activeFileBytes) {
@@ -1015,26 +1017,27 @@ class CloudPaneController(
                                 if (!event.success && event.error != null) {
                                     com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败: ${event.path} - ${event.error}")
                                 }
-                                // 增量更新父文件夹：完成时清零黄色，增加绿色
-                                // 从 fileSizes 获取原始文件大小（StatusChange 时记录的）
-                                val originalSize = fileSizes[event.path] ?: event.fileSize
+                                // 增量更新父文件夹
+                                // 从 fileSizes 获取剩余字节数（StatusChange 时记录的）
+                                val remaining = fileSizes[event.path] ?: event.fileSize
                                 if (event.success) {
-                                    // 成功：黄色全部转绿色
-                                    updateFolderAggregates(event.path, addGreen = originalSize, addYellow = -originalSize)
+                                    // 成功：绿色增加（文件从 yellow 移到 green）
+                                    updateFolderAggregates(event.path, addGreen = remaining)
                                 } else {
-                                    // 失败：黄色清零（不增加绿色）
-                                    updateFolderAggregates(event.path, addYellow = -originalSize)
+                                    // 失败：红色增加（文件回到"待上传"状态）
+                                    updateFolderAggregates(event.path, addRed = remaining)
                                 }
                                 fileSizes.remove(event.path)  // 清理
                                 // 完整更新文件状态（含 DB 读取）
                                 updateSingleEntry(event.path)
                             }
                             is UploadEvent.StatusChange -> {
-                                // 文件开始上传：设置文件夹的黄色进度条，记录文件大小
+                                // 文件开始上传：红色减少（文件从红移到黄，黄色自动增加）
                                 val fileEntry = state.entries.find { it.relativePath == event.path }
                                 if (fileEntry != null) {
-                                    fileSizes[event.path] = fileEntry.totalSize  // 记录原始大小
-                                    updateFolderAggregates(event.path, addYellow = fileEntry.totalSize)
+                                    val remaining = fileEntry.totalSize - fileEntry.uploadedSize
+                                    fileSizes[event.path] = remaining  // 记录剩余字节数
+                                    updateFolderAggregates(event.path, addRed = -remaining)
                                 }
                                 updateSingleEntry(event.path)
                             }
@@ -1840,6 +1843,10 @@ class CloudPaneController(
                 val folderSize = syncDb.getEntriesByParent("local_entries", childRelativePath)
                     .filter { entry -> !entry.path.endsWith("/") }  // 累加整个子树的所有文件，不只是直接子文件
                     .sumOf { it.size }
+                // 云端独有文件大小
+                val cloudOnlyFolderSize = syncDb.getEntriesByParent("cloud_entries", childRelativePath)
+                    .filter { !it.path.endsWith("/") }
+                    .sumOf { it.size }
                 // 同步状态：递归统计子树
                 val syncAgg = aggregateDirectChildren(childRelativePath)
                 // 检测异常：uploadedSize > totalSize 说明 DB 缓存过时
@@ -1850,9 +1857,11 @@ class CloudPaneController(
                     name = file.name,
                     relativePath = childRelativePath,
                     isDirectory = true,
-                    totalSize = folderSize,
+                    totalSize = folderSize + cloudOnlyFolderSize,
                     uploadedSize = syncAgg.uploadedSize,
-                    uploadingSize = syncAgg.uploadingSize,
+                    uploadingSize = 0,
+                    redSize = syncAgg.redSize,
+                    cloudOnlySize = cloudOnlyFolderSize,
                     lastModified = file.lastModified()
                 ))
             } else {
@@ -1883,12 +1892,10 @@ class CloudPaneController(
                     dbUploaded > 0 -> dbUploaded
                     else -> 0L
                 }
-                val yellowSize = when {
+                val redSize = when {
                     status == SyncStatus.COMPLETED -> 0L
-                    liveProgress != null -> fileSize - liveProgress.uploadedBytes
-                    dbUploaded > 0 -> fileSize - dbUploaded
-                    status == SyncStatus.UPLOADING -> fileSize
-                    else -> 0L
+                    status == SyncStatus.UPLOADING -> 0L  // 剩余部分归入 yellow（uploading），不计入 red
+                    else -> fileSize
                 }
                 entries.add(CloudFileEntry(
                     name = file.name,
@@ -1896,7 +1903,8 @@ class CloudPaneController(
                     isDirectory = false,
                     totalSize = fileSize,
                     uploadedSize = greenSize,
-                    uploadingSize = yellowSize,
+                    uploadingSize = 0,
+                    redSize = redSize,
                     lastModified = file.lastModified(),
                     syncStatus = status
                 ))
@@ -1932,7 +1940,7 @@ class CloudPaneController(
 
         val children = dir.listFiles() ?: return FolderAggregate()
         var uploadedSize = 0L
-        var uploadingSize = 0L
+        var redSize = 0L
 
         for (file in children) {
             if (file.name in excludedFiles) continue
@@ -1941,29 +1949,25 @@ class CloudPaneController(
             if (file.isDirectory) {
                 val childAgg = aggregateDirectChildren(childPath)
                 uploadedSize += childAgg.uploadedSize
-                uploadingSize += childAgg.uploadingSize
+                redSize += childAgg.redSize
             } else {
                 val dbEntry = syncDb.getEntry("local_entries", childPath)
-                // 使用 DB 中的原始文件大小（与 folderSize 统计口径一致），避免加密文件膨胀导致的误判
                 val fileSize = dbEntry?.size ?: file.length()
-                val liveProgress = state.syncTask.fileProgress[childPath]
-                val dbUploaded = dbEntry?.uploadedSize ?: 0L
                 when (dbEntry?.status) {
                     SyncStatus.COMPLETED -> uploadedSize += fileSize
                     SyncStatus.UPLOADING -> {
-                        val isSyncActive = state.syncTask.phase == SyncPhase.SYNCING || state.syncTask.phase == SyncPhase.SCANNING
-                        if (isSyncActive) {
-                            val done = liveProgress?.uploadedBytes ?: dbUploaded
-                            uploadedSize += done
-                            uploadingSize += (fileSize - done)
-                        }
+                        val liveProgress = state.syncTask.fileProgress[childPath]
+                        val dbUploaded = dbEntry?.uploadedSize ?: 0L
+                        val done = liveProgress?.uploadedBytes ?: dbUploaded
+                        uploadedSize += done
+                        // 剩余部分归入 yellow（uploading），不计入 red
                     }
-                    else -> {}
+                    else -> redSize += fileSize
                 }
             }
         }
 
-        return FolderAggregate(0L, uploadedSize, uploadingSize)
+        return FolderAggregate(totalSize = uploadedSize + redSize, uploadedSize = uploadedSize, redSize = redSize)
     }
 
     /**
@@ -2043,8 +2047,9 @@ class CloudPaneController(
                             relativePath = childRelativePath,
                             isDirectory = false,
                             totalSize = cloudEntry.size,
-                            uploadedSize = cloudEntry.size,
+                            uploadedSize = 0,
                             uploadingSize = 0,
+                            cloudOnlySize = cloudEntry.size,
                             lastModified = parseCloudLastModified(cloudEntry.lastModified),
                             syncStatus = SyncStatus.COMPLETED,
                             isCloudOnly = true,
@@ -2067,8 +2072,9 @@ class CloudPaneController(
                     relativePath = childRelativePath,
                     isDirectory = false,
                     totalSize = cloudEntry.size,
-                    uploadedSize = cloudEntry.size,  // 云端文件视为已上传
+                    uploadedSize = 0,
                     uploadingSize = 0,
+                    cloudOnlySize = cloudEntry.size,
                     lastModified = parseCloudLastModified(cloudEntry.lastModified),
                     syncStatus = SyncStatus.COMPLETED,
                     isCloudOnly = true
@@ -2086,8 +2092,9 @@ class CloudPaneController(
                 relativePath = childRelativePath,
                 isDirectory = true,
                 totalSize = dirSize,
-                uploadedSize = dirSize,  // 云端文件夹视为已上传
+                uploadedSize = 0,
                 uploadingSize = 0,
+                cloudOnlySize = dirSize,
                 lastModified = 0,
                 isCloudOnly = true
             ))
@@ -2268,9 +2275,10 @@ class CloudPaneController(
 
     /** 增量更新父文件夹聚合值（O(深度)，不遍历文件）
      *  @param addGreen 绿色增加量（已上传字节）
-     *  @param addYellow 黄色增加量（正在上传字节，负数表示减少）
+     *  @param addRed 红色增加量（本地未上传字节，负数表示减少）
+     *  @param addBlue 蓝色增加量（云端独有字节）
      */
-    private fun updateFolderAggregates(changedPath: String, addGreen: Long = 0, addYellow: Long = 0) {
+    private fun updateFolderAggregates(changedPath: String, addGreen: Long = 0, addRed: Long = 0, addBlue: Long = 0) {
         var parent = changedPath.substringBeforeLast('/', "/")
         while (parent.isNotEmpty()) {
             val entries = state.entries
@@ -2280,7 +2288,8 @@ class CloudPaneController(
                 val newEntries = entries.toMutableList()
                 newEntries[idx] = old.copy(
                     uploadedSize = (old.uploadedSize + addGreen).coerceAtLeast(0L),
-                    uploadingSize = (old.uploadingSize + addYellow).coerceAtLeast(0L)
+                    redSize = (old.redSize + addRed).coerceAtLeast(0L),
+                    cloudOnlySize = (old.cloudOnlySize + addBlue).coerceAtLeast(0L)
                 )
                 state.entries = newEntries
             }
@@ -2337,7 +2346,8 @@ class CloudPaneController(
     private data class FolderAggregate(
         val totalSize: Long = 0,
         val uploadedSize: Long = 0,
-        val uploadingSize: Long = 0
+        val redSize: Long = 0,
+        val cloudOnlySize: Long = 0
     )
 
     /**

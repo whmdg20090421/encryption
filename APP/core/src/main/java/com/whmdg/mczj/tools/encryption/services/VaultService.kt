@@ -173,6 +173,12 @@ class VaultService(private val context: Context) {
         )
     }
 
+    /** 检测保险箱是否需要旧格式迁移（JSON 中包含 encrypt_metadata 字段）。 */
+    fun needsMigration(vaultDir: File): Boolean {
+        val configFile = File(vaultDir, "vault_config.json")
+        return configFile.exists() && configFile.readText().contains("\"encrypt_metadata\"")
+    }
+
     /**
      * 迁移旧格式保险箱：裁剪所有 .whm 文件的 metadata 块，然后从 JSON 中删除 encrypt_metadata 字段。
      * 由 UI 层在显示进度条时调用。

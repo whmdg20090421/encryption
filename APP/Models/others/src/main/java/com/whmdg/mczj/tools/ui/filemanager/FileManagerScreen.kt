@@ -6129,7 +6129,8 @@ private fun CloudPanelContent(
                                 SyncStatusBar(
                                     totalSize = cloudEntry.totalSize,
                                     uploadedSize = cloudEntry.uploadedSize,
-                                    uploadingSize = cloudEntry.uploadingSize,
+                                    redSize = cloudEntry.redSize,
+                                    cloudOnlySize = cloudEntry.cloudOnlySize,
                                     isCloudOnly = cloudEntry.isCloudOnly,
                                     isVerifying = cloudEntry.isVerifying
                                 )
@@ -6580,13 +6581,14 @@ private fun UploadConflictDialog(
     }
 }
 
-// ==================== 同步状态进度条（三色段） ====================
+// ==================== 同步状态进度条（四色段） ====================
 
 @Composable
 private fun SyncStatusBar(
     totalSize: Long,
     uploadedSize: Long,
-    uploadingSize: Long,
+    redSize: Long,
+    cloudOnlySize: Long,
     isCloudOnly: Boolean = false,
     isVerifying: Boolean = false
 ) {
@@ -6596,7 +6598,6 @@ private fun SyncStatusBar(
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (isVerifying) {
-            // 校验中：显示滚动进度条
             CircularProgressIndicator(
                 modifier = Modifier.size(12.dp),
                 strokeWidth = 1.5.dp,
@@ -6610,7 +6611,7 @@ private fun SyncStatusBar(
                 maxLines = 1
             )
         } else {
-            // 进度条（自适应剩余空间）
+            val uploadingSize = (totalSize - uploadedSize - redSize - cloudOnlySize).coerceAtLeast(0L)
             Row(
                 modifier = Modifier
                     .weight(1f)
@@ -6618,21 +6619,21 @@ private fun SyncStatusBar(
                     .clip(RoundedCornerShape(1.5.dp))
             ) {
                 if (isCloudOnly) {
-                    // 云端-only：全天蓝色
                     Box(Modifier.weight(1f).fillMaxHeight().background(skyBlue))
-                } else {
-                    val remaining = totalSize - uploadedSize - uploadingSize
+                } else if (totalSize > 0L) {
                     val minWeight = totalSize * 0.01f
                     val greenW = if (uploadedSize > 0) maxOf(uploadedSize.toFloat(), minWeight) else 0f
                     val yellowW = if (uploadingSize > 0) maxOf(uploadingSize.toFloat(), minWeight) else 0f
-                    val redW = if (remaining > 0) maxOf(remaining.toFloat(), minWeight) else 0f
+                    val redW = if (redSize > 0) maxOf(redSize.toFloat(), minWeight) else 0f
+                    val blueW = if (cloudOnlySize > 0) maxOf(cloudOnlySize.toFloat(), minWeight) else 0f
                     if (greenW > 0f) Box(Modifier.weight(greenW).fillMaxHeight().background(Color(0xFF4CAF50)))
                     if (yellowW > 0f) Box(Modifier.weight(yellowW).fillMaxHeight().background(Color(0xFFFFC107)))
                     if (redW > 0f) Box(Modifier.weight(redW).fillMaxHeight().background(Color(0xFFE57373)))
-                    if (totalSize <= 0L) Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE57373)))
+                    if (blueW > 0f) Box(Modifier.weight(blueW).fillMaxHeight().background(skyBlue))
+                } else {
+                    Box(Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE57373)))
                 }
             }
-            // 百分比（自适应宽度）
             val pct = if (isCloudOnly) 100.0 else if (totalSize > 0) uploadedSize * 100.0 / totalSize else 0.0
             Text(
                 text = "${String.format("%.1f", pct)}%",
