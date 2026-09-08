@@ -1843,9 +1843,11 @@ class CloudPaneController(
                 val folderSize = syncDb.getEntriesByParent("local_entries", childRelativePath)
                     .filter { entry -> !entry.path.endsWith("/") }  // 累加整个子树的所有文件，不只是直接子文件
                     .sumOf { it.size }
-                // 云端独有文件大小
+                // 云端独有文件大小（排除本地也有的）
+                val localPaths = syncDb.getEntriesByParent("local_entries", childRelativePath)
+                    .map { it.path }.toSet()
                 val cloudOnlyFolderSize = syncDb.getEntriesByParent("cloud_entries", childRelativePath)
-                    .filter { !it.path.endsWith("/") }
+                    .filter { !it.path.endsWith("/") && it.path !in localPaths }
                     .sumOf { it.size }
                 // 同步状态：递归统计子树
                 val syncAgg = aggregateDirectChildren(childRelativePath)
@@ -2213,8 +2215,10 @@ class CloudPaneController(
                     }
                     .sumOf { it.size }
                 val syncAgg = aggregateDirectChildren(relativePath)
+                val localPaths = syncDb.getEntriesByParent("local_entries", relativePath)
+                    .map { it.path }.toSet()
                 val cloudOnlyFolderSize = syncDb.getEntriesByParent("cloud_entries", relativePath)
-                    .filter { !it.path.endsWith("/") }
+                    .filter { !it.path.endsWith("/") && it.path !in localPaths }
                     .sumOf { it.size }
                 old.copy(totalSize = folderSize + cloudOnlyFolderSize, uploadedSize = syncAgg.uploadedSize, redSize = syncAgg.redSize, cloudOnlySize = cloudOnlyFolderSize)
             } else {
@@ -2262,8 +2266,10 @@ class CloudPaneController(
                     }
                     .sumOf { it.size }
                 val syncAgg = aggregateDirectChildren(parent)
+                val localPaths = syncDb.getEntriesByParent("local_entries", parent)
+                    .map { it.path }.toSet()
                 val cloudOnlyFolderSize = syncDb.getEntriesByParent("cloud_entries", parent)
-                    .filter { !it.path.endsWith("/") }
+                    .filter { !it.path.endsWith("/") && it.path !in localPaths }
                     .sumOf { it.size }
                 entries[idx] = entries[idx].copy(
                     totalSize = folderSize + cloudOnlyFolderSize,
