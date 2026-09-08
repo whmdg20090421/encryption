@@ -315,7 +315,7 @@ private fun TaskCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // 第三行：百分比 + 速度 + 剩余时间
+            // 第三行：百分比 + 速度 + 剩余时间 + 精确百分比
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -345,6 +345,14 @@ private fun TaskCard(
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                )
+
+                // 精确百分比
+                Text(
+                    text = "%.2f%%".format(progress * 100),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
         }

@@ -42,7 +42,11 @@ import com.whmdg.mczj.tools.encryption.data.StorageLocation
 import com.whmdg.mczj.tools.util.FormatUtils
 import com.whmdg.mczj.tools.util.SizeTreeNode
 import com.whmdg.mczj.tools.encryption.data.VaultConfig
+import com.whmdg.mczj.tools.encryption.data.VaultPaths
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
+import com.whmdg.mczj.tools.encryption.data.NameMapping
+import com.whmdg.mczj.tools.encryption.core.FileConstants
+import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import com.whmdg.mczj.tools.encryption.services.VaultService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
 import java.io.File
@@ -505,6 +509,16 @@ fun VaultsListTab(
 
     var activeVaultForMenu by remember { mutableStateOf<VaultRecord?>(null) }
     var activeVaultForDelete by remember { mutableStateOf<VaultRecord?>(null) }
+    var activeVaultForSettings by remember { mutableStateOf<VaultRecord?>(null) }
+    var showEncryptFilenameWarning by remember { mutableStateOf<Pair<VaultRecord, Boolean>?>(null) }
+    var showPasswordDialogForSettings by remember { mutableStateOf<VaultRecord?>(null) }
+    var settingsPasswordInput by remember { mutableStateOf("") }
+    var settingsPasswordVisible by remember { mutableStateOf(false) }
+    var pendingSettingsVault by remember { mutableStateOf<Pair<VaultRecord, String>?>(null) }
+    var isRestoringFilenames by remember { mutableStateOf(false) }
+    var restoreProgress by remember { mutableIntStateOf(0) }
+    var restoreTotal by remember { mutableIntStateOf(0) }
+    var showRestoreComplete by remember { mutableStateOf(false) }
 
     var showPasswordDialog by remember { mutableStateOf<VaultRecord?>(null) }
     var passwordInput by remember { mutableStateOf("") }
@@ -685,6 +699,85 @@ fun VaultsListTab(
             },
             confirmButton = {}
         )
+    }
+
+    // 异步执行恢复文件名（需要打开保险箱获取 DEK）
+    LaunchedEffect(pendingSettingsVault) {
+        val (vault, pwd) = pendingSettingsVault ?: return@LaunchedEffect
+        isRestoringFilenames = true
+        restoreProgress = 0
+        restoreTotal = 0
+
+        try {
+            val session = withContext(Dispatchers.IO) {
+                vaultService.open(vault.id, pwd)
+            }
+
+            val vaultDir = session.vaultDir
+            val dek = session.dek
+            val nameMapping = session.nameMapping
+            val customEncryption = session.record.customEncryption
+
+            // 获取所有 .whm 文件
+            val whmFiles = withContext(Dispatchers.IO) {
+                vaultDir.listFiles()?.filter { it.name.endsWith(".whm") } ?: emptyList()
+            }
+            restoreTotal = whmFiles.size
+
+            if (restoreTotal > 0) {
+                withContext(Dispatchers.IO) {
+                    whmFiles.forEachIndexed { index, encryptedFile ->
+                        try {
+                            // 解密文件名
+                            val originalName = com.whmdg.mczj.tools.encryption.core.FilenameCodec.decrypt(
+                                encryptedName = encryptedFile.name,
+                                dek = dek,
+                                aad = if (customEncryption) com.whmdg.mczj.tools.encryption.core.FileConstants.aadCustomObf else null,
+                                lookupMapping = { nameMapping.get(it) }
+                            )
+
+                            // 重命名文件（去掉 .whm 后缀）
+                            val targetName = if (originalName.endsWith(".whm")) {
+                                originalName.substring(0, originalName.length - 4)
+                            } else {
+                                originalName
+                            }
+                            val targetFile = File(vaultDir, targetName)
+                            if (!targetFile.exists()) {
+                                encryptedFile.renameTo(targetFile)
+                            }
+                        } catch (e: Exception) {
+                            // 单个文件失败不影响其他文件
+                        }
+                        restoreProgress = index + 1
+                    }
+                }
+            }
+
+            // 清理 name_mappings.json
+            withContext(Dispatchers.IO) {
+                val nameMappingFile = File(vaultDir, "name_mappings.json")
+                if (nameMappingFile.exists()) {
+                    nameMappingFile.delete()
+                }
+            }
+
+            // 更新设置
+            vaultService.updateEncryptFilename(vault.id, false)
+            session.dispose()
+
+            withContext(Dispatchers.Main) {
+                isRestoringFilenames = false
+                showRestoreComplete = true
+                activeVaultForSettings = vault.copy(encryptFilename = false)
+            }
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                isRestoringFilenames = false
+                vaultListError = e
+            }
+        }
+        pendingSettingsVault = null
     }
 
     if (list.isEmpty()) {
@@ -1198,6 +1291,14 @@ fun VaultsListTab(
                         }
                     )
                     ListItem(
+                        headlineContent = { Text("更改设置") },
+                        leadingContent = { Icon(Icons.Default.Settings, contentDescription = null) },
+                        modifier = Modifier.clickable {
+                            activeVaultForMenu = null
+                            activeVaultForSettings = vault
+                        }
+                    )
+                    ListItem(
                         headlineContent = { Text("删除保险箱", color = MaterialTheme.colorScheme.error) },
                         leadingContent = { Icon(Icons.Default.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
                         modifier = Modifier.clickable {
@@ -1248,6 +1349,163 @@ fun VaultsListTab(
             dismissButton = {
                 TextButton(onClick = { activeVaultForDelete = null }) {
                     Text("取消")
+                }
+            }
+        )
+    }
+
+    // Active Vault Settings Dialog
+    activeVaultForSettings?.let { vault ->
+        AlertDialog(
+            onDismissRequest = { activeVaultForSettings = null },
+            title = { Text("设置「${vault.name}」") },
+            text = {
+                Column {
+                    ListItem(
+                        headlineContent = { Text("加密文件名") },
+                        supportingContent = { Text("开启后原始文件名将被加密为 hex/哈希") },
+                        trailingContent = {
+                            Switch(
+                                checked = vault.encryptFilename,
+                                onCheckedChange = { newValue ->
+                                    // 关闭加密文件名时需要恢复文件名
+                                    if (vault.encryptFilename && !newValue) {
+                                        showEncryptFilenameWarning = vault to newValue
+                                    } else {
+                                        // 开启加密文件名（直接允许）
+                                        try {
+                                            vaultService.updateEncryptFilename(vault.id, newValue)
+                                            activeVaultForSettings = vault.copy(encryptFilename = newValue)
+                                        } catch (e: Exception) {
+                                            vaultListError = e
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                    )
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    // Encrypt Filename Warning Dialog
+    showEncryptFilenameWarning?.let { (vault, newValue) ->
+        AlertDialog(
+            onDismissRequest = { showEncryptFilenameWarning = null },
+            title = { Text("关闭加密文件名？") },
+            text = {
+                Text("关闭此选项后，保险箱内所有加密的文件名将被恢复为原始名称。此操作需要输入密码，期间请勿退出应用。")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showEncryptFilenameWarning = null
+                        // 需要输入密码来获取 DEK 以解密文件名
+                        showPasswordDialogForSettings = vault
+                    }
+                ) {
+                    Text("继续")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEncryptFilenameWarning = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // Password Dialog for Settings
+    showPasswordDialogForSettings?.let { vault ->
+        AlertDialog(
+            onDismissRequest = { showPasswordDialogForSettings = null },
+            title = { Text("输入密码以恢复文件名") },
+            text = {
+                OutlinedTextField(
+                    value = settingsPasswordInput,
+                    onValueChange = { settingsPasswordInput = it },
+                    label = { Text("密码") },
+                    visualTransformation = if (settingsPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val pwd = settingsPasswordInput
+                        showPasswordDialogForSettings = null
+                        settingsPasswordInput = ""
+                        pendingSettingsVault = vault to pwd
+                    },
+                    enabled = settingsPasswordInput.isNotEmpty()
+                ) {
+                    Text("开始恢复")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPasswordDialogForSettings = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // Restoring Filenames Progress Dialog
+    if (isRestoringFilenames) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("正在恢复文件名") },
+            text = {
+                Column {
+                    LinearProgressIndicator(
+                        progress = { if (restoreTotal > 0) restoreProgress.toFloat() / restoreTotal else 0f },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "进度",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                        Text(
+                            text = "%.2f%%".format(if (restoreTotal > 0) restoreProgress.toFloat() / restoreTotal * 100 else 0f),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "$restoreProgress / $restoreTotal",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        )
+                    }
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    // Restore Complete Dialog
+    if (showRestoreComplete) {
+        AlertDialog(
+            onDismissRequest = { showRestoreComplete = false },
+            title = { Text("完成") },
+            text = { Text("文件名称已恢复") },
+            confirmButton = {
+                Button(onClick = { showRestoreComplete = false }) {
+                    Text("确定")
                 }
             }
         )

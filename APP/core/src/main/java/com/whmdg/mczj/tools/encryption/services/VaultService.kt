@@ -304,6 +304,21 @@ class VaultService(private val context: Context) {
         vaults.addAll(_db.vaults)
     }
 
+    /**
+     * 更新保险箱的 encryptFilename 设置。
+     * @return 更新后的 VaultRecord
+     */
+    fun updateEncryptFilename(id: Int, encryptFilename: Boolean): VaultRecord {
+        val rec = _db.vaults.find { it.id == id }
+            ?: throw IllegalArgumentException("保险箱不存在: id=$id")
+        val updated = rec.copy(encryptFilename = encryptFilename)
+        _db.replaceVault(updated)
+        _db.save(context)
+        vaults.clear()
+        vaults.addAll(_db.vaults)
+        return updated
+    }
+
     fun importVaultWithPassword(
         name: String,
         vaultPath: String,

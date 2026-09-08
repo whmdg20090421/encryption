@@ -76,6 +76,9 @@ fun VaultCreateScreen(
     var showAlgoDialog by remember { mutableStateOf(false) }
     var vaultError by remember { mutableStateOf<Throwable?>(null) }
     var showPermissionDialog by remember { mutableStateOf(false) }
+    var validationMessage by remember { mutableStateOf<String?>(null) }
+
+    val isFormValid = vaultPath.isNotEmpty() && name.trim().isNotEmpty() && pwd1.isNotEmpty() && pwd2.isNotEmpty()
 
     fun getAbsolutePathFromUri(context: Context, uri: android.net.Uri): String {
         if (uri.scheme == "file") {
@@ -183,19 +186,19 @@ fun VaultCreateScreen(
     fun onSubmit() {
         val trimmedName = name.trim()
         if (vaultPath.isEmpty()) {
-            vaultError = Exception("请先选择保险箱存放目录")
+            validationMessage = "请先选择保险箱存放目录"
             return
         }
         if (trimmedName.isEmpty() || pwd1.isEmpty() || pwd2.isEmpty()) {
-            vaultError = Exception("请先填齐所有必需选项")
+            validationMessage = "请先填齐所有必需选项"
             return
         }
         if (pwd1 != pwd2) {
-            vaultError = Exception("两次输入密码不一致")
+            validationMessage = "两次输入密码不一致"
             return
         }
         if (vaultService.isNameTaken(trimmedName)) {
-            vaultError = Exception("保险箱名称已存在")
+            validationMessage = "保险箱名称已存在"
             return
         }
 
@@ -512,7 +515,7 @@ fun VaultCreateScreen(
             item {
                 Button(
                     onClick = { onSubmit() },
-                    enabled = !busy,
+                    enabled = !busy && isFormValid,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     if (busy) {
@@ -554,6 +557,19 @@ fun VaultCreateScreen(
         }
 
         ErrorDialog(error = vaultError, onDismiss = { vaultError = null })
+
+        if (validationMessage != null) {
+            AlertDialog(
+                onDismissRequest = { validationMessage = null },
+                title = { Text("提示") },
+                text = { Text(validationMessage!!) },
+                confirmButton = {
+                    TextButton(onClick = { validationMessage = null }) {
+                        Text("确定")
+                    }
+                }
+            )
+        }
 
         if (showPermissionDialog) {
             AlertDialog(
