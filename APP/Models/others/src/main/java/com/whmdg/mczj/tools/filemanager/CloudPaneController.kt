@@ -637,22 +637,59 @@ class CloudPaneController(
                 }
             } else false
 
-            // ⑩ 构建最终队列（排除哈希相同自动跳过的文件）
-            val queue: List<Pair<File, String>> = if (reUploadAll) {
+            // ⑩ 跳过已完成时：检查已完成文件的 MD5，不同的重置为 PENDING
+            if (!reUploadAll && completedFiles.isNotEmpty()) {
+                withContext(Dispatchers.IO) {
+                    for ((file, relPath) in completedFiles) {
+                        val cloudEntry = syncDb.getEntry("cloud_entries", relPath)
+                        if (cloudEntry != null) {
+                            val localMd5 = calculateMd5(file)
+                            if (localMd5 != cloudEntry.md5) {
+                                // MD5 不同，重置为 PENDING
+                                syncDb.updateEntry("local_entries", relPath) { row ->
+                                    row.copy(
+                                        size = file.length(),
+                                        lastModified = Instant.ofEpochMilli(file.lastModified()).toString(),
+                                        md5 = localMd5,
+                                        status = SyncStatus.PENDING,
+                                        uploadedSize = 0
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ⑪ 构建最终队列
+            val finalQueue: List<Pair<File, String>>
+            if (reUploadAll) {
+                // 全部重传：completedFiles + toUpload
                 withContext(Dispatchers.IO) {
                     for ((file, relPath) in completedFiles) {
                         syncDb.updateStatus("local_entries", relPath, SyncStatus.QUEUED)
                         syncDb.updateUploadedSize("local_entries", relPath, 0)
                     }
                 }
-                completedFiles + toUpload.filter { (_, relPath) -> relPath !in skippedByHash }
+                finalQueue = completedFiles + toUpload.filter { (_, relPath) -> relPath !in skippedByHash }
             } else {
-                toUpload.filter { (_, relPath) -> relPath !in skippedByHash }
+                // 跳过已完成：重新获取 PENDING 文件（包含刚重置的）
+                val pendingAfterCheck = withContext(Dispatchers.IO) {
+                    syncDb.getEntriesByStatus("local_entries", SyncStatus.PENDING)
+                        .filter { it.path.startsWith(prefix) && !it.path.endsWith("/") }
+                }
+                // 重新扫描本地文件，构建路径到文件的映射
+                val localFileMap = localFiles.associateBy {
+                    "/" + it.relativeTo(File(vaultDir)).path.replace('\\', '/')
+                }
+                finalQueue = pendingAfterCheck
+                    .filter { it.path !in skippedByHash }
+                    .mapNotNull { entry -> localFileMap[entry.path]?.let { it to entry.path } }
             }
 
-            // ⑪ 将队列中未录入 DB 的文件写入
+            // ⑫ 将队列中未录入 DB 的文件写入
             withContext(Dispatchers.IO) {
-                for ((file, relPath) in queue) {
+                for ((file, relPath) in finalQueue) {
                     val existing = syncDb.getEntry("local_entries", relPath)
                     if (existing == null) {
                         val originalSize = file.length()
@@ -672,7 +709,7 @@ class CloudPaneController(
                 }
             }
 
-            if (queue.isEmpty()) {
+            if (finalQueue.isEmpty()) {
                 // 完全关闭弹窗（与上传完成同样的关闭方式）
                 silentRefresh()
                 withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "所有文件已上传完成", android.widget.Toast.LENGTH_SHORT).show() }
@@ -680,14 +717,14 @@ class CloudPaneController(
                 return@launch
             }
 
-            // ⑫ 静默刷新当前目录（不闪 loading）
+            // ⑬ 静默刷新当前目录（不闪 loading）
             silentRefresh()
 
-            withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "开始上传 ${queue.size} 个文件", android.widget.Toast.LENGTH_SHORT).show() }
+            withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "开始上传 ${finalQueue.size} 个文件", android.widget.Toast.LENGTH_SHORT).show() }
 
-            // ⑬ 预计算文件夹聚合值（避免上传过程中 O(n²) 全量遍历）
+            // ⑭ 预计算文件夹聚合值（避免上传过程中 O(n²) 全量遍历）
             val folderTotalSize = mutableMapOf<String, Long>()
-            for ((file, relPath) in queue) {
+            for ((file, relPath) in finalQueue) {
                 val fileSize = file.length()
                 var parent = relPath.substringBeforeLast('/', "/")
                 while (parent.isNotEmpty()) {
@@ -727,23 +764,23 @@ class CloudPaneController(
                 logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
 
-            // ⑬ 显示同步弹窗 + 初始化状态栏
+            // ⑮ 显示同步弹窗 + 初始化状态栏
             val maxConcurrency = context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
                 .getInt("max_concurrency", 3)
             state.onCancelUpload = ::cancelUpload
             state.syncTask = SyncTaskState(
                 phase = SyncPhase.SYNCING,
-                totalFiles = queue.size,
-                totalBytes = queue.sumOf { it.first.length() },
+                totalFiles = finalQueue.size,
+                totalBytes = finalQueue.sumOf { it.first.length() },
                 concurrency = maxConcurrency
             )
             openProgressDialog()
 
-            // ⑭ 并发动态上传（Channel 单写者模式，避免多线程竞态）
+            // ⑯ 并发动态上传（Channel 单写者模式，避免多线程竞态）
             val completedBytes = java.util.concurrent.atomic.AtomicLong(0)
             val activeFileBytes = java.util.concurrent.ConcurrentHashMap<String, Long>()
             val fileSizes = java.util.concurrent.ConcurrentHashMap<String, Long>()
-            queue.forEach { (file, path) -> fileSizes[path] = file.length() }
+            finalQueue.forEach { (file, path) -> fileSizes[path] = file.length() }
             var activeWorkers = 0
             var queueIndex = 0
             var completedFilesCount = 0  // 仅更新器协程访问
@@ -822,7 +859,7 @@ class CloudPaneController(
                                         }
                                         appendLine()
                                         appendLine("--- queue 状态 ---")
-                                        appendLine("queueIndex=$queueIndex, queue.size=${queue.size}")
+                                        appendLine("queueIndex=$queueIndex, finalQueue.size=${finalQueue.size}")
                                         appendLine("activeWorkers=$activeWorkers")
                                         appendLine("maxConcurrency=$maxConcurrency")
                                         appendLine()
@@ -985,7 +1022,7 @@ class CloudPaneController(
                                         }
                                         appendLine()
                                         appendLine("--- queue 状态 ---")
-                                        appendLine("queueIndex=$queueIndex, queue.size=${queue.size}")
+                                        appendLine("queueIndex=$queueIndex, finalQueue.size=${finalQueue.size}")
                                         appendLine("activeWorkers=$activeWorkers")
                                         appendLine("maxConcurrency=$maxConcurrency")
                                         appendLine()
@@ -1051,14 +1088,14 @@ class CloudPaneController(
             // 上传工作协程（回调仅发送事件，不直接修改 state）
             val uploadJobs = mutableListOf<Job>()
 
-            while (queueIndex < queue.size || activeWorkers > 0) {
-                while (activeWorkers >= maxConcurrency && queueIndex < queue.size) {
+            while (queueIndex < finalQueue.size || activeWorkers > 0) {
+                while (activeWorkers >= maxConcurrency && queueIndex < finalQueue.size) {
                     delay(100)
                 }
 
-                if (queueIndex < queue.size && activeWorkers < maxConcurrency) {
+                if (queueIndex < finalQueue.size && activeWorkers < maxConcurrency) {
                     val idx = queueIndex++
-                    val (file, relPath) = queue[idx]
+                    val (file, relPath) = finalQueue[idx]
                     val fileSize = file.length()
                     activeWorkers++
 
