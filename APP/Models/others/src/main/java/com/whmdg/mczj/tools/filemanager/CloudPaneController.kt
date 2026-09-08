@@ -5,6 +5,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
+import com.whmdg.mczj.tools.security.ShellExecutor
+import com.whmdg.mczj.tools.security.ShellExecutor.Permission
 import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
 import com.whmdg.mczj.tools.encryption.data.SyncStatus
