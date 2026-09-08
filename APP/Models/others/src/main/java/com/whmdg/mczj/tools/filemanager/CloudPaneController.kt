@@ -1875,6 +1875,52 @@ class CloudPaneController(
                 // 文件：从 DB 查同步状态，优先用内存实时进度，回退到 DB 持久化进度
                 val dbEntry = syncDb.getEntry("local_entries", childRelativePath)
                 var status = dbEntry?.status ?: SyncStatus.PENDING
+
+                // 渲染时冲突检测：COMPLETED 文件检查本地是否已修改
+                if (status == SyncStatus.COMPLETED) {
+                    val cloudEntry = syncDb.getEntry("cloud_entries", childRelativePath)
+                    if (cloudEntry != null) {
+                        // 一次 stat 获取 size 和 time
+                        val statResult = try {
+                            ShellExecutor.execute(Permission.MIN, "stat -c '%s %Y' '${file.absolutePath}'").trim()
+                        } catch (_: Exception) { null }
+                        if (statResult != null) {
+                            val parts = statResult.split(' ')
+                            if (parts.size == 2) {
+                                val localSize = parts[0].toLongOrNull() ?: file.length()
+                                val localTime = parts[1].toLongOrNull() ?: 0L
+                                val cloudSize = cloudEntry.size
+                                val cloudTime = try {
+                                    java.time.Instant.parse(cloudEntry.lastModified).epochSecond
+                                } catch (_: Exception) { 0L }
+
+                                val isChanged = if (localSize != cloudSize) {
+                                    true  // size 不同，直接判定改变
+                                } else if (localTime != cloudTime) {
+                                    // size 相同但 time 不同，计算 MD5 对比
+                                    val localMd5 = calculateMd5(file)
+                                    localMd5 != cloudEntry.md5
+                                } else {
+                                    false  // size 和 time 都相同
+                                }
+
+                                if (isChanged) {
+                                    // 刷新 local_entries，重置为 PENDING
+                                    syncDb.updateEntry("local_entries", childRelativePath) { row ->
+                                        row.copy(
+                                            size = localSize,
+                                            lastModified = java.time.Instant.ofEpochMilli(file.lastModified()).toString(),
+                                            status = SyncStatus.PENDING,
+                                            uploadedSize = 0
+                                        )
+                                    }
+                                    status = SyncStatus.PENDING
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // 优先使用 DB 中的原始文件大小，避免读取加密文件的膨胀大小
                 val fileSize = dbEntry?.size ?: file.length()
                 val liveProgress = state.syncTask.fileProgress[childRelativePath]
