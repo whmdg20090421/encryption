@@ -58,7 +58,7 @@ fun VaultCreateScreen(
     var pwd1 by remember { mutableStateOf("") }
     var pwd2 by remember { mutableStateOf("") }
 
-    var encryptFilename by remember { mutableStateOf(true) }
+    var encryptFilename by remember { mutableStateOf(false) }
     var customEncryption by remember { mutableStateOf(false) }
     var algorithm by remember { mutableStateOf("AES-256-GCM") }
 

@@ -1404,14 +1404,17 @@ fun VaultsListTab(
 
                         // 验证密码
                         coroutineScope.launch(Dispatchers.IO) {
+                            var session: VaultSession? = null
                             try {
-                                vaultService.open(vault.id, pwd)
-                                // 密码正确，开始删除
+                                session = vaultService.open(vault.id, pwd)
+                                // 密码正确，关闭验证会话，开始删除
+                                session.dispose()
                                 withContext(Dispatchers.Main) {
                                     showDeletePasswordDialog = null
                                     pendingVaultDelete = vault to deleteFiles
                                 }
                             } catch (e: Exception) {
+                                session?.dispose()
                                 withContext(Dispatchers.Main) {
                                     deletePasswordError = "密码错误，请重试"
                                 }
