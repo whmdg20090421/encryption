@@ -519,6 +519,10 @@ fun VaultsListTab(
     var restoreProgress by remember { mutableIntStateOf(0) }
     var restoreTotal by remember { mutableIntStateOf(0) }
     var showRestoreComplete by remember { mutableStateOf(false) }
+    var pendingVaultDelete by remember { mutableStateOf<Pair<VaultRecord, Boolean>?>(null) }
+    var isDeletingVault by remember { mutableStateOf(false) }
+    var deleteProgress by remember { mutableIntStateOf(0) }
+    var deleteTotal by remember { mutableIntStateOf(0) }
 
     var showPasswordDialog by remember { mutableStateOf<VaultRecord?>(null) }
     var passwordInput by remember { mutableStateOf("") }
@@ -1333,13 +1337,8 @@ fun VaultsListTab(
             confirmButton = {
                 Button(
                     onClick = {
-                        try {
-                            vaultService.removeVault(vault.id, alsoDeleteFiles)
-                            Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
-                        } catch (e: Exception) {
-                            vaultListError = e
-                        }
                         activeVaultForDelete = null
+                        pendingVaultDelete = vault to alsoDeleteFiles
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
@@ -1351,6 +1350,108 @@ fun VaultsListTab(
                     Text("取消")
                 }
             }
+        )
+    }
+
+    // 异步执行删除保险箱
+    LaunchedEffect(pendingVaultDelete) {
+        val (vault, deleteFiles) = pendingVaultDelete ?: return@LaunchedEffect
+        isDeletingVault = true
+        deleteProgress = 0
+        deleteTotal = 0
+
+        try {
+            if (deleteFiles) {
+                // 需要删除文件，统计文件数量
+                val vaultDir = VaultPaths.resolveVault(context, vault.location, vault.relativePath)
+                val files = withContext(Dispatchers.IO) {
+                    if (vaultDir.exists()) {
+                        vaultDir.walkTopDown().filter { it.isFile }.toList()
+                    } else {
+                        emptyList()
+                    }
+                }
+                deleteTotal = files.size
+
+                // 异步删除文件
+                if (deleteTotal > 0) {
+                    withContext(Dispatchers.IO) {
+                        files.forEachIndexed { index, file ->
+                            try {
+                                file.delete()
+                            } catch (_: Exception) {}
+                            deleteProgress = index + 1
+                        }
+                    }
+                    // 删除空目录
+                    withContext(Dispatchers.IO) {
+                        try {
+                            if (vaultDir.exists()) {
+                                vaultDir.deleteRecursively()
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+            }
+
+            // 从数据库中删除记录
+            vaultService.removeVault(vault.id, false)
+
+            withContext(Dispatchers.Main) {
+                isDeletingVault = false
+                Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                isDeletingVault = false
+                vaultListError = e
+            }
+        }
+        pendingVaultDelete = null
+    }
+
+    // Deleting Vault Progress Dialog
+    if (isDeletingVault) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("正在删除保险箱") },
+            text = {
+                Column {
+                    LinearProgressIndicator(
+                        progress = { if (deleteTotal > 0) deleteProgress.toFloat() / deleteTotal else 0f },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "进度",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                        Text(
+                            text = "%.2f%%".format(if (deleteTotal > 0) deleteProgress.toFloat() / deleteTotal * 100 else 0f),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "$deleteProgress / $deleteTotal",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        )
+                    }
+                }
+            },
+            confirmButton = {}
         )
     }
 
