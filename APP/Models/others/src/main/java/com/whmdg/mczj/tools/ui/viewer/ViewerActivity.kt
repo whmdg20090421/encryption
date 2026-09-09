@@ -48,6 +48,7 @@ class ViewerActivity : ComponentActivity() {
             archivePermissionLevel: String = "NORMAL"
         ): Intent {
             return Intent(context, ViewerActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 putExtra(EXTRA_VIEWER_TYPE, TYPE_IMAGE)
                 putExtra(EXTRA_FILE_PATH, filePath)
                 putStringArrayListExtra(EXTRA_IMAGE_PATHS, ArrayList(imagePaths))
@@ -67,6 +68,7 @@ class ViewerActivity : ComponentActivity() {
             vaultSessionId: String? = null
         ): Intent {
             return Intent(context, ViewerActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 putExtra(EXTRA_VIEWER_TYPE, TYPE_TEXT)
                 putExtra(EXTRA_FILE_PATH, filePath)
                 if (vaultSessionId != null) putExtra(EXTRA_VAULT_SESSION_ID, vaultSessionId)
