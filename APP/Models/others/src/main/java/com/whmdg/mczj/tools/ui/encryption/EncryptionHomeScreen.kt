@@ -725,12 +725,17 @@ fun VaultsListTab(
 
             val vaultDir = session.vaultDir
             val dek = session.dek
-            val nameMapping = session.nameMapping
             val customEncryption = session.record.customEncryption
 
-            // 获取所有 .whm 文件
+            // 加载文件名映射表（用于解密哈希映射的长文件名）
+            withContext(Dispatchers.IO) {
+                session.loadNameMapping(context)
+            }
+            val nameMapping = session.nameMapping
+
+            // 获取所有 .whm 文件（递归遍历子目录）
             val whmFiles = withContext(Dispatchers.IO) {
-                vaultDir.listFiles()?.filter { it.name.endsWith(".whm") } ?: emptyList()
+                vaultDir.walkTopDown().filter { it.isFile && it.name.endsWith(".whm") }.toList()
             }
             restoreTotal = whmFiles.size
 
@@ -746,13 +751,13 @@ fun VaultsListTab(
                                 lookupMapping = { nameMapping.get(it) }
                             )
 
-                            // 重命名文件（去掉 .whm 后缀）
+                            // 重命名文件（去掉 .whm 后缀，保持原目录位置）
                             val targetName = if (originalName.endsWith(".whm")) {
                                 originalName.substring(0, originalName.length - 4)
                             } else {
                                 originalName
                             }
-                            val targetFile = File(vaultDir, targetName)
+                            val targetFile = File(encryptedFile.parentFile, targetName)
                             if (!targetFile.exists()) {
                                 encryptedFile.renameTo(targetFile)
                             }
