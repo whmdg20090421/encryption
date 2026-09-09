@@ -505,6 +505,7 @@ fun VaultsListTab(
     onNavigate: (Screen) -> Unit
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val list = vaultService.vaults
     val glowEnabled = com.whmdg.mczj.tools.ui.theme.LocalIsGlowEnabled.current
     val isDarkMode = LocalIsDarkMode.current
