@@ -3319,77 +3319,61 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             entry.name
         }
-        val ext = originalName.substringAfterLast('.').lowercase()
-        val imageExts = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico", "tiff", "tif")
+
+        // 计算相对路径：从 vaultDir 到当前文件的路径
+        val vaultDirPath = session.vaultDir.absolutePath
+        val relativePath = entry.path.removePrefix(vaultDirPath).removePrefix("/")
+        // 例如：relativePath = "photos/image.jpg.whm"
 
         // 生成 sessionId
         val sessionId = "vault_${System.currentTimeMillis()}_${entry.name.hashCode()}"
 
-        if (ext in imageExts) {
-            // 图片：预计算所有缓存路径，不解密（Compose 层按需解密）
-            val cacheBase = File(context.cacheDir, "vault_preview/${session.record.name}")
-            cacheBase.mkdirs()
+        // 解密单个文件到缓存
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val cacheBase = File(context.cacheDir, "vault_preview/${session.record.name}")
+                cacheBase.mkdirs()
 
-            // 清理该保险箱过期缓存（>1天）
-            val now = System.currentTimeMillis()
-            cacheBase.listFiles()?.forEach { f ->
-                if (now - f.lastModified() > 86_400_000L) f.delete()
-            }
-
-            // 直接从文件系统读取当前目录，不依赖 UI 状态
-            val currentDir = File(entry.path).parentFile
-            val imageEntries = currentDir?.listFiles()
-                ?.filter { it.isFile && it.name.endsWith(".whm", ignoreCase = true) }
-                ?.filter {
-                    val originalName = it.name.substring(0, it.name.length - 4)
-                    originalName.substringAfterLast('.').lowercase() in imageExts
+                // 清理该保险箱过期缓存（>1天）
+                val now = System.currentTimeMillis()
+                cacheBase.listFiles()?.forEach { f ->
+                    if (now - f.lastModified() > 86_400_000L) f.delete()
                 }
-                ?.map { FileEntry(path = it.absolutePath, name = it.name, isDirectory = false, size = it.length(), lastModified = it.lastModified()) }
-                ?: emptyList()
-            val currentIdx = imageEntries.indexOfFirst { it.path == entry.path }.coerceAtLeast(0)
 
-            // 构建缓存路径列表 + 加密源路径映射
-            val cachePaths = mutableListOf<String>()
-            val imageEntryMap = mutableMapOf<String, String>()
-            for (imgEntry in imageEntries) {
-                val imgName = if (imgEntry.name.endsWith(".whm", ignoreCase = true))
-                    imgEntry.name.substring(0, imgEntry.name.length - 4) else imgEntry.name
-                val cachePath = File(cacheBase, imgName).absolutePath
-                cachePaths.add(cachePath)
-                imageEntryMap[cachePath] = imgEntry.path
-            }
+                // 缓存路径 = vault_preview/{vaultName}/{相对路径}
+                // relativePath = "photos/image.jpg.whm" → destPath = "photos/image.jpg"
+                val destPath = relativePath.removeSuffix(".whm")
+                val destFile = File(cacheBase, destPath)
+                destFile.parentFile?.mkdirs()
 
-            // 存入 VaultKeyHolder，供 Compose 层按需解密
-            VaultKeyHolder.put(sessionId, VaultViewContext(
-                dek = session.dek,
-                vaultDir = session.vaultDir.absolutePath,
-                originalEncryptedPath = entry.path,
-                customEncryption = session.record.customEncryption,
-                vaultId = session.record.id,
-                vaultImageEntries = imageEntryMap
-            ))
+                if (!destFile.exists()) {
+                    FileCodec.decrypt(
+                        src = File(entry.path),
+                        dst = destFile,
+                        dek = session.dek,
+                        customEncryption = session.record.customEncryption
+                    )
+                }
 
-            val destFile = File(cachePaths[currentIdx])
-            openFile(context, entry.copy(path = destFile.absolutePath),
-                overrideImagePaths = cachePaths, totalCount = imageEntries.size)
-        } else {
-            // 非图片：解密单个文件到缓存
-            viewModelScope.launch(Dispatchers.IO) {
-                try {
-                    val destFile = File(context.cacheDir, "vault_cache/${session.record.name}/$originalName")
-                    destFile.parentFile?.mkdirs()
-                    if (!destFile.exists()) {
-                        FileCodec.decrypt(src = File(entry.path), dst = destFile, dek = session.dek, customEncryption = session.record.customEncryption)
-                    }
-                    withContext(Dispatchers.Main) {
-                        VaultKeyHolder.clear(sessionId)
-                        openFile(context, entry.copy(path = destFile.absolutePath))
-                    }
-                } catch (e: Exception) {
-                    VaultKeyHolder.clear(sessionId)
-                    withContext(Dispatchers.Main) {
-                        loadError = e
-                    }
+                withContext(Dispatchers.Main) {
+                    // 存入 VaultKeyHolder（只存当前文件的基本信息）
+                    VaultKeyHolder.put(sessionId, VaultViewContext(
+                        dek = session.dek,
+                        vaultDir = vaultDirPath,
+                        originalEncryptedPath = entry.path,
+                        customEncryption = session.record.customEncryption,
+                        vaultId = session.record.id,
+                        vaultImageEntries = emptyMap()  // 由 openFile 构建
+                    ))
+
+                    // 调用 openFile，让文件管理器判断怎么打开
+                    openFile(context, entry.copy(path = destFile.absolutePath),
+                        vaultSessionId = sessionId)
+                }
+            } catch (e: Exception) {
+                VaultKeyHolder.clear(sessionId)
+                withContext(Dispatchers.Main) {
+                    loadError = e
                 }
             }
         }
@@ -3749,6 +3733,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         isDebug: Boolean = false,
         overrideImagePaths: List<String>? = null,
         totalCount: Int = 0,
+        vaultSessionId: String? = null,
         archivePath: String? = null,
         archiveName: String? = null,
         archiveEntryPaths: List<String> = emptyList(),
@@ -3803,13 +3788,71 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
         if (ext in imageExtensions) {
             DiagnosticLog.log("OpenFile", "内置查看器打开: ${entry.name}")
-            val imagePaths = overrideImagePaths ?: currentPanel.entries
-                .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions }
-                .map { it.path }
+
+            var imagePaths = overrideImagePaths
+            var imageEntryMap = mutableMapOf<String, String>()
+
+            if (vaultSessionId != null) {
+                // 保险箱模式：从文件系统读取当前目录，构建图片列表和映射
+                val ctx = VaultKeyHolder.get(vaultSessionId)
+                if (ctx != null) {
+                    // entry.path 是解密后的缓存路径，如 vault_preview/我的保险箱/photos/image.jpg
+                    // 需要找到对应的加密源文件
+                    val cacheBase = File(context.cacheDir, "vault_preview/${File(ctx.vaultDir).name}")
+                    val vaultDirPath = ctx.vaultDir
+
+                    // 从缓存路径反推相对路径，再找到加密源目录
+                    // entry.path.removePrefix(cacheBase.absolutePath) = "/photos/image.jpg"
+                    val relativePath = entry.path.removePrefix(cacheBase.absolutePath).removePrefix("/")
+                    val encryptedDir = File(vaultDirPath, File(relativePath).parent ?: "")
+
+                    // 读取加密源目录下所有 .whm 文件
+                    val whmFiles = encryptedDir.listFiles()
+                        ?.filter { it.isFile && it.name.endsWith(".whm", ignoreCase = true) }
+                        ?: emptyList()
+
+                    // 筛选图片文件并构建映射
+                    val imageFiles = mutableListOf<String>()
+                    val newImageEntryMap = mutableMapOf<String, String>()
+
+                    for (whmFile in whmFiles) {
+                        // 原始文件名：image.jpg.whm → image.jpg
+                        val originalName = whmFile.name.substring(0, whmFile.name.length - 4)
+                        val fileExt = originalName.substringAfterLast('.').lowercase()
+
+                        if (fileExt in imageExtensions) {
+                            // 缓存路径 = cacheBase + 相对路径
+                            val cacheRelativePath = whmFile.absolutePath.removePrefix(vaultDirPath).removePrefix("/").removeSuffix(".whm")
+                            val cachePath = File(cacheBase, cacheRelativePath).absolutePath
+                            imageFiles.add(cachePath)
+                            newImageEntryMap[cachePath] = whmFile.absolutePath
+                        }
+                    }
+
+                    imagePaths = imageFiles
+                    imageEntryMap = newImageEntryMap
+
+                    // 更新 VaultKeyHolder 中的映射
+                    VaultKeyHolder.put(vaultSessionId, ctx.copy(vaultImageEntries = newImageEntryMap))
+                }
+            } else {
+                // 普通模式：从当前面板读取
+                imagePaths = currentPanel.entries
+                    .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions }
+                    .map { it.path }
+            }
+
+            if (imagePaths.isNullOrEmpty()) {
+                Toast.makeText(context, "未找到图片文件", Toast.LENGTH_SHORT).show()
+                return
+            }
+
             val startIndex = if (archivePath != null) archiveStartIndex
             else imagePaths.indexOf(entry.path).coerceAtLeast(0)
+
             context.startActivity(ViewerActivity.createImageIntent(context, entry.path, imagePaths, startIndex,
-                totalCount = totalCount,
+                totalCount = imagePaths.size,
+                vaultSessionId = vaultSessionId,
                 archivePath = archivePath, archiveName = archiveName,
                 archiveEntryPaths = archiveEntryPaths, archivePassword = archivePassword,
                 archivePermissionLevel = archivePermissionLevel))
