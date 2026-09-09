@@ -3336,8 +3336,16 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (now - f.lastModified() > 86_400_000L) f.delete()
             }
 
-            val imageEntries = focusedController.state.entries
-                .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExts }
+            // 直接从文件系统读取当前目录，不依赖 UI 状态
+            val currentDir = File(entry.path).parentFile
+            val imageEntries = currentDir?.listFiles()
+                ?.filter { it.isFile && it.name.endsWith(".whm", ignoreCase = true) }
+                ?.filter {
+                    val originalName = it.name.substring(0, it.name.length - 4)
+                    originalName.substringAfterLast('.').lowercase() in imageExts
+                }
+                ?.map { FileEntry(path = it.absolutePath, name = it.name, isDirectory = false, size = it.length(), lastModified = it.lastModified()) }
+                ?: emptyList()
             val currentIdx = imageEntries.indexOfFirst { it.path == entry.path }.coerceAtLeast(0)
 
             // 构建缓存路径列表 + 加密源路径映射
