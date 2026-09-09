@@ -31,6 +31,7 @@ class ViewerActivity : ComponentActivity() {
         const val EXTRA_ARCHIVE_PASSWORD = "archive_password"
         const val EXTRA_ARCHIVE_PERMISSION = "archive_permission"
         const val EXTRA_VAULT_SESSION_ID = "vault_session_id"
+        const val EXTRA_TOTAL_COUNT = "total_count"
 
         private const val TYPE_IMAGE = "image"
         private const val TYPE_TEXT = "text"
@@ -40,6 +41,7 @@ class ViewerActivity : ComponentActivity() {
             filePath: String,
             imagePaths: List<String> = emptyList(),
             startIndex: Int = 0,
+            totalCount: Int = 0,
             vaultSessionId: String? = null,
             archivePath: String? = null,
             archiveName: String? = null,
@@ -59,6 +61,7 @@ class ViewerActivity : ComponentActivity() {
                 if (archivePath != null) putExtra(EXTRA_ARCHIVE_PASSWORD, archivePassword)
                 if (archivePath != null) putExtra(EXTRA_ARCHIVE_PERMISSION, archivePermissionLevel)
                 if (vaultSessionId != null) putExtra(EXTRA_VAULT_SESSION_ID, vaultSessionId)
+                if (totalCount > 0) putExtra(EXTRA_TOTAL_COUNT, totalCount)
             }
         }
 
@@ -92,6 +95,7 @@ class ViewerActivity : ComponentActivity() {
         val archivePassword = intent.getStringExtra(EXTRA_ARCHIVE_PASSWORD) ?: ""
         val archivePermissionLevel = intent.getStringExtra(EXTRA_ARCHIVE_PERMISSION) ?: "NORMAL"
         vaultSessionId = intent.getStringExtra(EXTRA_VAULT_SESSION_ID)
+        val totalCount = intent.getIntExtra(EXTRA_TOTAL_COUNT, 0)
 
         // 验证 vault session 有效性
         if (vaultSessionId != null && VaultKeyHolder.get(vaultSessionId!!) == null) {
@@ -108,6 +112,8 @@ class ViewerActivity : ComponentActivity() {
                         filePath = filePath,
                         imagePaths = imagePaths,
                         startIndex = startIndex,
+                        totalCount = totalCount,
+                        vaultSessionId = vaultSessionId,
                         archivePath = archivePath,
                         archiveEntryPaths = archiveEntryPaths,
                         archivePassword = archivePassword,

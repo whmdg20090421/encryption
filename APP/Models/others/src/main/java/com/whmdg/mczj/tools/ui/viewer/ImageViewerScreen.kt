@@ -29,6 +29,8 @@ fun ImageViewerScreen(
     filePath: String,
     imagePaths: List<String> = emptyList(),
     startIndex: Int = 0,
+    totalCount: Int = 0,
+    vaultSessionId: String? = null,
     archivePath: String? = null,
     archiveEntryPaths: List<String> = emptyList(),
     archivePassword: String = "",
@@ -36,6 +38,7 @@ fun ImageViewerScreen(
     onBack: () -> Unit
 ) {
     val paths = if (imagePaths.isNotEmpty()) imagePaths else listOf(filePath)
+    val displayTotal = if (totalCount > 0) totalCount else paths.size
     val initialPage = if (imagePaths.isNotEmpty()) startIndex.coerceIn(0, paths.size - 1) else 0
 
     val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { paths.size })
@@ -76,19 +79,32 @@ fun ImageViewerScreen(
                 modifier = Modifier.fillMaxSize()
             ) { page ->
                 val file = File(paths[page])
-                ArchiveImagePage(
-                    file = file,
-                    archivePath = archivePath,
-                    archiveEntryPath = archiveEntryPaths.getOrNull(page),
-                    archivePassword = archivePassword,
-                    archivePermissionLevel = archivePermissionLevel
-                )
+                when {
+                    vaultSessionId != null -> VaultImagePage(
+                        file = file,
+                        vaultSessionId = vaultSessionId
+                    )
+                    archivePath != null -> ArchiveImagePage(
+                        file = file,
+                        archivePath = archivePath,
+                        archiveEntryPath = archiveEntryPaths.getOrNull(page),
+                        archivePassword = archivePassword,
+                        archivePermissionLevel = archivePermissionLevel
+                    )
+                    else -> ArchiveImagePage(
+                        file = file,
+                        archivePath = null,
+                        archiveEntryPath = null,
+                        archivePassword = "",
+                        archivePermissionLevel = ""
+                    )
+                }
             }
 
             // 底部半透明页码指示器
-            if (paths.size > 1) {
+            if (displayTotal > 1) {
                 Text(
-                    text = "${pagerState.currentPage + 1}/${paths.size}",
+                    text = "${pagerState.currentPage + 1}/$displayTotal",
                     color = Color.White.copy(alpha = 0.6f),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier
@@ -144,6 +160,69 @@ private fun ArchiveImagePage(
             )
         } else if (loadState == 2) {
             Text(loadError ?: "图片解压失败", color = Color.White)
+        } else {
+            CircularProgressIndicator(color = Color.White)
+        }
+    }
+}
+
+@Composable
+private fun VaultImagePage(
+    file: File,
+    vaultSessionId: String
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var loadState by remember(file.absolutePath) { mutableIntStateOf(if (file.exists()) 1 else 0) }
+    var loadError by remember(file.absolutePath) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(file.absolutePath) {
+        if (!file.exists()) {
+            val ctx = com.whmdg.mczj.tools.encryption.services.VaultKeyHolder.get(vaultSessionId)
+            val encryptedPath = ctx?.vaultImageEntries?.get(file.absolutePath)
+            if (ctx != null && encryptedPath != null) {
+                try {
+                    com.whmdg.mczj.tools.encryption.core.FileCodec.decrypt(
+                        src = java.io.File(encryptedPath),
+                        dst = file,
+                        dek = ctx.dek,
+                        customEncryption = ctx.customEncryption
+                    )
+                    loadState = 1
+                } catch (e: Exception) {
+                    loadError = "解密失败: ${e.message}"
+                    loadState = 2
+                }
+            } else {
+                loadError = "会话已过期"
+                loadState = 2
+            }
+        } else {
+            loadState = 1
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (loadState == 1) {
+            AndroidView(
+                factory = { context -> createPhotoView(context) },
+                update = { photoView ->
+                    if (photoView.tag != file.absolutePath) {
+                        photoView.tag = file.absolutePath
+                        if (file.extension.equals("jxl", ignoreCase = true)) {
+                            try {
+                                photoView.setImageBitmap(JxlCoder.decode(file.readBytes()))
+                            } catch (e: Exception) {
+                                DiagnosticLog.log("ImageViewer", "JXL 解码失败: ${e.message}")
+                            }
+                        } else {
+                            photoView.setImageURI(Uri.fromFile(file))
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else if (loadState == 2) {
+            Text(loadError ?: "图片解密失败", color = Color.White)
         } else {
             CircularProgressIndicator(color = Color.White)
         }

@@ -3313,60 +3313,75 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
 
-        // 生成 sessionId 并存入 VaultKeyHolder
+        // 去掉 .whm 后缀得到原始文件名
+        val originalName = if (entry.name.endsWith(".whm", ignoreCase = true)) {
+            entry.name.substring(0, entry.name.length - 4)
+        } else {
+            entry.name
+        }
+        val ext = originalName.substringAfterLast('.').lowercase()
+        val imageExts = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico", "tiff", "tif")
+
+        // 生成 sessionId
         val sessionId = "vault_${System.currentTimeMillis()}_${entry.name.hashCode()}"
-        VaultKeyHolder.put(sessionId, VaultViewContext(
-            dek = session.dek,
-            vaultDir = session.vaultDir.absolutePath,
-            originalEncryptedPath = entry.path,
-            customEncryption = session.record.customEncryption,
 
-            vaultId = session.record.id
-        ))
+        if (ext in imageExts) {
+            // 图片：预计算所有缓存路径，不解密（Compose 层按需解密）
+            val cacheBase = File(context.cacheDir, "vault_preview/${session.record.name}")
+            cacheBase.mkdirs()
 
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                // 去掉 .whm 后缀得到原始文件名
-                val originalName = if (entry.name.endsWith(".whm", ignoreCase = true)) {
-                    entry.name.substring(0, entry.name.length - 4)
-                } else {
-                    entry.name
-                }
+            // 清理该保险箱过期缓存（>1天）
+            val now = System.currentTimeMillis()
+            cacheBase.listFiles()?.forEach { f ->
+                if (now - f.lastModified() > 86_400_000L) f.delete()
+            }
 
-                val tempFile = File(context.cacheDir, "vault_open_${System.currentTimeMillis()}_${originalName}")
-                FileCodec.decrypt(
-                    src = File(entry.path),
-                    dst = tempFile,
-                    dek = session.dek,
-                    customEncryption = session.record.customEncryption
-                )
+            val imageEntries = focusedController.state.entries
+                .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExts }
+            val currentIdx = imageEntries.indexOfFirst { it.path == entry.path }.coerceAtLeast(0)
 
-                withContext(Dispatchers.Main) {
-                    val ext = originalName.substringAfterLast('.').lowercase()
-                    val textExts = listOf("txt", "kt", "java", "xml", "json", "md", "py", "sh", "log", "csv", "html", "css", "js", "yml", "yaml", "toml", "ini", "cfg", "conf", "bat", "cmd", "c", "cpp", "h", "hpp", "go", "rs", "swift", "rb", "php", "sql", "r", "lua", "pl", "scala", "groovy", "properties")
-                    val imageExts = listOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "ico", "tiff", "tif")
+            // 构建缓存路径列表 + 加密源路径映射
+            val cachePaths = mutableListOf<String>()
+            val imageEntryMap = mutableMapOf<String, String>()
+            for (imgEntry in imageEntries) {
+                val imgName = if (imgEntry.name.endsWith(".whm", ignoreCase = true))
+                    imgEntry.name.substring(0, imgEntry.name.length - 4) else imgEntry.name
+                val cachePath = File(cacheBase, imgName).absolutePath
+                cachePaths.add(cachePath)
+                imageEntryMap[cachePath] = imgEntry.path
+            }
 
-                    when {
-                        ext in textExts -> {
-                            val textFile = File(context.cacheDir, "vault_text_${originalName}")
-                            tempFile.copyTo(textFile, overwrite = true)
-                            context.startActivity(ViewerActivity.createTextIntent(context, textFile.absolutePath, sessionId))
-                        }
-                        ext in imageExts -> {
-                            val imgFile = File(context.cacheDir, "vault_img_${originalName}")
-                            tempFile.copyTo(imgFile, overwrite = true)
-                            context.startActivity(ViewerActivity.createImageIntent(context, imgFile.absolutePath, vaultSessionId = sessionId))
-                        }
-                        else -> {
-                            VaultKeyHolder.clear(sessionId)
-                            openWithExternalApp(tempFile, originalName)
-                        }
+            // 存入 VaultKeyHolder，供 Compose 层按需解密
+            VaultKeyHolder.put(sessionId, VaultViewContext(
+                dek = session.dek,
+                vaultDir = session.vaultDir.absolutePath,
+                originalEncryptedPath = entry.path,
+                customEncryption = session.record.customEncryption,
+                vaultId = session.record.id,
+                vaultImageEntries = imageEntryMap
+            ))
+
+            val destFile = File(cachePaths[currentIdx])
+            openFile(context, entry.copy(path = destFile.absolutePath),
+                overrideImagePaths = cachePaths, totalCount = imageEntries.size)
+        } else {
+            // 非图片：解密单个文件到缓存
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val destFile = File(context.cacheDir, "vault_cache/${session.record.name}/$originalName")
+                    destFile.parentFile?.mkdirs()
+                    if (!destFile.exists()) {
+                        FileCodec.decrypt(src = File(entry.path), dst = destFile, dek = session.dek, customEncryption = session.record.customEncryption)
                     }
-                }
-            } catch (e: Exception) {
-                VaultKeyHolder.clear(sessionId)
-                withContext(Dispatchers.Main) {
-                    loadError = e
+                    withContext(Dispatchers.Main) {
+                        VaultKeyHolder.clear(sessionId)
+                        openFile(context, entry.copy(path = destFile.absolutePath))
+                    }
+                } catch (e: Exception) {
+                    VaultKeyHolder.clear(sessionId)
+                    withContext(Dispatchers.Main) {
+                        loadError = e
+                    }
                 }
             }
         }
@@ -3725,6 +3740,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         entry: FileEntry,
         isDebug: Boolean = false,
         overrideImagePaths: List<String>? = null,
+        totalCount: Int = 0,
         archivePath: String? = null,
         archiveName: String? = null,
         archiveEntryPaths: List<String> = emptyList(),
@@ -3736,8 +3752,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             pendingSymlinkEntry = entry
             return
         }
-        // vault 模式：解密后打开（仅当前聚焦面板在保险箱内才走此路径）
-        if (focusedController.isVaultMode) {
+        // vault 模式：仅加密文件（.whm）走解密路径，已解密的明文文件走正常路由
+        if (focusedController.isVaultMode && entry.name.endsWith(".whm", ignoreCase = true)) {
             openVaultFile(entry)
             return
         }
@@ -3785,6 +3801,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val startIndex = if (archivePath != null) archiveStartIndex
             else imagePaths.indexOf(entry.path).coerceAtLeast(0)
             context.startActivity(ViewerActivity.createImageIntent(context, entry.path, imagePaths, startIndex,
+                totalCount = totalCount,
                 archivePath = archivePath, archiveName = archiveName,
                 archiveEntryPaths = archiveEntryPaths, archivePassword = archivePassword,
                 archivePermissionLevel = archivePermissionLevel))
