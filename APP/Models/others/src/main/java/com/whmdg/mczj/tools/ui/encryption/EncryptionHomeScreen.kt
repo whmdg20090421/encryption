@@ -18,6 +18,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Settings
@@ -523,6 +525,10 @@ fun VaultsListTab(
     var isDeletingVault by remember { mutableStateOf(false) }
     var deleteProgress by remember { mutableIntStateOf(0) }
     var deleteTotal by remember { mutableIntStateOf(0) }
+    var showDeletePasswordDialog by remember { mutableStateOf<Pair<VaultRecord, Boolean>?>(null) }
+    var deletePasswordInput by remember { mutableStateOf("") }
+    var deletePasswordVisible by remember { mutableStateOf(false) }
+    var deletePasswordError by remember { mutableStateOf<String?>(null) }
 
     var showPasswordDialog by remember { mutableStateOf<VaultRecord?>(null) }
     var passwordInput by remember { mutableStateOf("") }
@@ -1337,8 +1343,9 @@ fun VaultsListTab(
             confirmButton = {
                 Button(
                     onClick = {
+                        val deleteRecord = vault to alsoDeleteFiles
                         activeVaultForDelete = null
-                        pendingVaultDelete = vault to alsoDeleteFiles
+                        showDeletePasswordDialog = deleteRecord
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
@@ -1347,6 +1354,77 @@ fun VaultsListTab(
             },
             dismissButton = {
                 TextButton(onClick = { activeVaultForDelete = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // Delete Password Verification Dialog
+    showDeletePasswordDialog?.let { (vault, deleteFiles) ->
+        AlertDialog(
+            onDismissRequest = { showDeletePasswordDialog = null; deletePasswordInput = ""; deletePasswordError = null },
+            title = { Text("验证密码以删除「${vault.name}」") },
+            text = {
+                Column {
+                    Text("请输入保险箱密码以确认删除操作。")
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = deletePasswordInput,
+                        onValueChange = { deletePasswordInput = it; deletePasswordError = null },
+                        label = { Text("密码") },
+                        visualTransformation = if (deletePasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { deletePasswordVisible = !deletePasswordVisible }) {
+                                Icon(
+                                    imageVector = if (deletePasswordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                                    contentDescription = "切换显示"
+                                )
+                            }
+                        },
+                        isError = deletePasswordError != null,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (deletePasswordError != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = deletePasswordError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val pwd = deletePasswordInput
+                        deletePasswordInput = ""
+                        deletePasswordError = null
+
+                        // 验证密码
+                        coroutineScope.launch(Dispatchers.IO) {
+                            try {
+                                vaultService.open(vault.id, pwd)
+                                // 密码正确，开始删除
+                                withContext(Dispatchers.Main) {
+                                    showDeletePasswordDialog = null
+                                    pendingVaultDelete = vault to deleteFiles
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    deletePasswordError = "密码错误，请重试"
+                                }
+                            }
+                        }
+                    },
+                    enabled = deletePasswordInput.isNotEmpty()
+                ) {
+                    Text("确认删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeletePasswordDialog = null; deletePasswordInput = ""; deletePasswordError = null }) {
                     Text("取消")
                 }
             }
