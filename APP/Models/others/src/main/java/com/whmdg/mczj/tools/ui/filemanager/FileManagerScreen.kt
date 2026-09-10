@@ -3143,6 +3143,12 @@ fun FileManagerScreen(
             onDismiss = { vm.currentPanel.archiveOpenError = null }
         )
     }
+    vm.archiveExtractError?.let { error ->
+        ErrorDialog(
+            error = error,
+            onDismiss = { vm.currentPanel.archiveExtractError = null }
+        )
+    }
 
     // ── 强行打开失败详情 ──
     if (forceOpenError != null) {

@@ -215,6 +215,8 @@ class FilePaneController(
             internal set
         var archiveOpenError by mutableStateOf<com.whmdg.mczj.tools.ui.MessageDialogData?>(null)
             internal set
+        var archiveExtractError by mutableStateOf<Throwable?>(null)
+            internal set
         var archiveLoading by mutableStateOf(false)
             internal set
 
@@ -2861,6 +2863,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     val archivePasswordRequest: FileEntry? get() = currentPanel.archivePasswordRequest
     val archiveDebugInfo: ArchiveBrowser.ArchiveDebugInfo? get() = currentPanel.archiveDebugInfo
     val archiveOpenError: com.whmdg.mczj.tools.ui.MessageDialogData? get() = currentPanel.archiveOpenError
+    val archiveExtractError: Throwable? get() = currentPanel.archiveExtractError
     val archiveLoading: Boolean get() = currentPanel.archiveLoading
     /** 压缩包密码缓存：archivePath → password（仅内存，进程退出即清除） */
     internal val archivePasswordCache = mutableMapOf<String, String>()
@@ -3735,11 +3738,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         archivePassword = password, archiveStartIndex = startIndex,
                         archivePermissionLevel = permissionLevel)
                 } else {
-                    currentPanel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
-                        title = "预览解压失败",
-                        errorSummary = "无法读取压缩包内文件",
-                        errorMessage = error ?: "未知错误"
-                    )
+                    currentPanel.archiveExtractError = RuntimeException("预览解压失败: ${error ?: "未知原因"}")
                 }
             }
         )
