@@ -265,7 +265,6 @@ private fun VaultImagePage(
 
 private class SmartPhotoView(context: android.content.Context) : PhotoView(context) {
     private var downX = 0f
-    private var downY = 0f
     private var atLeftEdge = false
     private var atRightEdge = false
 
@@ -299,27 +298,14 @@ private class SmartPhotoView(context: android.content.Context) : PhotoView(conte
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = ev.x
-                downY = ev.y
                 if (scale > 1f) parent.requestDisallowInterceptTouchEvent(true)
             }
             MotionEvent.ACTION_POINTER_DOWN -> parent?.requestDisallowInterceptTouchEvent(true)
             MotionEvent.ACTION_MOVE -> {
-                val dx = ev.x - downX
-                val dy = ev.y - downY
-                if (dx * dx + dy * dy > 225) {
-                    val angle = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).let {
-                        if (it < 0) it + 360 else it
-                    }
-                    // atan2: 0°=右, 90°=下, 180°=左, 270°=上
-                    val nearHorizontal = angle <= 10 || angle >= 350 || (angle in 170.0..190.0)
-                    val nearVertical = angle in 80.0..100.0 || angle in 260.0..280.0
-                    if (nearVertical) {
-                        ev.offsetLocation(-ev.x + downX, 0f)
-                    } else if (nearHorizontal) {
-                        ev.offsetLocation(0f, -ev.y + downY)
-                        if ((atLeftEdge && dx < 0) || (atRightEdge && dx > 0)) {
-                            parent.requestDisallowInterceptTouchEvent(false)
-                        }
+                if (ev.pointerCount == 1 && scale > 1f) {
+                    val dx = ev.x - downX
+                    if ((atLeftEdge && dx < 0) || (atRightEdge && dx > 0)) {
+                        parent.requestDisallowInterceptTouchEvent(false)
                     }
                 }
             }
