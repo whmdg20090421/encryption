@@ -3689,11 +3689,26 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     // ── 压缩包内文件预览 ──
     fun openArchiveFile(context: Context, entry: FileEntry) {
         val session = currentPanel.archiveSession ?: return
+        val password = archivePasswordCache[session.archivePath] ?: ""
         val cacheDir = File(context.cacheDir, "archive_cache")
         val destFile = File(cacheDir, "${session.archiveName}/${entry.path}")
 
+        // 收集压缩包内所有图片文件，用于翻页预览
+        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
+        val imageEntries = session.currentEntries.filter {
+            !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions
+        }
+        val cacheRoot = File(context.cacheDir, "archive_cache/${session.archiveName}")
+        val imagePaths = imageEntries.map { File(cacheRoot, it.path).absolutePath }
+        val imageEntryPaths = imageEntries.map { it.path }
+        val startIndex = imageEntries.indexOfFirst { it.path == entry.path }.coerceAtLeast(0)
+
         if (destFile.exists()) {
-            openFile(context, entry.copy(path = destFile.absolutePath))
+            openFile(context, entry.copy(path = destFile.absolutePath),
+                overrideImagePaths = imagePaths, archivePath = session.archivePath,
+                archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
+                archivePassword = password, archiveStartIndex = startIndex,
+                archivePermissionLevel = permissionLevel)
             return
         }
 
@@ -3714,7 +3729,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             onProgress = { _, _, _ -> },
             onComplete = { successCount, _, error ->
                 if (successCount > 0 && destFile.exists()) {
-                    openFile(context, entry.copy(path = destFile.absolutePath))
+                    openFile(context, entry.copy(path = destFile.absolutePath),
+                        overrideImagePaths = imagePaths, archivePath = session.archivePath,
+                        archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
+                        archivePassword = password, archiveStartIndex = startIndex,
+                        archivePermissionLevel = permissionLevel)
                 } else {
                     currentPanel.archiveOpenError = com.whmdg.mczj.tools.ui.MessageDialogData(
                         title = "预览解压失败",
