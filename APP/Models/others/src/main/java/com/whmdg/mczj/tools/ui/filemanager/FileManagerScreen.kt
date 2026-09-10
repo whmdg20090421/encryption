@@ -1420,7 +1420,7 @@ fun FileManagerScreen(
                                     onVisibleRangeChanged = null,
                                     thumbnailLoader = null,
                                     archiveContext = if (rightPanel.path is PanelPath.Archive) {
-                                        vm.archiveSession?.let { session ->
+                                        rightPanel.archiveSession?.let { session ->
                                             ArchiveContext(
                                                 archivePath = session.archivePath,
                                                 archiveName = session.archiveName,
@@ -1497,7 +1497,7 @@ fun FileManagerScreen(
                                     onVisibleRangeChanged = null,
                                     thumbnailLoader = null,
                                     archiveContext = if (panel.path is PanelPath.Archive) {
-                                        vm.archiveSession?.let { session ->
+                                        panel.archiveSession?.let { session ->
                                             ArchiveContext(
                                                 archivePath = session.archivePath,
                                                 archiveName = session.archiveName,

@@ -142,6 +142,7 @@ class FilePaneController(
     internal var compressJob: Job? = null
     internal val extractCancelFlag = AtomicBoolean(false)
     internal var extractJob: Job? = null
+    internal var vaultPreviewJob: Job? = null
 
     // ── 文件操作进度 ──
     data class FileOpProgress(
@@ -3297,7 +3298,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** vault 模式下打开文件：解密到临时文件后启动 ViewerActivity */
     fun openVaultFile(entry: FileEntry) {
-        val session = focusedController.vaultSession ?: return
+        val panel = currentPanel
+        val session = panel.vaultSession ?: return
 
         if (entry.isDirectory) {
             navigateToFolder(entry)
@@ -3312,7 +3314,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             "folder_sizes.json"
         )
         if (entry.name in systemFiles) {
-            loadError = IllegalArgumentException("系统配置文件不可查看")
+            panel.loadError = IllegalArgumentException("系统配置文件不可查看")
             return
         }
 
@@ -3331,8 +3333,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 生成 sessionId
         val sessionId = "vault_${System.currentTimeMillis()}_${entry.name.hashCode()}"
 
-        // 解密单个文件到缓存
-        viewModelScope.launch(Dispatchers.IO) {
+        // 取消上一个未完成的预览解密
+        panel.vaultPreviewJob?.cancel()
+        panel.vaultPreviewJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val cacheBase = File(context.cacheDir, "vault_preview/${session.record.name}")
                 cacheBase.mkdirs()
@@ -3371,12 +3374,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
                     // 调用 openFile，让文件管理器判断怎么打开
                     openFile(context, entry.copy(path = destFile.absolutePath, name = destFile.name),
-                        vaultSessionId = sessionId)
+                        vaultSessionId = sessionId, originPanel = panel)
                 }
             } catch (e: Exception) {
                 VaultKeyHolder.clear(sessionId)
                 withContext(Dispatchers.Main) {
-                    loadError = e
+                    panel.loadError = e
                 }
             }
         }
@@ -3691,7 +3694,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 压缩包内文件预览 ──
     fun openArchiveFile(context: Context, entry: FileEntry) {
-        val session = currentPanel.archiveSession ?: return
+        val panel = currentPanel
+        val session = panel.archiveSession ?: return
         val password = archivePasswordCache[session.archivePath] ?: ""
         val cacheDir = File(context.cacheDir, "archive_cache")
         val destFile = File(cacheDir, "${session.archiveName}/${entry.path}")
@@ -3711,7 +3715,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 overrideImagePaths = imagePaths, archivePath = session.archivePath,
                 archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
                 archivePassword = password, archiveStartIndex = startIndex,
-                archivePermissionLevel = permissionLevel)
+                archivePermissionLevel = permissionLevel, originPanel = panel)
             return
         }
 
@@ -3721,7 +3725,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             entryPaths = listOf(entry.path),
             target = ArchiveExtractionTarget.Directory(cacheDir.absolutePath),
             onPasswordRequired = {
-                currentPanel.archivePasswordRequest = FileEntry(
+                panel.archivePasswordRequest = FileEntry(
                     path = session.archivePath,
                     name = session.archiveName,
                     isDirectory = false,
@@ -3736,9 +3740,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         overrideImagePaths = imagePaths, archivePath = session.archivePath,
                         archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
                         archivePassword = password, archiveStartIndex = startIndex,
-                        archivePermissionLevel = permissionLevel)
+                        archivePermissionLevel = permissionLevel, originPanel = panel)
                 } else {
-                    currentPanel.archiveExtractError = RuntimeException("预览解压失败: ${error ?: "未知原因"}")
+                    panel.archiveExtractError = RuntimeException("预览解压失败: ${error ?: "未知原因"}")
                 }
             }
         )
@@ -3757,14 +3761,16 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         archiveEntryPaths: List<String> = emptyList(),
         archivePassword: String = "",
         archiveStartIndex: Int = 0,
-        archivePermissionLevel: String = "NORMAL"
+        archivePermissionLevel: String = "NORMAL",
+        originPanel: FilePaneController? = null
     ) {
         if (entry.permission.startsWith("l")) {
             pendingSymlinkEntry = entry
             return
         }
         // vault 模式：仅加密文件（.whm）走解密路径，已解密的明文文件走正常路由
-        if (focusedController.isVaultMode && entry.name.endsWith(".whm", ignoreCase = true)) {
+        val ctrl = originPanel ?: focusedController
+        if (ctrl.isVaultMode && entry.name.endsWith(".whm", ignoreCase = true)) {
             openVaultFile(entry)
             return
         }
