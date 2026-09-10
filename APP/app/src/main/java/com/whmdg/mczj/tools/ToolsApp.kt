@@ -67,6 +67,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
             }
             .components {
                 add(com.whmdg.mczj.tools.util.ArchiveThumbnailFetcher.Factory(context.cacheDir))
+                add(com.whmdg.mczj.tools.util.VaultThumbnailFetcher.Factory(context, context.cacheDir))
                 add(com.whmdg.mczj.tools.util.JxlDecoderFactory())
                 add(coil3.svg.SvgDecoder.Factory())
             }

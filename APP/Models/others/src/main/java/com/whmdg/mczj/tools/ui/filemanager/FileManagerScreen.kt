@@ -173,6 +173,25 @@ data class ArchiveContext(
     val password: String
 )
 
+data class VaultContext(
+    val vaultDir: String,
+    val vaultName: String,
+    val dek: ByteArray,
+    val customEncryption: Boolean
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is VaultContext) return false
+        return vaultDir == other.vaultDir && vaultName == other.vaultName
+    }
+
+    override fun hashCode(): Int {
+        var result = vaultDir.hashCode()
+        result = 31 * result + vaultName.hashCode()
+        return result
+    }
+}
+
 @kotlinx.serialization.Serializable
 data class HistoryEntry(
     val name: String,
@@ -1428,6 +1447,16 @@ fun FileManagerScreen(
                                             )
                                         }
                                     } else null,
+                                    vaultContext = if (rightPanel.path is PanelPath.Vault) {
+                                        vm.vaultSession?.let { session ->
+                                            VaultContext(
+                                                vaultDir = session.vaultDir.absolutePath,
+                                                vaultName = session.record.name,
+                                                dek = session.dek,
+                                                customEncryption = session.record.customEncryption
+                                            )
+                                        }
+                                    } else null,
                                     selectedPaths = rightPanel.selectedPaths,
                                     onSwipeSelect = { entry, index -> },
                                     onToggleSelect = { entry -> },
@@ -1502,6 +1531,16 @@ fun FileManagerScreen(
                                                 archivePath = session.archivePath,
                                                 archiveName = session.archiveName,
                                                 password = vm.archivePasswordCache[session.archivePath] ?: ""
+                                            )
+                                        }
+                                    } else null,
+                                    vaultContext = if (panel.path is PanelPath.Vault) {
+                                        vm.vaultSession?.let { session ->
+                                            VaultContext(
+                                                vaultDir = session.vaultDir.absolutePath,
+                                                vaultName = session.record.name,
+                                                dek = session.dek,
+                                                customEncryption = session.record.customEncryption
                                             )
                                         }
                                     } else null,
@@ -5528,6 +5567,7 @@ private fun FileBrowserPanel(
     onVisibleRangeChanged: ((firstVisible: Int, lastVisible: Int) -> Unit)? = null,
     thumbnailLoader: ((FileEntry) -> ImageBitmap?)? = null,
     archiveContext: ArchiveContext? = null,
+    vaultContext: VaultContext? = null,
     fileNameFontSize: Float = 12f
 ) {
     val isMultiSelectMode = selectedPaths.isNotEmpty()
@@ -5634,6 +5674,7 @@ private fun FileBrowserPanel(
                         extFlags = extFlagsMap[entry.name] ?: "",
                         thumbnail = thumb,
                         archiveContext = archiveContext,
+                        vaultContext = vaultContext,
                         fileNameFontSize = fileNameFontSize
                     )
                 }
@@ -5655,6 +5696,7 @@ private fun FileEntryRow(
     extFlags: String = "",
     thumbnail: ImageBitmap? = null,
     archiveContext: ArchiveContext? = null,
+    vaultContext: VaultContext? = null,
     fileNameFontSize: Float = 12f,
     cloudExtra: (@Composable () -> Unit)? = null
 ) {
@@ -5769,6 +5811,24 @@ private fun FileEntryRow(
                                         entryPath = entry.path,
                                         archiveName = archiveContext.archiveName,
                                         password = archiveContext.password
+                                    ),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(4.dp)),
+                                    contentScale = ContentScale.Crop,
+                                    placeholder = imagePlaceholder?.let { painterResource(it) },
+                                    error = imagePlaceholder?.let { painterResource(it) }
+                                )
+                            } else if (vaultContext != null) {
+                                val imagePlaceholder = getFileTypeDrawableRes(category)
+                                val vaultRelativePath = entry.path.removePrefix(vaultContext.vaultDir).removePrefix("/")
+                                AsyncImage(
+                                    model = com.whmdg.mczj.tools.util.VaultThumbnailRequest(
+                                        encryptedPath = entry.path,
+                                        entryPath = vaultRelativePath,
+                                        vaultDir = vaultContext.vaultDir,
+                                        vaultName = vaultContext.vaultName,
+                                        dek = vaultContext.dek,
+                                        customEncryption = vaultContext.customEncryption
                                     ),
                                     contentDescription = null,
                                     modifier = Modifier.size(36.dp).clip(RoundedCornerShape(4.dp)),
