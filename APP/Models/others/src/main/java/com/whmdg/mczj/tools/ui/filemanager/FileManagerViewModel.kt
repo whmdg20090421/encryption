@@ -2863,7 +2863,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     val archiveOpenError: com.whmdg.mczj.tools.ui.MessageDialogData? get() = currentPanel.archiveOpenError
     val archiveLoading: Boolean get() = currentPanel.archiveLoading
     /** 压缩包密码缓存：archivePath → password（仅内存，进程退出即清除） */
-    private val archivePasswordCache = mutableMapOf<String, String>()
+    internal val archivePasswordCache = mutableMapOf<String, String>()
 
     // ── 回收站（面板级路径已移入 VmPanelState） ──
     /** 向后兼容：当前聚焦面板的回收站路径 */

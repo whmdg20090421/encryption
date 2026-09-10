@@ -167,6 +167,12 @@ data class QuickAccessEntry(
     val path: String
 )
 
+data class ArchiveContext(
+    val archivePath: String,
+    val archiveName: String,
+    val password: String
+)
+
 @kotlinx.serialization.Serializable
 data class HistoryEntry(
     val name: String,
@@ -1413,6 +1419,15 @@ fun FileManagerScreen(
                                     archiveSizeProvider = null,
                                     onVisibleRangeChanged = null,
                                     thumbnailLoader = null,
+                                    archiveContext = if (rightPanel.path is PanelPath.Archive) {
+                                        vm.archiveSession?.let { session ->
+                                            ArchiveContext(
+                                                archivePath = session.archivePath,
+                                                archiveName = session.archiveName,
+                                                password = vm.archivePasswordCache[session.archivePath] ?: ""
+                                            )
+                                        }
+                                    } else null,
                                     selectedPaths = rightPanel.selectedPaths,
                                     onSwipeSelect = { entry, index -> },
                                     onToggleSelect = { entry -> },
@@ -1481,6 +1496,15 @@ fun FileManagerScreen(
                                     } else null,
                                     onVisibleRangeChanged = null,
                                     thumbnailLoader = null,
+                                    archiveContext = if (panel.path is PanelPath.Archive) {
+                                        vm.archiveSession?.let { session ->
+                                            ArchiveContext(
+                                                archivePath = session.archivePath,
+                                                archiveName = session.archiveName,
+                                                password = vm.archivePasswordCache[session.archivePath] ?: ""
+                                            )
+                                        }
+                                    } else null,
                                     selectedPaths = panel.selectedPaths,
                                     onSwipeSelect = { entry, index ->
                                         vm.focusedPanel = side
@@ -5497,6 +5521,7 @@ private fun FileBrowserPanel(
     extFlagsMap: Map<String, String> = emptyMap(),
     onVisibleRangeChanged: ((firstVisible: Int, lastVisible: Int) -> Unit)? = null,
     thumbnailLoader: ((FileEntry) -> ImageBitmap?)? = null,
+    archiveContext: ArchiveContext? = null,
     fileNameFontSize: Float = 12f
 ) {
     val isMultiSelectMode = selectedPaths.isNotEmpty()
@@ -5602,6 +5627,7 @@ private fun FileBrowserPanel(
                         folderSize = dirSize,
                         extFlags = extFlagsMap[entry.name] ?: "",
                         thumbnail = thumb,
+                        archiveContext = archiveContext,
                         fileNameFontSize = fileNameFontSize
                     )
                 }
@@ -5622,6 +5648,7 @@ private fun FileEntryRow(
     folderSize: String = "",
     extFlags: String = "",
     thumbnail: ImageBitmap? = null,
+    archiveContext: ArchiveContext? = null,
     fileNameFontSize: Float = 12f,
     cloudExtra: (@Composable () -> Unit)? = null
 ) {
@@ -5727,6 +5754,21 @@ private fun FileEntryRow(
                                     contentDescription = null,
                                     modifier = Modifier.size(36.dp).clip(RoundedCornerShape(4.dp)),
                                     contentScale = ContentScale.Crop
+                                )
+                            } else if (archiveContext != null) {
+                                val imagePlaceholder = getFileTypeDrawableRes(category)
+                                AsyncImage(
+                                    model = com.whmdg.mczj.tools.util.ArchiveThumbnailRequest(
+                                        archivePath = archiveContext.archivePath,
+                                        entryPath = entry.path,
+                                        archiveName = archiveContext.archiveName,
+                                        password = archiveContext.password
+                                    ),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(4.dp)),
+                                    contentScale = ContentScale.Crop,
+                                    placeholder = imagePlaceholder?.let { painterResource(it) },
+                                    error = imagePlaceholder?.let { painterResource(it) }
                                 )
                             } else {
                                 val imagePlaceholder = getFileTypeDrawableRes(category)
