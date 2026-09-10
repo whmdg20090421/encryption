@@ -2783,6 +2783,10 @@ fun FileManagerScreen(
     // ── 云盘删除方式选择对话框 ──
     if (showCloudDeleteModeDialog && cloudDeleteTarget != null) {
         val target = cloudDeleteTarget!!
+        // 根据存储分布判断哪些按钮可用
+        val hasLocal = target.redSize > 0 || target.uploadedSize > 0
+        val hasCloud = target.cloudOnlySize > 0 || target.uploadedSize > 0
+        val disabledColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
         AlertDialog(
             onDismissRequest = { showCloudDeleteModeDialog = false; cloudDeleteTarget = null },
             title = { Text("删除「${target.name}」") },
@@ -2790,8 +2794,9 @@ fun FileManagerScreen(
                 Column {
                     Text("选择删除方式")
                     Spacer(Modifier.height(16.dp))
-                    // 删除全部
+                    // 删除全部（本地+云端）
                     TextButton(
+                        enabled = hasLocal && hasCloud,
                         onClick = {
                             showCloudDeleteModeDialog = false
                             showCloudDeleteProgress = true
@@ -2803,14 +2808,15 @@ fun FileManagerScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
+                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (hasLocal && hasCloud) MaterialTheme.colorScheme.error else disabledColor)
                             Spacer(Modifier.width(8.dp))
-                            Text("删除全部（本地+云端）", color = MaterialTheme.colorScheme.error)
+                            Text("删除全部（本地+云端）", color = if (hasLocal && hasCloud) MaterialTheme.colorScheme.error else disabledColor)
                         }
                     }
                     HorizontalDivider()
                     // 仅删除本地
                     TextButton(
+                        enabled = hasLocal,
                         onClick = {
                             showCloudDeleteModeDialog = false
                             showCloudDeleteProgress = true
@@ -2822,14 +2828,15 @@ fun FileManagerScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (hasLocal) Color.Unspecified else disabledColor)
                             Spacer(Modifier.width(8.dp))
-                            Text("仅删除本地")
+                            Text("仅删除本地", color = if (hasLocal) Color.Unspecified else disabledColor)
                         }
                     }
                     HorizontalDivider()
                     // 仅删除云端
                     TextButton(
+                        enabled = hasCloud,
                         onClick = {
                             showCloudDeleteModeDialog = false
                             showCloudDeleteProgress = true
@@ -2841,9 +2848,9 @@ fun FileManagerScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.CloudOff, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.CloudOff, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (hasCloud) Color.Unspecified else disabledColor)
                             Spacer(Modifier.width(8.dp))
-                            Text("仅删除云端")
+                            Text("仅删除云端", color = if (hasCloud) Color.Unspecified else disabledColor)
                         }
                     }
                 }
