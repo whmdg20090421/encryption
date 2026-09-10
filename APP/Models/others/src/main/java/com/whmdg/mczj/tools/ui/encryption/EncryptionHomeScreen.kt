@@ -92,6 +92,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import com.whmdg.mczj.tools.ui.ErrorDialog
 import com.whmdg.mczj.tools.ui.SizeCalcManager
 import com.whmdg.mczj.tools.ui.components.GlowCard
+import com.whmdg.mczj.tools.ui.filemanager.StandardDialog
 import com.whmdg.mczj.tools.ui.components.GlowSection
 import com.whmdg.mczj.tools.ui.components.GlowListItem
 import com.whmdg.mczj.tools.ui.components.GlowToggleItem
@@ -491,7 +492,25 @@ fun EncryptionHomeScreen(
                 )
             }
 
-            ErrorDialog(error = encryptionError, onDismiss = { encryptionError = null })
+            if (encryptionError != null) {
+                StandardDialog(
+                    onDismissRequest = { encryptionError = null },
+                    title = { Text("操作失败") },
+                    text = {
+                        Text(
+                            buildString {
+                                appendLine("异常: ${encryptionError!!.javaClass.simpleName}")
+                                appendLine("原因: ${encryptionError!!.message ?: "(无)"}")
+                                encryptionError!!.cause?.let { appendLine("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
+                            },
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { encryptionError = null }) { Text("确定") }
+                    }
+                )
+            }
             ErrorDialog(error = fatalError, onDismiss = { fatalError = null }, fatal = true)
         }
     }
@@ -1699,7 +1718,25 @@ fun VaultsListTab(
         )
     }
 
-    ErrorDialog(error = vaultListError, onDismiss = { vaultListError = null })
+    if (vaultListError != null) {
+        StandardDialog(
+            onDismissRequest = { vaultListError = null },
+            title = { Text("操作失败") },
+            text = {
+                Text(
+                    buildString {
+                        appendLine("异常: ${vaultListError!!.javaClass.simpleName}")
+                        appendLine("原因: ${vaultListError!!.message ?: "(无)"}")
+                        vaultListError!!.cause?.let { appendLine("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
+                    },
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vaultListError = null }) { Text("确定") }
+            }
+        )
+    }
 }
 
 @Composable

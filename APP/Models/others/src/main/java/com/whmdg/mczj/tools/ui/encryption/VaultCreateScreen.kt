@@ -36,6 +36,7 @@ import com.whmdg.mczj.tools.encryption.data.Argon2Params
 import com.whmdg.mczj.tools.encryption.data.KdfType
 import com.whmdg.mczj.tools.encryption.data.StorageLocation
 import com.whmdg.mczj.tools.ui.ErrorDialog
+import com.whmdg.mczj.tools.ui.filemanager.StandardDialog
 import com.whmdg.mczj.tools.encryption.services.VaultService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -556,7 +557,25 @@ fun VaultCreateScreen(
             )
         }
 
-        ErrorDialog(error = vaultError, onDismiss = { vaultError = null })
+        if (vaultError != null) {
+            StandardDialog(
+                onDismissRequest = { vaultError = null },
+                title = { Text("创建保险箱失败") },
+                text = {
+                    Text(
+                        buildString {
+                            appendLine("异常: ${vaultError!!.javaClass.simpleName}")
+                            appendLine("原因: ${vaultError!!.message ?: "(无)"}")
+                            vaultError!!.cause?.let { appendLine("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
+                        },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { vaultError = null }) { Text("确定") }
+                }
+            )
+        }
 
         if (validationMessage != null) {
             AlertDialog(

@@ -21,6 +21,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.awxkee.jxlcoder.JxlCoder
 import com.github.chrisbanes.photoview.PhotoView
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import com.whmdg.mczj.tools.ui.filemanager.StandardDialog
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -189,16 +190,37 @@ private fun VaultImagePage(
                     )
                     loadState = 1
                 } catch (e: Exception) {
-                    loadError = "解密失败: ${e.message}"
+                    DiagnosticLog.log("VaultImage", "解密失败: ${e.javaClass.simpleName}: ${e.message}, file=${file.name}, encryptedPath=$encryptedPath")
+                    loadError = buildString {
+                        appendLine("解密失败")
+                        appendLine()
+                        appendLine("文件: ${file.name}")
+                        appendLine("异常: ${e.javaClass.simpleName}")
+                        appendLine("原因: ${e.message ?: "(无)"}")
+                        e.cause?.let { appendLine("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
+                    }
                     loadState = 2
                 }
             } else {
-                loadError = "会话已过期"
+                loadError = "会话已过期，请重新打开保险箱"
                 loadState = 2
             }
         } else {
             loadState = 1
         }
+    }
+
+    if (loadState == 2 && loadError != null) {
+        com.whmdg.mczj.tools.ui.filemanager.StandardDialog(
+            onDismissRequest = { loadError = null },
+            title = { Text("图片打开失败") },
+            text = { Text(loadError!!, style = MaterialTheme.typography.bodySmall) },
+            confirmButton = {
+                TextButton(onClick = { loadError = null }) {
+                    Text("确定")
+                }
+            }
+        )
     }
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -222,7 +244,7 @@ private fun VaultImagePage(
                 modifier = Modifier.fillMaxSize()
             )
         } else if (loadState == 2) {
-            Text(loadError ?: "图片解密失败", color = Color.White)
+            Text("加载失败", color = Color.White)
         } else {
             CircularProgressIndicator(color = Color.White)
         }

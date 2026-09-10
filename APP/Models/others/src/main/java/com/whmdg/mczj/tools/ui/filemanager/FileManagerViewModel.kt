@@ -3367,7 +3367,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     ))
 
                     // 调用 openFile，让文件管理器判断怎么打开
-                    openFile(context, entry.copy(path = destFile.absolutePath),
+                    openFile(context, entry.copy(path = destFile.absolutePath, name = destFile.name),
                         vaultSessionId = sessionId)
                 }
             } catch (e: Exception) {

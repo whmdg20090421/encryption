@@ -2815,10 +2815,28 @@ fun FileManagerScreen(
         )
     }
 
-    ErrorDialog(error = vm.loadError, onDismiss = {
-        DiagnosticLog.log("FileMgr", "关闭错误对话框")
-        vm.loadError = null
-    })
+    if (vm.loadError != null) {
+        StandardDialog(
+            onDismissRequest = {
+                DiagnosticLog.log("FileMgr", "关闭错误对话框")
+                vm.loadError = null
+            },
+            title = { Text("文件操作失败") },
+            text = {
+                Text(
+                    buildString {
+                        appendLine("异常: ${vm.loadError!!.javaClass.simpleName}")
+                        appendLine("原因: ${vm.loadError!!.message ?: "(无)"}")
+                        vm.loadError!!.cause?.let { appendLine("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
+                    },
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.loadError = null }) { Text("确定") }
+            }
+        )
+    }
 
     // ── 诊断错误对话框 ──
     ErrorDialog(error = diagnosticError, onDismiss = {
@@ -4974,9 +4992,22 @@ fun FileManagerScreen(
 
     // ── 压缩错误弹窗 ──
     if (compressError != null) {
-        ErrorDialog(
-            error = compressError,
-            onDismiss = { compressError = null }
+        StandardDialog(
+            onDismissRequest = { compressError = null },
+            title = { Text("压缩失败") },
+            text = {
+                Text(
+                    buildString {
+                        appendLine("异常: ${compressError!!.javaClass.simpleName}")
+                        appendLine("原因: ${compressError!!.message ?: "(无)"}")
+                        compressError!!.cause?.let { appendLine("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
+                    },
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { compressError = null }) { Text("确定") }
+            }
         )
     }
 
@@ -5370,9 +5401,22 @@ fun FileManagerScreen(
 
     // ── 解压错误弹窗 ──
     if (extractError != null) {
-        ErrorDialog(
-            error = extractError,
-            onDismiss = { extractError = null }
+        StandardDialog(
+            onDismissRequest = { extractError = null },
+            title = { Text("解压失败") },
+            text = {
+                Text(
+                    buildString {
+                        appendLine("异常: ${extractError!!.javaClass.simpleName}")
+                        appendLine("原因: ${extractError!!.message ?: "(无)"}")
+                        extractError!!.cause?.let { appendLine("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
+                    },
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { extractError = null }) { Text("确定") }
+            }
         )
     }
 

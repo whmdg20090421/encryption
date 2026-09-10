@@ -4,7 +4,9 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.auth.Feature
 import com.whmdg.mczj.tools.auth.SecurityEnforcer
@@ -27,13 +29,16 @@ class VaultService(private val context: Context) {
     private var _loaded = false
 
     val loaded: Boolean get() = _loaded
-    val vaults = mutableStateListOf<VaultRecord>()
+    var vaults by mutableStateOf<List<VaultRecord>>(emptyList())
 
     fun load() {
         _db = VaultDb.load(context)
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
         _loaded = true
+    }
+
+    private fun syncVaults() {
+        vaults = _db.vaults.toList()
     }
 
     fun isNameTaken(name: String) = _db.isNameTaken(name)
@@ -102,8 +107,7 @@ class VaultService(private val context: Context) {
         val assigned = _db.addVault(rec)
         _db.save(context)
         
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
         
         return assigned
     }
@@ -162,8 +166,7 @@ class VaultService(private val context: Context) {
         }.format(Date())
         _db.replaceVault(rec.copy(lastOpenedAt = now))
         _db.save(context)
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
 
         return VaultSession(
             record = rec.copy(lastOpenedAt = now),
@@ -231,8 +234,7 @@ class VaultService(private val context: Context) {
         }
         val restored = _db.addVaultWithId(record, record.id)
         _db.save(context)
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
         return restored
     }
 
@@ -246,8 +248,7 @@ class VaultService(private val context: Context) {
         val replaced = cloudRecord.copy(relativePath = _db.vaults[index].relativePath)
         _db.vaults[index] = replaced
         _db.save(context)
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
         return replaced
     }
 
@@ -268,8 +269,7 @@ class VaultService(private val context: Context) {
         val updated = current.copy(id = replacementId, relativePath = renamed.absolutePath)
         _db.vaults[index] = updated
         _db.save(context)
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
         return updated
     }
 
@@ -281,8 +281,7 @@ class VaultService(private val context: Context) {
         }.format(Date())
         _db.replaceVault(rec.copy(lastModifiedAt = now))
         _db.save(context)
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
     }
 
     fun removeVault(id: Int, deleteFiles: Boolean) {
@@ -300,8 +299,7 @@ class VaultService(private val context: Context) {
         }
         _db.removeVault(id)
         _db.save(context)
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
     }
 
     /**
@@ -314,8 +312,7 @@ class VaultService(private val context: Context) {
         val updated = rec.copy(encryptFilename = encryptFilename)
         _db.replaceVault(updated)
         _db.save(context)
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
         return updated
     }
 
@@ -376,8 +373,7 @@ class VaultService(private val context: Context) {
         val assigned = _db.addVault(rec)
         _db.save(context)
 
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
 
         return assigned
     }
@@ -465,8 +461,7 @@ class VaultService(private val context: Context) {
         val assigned = _db.addVault(rec)
         _db.save(context)
 
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
 
         return assigned
     }
@@ -573,8 +568,7 @@ class VaultService(private val context: Context) {
         val newSize = (rec.storageSize + delta).coerceAtLeast(0)
         _db.replaceVault(rec.copy(storageSize = newSize))
         _db.save(context)
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
         markModified(id)
     }
 
@@ -585,8 +579,7 @@ class VaultService(private val context: Context) {
         val rec = _db.vaults.find { it.id == id } ?: return
         _db.replaceVault(rec.copy(storageSize = size))
         _db.save(context)
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
     }
 
     /**
@@ -598,8 +591,7 @@ class VaultService(private val context: Context) {
         val newCount = (cur + delta).coerceAtLeast(0)
         _db.replaceVault(rec.copy(fileCount = newCount))
         _db.save(context)
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
         markModified(id)
     }
 
@@ -610,8 +602,7 @@ class VaultService(private val context: Context) {
         val rec = _db.vaults.find { it.id == id } ?: return
         _db.replaceVault(rec.copy(fileCount = count))
         _db.save(context)
-        vaults.clear()
-        vaults.addAll(_db.vaults)
+        syncVaults()
     }
 
     /**
