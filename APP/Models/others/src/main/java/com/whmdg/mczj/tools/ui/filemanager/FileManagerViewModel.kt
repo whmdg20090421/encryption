@@ -3298,8 +3298,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     /** vault 模式下打开文件：解密到临时文件后启动 ViewerActivity */
     fun openVaultFile(entry: FileEntry) {
-        val panel = currentPanel
-        val session = panel.vaultSession ?: return
+        val ctrl = focusedController
+        val session = ctrl.vaultSession ?: return
 
         if (entry.isDirectory) {
             navigateToFolder(entry)
@@ -3314,7 +3314,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             "folder_sizes.json"
         )
         if (entry.name in systemFiles) {
-            panel.loadError = IllegalArgumentException("系统配置文件不可查看")
+            ctrl.state.loadError = IllegalArgumentException("系统配置文件不可查看")
             return
         }
 
@@ -3334,8 +3334,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val sessionId = "vault_${System.currentTimeMillis()}_${entry.name.hashCode()}"
 
         // 取消上一个未完成的预览解密
-        panel.vaultPreviewJob?.cancel()
-        panel.vaultPreviewJob = viewModelScope.launch(Dispatchers.IO) {
+        ctrl.vaultPreviewJob?.cancel()
+        ctrl.vaultPreviewJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 val cacheBase = File(context.cacheDir, "vault_preview/${session.record.name}")
                 cacheBase.mkdirs()
@@ -3374,12 +3374,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
                     // 调用 openFile，让文件管理器判断怎么打开
                     openFile(context, entry.copy(path = destFile.absolutePath, name = destFile.name),
-                        vaultSessionId = sessionId, originPanel = panel)
+                        vaultSessionId = sessionId, originPanel = ctrl)
                 }
             } catch (e: Exception) {
                 VaultKeyHolder.clear(sessionId)
                 withContext(Dispatchers.Main) {
-                    panel.loadError = e
+                    ctrl.state.loadError = e
                 }
             }
         }
@@ -3694,8 +3694,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 压缩包内文件预览 ──
     fun openArchiveFile(context: Context, entry: FileEntry) {
-        val panel = currentPanel
-        val session = panel.archiveSession ?: return
+        val ctrl = focusedController
+        val session = ctrl.state.archiveSession ?: return
         val password = archivePasswordCache[session.archivePath] ?: ""
         val cacheDir = File(context.cacheDir, "archive_cache")
         val destFile = File(cacheDir, "${session.archiveName}/${entry.path}")
@@ -3715,7 +3715,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 overrideImagePaths = imagePaths, archivePath = session.archivePath,
                 archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
                 archivePassword = password, archiveStartIndex = startIndex,
-                archivePermissionLevel = permissionLevel, originPanel = panel)
+                archivePermissionLevel = permissionLevel, originPanel = ctrl)
             return
         }
 
@@ -3725,7 +3725,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             entryPaths = listOf(entry.path),
             target = ArchiveExtractionTarget.Directory(cacheDir.absolutePath),
             onPasswordRequired = {
-                panel.archivePasswordRequest = FileEntry(
+                ctrl.state.archivePasswordRequest = FileEntry(
                     path = session.archivePath,
                     name = session.archiveName,
                     isDirectory = false,
@@ -3740,9 +3740,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         overrideImagePaths = imagePaths, archivePath = session.archivePath,
                         archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
                         archivePassword = password, archiveStartIndex = startIndex,
-                        archivePermissionLevel = permissionLevel, originPanel = panel)
+                        archivePermissionLevel = permissionLevel, originPanel = ctrl)
                 } else {
-                    panel.archiveExtractError = RuntimeException("预览解压失败: ${error ?: "未知原因"}")
+                    ctrl.state.archiveExtractError = RuntimeException("预览解压失败: ${error ?: "未知原因"}")
                 }
             }
         )
