@@ -3854,7 +3854,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     // 更新 VaultKeyHolder 中的映射
                     VaultKeyHolder.put(vaultSessionId, ctx.copy(vaultImageEntries = newImageEntryMap))
                 }
-            } else {
+            } else if (overrideImagePaths.isNullOrEmpty()) {
                 // 普通模式：从当前面板读取
                 imagePaths = currentPanel.entries
                     .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions }
