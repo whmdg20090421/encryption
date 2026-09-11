@@ -15,6 +15,9 @@ object NailObfuscation {
      */
     private const val MIN_LENGTH = 1024
 
+    // ThreadLocal 缓存：避免每块重复 Mac.getInstance() + init()
+    private val cachedMac = ThreadLocal<Mac>()
+
     /**
      * 插入钉子。返回结果比输入长 16 字节。
      */
@@ -86,7 +89,8 @@ object NailObfuscation {
 
     private fun computeNailParts(iv: ByteArray, dek: ByteArray, l: Int): List<ByteArray> {
         val ivInt = BigInteger(1, iv)
-        val mac = Mac.getInstance("HmacSHA256")
+        val mac = cachedMac.get()
+            ?: Mac.getInstance("HmacSHA256").also { cachedMac.set(it) }
         mac.init(SecretKeySpec(dek, "HmacSHA256"))
         val nailSecret = mac.doFinal("nail".toByteArray(Charsets.UTF_8)).copyOfRange(0, 16)
         val nailInt = BigInteger(1, nailSecret)

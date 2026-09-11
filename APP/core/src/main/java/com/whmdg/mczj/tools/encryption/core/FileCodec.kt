@@ -21,6 +21,16 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object FileCodec {
 
+    /** 并发加密文件数，1 = 串行。预留变量，暂不提供修改接口。 */
+    var concurrentFiles = 1
+
+    /** 根据文件大小选择 chunk：小文件小块减少内存占用，大文件大块减少初始化次数。 */
+    private fun chunkSizeFor(fileSize: Long): Int = when {
+        fileSize <= 2L * 1024 * 1024  -> 1 * 1024 * 1024  // ≤2MB → 1MB chunk
+        fileSize <= 8L * 1024 * 1024  -> 2 * 1024 * 1024  // ≤8MB → 2MB chunk
+        else                          -> 4 * 1024 * 1024  // >8MB → 4MB chunk
+    }
+
     /**
      * 接收解压回调的明文字节并按加密格式写出，始终只保留一个固定大小明文块。
      * 调用方必须在成功时调用 [finish]，失败或取消时调用 [abort]。
@@ -35,6 +45,7 @@ object FileCodec {
     ) {
         private val aad = if (customEncryption) FileConstants.aadCustomObf else null
         private val buffer = ByteArray(FileConstants.CHUNK_SIZE)
+        private val headerBuf = ByteArray(4 + 12) // 复用：chunkLen(4) + IV(12)
         private val out = FileOutputStream(dst)
         private var buffered = 0
         private var written = 0L
@@ -79,8 +90,14 @@ object FileCodec {
             val encrypted = AesGcm256.encrypt(dek, plain, aad)
             var cipher = encrypted.ciphertext
             if (customEncryption && cipher.size >= 1024) cipher = NailObfuscation.insert(cipher, encrypted.iv, dek)
-            out.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(encrypted.iv.size + cipher.size).array())
-            out.write(encrypted.iv)
+            // 合并写出：length(4B) + IV(12B) 一次 syscall，密文紧随
+            val chunkLen = encrypted.iv.size + cipher.size
+            headerBuf[0] = (chunkLen shr 24).toByte()
+            headerBuf[1] = (chunkLen shr 16).toByte()
+            headerBuf[2] = (chunkLen shr 8).toByte()
+            headerBuf[3] = chunkLen.toByte()
+            System.arraycopy(encrypted.iv, 0, headerBuf, 4, encrypted.iv.size)
+            out.write(headerBuf, 0, 4 + encrypted.iv.size)
             out.write(cipher)
             written += buffered
             buffered = 0
@@ -98,6 +115,9 @@ object FileCodec {
     ) {
         val aad = if (customEncryption) FileConstants.aadCustomObf else null
         val totalSize = src.length()
+        val chunkSize = chunkSizeFor(totalSize)
+        // 复用 buffer：chunkLen(4B) + IV(12B)，合并一次写出减少 syscall
+        val headerBuf = ByteArray(4 + 12)
 
         FileOutputStream(dst).use { out ->
             if (customEncryption) {
@@ -105,24 +125,29 @@ object FileCodec {
             }
 
             var bytesDone = 0L
-            FileInputStream(src).use { `in` ->
-                val buffer = ByteArray(FileConstants.CHUNK_SIZE)
+            FileInputStream(src).use { inp ->
+                val buffer = ByteArray(chunkSize)
                 while (true) {
-                    val read = `in`.read(buffer)
+                    if (cancelFlag?.get() == true) throw InterruptedIOException("用户取消")
+                    val read = inp.read(buffer)
                     if (read <= 0) break
-                    val chunk = if (read == buffer.size) buffer else buffer.copyOfRange(0, read)
+                    val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
                     val e = AesGcm256.encrypt(dek, chunk, aad)
                     var cipherOut = e.ciphertext
                     if (customEncryption && cipherOut.size >= 1024) {
                         cipherOut = NailObfuscation.insert(cipherOut, e.iv, dek)
                     }
+                    // 合并写出：length(4B) + IV(12B) 一次 syscall，密文紧随
                     val chunkLen = e.iv.size + cipherOut.size
-                    out.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(chunkLen).array())
-                    out.write(e.iv)
+                    headerBuf[0] = (chunkLen shr 24).toByte()
+                    headerBuf[1] = (chunkLen shr 16).toByte()
+                    headerBuf[2] = (chunkLen shr 8).toByte()
+                    headerBuf[3] = chunkLen.toByte()
+                    System.arraycopy(e.iv, 0, headerBuf, 4, e.iv.size)
+                    out.write(headerBuf, 0, 4 + e.iv.size)
                     out.write(cipherOut)
                     bytesDone += read
                     onProgress(bytesDone, totalSize)
-                    if (cancelFlag?.get() == true) throw InterruptedIOException("用户取消")
                 }
             }
         }
