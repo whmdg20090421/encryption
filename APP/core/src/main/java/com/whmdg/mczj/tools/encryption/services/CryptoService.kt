@@ -3,6 +3,7 @@ package com.whmdg.mczj.tools.encryption.services
 import android.content.Context
 import com.whmdg.mczj.tools.encryption.core.FileCodec
 import com.whmdg.mczj.tools.encryption.core.FileConstants
+import com.whmdg.mczj.tools.encryption.core.EncryptionTraceLog
 import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -90,9 +91,12 @@ object CryptoService {
         onProgress: (Long, Long) -> Unit = { _, _ -> },
         cancelFlag: AtomicBoolean? = null
     ): File {
+        val trace = EncryptionTraceLog.enabled(context)
+        if (trace) EncryptionTraceLog.log("CryptoService.encryptIntoVault: src=${srcFile.name} size=${srcFile.length()} subDir=$subDir custom=${session.record.customEncryption}")
+
         val origName = srcFile.name
         val outName: String
-        
+
         if (session.record.encryptFilename) {
             val enc = FilenameCodec.encrypt(
                 filename = origName,
@@ -111,7 +115,7 @@ object CryptoService {
         val targetDir = if (subDir.isEmpty()) session.vaultDir else File(session.vaultDir, subDir)
         val outFile = File(targetDir, outName)
         outFile.parentFile?.mkdirs()
-        
+
         if (outFile.exists() && !overwrite) {
             throw Exception("目标加密文件已存在: ${outFile.path}")
         }
@@ -122,8 +126,10 @@ object CryptoService {
             dek = session.dek,
             customEncryption = session.record.customEncryption,
             onProgress = onProgress,
-            cancelFlag = cancelFlag
+            cancelFlag = cancelFlag,
+            context = context
         )
+        if (trace) EncryptionTraceLog.log("CryptoService.encryptIntoVault done: out=${outFile.name}")
         return outFile
     }
 

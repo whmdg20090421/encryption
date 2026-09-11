@@ -919,6 +919,27 @@ fun FunctionalTestScreen(onBack: () -> Unit) {
                         }
                     )
                 }
+
+                Spacer(Modifier.height(16.dp))
+
+                SettingsSection(
+                    title = "加密流程 Debug",
+                    icon = Icons.Default.Lock
+                ) {
+                    var encTraceEnabled by remember {
+                        mutableStateOf(com.whmdg.mczj.tools.encryption.core.EncryptionTraceLog.enabled(context))
+                    }
+                    CompactSettingsToggle(
+                        title = "加密流程日志",
+                        subtitle = "记录加密调用链、速度与用时到诊断日志目录",
+                        icon = Icons.Default.Speed,
+                        checked = encTraceEnabled,
+                        onCheckedChange = {
+                            encTraceEnabled = it
+                            com.whmdg.mczj.tools.encryption.core.EncryptionTraceLog.setEnabled(context, it)
+                        }
+                    )
+                }
             }
         }
     }

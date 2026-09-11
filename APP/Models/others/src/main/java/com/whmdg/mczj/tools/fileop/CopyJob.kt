@@ -6,6 +6,7 @@ import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import com.whmdg.mczj.tools.encryption.core.FileConstants
+import com.whmdg.mczj.tools.encryption.core.EncryptionTraceLog
 import com.whmdg.mczj.tools.encryption.services.CryptoService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
 import com.whmdg.mczj.tools.ui.SizeCalcManager
@@ -264,6 +265,11 @@ class CopyJob(
     }
 
     private fun copyExternalToVault(ctx: VaultOperationContext.ExternalToVault) {
+        val trace = EncryptionTraceLog.enabled(context)
+        if (trace) {
+            EncryptionTraceLog.start(context, "ExternalToVault")
+            EncryptionTraceLog.log("copyExternalToVault: sources=${sources.size} totalSize=${duTotalSize(*sources.toTypedArray())} target=${ctx.targetSession.vaultDir.name}")
+        }
         val totalSize = duTotalSize(*sources.toTypedArray())
         var doneBytes = 0L
         var doneFiles = 0
@@ -344,6 +350,7 @@ class CopyJob(
 
         // 写入 FolderSizeDb
         saveFolderSizes(ctx.targetSession.vaultDir, folderSizeAccumulator)
+        if (trace) EncryptionTraceLog.finish()
     }
 
     private fun encryptDirToVault(

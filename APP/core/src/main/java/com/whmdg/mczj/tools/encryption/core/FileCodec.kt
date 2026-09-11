@@ -111,13 +111,19 @@ object FileCodec {
         dek: ByteArray,
         customEncryption: Boolean,
         onProgress: (Long, Long) -> Unit = { _, _ -> },
-        cancelFlag: AtomicBoolean? = null
+        cancelFlag: AtomicBoolean? = null,
+        context: android.content.Context? = null
     ) {
         val aad = if (customEncryption) FileConstants.aadCustomObf else null
         val totalSize = src.length()
         val chunkSize = chunkSizeFor(totalSize)
+        val trace = context != null && EncryptionTraceLog.enabled(context)
         // 复用 buffer：chunkLen(4B) + IV(12B)，合并一次写出减少 syscall
         val headerBuf = ByteArray(4 + 12)
+
+        if (trace) {
+            EncryptionTraceLog.log("FileCodec.encrypt: src=${src.name} size=$totalSize chunkSize=$chunkSize chunks=${(totalSize + chunkSize - 1) / chunkSize}")
+        }
 
         FileOutputStream(dst).use { out ->
             if (customEncryption) {
@@ -125,18 +131,22 @@ object FileCodec {
             }
 
             var bytesDone = 0L
+            var chunkIndex = 0
             FileInputStream(src).use { inp ->
                 val buffer = ByteArray(chunkSize)
                 while (true) {
                     if (cancelFlag?.get() == true) throw InterruptedIOException("用户取消")
+                    val t0 = if (trace) System.nanoTime() else 0L
                     val read = inp.read(buffer)
                     if (read <= 0) break
+                    val t1 = if (trace) System.nanoTime() else 0L
                     val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
                     val e = AesGcm256.encrypt(dek, chunk, aad)
                     var cipherOut = e.ciphertext
                     if (customEncryption && cipherOut.size >= 1024) {
                         cipherOut = NailObfuscation.insert(cipherOut, e.iv, dek)
                     }
+                    val t2 = if (trace) System.nanoTime() else 0L
                     // 合并写出：length(4B) + IV(12B) 一次 syscall，密文紧随
                     val chunkLen = e.iv.size + cipherOut.size
                     headerBuf[0] = (chunkLen shr 24).toByte()
@@ -146,10 +156,24 @@ object FileCodec {
                     System.arraycopy(e.iv, 0, headerBuf, 4, e.iv.size)
                     out.write(headerBuf, 0, 4 + e.iv.size)
                     out.write(cipherOut)
+                    val t3 = if (trace) System.nanoTime() else 0L
                     bytesDone += read
+                    if (trace) {
+                        val readMs = (t1 - t0) / 1_000_000.0
+                        val encMs = (t2 - t1) / 1_000_000.0
+                        val writeMs = (t3 - t2) / 1_000_000.0
+                        val totalMs = (t3 - t0) / 1_000_000.0
+                        val speed = if (totalMs > 0) read / 1024.0 / 1024.0 / (totalMs / 1000.0) else 0.0
+                        EncryptionTraceLog.log("chunk#${chunkIndex}: read=${read}B readTime=%.1fms encTime=%.1fms writeTime=%.1fms total=%.1fms speed=%.1fMB/s".format(readMs, encMs, writeMs, totalMs, speed))
+                        EncryptionTraceLog.addBytes(read.toLong())
+                    }
+                    chunkIndex++
                     onProgress(bytesDone, totalSize)
                 }
             }
+        }
+        if (trace) {
+            EncryptionTraceLog.log("FileCodec.encrypt done: totalBytes=$totalSize")
         }
         onProgress(totalSize, totalSize)
     }
