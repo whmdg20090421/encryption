@@ -5,3 +5,11 @@ plugins {
     alias(libs.plugins.kotlin.compose) apply false
     id("com.google.devtools.ksp") version libs.versions.ksp apply false
 }
+
+allprojects {
+    configurations.all {
+        resolutionStrategy {
+            force("org.jetbrains.kotlin:kotlin-stdlib:${libs.versions.kotlin.get()}")
+        }
+    }
+}
