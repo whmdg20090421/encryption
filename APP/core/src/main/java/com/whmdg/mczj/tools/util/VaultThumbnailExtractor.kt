@@ -19,29 +19,19 @@ object VaultThumbnailExtractor {
             val src = File(encryptedPath)
             if (!src.exists()) return@withContext null
 
-            // Decrypt to temp file, then read as thumbnail
-            val tmpFile = File.createTempFile("vault_thumb_", ".tmp")
-            try {
-                FileCodec.decrypt(
-                    src = src,
-                    dst = tmpFile,
-                    dek = dek,
-                    customEncryption = customEncryption
-                )
+            val buffer = ByteArrayOutputStream()
+            FileCodec.decryptToStream(src, buffer, dek, customEncryption)
 
-                val opts = BitmapFactory.Options().apply {
-                    inJustDecodeBounds = true
-                }
-                BitmapFactory.decodeFile(tmpFile.absolutePath, opts)
-
-                opts.inSampleSize = calculateInSampleSize(opts, targetSize, targetSize)
-                opts.inJustDecodeBounds = false
-                opts.inPreferredConfig = Bitmap.Config.RGB_565
-
-                return@withContext BitmapFactory.decodeFile(tmpFile.absolutePath, opts)
-            } finally {
-                tmpFile.delete()
+            val opts = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
             }
+            BitmapFactory.decodeByteArray(buffer.toByteArray(), 0, buffer.size(), opts)
+
+            opts.inSampleSize = calculateInSampleSize(opts, targetSize, targetSize)
+            opts.inJustDecodeBounds = false
+            opts.inPreferredConfig = Bitmap.Config.RGB_565
+
+            BitmapFactory.decodeByteArray(buffer.toByteArray(), 0, buffer.size(), opts)
         } catch (e: Exception) {
             null
         }

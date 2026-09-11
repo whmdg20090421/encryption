@@ -7,6 +7,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InterruptedIOException
+import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
@@ -178,6 +179,55 @@ object FileCodec {
             }
         }
         onProgress(totalSize, totalSize)
+    }
+
+    /**
+     * 解密到 [OutputStream]（内存），用于缩略图等不需要落盘的场景。
+     * 逻辑与 [decrypt] 完全一致，仅输出目标不同。
+     */
+    fun decryptToStream(
+        src: File,
+        out: OutputStream,
+        dek: ByteArray,
+        customEncryption: Boolean
+    ) {
+        val aad = if (customEncryption) FileConstants.aadCustomObf else null
+        val totalSize = src.length()
+
+        FileInputStream(src).use { `in` ->
+            if (customEncryption) {
+                val magic = ByteArray(FileConstants.magicHeader.size)
+                `in`.read(magic)
+                if (!magic.contentEquals(FileConstants.magicHeader)) {
+                    throw IllegalArgumentException("文件头损坏或未启用对应加密配置")
+                }
+            }
+
+            val dataEnd = totalSize
+            var currentPos = if (customEncryption) FileConstants.magicHeader.size.toLong() else 0L
+
+            while (currentPos < dataEnd) {
+                val clBuf = ByteArray(4)
+                val readLen = `in`.read(clBuf)
+                if (readLen < 4) break
+                currentPos += 4
+                val chunkLen = ByteBuffer.wrap(clBuf).order(ByteOrder.BIG_ENDIAN).int
+                if (chunkLen < 12 || chunkLen > FileConstants.MAX_CHUNK_SIZE) {
+                    throw IllegalArgumentException("块长度异常: $chunkLen，文件可能被篡改")
+                }
+                val iv = ByteArray(12)
+                `in`.read(iv)
+                var cipher = ByteArray(chunkLen - 12)
+                `in`.read(cipher)
+                currentPos += chunkLen
+
+                if (customEncryption && cipher.size >= 1040) {
+                    cipher = NailObfuscation.extract(cipher, iv, dek)
+                }
+                val plain = AesGcm256.decrypt(dek, iv, cipher, aad)
+                out.write(plain)
+            }
+        }
     }
 
     /**

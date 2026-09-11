@@ -19,12 +19,12 @@ class VaultThumbnailFetcher(
     private val cacheDir: File
 ) : Fetcher {
     override suspend fun fetch(): FetchResult {
-        // Priority: vault_preview (original) > vault_cache (thumbnail) > generate
-        val previewFile = File(context.cacheDir, "vault_preview/${data.vaultName}/${data.entryPath}")
-        val thumbFile = File(cacheDir, "vault_cache/${data.vaultName}/${data.entryPath}.thumb")
+        // 优先级 2→1→生成，同目录：原图 = {path}，缩略图 = {path}.thumb
+        val baseFile = File(cacheDir, "vault_cache/${data.vaultName}/${data.entryPath}")
+        val thumbFile = File("${baseFile.absolutePath}.thumb")
 
         val imageFile = when {
-            previewFile.exists() -> previewFile
+            baseFile.exists() -> baseFile
             thumbFile.exists() -> thumbFile
             else -> {
                 val bitmap = VaultThumbnailExtractor.extractThumbnail(

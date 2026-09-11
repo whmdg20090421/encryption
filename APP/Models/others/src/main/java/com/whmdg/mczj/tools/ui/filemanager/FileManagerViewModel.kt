@@ -3337,16 +3337,16 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         ctrl.vaultPreviewJob?.cancel()
         ctrl.vaultPreviewJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                val cacheBase = File(context.cacheDir, "vault_preview/${session.record.name}")
+                val cacheBase = File(context.cacheDir, "vault_cache/${session.record.name}")
                 cacheBase.mkdirs()
 
                 // 清理该保险箱过期缓存（>1天）
                 val now = System.currentTimeMillis()
-                cacheBase.listFiles()?.forEach { f ->
+                cacheBase.listFiles()?.filter { !it.name.endsWith(".thumb") }?.forEach { f ->
                     if (now - f.lastModified() > 86_400_000L) f.delete()
                 }
 
-                // 缓存路径 = vault_preview/{vaultName}/{相对路径}
+                // 缓存路径 = vault_cache/{vaultName}/{相对路径}（与缩略图同目录）
                 // relativePath = "photos/image.jpg.whm" → destPath = "photos/image.jpg"
                 val destPath = relativePath.removeSuffix(".whm")
                 val destFile = File(cacheBase, destPath)
@@ -3813,9 +3813,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 // 保险箱模式：从文件系统读取当前目录，构建图片列表和映射
                 val ctx = VaultKeyHolder.get(vaultSessionId)
                 if (ctx != null) {
-                    // entry.path 是解密后的缓存路径，如 vault_preview/我的保险箱/photos/image.jpg
+                    // entry.path 是解密后的缓存路径，如 vault_cache/我的保险箱/photos/image.jpg
                     // 需要找到对应的加密源文件
-                    val cacheBase = File(context.cacheDir, "vault_preview/${File(ctx.vaultDir).name}")
+                    val cacheBase = File(context.cacheDir, "vault_cache/${File(ctx.vaultDir).name}")
                     val vaultDirPath = ctx.vaultDir
 
                     // 从缓存路径反推相对路径，再找到加密源目录
