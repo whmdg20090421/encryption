@@ -2605,11 +2605,12 @@ class PanelCoordinator(
      * 子文件夹：加该文件夹在 FolderSizeDb 中的缓存值
      */
     private fun calculateRootSize(vaultPath: String, entries: List<FileEntry>) {
+        val db = folderSizeDb()
         var totalSize = 0L
         for (entry in entries) {
             if (entry.isDirectory) {
                 // 子文件夹：从 FolderSizeDb 读取缓存大小
-                val cached = folderSizeDb.get(entry.path)
+                val cached = db.get(entry.path)
                 totalSize += cached?.size ?: 0L
             } else {
                 // 文件：直接加文件大小
@@ -2618,8 +2619,8 @@ class PanelCoordinator(
         }
         // 更新 FolderSizeDb 中根目录的大小
         val saveDir = AppDataPaths.fileManager(context)
-        folderSizeDb.put(vaultPath, FolderSizeInfo(totalSize, System.currentTimeMillis()))
-        folderSizeDb.save(saveDir)
+        db.put(vaultPath, FolderSizeInfo(totalSize, System.currentTimeMillis()))
+        db.save(saveDir)
         // 刷新面板显示
         refreshBoth()
     }
