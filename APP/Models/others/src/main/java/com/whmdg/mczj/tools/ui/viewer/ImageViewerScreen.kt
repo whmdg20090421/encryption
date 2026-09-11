@@ -18,7 +18,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import com.github.panpf.zoomimage CoilZoomAsyncImage
+import com.github.panpf.zoomimage.CoilZoomAsyncImage
 import com.whmdg.mczj.tools.util.ArchiveBrowser
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.ui.filemanager.StandardDialog
