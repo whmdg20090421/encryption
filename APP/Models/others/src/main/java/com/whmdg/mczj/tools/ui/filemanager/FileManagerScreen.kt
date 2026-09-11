@@ -177,7 +177,9 @@ data class VaultContext(
     val vaultDir: String,
     val vaultName: String,
     val dek: ByteArray,
-    val customEncryption: Boolean
+    val customEncryption: Boolean,
+    val encryptFilename: Boolean = false,
+    val nameMapping: com.whmdg.mczj.tools.encryption.data.NameMapping = com.whmdg.mczj.tools.encryption.data.NameMapping.empty()
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -1454,7 +1456,9 @@ fun FileManagerScreen(
                                                 vaultDir = session.vaultDir.absolutePath,
                                                 vaultName = session.record.name,
                                                 dek = session.dek,
-                                                customEncryption = session.record.customEncryption
+                                                customEncryption = session.record.customEncryption,
+                                                encryptFilename = session.record.encryptFilename,
+                                                nameMapping = session.nameMapping
                                             )
                                         }
                                     } else null,
@@ -1541,7 +1545,9 @@ fun FileManagerScreen(
                                                 vaultDir = session.vaultDir.absolutePath,
                                                 vaultName = session.record.name,
                                                 dek = session.dek,
-                                                customEncryption = session.record.customEncryption
+                                                customEncryption = session.record.customEncryption,
+                                                encryptFilename = session.record.encryptFilename,
+                                                nameMapping = session.nameMapping
                                             )
                                         }
                                     } else null,
@@ -3370,7 +3376,7 @@ fun FileManagerScreen(
                     }
                     .let { if (it > 0) -it else 0 }
             } else 0
-            FileOperationManager.delete(deleteEntries, recycleBinEnabled, accessLevel, context, vaultId, vaultDelta, vaultFileCountDelta)
+            FileOperationManager.delete(deleteEntries, recycleBinEnabled, accessLevel, context, vaultId, vaultDelta, vaultFileCountDelta, vaultSession?.vaultDir)
             if (vm.focusedPanel == FocusedPanel.LEFT) {
                 vm.左.selectedPaths = emptySet(); swipeStates[0].selectFlag = 0; swipeStates[0].lastIndex = -1
             } else {
@@ -5841,7 +5847,17 @@ private fun FileEntryRow(
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         contentAlignment = Alignment.Center
                     ) {
-                        val ext = extractExtension(entry.name)
+                        val originalName = if (vaultContext != null && vaultContext.encryptFilename && entry.name.endsWith(".whm")) {
+                            com.whmdg.mczj.tools.encryption.core.FilenameCodec.decrypt(
+                                encryptedName = entry.name.removeSuffix(".whm"),
+                                dek = vaultContext.dek,
+                                aad = if (vaultContext.customEncryption) com.whmdg.mczj.tools.encryption.core.FileConstants.aadCustomObf else null,
+                                lookupMapping = { hash -> vaultContext.nameMapping.get(hash) }
+                            )
+                        } else {
+                            entry.name
+                        }
+                        val ext = extractExtension(originalName)
                         val category = categorizeFile(ext)
                         val isImageFile = category == FileCategory.IMAGE && !entry.isDirectory
                             && entry.name != "返回上一级"

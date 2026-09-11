@@ -2595,6 +2595,33 @@ class PanelCoordinator(
         val vaultPath = session.vaultDir.absolutePath
         ctrl.state.path = PanelPath.Vault(vaultPath, vaultPath)
         ctrl.state.entries = ctrl.listDirectory(vaultPath)
+        // 计算根目录大小 = 所有直接子项的大小之和（深度为1）
+        calculateRootSize(vaultPath, ctrl.state.entries)
+    }
+
+    /**
+     * 计算根目录大小 = 所有直接子项的大小之和（深度为1）。
+     * 文件：加文件本身的大小
+     * 子文件夹：加该文件夹在 FolderSizeDb 中的缓存值
+     */
+    private fun calculateRootSize(vaultPath: String, entries: List<FileEntry>) {
+        var totalSize = 0L
+        for (entry in entries) {
+            if (entry.isDirectory) {
+                // 子文件夹：从 FolderSizeDb 读取缓存大小
+                val cached = folderSizeDb.get(entry.path)
+                totalSize += cached?.size ?: 0L
+            } else {
+                // 文件：直接加文件大小
+                totalSize += entry.size
+            }
+        }
+        // 更新 FolderSizeDb 中根目录的大小
+        val saveDir = AppDataPaths.fileManager(context)
+        folderSizeDb.put(vaultPath, FolderSizeInfo(totalSize, System.currentTimeMillis()))
+        folderSizeDb.save(saveDir)
+        // 刷新面板显示
+        refreshBoth()
     }
 
     /** 退出 vault 模式：清除所有 Controller 的会话 */

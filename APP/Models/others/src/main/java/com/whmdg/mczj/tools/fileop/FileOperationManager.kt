@@ -183,11 +183,12 @@ object FileOperationManager {
         context: Context,
         vaultId: Int? = null,
         vaultSizeDelta: Long = 0L,
-        vaultFileCountDelta: Int = 0
+        vaultFileCountDelta: Int = 0,
+        vaultDir: java.io.File? = null
     ) {
         _progress.value = FileOpProgress(phase = "正在删除", currentBytes = 0, totalBytes = 0, isScanning = true)
         val operator = FileOperator.create(accessLevel)
-        val job = DeleteJob(entries, toRecycleBin, this, context, vaultId, vaultSizeDelta, vaultFileCountDelta).apply {
+        val job = DeleteJob(entries, toRecycleBin, this, context, vaultId, vaultSizeDelta, vaultFileCountDelta, vaultDir).apply {
             this.operator = operator
         }
         FileOperationService.submit(job, context)

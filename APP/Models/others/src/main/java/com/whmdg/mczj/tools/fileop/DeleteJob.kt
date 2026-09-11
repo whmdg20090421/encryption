@@ -2,6 +2,8 @@ package com.whmdg.mczj.tools.fileop
 
 import android.content.Context
 import com.whmdg.mczj.tools.AppDataPaths
+import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
+import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.ShellEscape
 import kotlinx.coroutines.runBlocking
@@ -27,7 +29,8 @@ class DeleteJob(
     private val context: Context,
     private val vaultId: Int? = null,
     private val vaultSizeDelta: Long = 0L,
-    private val vaultFileCountDelta: Int = 0
+    private val vaultFileCountDelta: Int = 0,
+    private val vaultDir: File? = null
 ) : FileOperationJob() {
 
     private var skipAllErrors = false
@@ -115,6 +118,7 @@ class DeleteJob(
                 manager.notifyRefreshNeeded()
             } else {
                 // 步骤二：其他错误或正常完成
+                updateFolderSizeDb()
                 manager.updateProgress(null)
                 manager.notifyRefreshNeeded()
             }
@@ -130,10 +134,45 @@ class DeleteJob(
     }
 
     /**
-     * 将文件移到回收站。
-     * 回收站路径：<internal_files>/.recycle_bin/
-     * 通过 operator（Permission.MAX）执行 mv，确保 ROOT-only 文件也能移动。
+     * 删除完成后更新 FolderSizeDb：
+     * 1. 移除被删除路径及其所有子路径
+     * 2. 从所有祖先路径中减去被删除的大小
+     * 3. 通知 UI 更新
      */
+    private fun updateFolderSizeDb() {
+        val saveDir = AppDataPaths.fileManager(context)
+        val db = FolderSizeDb.load(saveDir)
+        val affectedSizes = mutableMapOf<String, Long>()
+
+        for (entry in entries) {
+            val deletedSize = entry.size.takeIf { it > 0 } ?: calculateTotalSize(entry.path)
+
+            // 移除被删除路径及其所有子路径
+            if (entry.isDirectory) {
+                db.removeDescendants(entry.path)
+            } else {
+                db.remove(entry.path)
+            }
+
+            // 从所有祖先路径中减去被删除的大小
+            var parent = File(entry.path).parentFile
+            while (parent != null) {
+                val existing = db.get(parent.absolutePath)
+                if (existing == null) {
+                    // 没有缓存记录，说明已超出统计范围，停止向上遍历
+                    break
+                }
+                val newSize = maxOf(0L, existing.size - deletedSize)
+                db.put(parent.absolutePath, FolderSizeInfo(newSize, System.currentTimeMillis()))
+                affectedSizes[parent.absolutePath] = newSize
+                parent = parent.parentFile
+            }
+        }
+
+        db.save(saveDir)
+        manager.notifyFolderSizeChanged(affectedSizes)
+    }
+
     private fun moveToRecycleBin(entry: DeleteEntry) {
         val binDir = AppDataPaths.recycleBin(context)
         operator.mkdir(binDir.absolutePath)
