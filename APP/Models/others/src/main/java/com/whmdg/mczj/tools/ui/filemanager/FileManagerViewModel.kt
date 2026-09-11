@@ -3612,13 +3612,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
 
 
-    /** 回收站是否在根目录 */
-    val isAtRecycleBinRoot: Boolean get() {
-        val panel = currentPanel
-        val binRoot = AppDataPaths.recycleBin(context).absolutePath
-        return panel.recycleBinPath == binRoot
-    }
-
     /**
      * 退出回收站视图，恢复到正常目录浏览。
      */

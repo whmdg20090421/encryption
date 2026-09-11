@@ -1321,6 +1321,7 @@ fun FileManagerScreen(
                 } else {
                     // 按面板索引计算父路径（云盘模式使用云盘面板的 currentPath）
                     val cloudCurrentPath = vm.panels.cloud?.state?.currentPath
+                    val recycleBinRootPath = AppDataPaths.recycleBin(context).absolutePath
                     val parentPaths = FocusedPanel.entries.map { side ->
                         if (side == FocusedPanel.LEFT && vm.panels.isCloudMode && cloudCurrentPath != null) {
                             // 云盘模式：基于云盘面板的 currentPath 计算
@@ -1331,8 +1332,8 @@ fun FileManagerScreen(
                             computeParentPath(
                                 panelPath = panel.path,
                                 isRecycleBinPanel = vm.recycleBinPanel == side,
-                                isAtRecycleBinRoot = vm.isAtRecycleBinRoot,
-                                recycleBinPath = panel.recycleBinPath
+                                recycleBinPath = panel.recycleBinPath,
+                                recycleBinRootPath = recycleBinRootPath
                             )
                         }
                     }
@@ -5539,11 +5540,11 @@ fun FileManagerScreen(
 private fun computeParentPath(
     panelPath: PanelPath,
     isRecycleBinPanel: Boolean,
-    isAtRecycleBinRoot: Boolean,
-    recycleBinPath: String
+    recycleBinPath: String,
+    recycleBinRootPath: String
 ): String? {
     if (isRecycleBinPanel) {
-        if (isAtRecycleBinRoot) return null
+        if (recycleBinPath == recycleBinRootPath) return null
         return java.io.File(recycleBinPath).parentFile?.absolutePath?.let { p ->
             if (try { java.io.File(p).canRead() } catch (_: Exception) { false }) p else null
         }
