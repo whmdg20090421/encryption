@@ -38,7 +38,7 @@ object VaultThumbnailExtractor {
                 opts.inJustDecodeBounds = false
                 opts.inPreferredConfig = Bitmap.Config.RGB_565
 
-                BitmapFactory.decodeFile(tmpFile.absolutePath, opts)
+                return@withContext BitmapFactory.decodeFile(tmpFile.absolutePath, opts)
             } finally {
                 tmpFile.delete()
             }

@@ -1449,7 +1449,7 @@ fun FileManagerScreen(
                                         }
                                     } else null,
                                     vaultContext = if (rightPanel.path is PanelPath.Vault) {
-                                        vm.vaultSession?.let { session ->
+                                        vm.panels.right.vaultSession?.let { session ->
                                             VaultContext(
                                                 vaultDir = session.vaultDir.absolutePath,
                                                 vaultName = session.record.name,
@@ -1536,7 +1536,7 @@ fun FileManagerScreen(
                                         }
                                     } else null,
                                     vaultContext = if (panel.path is PanelPath.Vault) {
-                                        vm.vaultSession?.let { session ->
+                                        vm.panels[side.panelId].vaultSession?.let { session ->
                                             VaultContext(
                                                 vaultDir = session.vaultDir.absolutePath,
                                                 vaultName = session.record.name,
