@@ -38,3 +38,8 @@ target_link_options(authcore PRIVATE
 )
 
 target_link_libraries(authcore log)
+
+# AES-256-GCM 硬件加速：直接调用系统 libcrypto.so 的 EVP API
+add_library(cryptolib SHARED crypto_jni.c)
+find_library(crypto-lib crypto)
+target_link_libraries(cryptolib log ${crypto-lib})
