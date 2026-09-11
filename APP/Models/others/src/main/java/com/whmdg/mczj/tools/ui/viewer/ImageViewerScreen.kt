@@ -1,8 +1,5 @@
 package com.whmdg.mczj.tools.ui.viewer
 
-import android.net.Uri
-import android.view.GestureDetector
-import android.view.MotionEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,9 +14,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.viewinterop.AndroidView
-import com.awxkee.jxlcoder.JxlCoder
-import com.github.chrisbanes.photoview.PhotoView
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import coil3.request.ImageRequest
+import coil3.request.crossfade
+import com.github.panpf.zoomimage CoilZoomAsyncImage
 import com.whmdg.mczj.tools.util.ArchiveBrowser
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.ui.filemanager.StandardDialog
@@ -126,7 +125,7 @@ private fun ArchiveImagePage(
     archivePassword: String,
     archivePermissionLevel: String
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     var loadState by remember(file.absolutePath) { mutableIntStateOf(if (file.exists()) 1 else 0) }
     var loadError by remember(file.absolutePath) { mutableStateOf<String?>(null) }
 
@@ -152,29 +151,23 @@ private fun ArchiveImagePage(
     }
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        if (loadState == 1) {
-            AndroidView(
-                factory = { context -> createPhotoView(context) },
-                update = { photoView ->
-                    if (photoView.tag != file.absolutePath) {
-                        photoView.tag = file.absolutePath
-                        if (file.extension.equals("jxl", ignoreCase = true)) {
-                            try {
-                                photoView.setImageBitmap(JxlCoder.decode(file.readBytes()))
-                            } catch (e: Exception) {
-                                DiagnosticLog.log("ImageViewer", "JXL 解码失败: ${e.message}")
-                            }
-                        } else {
-                            photoView.setImageURI(Uri.fromFile(file))
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
+        when (loadState) {
+            1 -> CoilZoomAsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(file)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+                onError = { state ->
+                    DiagnosticLog.log("ImageViewer", "图片加载失败: ${state.result.throwable.message}")
+                    loadError = state.result.throwable.message
+                    loadState = 2
+                }
             )
-        } else if (loadState == 2) {
-            Text(loadError ?: "图片解压失败", color = Color.White)
-        } else {
-            CircularProgressIndicator(color = Color.White)
+            2 -> Text(loadError ?: "图片解压失败", color = Color.White)
+            else -> CircularProgressIndicator(color = Color.White)
         }
     }
 }
@@ -184,7 +177,7 @@ private fun VaultImagePage(
     file: File,
     vaultSessionId: String
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     var loadState by remember(file.absolutePath) { mutableIntStateOf(if (file.exists()) 1 else 0) }
     var loadError by remember(file.absolutePath) { mutableStateOf<String?>(null) }
 
@@ -236,92 +229,23 @@ private fun VaultImagePage(
     }
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        if (loadState == 1) {
-            AndroidView(
-                factory = { context -> createPhotoView(context) },
-                update = { photoView ->
-                    if (photoView.tag != file.absolutePath) {
-                        photoView.tag = file.absolutePath
-                        if (file.extension.equals("jxl", ignoreCase = true)) {
-                            try {
-                                photoView.setImageBitmap(JxlCoder.decode(file.readBytes()))
-                            } catch (e: Exception) {
-                                DiagnosticLog.log("ImageViewer", "JXL 解码失败: ${e.message}")
-                            }
-                        } else {
-                            photoView.setImageURI(Uri.fromFile(file))
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-        } else if (loadState == 2) {
-            Text("加载失败", color = Color.White)
-        } else {
-            CircularProgressIndicator(color = Color.White)
-        }
-    }
-}
-
-private class SmartPhotoView(context: android.content.Context) : PhotoView(context) {
-    private var downX = 0f
-    private var atLeftEdge = false
-    private var atRightEdge = false
-
-    init {
-        minimumScale = 1f
-        mediumScale = 2f
-        maximumScale = Float.MAX_VALUE
-        scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-        setOnDoubleTapListener(object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDoubleTap(e: MotionEvent): Boolean {
-                val targetScale = if (scale > minimumScale + 0.01f) minimumScale else scaleForDoubleTap()
-                setScale(targetScale, e.x, e.y, true)
-                return true
-            }
-        })
-        setOnMatrixChangeListener {
-            val rect = displayRect
-            if (rect == null || rect.width() <= width) {
-                atLeftEdge = false
-                atRightEdge = false
-                setAllowParentInterceptOnEdge(true)
-            } else {
-                atLeftEdge = rect.left >= -1f
-                atRightEdge = rect.right <= width + 1f
-                setAllowParentInterceptOnEdge(atLeftEdge || atRightEdge)
-            }
-        }
-    }
-
-    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                downX = ev.x
-                if (scale > 1f) parent.requestDisallowInterceptTouchEvent(true)
-            }
-            MotionEvent.ACTION_POINTER_DOWN -> parent?.requestDisallowInterceptTouchEvent(true)
-            MotionEvent.ACTION_MOVE -> {
-                if (ev.pointerCount == 1 && scale > 1f) {
-                    val dx = ev.x - downX
-                    if ((atLeftEdge && dx < 0) || (atRightEdge && dx > 0)) {
-                        parent.requestDisallowInterceptTouchEvent(false)
-                    }
+        when (loadState) {
+            1 -> CoilZoomAsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(file)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+                onError = { state ->
+                    DiagnosticLog.log("VaultImage", "图片加载失败: ${state.result.throwable.message}")
+                    loadError = state.result.throwable.message
+                    loadState = 2
                 }
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
-                parent.requestDisallowInterceptTouchEvent(false)
+            )
+            2 -> Text("加载失败", color = Color.White)
+            else -> CircularProgressIndicator(color = Color.White)
         }
-        return super.dispatchTouchEvent(ev)
-    }
-
-    private fun scaleForDoubleTap(): Float {
-        val visibleRect = displayRect
-        if (visibleRect == null || width <= 0 || height <= 0) return mediumScale
-        val horizontalScale = width / visibleRect.width()
-        val verticalScale = height / visibleRect.height()
-        return scale * maxOf(horizontalScale, verticalScale)
     }
 }
-
-private fun createPhotoView(context: android.content.Context) = SmartPhotoView(context)
