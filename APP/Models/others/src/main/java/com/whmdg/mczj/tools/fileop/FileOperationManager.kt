@@ -241,7 +241,8 @@ data class ConflictRequest(
     val sourceSize: Long,
     val targetSize: Long,
     val sourceModifiedTime: Long,
-    val targetModifiedTime: Long
+    val targetModifiedTime: Long,
+    val allowRename: Boolean = true
 )
 
 data class ConflictResult(val action: ConflictAction, val newName: String? = null)

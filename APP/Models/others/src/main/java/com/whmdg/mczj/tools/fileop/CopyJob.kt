@@ -4,6 +4,8 @@ import android.content.Context
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
+import com.whmdg.mczj.tools.encryption.core.FilenameCodec
+import com.whmdg.mczj.tools.encryption.core.FileConstants
 import com.whmdg.mczj.tools.encryption.services.CryptoService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
 import com.whmdg.mczj.tools.ui.SizeCalcManager
@@ -251,12 +253,28 @@ class CopyJob(
     //  Vault 操作：外部 → 保险箱（加密引入）
     // ═══════════════════════════════════════════════════════
 
+    /** 用 du -sb 获取路径总大小（字节）。 */
+    private fun duTotalSize(vararg paths: String): Long {
+        val proc = Runtime.getRuntime().exec(arrayOf("/system/bin/du", "-sb") + paths)
+        val output = proc.inputStream.bufferedReader().readText()
+        proc.waitFor()
+        return output.lines().sumOf { line ->
+            line.split("\t").firstOrNull()?.trim()?.toLongOrNull() ?: 0L
+        }
+    }
+
     private fun copyExternalToVault(ctx: VaultOperationContext.ExternalToVault) {
-        val totalSize = sources.sumOf { File(it).walkTopDown().filter { f -> f.isFile }.sumOf { f -> f.length() } }
+        val totalSize = duTotalSize(*sources.toTypedArray())
         var doneBytes = 0L
         var doneFiles = 0
         // 保险箱目录大小累加器（绝对路径 → 累加大小）
         val folderSizeAccumulator = mutableMapOf<String, Long>()
+        // 预计算每个源的文件大小总和，避免后续重复 walkTopDown
+        val sourceSizes = sources.map { src ->
+            val f = File(src)
+            if (f.isFile) f.length()
+            else f.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        }
 
         manager.updateProgress(FileOpProgress(
             phase = "正在加密",
@@ -267,23 +285,29 @@ class CopyJob(
             fileCount = sources.size
         ))
 
-        for (src in sources) {
+        for ((i, src) in sources.withIndex()) {
             throwIfCancelled()
             val srcFile = File(src)
             val subDir = if (ctx.targetSubDir.isEmpty()) "" else ctx.targetSubDir
             if (srcFile.isDirectory) {
                 val dirSubDir = if (subDir.isEmpty()) srcFile.name else "$subDir/${srcFile.name}"
                 encryptDirToVault(srcFile, dirSubDir, ctx.targetSession, totalSize, doneBytes, doneFiles, folderSizeAccumulator)
-                doneBytes += srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+                doneBytes += sourceSizes[i]
                 // MOVE：整个目录加密完成后立即删除源目录
                 if (purpose == CopyPurpose.MOVE) {
                     srcFile.deleteRecursively()
                 }
             } else {
                 currentStep = "加密: ${srcFile.name}"
+                val overwrite = resolveVaultConflict(ctx.targetSession, srcFile, subDir)
+                if (!overwrite) {
+                    doneFiles++
+                    continue
+                }
                 val fileDoneBytes = doneBytes
                 val encrypted = CryptoService.encryptIntoVault(
                     context, ctx.targetSession, srcFile, subDir,
+                    overwrite = true,
                     onProgress = { encryptedBytes, _ ->
                         manager.updateProgress(FileOpProgress(
                             phase = "正在加密",
@@ -340,9 +364,15 @@ class CopyJob(
                 if (relPath.isEmpty()) parentSubDir else "$parentSubDir/$relPath"
             }
             currentStep = "加密: ${file.name}"
+            val overwrite = resolveVaultConflict(session, file, fileSubDir)
+            if (!overwrite) {
+                doneBytes += file.length()
+                continue
+            }
             val fileDoneBytes = doneBytes
             val encrypted = CryptoService.encryptIntoVault(
                 context, session, file, fileSubDir,
+                overwrite = true,
                 onProgress = { encryptedBytes, _ ->
                     manager.updateProgress(FileOpProgress(
                         phase = "正在加密",
@@ -836,6 +866,47 @@ class CopyJob(
             }
             ConflictAction.SKIP -> null
             ConflictAction.CANCEL -> throw InterruptedIOException("用户取消")
+        }
+    }
+
+    /**
+     * 加密引入前检查：目标加密文件已存在时弹冲突弹窗（仅 跳过/替换）。
+     * 返回 true 表示应覆盖写入，false 表示跳过。
+     */
+    private fun resolveVaultConflict(
+        session: VaultSession,
+        srcFile: File,
+        subDir: String
+    ): Boolean {
+        val outName = if (session.record.encryptFilename) {
+            FilenameCodec.encrypt(
+                filename = srcFile.name,
+                dek = session.dek,
+                aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null
+            ).encoded
+        } else {
+            "${srcFile.name}.whm"
+        }
+        val targetDir = if (subDir.isEmpty()) session.vaultDir else File(session.vaultDir, subDir)
+        val outFile = File(targetDir, outName)
+        if (!outFile.exists()) return true
+
+        val request = ConflictRequest(
+            sourceName = srcFile.name,
+            targetName = outName,
+            isDirectory = false,
+            sourceSize = srcFile.length(),
+            targetSize = outFile.length(),
+            sourceModifiedTime = srcFile.lastModified(),
+            targetModifiedTime = outFile.lastModified(),
+            allowRename = false
+        )
+        val result = runBlocking { manager.resolveConflict(request) }
+        return when (result.action) {
+            ConflictAction.REPLACE -> true
+            ConflictAction.SKIP -> false
+            ConflictAction.CANCEL -> throw InterruptedIOException("用户取消")
+            else -> false
         }
     }
 

@@ -1664,16 +1664,59 @@ fun FileManagerScreen(
                     )
                 }
                 // 进度异常弹窗
-                val anomalyMsg = cloudStateForOverlay.anomalyDialogMessage
-                if (anomalyMsg != null) {
-                    StandardDialog(
-                        onDismissRequest = { cloudStateForOverlay.anomalyDialogMessage = null },
-                        title = { Text("上传异常终止") },
-                        text = { Text(anomalyMsg) },
-                        confirmButton = {
-                            TextButton(onClick = { cloudStateForOverlay.anomalyDialogMessage = null }) { Text("知道了") }
+                val anomalyInfo = cloudStateForOverlay.anomalyDialogInfo
+                if (anomalyInfo != null) {
+                    Dialog(
+                        onDismissRequest = { cloudStateForOverlay.anomalyDialogInfo = null },
+                        properties = DialogProperties(usePlatformDefaultWidth = false)
+                    ) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "上传异常终止",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Text(
+                                    text = anomalyInfo.summary,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                HorizontalDivider()
+                                Box(modifier = Modifier.weight(1f, fill = false).heightIn(max = 300.dp)) {
+                                    val scrollState = rememberScrollState()
+                                    Column(modifier = Modifier.verticalScroll(scrollState)) {
+                                        Text(
+                                            text = anomalyInfo.detail,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    TextButton(onClick = {
+                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("anomaly", anomalyInfo.detail))
+                                        android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+                                    }) { Text("复制") }
+                                    Spacer(Modifier.width(8.dp))
+                                    TextButton(onClick = { cloudStateForOverlay.anomalyDialogInfo = null }) { Text("关闭") }
+                                }
+                            }
                         }
-                    )
+                    }
                 }
             }
 

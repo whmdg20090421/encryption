@@ -95,7 +95,7 @@ fun FileConflictDialog() {
                     HorizontalDivider()
 
                     // 三个单选操作
-                    ConflictAction.entries.filter { it != ConflictAction.CANCEL }.forEach { action ->
+                    ConflictAction.entries.filter { it != ConflictAction.CANCEL && (req.allowRename || it != ConflictAction.RENAME) }.forEach { action ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()

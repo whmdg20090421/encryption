@@ -73,7 +73,7 @@ class CloudPaneController(
         /** 上传冲突确认对话框 */
         var uploadConflictDialog by mutableStateOf<UploadConflictState?>(null)
         /** 进度异常弹窗（为 null 时隐藏） */
-        var anomalyDialogMessage by mutableStateOf<String?>(null)
+        var anomalyDialogInfo by mutableStateOf<AnomalyDialogInfo?>(null)
         /** 上传功能是否被禁用（用户取消下载覆盖时设置） */
         var uploadDisabled by mutableStateOf(false)
         /** 文件夹大小异常：需要重新计算的路径集合 */
@@ -89,6 +89,11 @@ class CloudPaneController(
         val errorMessage: String = "",
         val onRetry: () -> Unit = {},
         val onConfirm: () -> Unit = {}
+    )
+
+    data class AnomalyDialogInfo(
+        val summary: String,
+        val detail: String
     )
 
     data class DeletedFilesState(
@@ -357,7 +362,10 @@ class CloudPaneController(
                         } catch (_: Exception) {}
                         if (anomalyCount >= 5) {
                             anomalyTerminated.set(true)
-                            state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
+                            state.anomalyDialogInfo = AnomalyDialogInfo(
+                                summary = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。",
+                                detail = "异常日志: ${anomalyLogFile.absolutePath}"
+                            )
                             forceTerminate()
                         }
                     }
@@ -871,7 +879,10 @@ class CloudPaneController(
                                         val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
                                         java.io.File(regDir, "${vaultName}_regression_$ts.log").writeText(diagInfo)
                                     } catch (_: Exception) {}
-                                    state.anomalyDialogMessage = "检测到进度异常回退（transferred 从 ${lastTransferredBytes} 降至 $transferred），已自动终止上传以保护数据安全。"
+                                    state.anomalyDialogInfo = AnomalyDialogInfo(
+                                        summary = "检测到进度异常回退（transferred 从 ${lastTransferredBytes} 降至 $transferred），已自动终止上传以保护数据安全。",
+                                        detail = diagInfo
+                                    )
                                     forceTerminate()
                                     return@launch
                                 }
@@ -948,7 +959,10 @@ class CloudPaneController(
                                             })
                                         } catch (_: Exception) {}
                                         if (anomalyCount >= 5) {
-                                            state.anomalyDialogMessage = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。"
+                                            state.anomalyDialogInfo = AnomalyDialogInfo(
+                                                summary = "检测到本次上传进度异常（累计${anomalyCount}次增量超限），已自动终止上传以保护数据安全。已上传的文件不受影响，未上传的文件已重置为待上传状态。",
+                                                detail = "异常日志: ${anomalyLogFile.absolutePath}"
+                                            )
                                             forceTerminate()
                                             return@launch
                                         }
@@ -1034,7 +1048,10 @@ class CloudPaneController(
                                         val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
                                         java.io.File(regDir, "${vaultName}_regression_$ts.log").writeText(diagInfo)
                                     } catch (_: Exception) {}
-                                    state.anomalyDialogMessage = "检测到进度异常回退（transferred 从 ${lastTransferredBytes} 降至 $transferred），已自动终止上传以保护数据安全。"
+                                    state.anomalyDialogInfo = AnomalyDialogInfo(
+                                        summary = "检测到进度异常回退（transferred 从 ${lastTransferredBytes} 降至 $transferred），已自动终止上传以保护数据安全。",
+                                        detail = diagInfo
+                                    )
                                     forceTerminate()
                                     return@launch
                                 }
