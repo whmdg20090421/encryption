@@ -214,6 +214,13 @@ class CopyJob(
                     } catch (_: Exception) {}
                     pendingCleanupTarget = null
                 }
+                // 清理保险箱中未完成的加密文件
+                synchronized(pendingVaultTargets) {
+                    for (target in pendingVaultTargets) {
+                        try { File(target).delete() } catch (_: Exception) {}
+                    }
+                    pendingVaultTargets.clear()
+                }
                 // 2. 关闭进度条
                 manager.updateProgress(null)
                 manager.notifyRefreshNeeded()
