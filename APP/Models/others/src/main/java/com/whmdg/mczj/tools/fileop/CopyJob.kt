@@ -99,6 +99,10 @@ class CopyJob(
     @Volatile
     private var conflictAutoAction: ConflictAction? = null
 
+    /** 保险箱目录大小累加器（cancel 时也需持久化） */
+    private var folderSizeAccumulator: MutableMap<String, Long>? = null
+    private var vaultDirForSave: java.io.File? = null
+
     // ── 保险箱存储用量 delta 追踪 ──
     private val vaultBytesAdded = AtomicLong(0)
     private val vaultBytesRemoved = AtomicLong(0)
@@ -166,6 +170,12 @@ class CopyJob(
             Thread.interrupted()
 
             if (cancelFlag.get()) {
+                // 取消时也将已累加的目录大小写入 FolderSizeDb
+                val acc = folderSizeAccumulator
+                val vd = vaultDirForSave
+                if (acc != null && vd != null && acc.isNotEmpty()) {
+                    try { saveFolderSizes(vd, acc) } catch (_: Exception) {}
+                }
                 // 步骤一：用户手动取消（文件描述符失效 + 用户取消为真）
                 // 1. 面板改为"正在取消"
                 manager.updateProgress(FileOpProgress(
@@ -276,7 +286,9 @@ class CopyJob(
         var doneBytes = 0L
         var doneFiles = 0
         // 保险箱目录大小累加器（绝对路径 → 累加大小）
-        val folderSizeAccumulator = mutableMapOf<String, Long>()
+        val acc = mutableMapOf<String, Long>()
+        folderSizeAccumulator = acc
+        vaultDirForSave = ctx.targetSession.vaultDir
         // 预计算每个源的文件大小总和，避免后续重复 walkTopDown
         val sourceSizes = sources.map { src ->
             val f = File(src)
@@ -299,7 +311,7 @@ class CopyJob(
             val subDir = if (ctx.targetSubDir.isEmpty()) "" else ctx.targetSubDir
             if (srcFile.isDirectory) {
                 val dirSubDir = if (subDir.isEmpty()) srcFile.name else "$subDir/${srcFile.name}"
-                encryptDirToVault(srcFile, dirSubDir, ctx.targetSession, totalSize, doneBytes, doneFiles, folderSizeAccumulator)
+                encryptDirToVault(srcFile, dirSubDir, ctx.targetSession, totalSize, doneBytes, doneFiles, acc)
                 doneBytes += sourceSizes[i]
                 // MOVE：整个目录加密完成后立即删除源目录
                 if (purpose == CopyPurpose.MOVE) {
@@ -332,7 +344,7 @@ class CopyJob(
                 vaultFilesAdded.incrementAndGet()
                 doneBytes += srcFile.length()
                 // 累加保险箱目录大小
-                accumulateFolderSize(folderSizeAccumulator, encrypted, ctx.targetSession.vaultDir, srcFile.length())
+                accumulateFolderSize(acc, encrypted, ctx.targetSession.vaultDir, srcFile.length())
                 // MOVE：单文件加密完成后立即删除源文件
                 if (purpose == CopyPurpose.MOVE) {
                     srcFile.delete()
@@ -351,7 +363,7 @@ class CopyJob(
         }
 
         // 写入 FolderSizeDb
-        saveFolderSizes(ctx.targetSession.vaultDir, folderSizeAccumulator)
+        saveFolderSizes(ctx.targetSession.vaultDir, acc)
         if (trace) EncryptionTraceLog.finish()
     }
 
