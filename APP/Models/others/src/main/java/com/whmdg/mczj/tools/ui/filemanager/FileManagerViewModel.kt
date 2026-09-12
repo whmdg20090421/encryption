@@ -665,7 +665,7 @@ class FilePaneController(
             SortField.SIZE -> {
                 fun effectiveSize(entry: FileEntry): Long {
                     if (!entry.isDirectory) return entry.size
-                    val cached = folderSizeDb().get(entry.path)
+                    val cached = folderSizeDb().getNormalized(entry.path)
                     return cached?.size ?: -1L
                 }
                 if (sortOrder() == SortOrder.ASC)
@@ -990,7 +990,7 @@ class FilePaneController(
                 // 获取条目的有效大小：文件用 entry.size，已统计目录用 folderSizeDb()，未统计目录用 -1
                 fun effectiveSize(entry: FileEntry): Long {
                     if (!entry.isDirectory) return entry.size
-                    val cached = folderSizeDb().get(entry.path)
+                    val cached = folderSizeDb().getNormalized(entry.path)
                     return cached?.size ?: -1L // -1 表示未统计
                 }
                 if (sortOrder() == SortOrder.ASC)
@@ -1553,7 +1553,7 @@ class FilePaneController(
         } else ""
 
         val sizeDisplay = if (entry.isDirectory) {
-            val cached = folderSizeDb().get(entry.path)
+            val cached = folderSizeDb().getNormalized(entry.path)
             val bytes = cached?.size ?: 0L
             if (bytes > 0) "${formatSize(bytes)} ($bytes)" else "0 B (0)"
         } else {
@@ -2610,7 +2610,7 @@ class PanelCoordinator(
         for (entry in entries) {
             if (entry.isDirectory) {
                 // 子文件夹：从 FolderSizeDb 读取缓存大小
-                val cached = db.get(entry.path)
+                val cached = db.getNormalized(entry.path)
                 totalSize += cached?.size ?: 0L
             } else {
                 // 文件：直接加文件大小

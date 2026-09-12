@@ -350,7 +350,7 @@ fun CloudSyncScreen(
                         val vaultDirPath = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
                             context, vault.location, vault.relativePath
                         ).absolutePath
-                        val localSize = folderSizeDb.get(vaultDirPath)?.size ?: 0L
+                        val localSize = folderSizeDb.getNormalized(vaultDirPath)?.size ?: 0L
                         val localFileCount = try {
                             val dir = java.io.File(vaultDirPath)
                             if (dir.exists()) dir.walkTopDown().filter { it.isFile }.count() else 0
@@ -412,7 +412,7 @@ fun CloudSyncScreen(
             val vaultDirPath = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
                 context, vault.location, vault.relativePath
             ).absolutePath
-            val localSize = folderSizeDb.get(vaultDirPath)?.size ?: 0L
+            val localSize = folderSizeDb.getNormalized(vaultDirPath)?.size ?: 0L
             val localFileCount = try {
                 val dir = java.io.File(vaultDirPath)
                 if (dir.exists()) dir.walkTopDown().filter { it.isFile }.count() else 0
@@ -646,7 +646,7 @@ fun CloudSyncScreen(
                                         val vaultDirPath = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
                                             context, vault.location, vault.relativePath
                                         ).absolutePath
-                                        folderSizeDb.get(vaultDirPath)?.size ?: 0L
+                                        folderSizeDb.getNormalized(vaultDirPath)?.size ?: 0L
                                     } else 0L
                                     syncItems[idx] = syncItems[idx].copy(
                                         diffFileCount = stats.diffCount,

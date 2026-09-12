@@ -4600,7 +4600,7 @@ fun FileManagerScreen(
                         val currentEntries = vm.currentPanel.entries
                         val unmeasured = currentEntries.filter { entry ->
                             if (!entry.isDirectory) return@filter false
-                            val cached = vm.folderSizeDb.get(entry.path)
+                            val cached = vm.folderSizeDb.getNormalized(entry.path)
                             if (cached != null) return@filter false // 已统计
                             // 检查是否空文件夹或权限不足（受保护路径走 shell）
                             val children = vm.listChildrenOrNull(entry.path)
@@ -5684,7 +5684,7 @@ private fun FileBrowserPanel(
                     val dirSize = if (entry.isDirectory) {
                         if (archiveSizeProvider != null) archiveSizeProvider(entry)
                         else {
-                            val cached = folderSizeDb.get(entry.path)
+                            val cached = folderSizeDb.getNormalized(entry.path)
                             if (cached != null) {
                                 if (cached.size == 0L) "0MB"
                                 else compactSize(cached.size)

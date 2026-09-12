@@ -81,6 +81,9 @@ class FolderSizeDb() {
 
     fun get(path: String): FolderSizeInfo? = folders[path]
 
+    /** 规范化查找：去除尾部 / 后再匹配，避免目录路径格式不一致导致查不到 */
+    fun getNormalized(path: String): FolderSizeInfo? = folders[path.trimEnd('/')]
+
     fun put(path: String, info: FolderSizeInfo) {
         folders[path] = info
         bumpVersion()
