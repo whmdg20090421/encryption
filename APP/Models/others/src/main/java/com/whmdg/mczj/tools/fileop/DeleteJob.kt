@@ -158,13 +158,9 @@ class DeleteJob(
         val db = FolderSizeDb.load(saveDir)
         val affectedSizes = mutableMapOf<String, Long>()
 
-        // 按父目录聚合已删除的大小
-        val deletedByParent = mutableMapOf<String, Long>()
         for ((i, entry) in entries.withIndex()) {
             val entrySize = entrySizes[i]
             val normalizedEntryPath = entry.path.trimEnd('/')
-            val parent = File(entry.path).parentFile?.path?.trimEnd('/') ?: continue
-            deletedByParent[parent] = (deletedByParent[parent] ?: 0L) + entrySize
 
             // 移除被删除路径及其所有子路径
             if (entry.isDirectory) {
@@ -172,20 +168,17 @@ class DeleteJob(
             } else {
                 db.remove(normalizedEntryPath)
             }
-        }
 
-        // 从每个受影响的父目录向上冒泡至根节点
-        for ((parentPath, deleted) in deletedByParent) {
-            var dir = File(parentPath)
-            var remaining = deleted
+            // 从被删除文件的父目录开始，逐层向上冒泡减去 delta
+            var dir = File(normalizedEntryPath).parentFile ?: continue
+            var remaining = entrySize
             while (remaining > 0) {
-                // 规范化路径：去除尾部 /，确保与 FolderSizeDb 中的 key 格式一致
-                val normalizedPath = dir.path.trimEnd('/')
-                val existing = db.get(normalizedPath) ?: break
+                val key = dir.path.trimEnd('/')
+                val existing = db.get(key) ?: break
                 val deduction = minOf(remaining, existing.size)
                 val newSize = existing.size - deduction
-                db.put(normalizedPath, FolderSizeInfo(newSize, System.currentTimeMillis()))
-                affectedSizes[normalizedPath] = newSize
+                db.put(key, FolderSizeInfo(newSize, System.currentTimeMillis()))
+                affectedSizes[key] = newSize
                 remaining -= deduction
                 dir = dir.parentFile ?: break
             }
