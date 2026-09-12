@@ -310,7 +310,7 @@ fun EncryptionHomeScreen(
                                     )
                                     Text(
                                         buildString {
-                                            val vaultDirPath = VaultPaths.resolveVault(context, vault.location, vault.relativePath).absolutePath
+                                            val vaultDirPath = VaultPaths.resolveVault(context, vault.location, vault.relativePath).path.trimEnd('/')
                                             val size = folderSizeDb.get(vaultDirPath)?.size ?: 0L
                                             append(if (size > 0) FormatUtils.formatBytes(size) else "未统计")
                                         },
@@ -1015,7 +1015,7 @@ fun VaultsListTab(
                                 VaultInfoRow("存储路径", pathDisplay)
                                 Spacer(modifier = Modifier.height(10.dp))
                                 // 大小占位
-                                val vaultDirPath = VaultPaths.resolveVault(context, vault.location, vault.relativePath).absolutePath
+                                val vaultDirPath = VaultPaths.resolveVault(context, vault.location, vault.relativePath).path.trimEnd('/')
                                 val vaultSize = folderSizeDb.get(vaultDirPath)?.size ?: 0L
                                 val vaultDir = java.io.File(vaultDirPath)
                                 val vaultFileCount = if (vaultDir.exists()) {

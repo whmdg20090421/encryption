@@ -475,10 +475,13 @@ class CopyJob(
         vaultDir: File,
         fileSize: Long
     ) {
+        val vaultPath = vaultDir.path.trimEnd('/')
         var dir = encryptedFile.parentFile
-        while (dir != null && dir.absolutePath.startsWith(vaultDir.absolutePath)) {
-            val oldSize = accumulator[dir.absolutePath] ?: 0L
-            accumulator[dir.absolutePath] = oldSize + fileSize
+        while (dir != null) {
+            val normalizedPath = dir.path.trimEnd('/')
+            if (!normalizedPath.startsWith(vaultPath)) break
+            val oldSize = accumulator[normalizedPath] ?: 0L
+            accumulator[normalizedPath] = oldSize + fileSize
             dir = dir.parentFile
         }
     }

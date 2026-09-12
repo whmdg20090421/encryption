@@ -162,14 +162,15 @@ class DeleteJob(
         val deletedByParent = mutableMapOf<String, Long>()
         for ((i, entry) in entries.withIndex()) {
             val entrySize = entrySizes[i]
-            val parent = File(entry.path).parentFile?.absolutePath ?: continue
+            val normalizedEntryPath = entry.path.trimEnd('/')
+            val parent = File(entry.path).parentFile?.path?.trimEnd('/') ?: continue
             deletedByParent[parent] = (deletedByParent[parent] ?: 0L) + entrySize
 
             // 移除被删除路径及其所有子路径
             if (entry.isDirectory) {
-                db.removeDescendants(entry.path)
+                db.removeDescendants(normalizedEntryPath)
             } else {
-                db.remove(entry.path)
+                db.remove(normalizedEntryPath)
             }
         }
 
@@ -178,11 +179,13 @@ class DeleteJob(
             var dir = File(parentPath)
             var remaining = deleted
             while (remaining > 0) {
-                val existing = db.get(dir.absolutePath) ?: break
+                // 规范化路径：去除尾部 /，确保与 FolderSizeDb 中的 key 格式一致
+                val normalizedPath = dir.path.trimEnd('/')
+                val existing = db.get(normalizedPath) ?: break
                 val deduction = minOf(remaining, existing.size)
                 val newSize = existing.size - deduction
-                db.put(dir.absolutePath, FolderSizeInfo(newSize, System.currentTimeMillis()))
-                affectedSizes[dir.absolutePath] = newSize
+                db.put(normalizedPath, FolderSizeInfo(newSize, System.currentTimeMillis()))
+                affectedSizes[normalizedPath] = newSize
                 remaining -= deduction
                 dir = dir.parentFile ?: break
             }
