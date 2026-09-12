@@ -374,8 +374,8 @@ class CopyJob(
                 vaultBytesAdded.addAndGet(encrypted.length())
                 vaultFilesAdded.incrementAndGet()
                 doneBytes += srcFile.length()
-                // 累加保险箱目录大小
-                accumulateFolderSize(acc, encrypted, ctx.targetSession.vaultDir, srcFile.length())
+                // 累加保险箱目录大小（必须用加密后文件大小，不是源文件大小）
+                accumulateFolderSize(acc, encrypted, ctx.targetSession.vaultDir, encrypted.length())
                 // MOVE：单文件加密完成后立即删除源文件
                 if (purpose == CopyPurpose.MOVE) {
                     srcFile.delete()
@@ -454,12 +454,21 @@ class CopyJob(
             vaultBytesAdded.addAndGet(encrypted.length())
             vaultFilesAdded.incrementAndGet()
             doneBytes += file.length()
-            // 累加保险箱目录大小
-            accumulateFolderSize(folderSizeAccumulator, encrypted, session.vaultDir, file.length())
+            // 累加保险箱目录大小（必须用加密后文件大小，不是源文件大小）
+            accumulateFolderSize(folderSizeAccumulator, encrypted, session.vaultDir, encrypted.length())
         }
     }
 
-    /** 累加加密文件的大小到保险箱目录及其所有祖先目录 */
+    /**
+     * 累加加密文件的大小到保险箱目录及其所有祖先目录。
+     *
+     * 核心原则：保险箱中只存在加密后的 .whm 文件，因此所有大小计算
+     * 必须使用加密后的文件大小（encrypted.length()），禁止使用源文件大小。
+     * 源文件存在于外部存储，其大小与保险箱无关。
+     *
+     * 调用时机：仅在加密成功完成后调用。加密中断（取消/报错）时不调用，
+     * 因为残留文件会被删除，不产生有效 delta。
+     */
     private fun accumulateFolderSize(
         accumulator: MutableMap<String, Long>,
         encryptedFile: File,
