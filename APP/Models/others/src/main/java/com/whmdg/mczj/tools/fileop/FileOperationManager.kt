@@ -246,7 +246,7 @@ data class ConflictRequest(
     val allowRename: Boolean = true
 )
 
-data class ConflictResult(val action: ConflictAction, val newName: String? = null)
+data class ConflictResult(val action: ConflictAction, val newName: String? = null, val applyToAll: Boolean = false)
 
 enum class ErrorAction { RETRY, SKIP, SKIP_ALL, CANCEL }
 

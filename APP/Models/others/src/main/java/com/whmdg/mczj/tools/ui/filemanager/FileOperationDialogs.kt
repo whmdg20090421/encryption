@@ -44,6 +44,7 @@ fun FileConflictDialog() {
     request?.let { req ->
         val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
         var selected by remember(req) { mutableStateOf(ConflictAction.REPLACE) }
+        var applyToAll by remember(req) { mutableStateOf(false) }
 
         Dialog(onDismissRequest = { /* 不可点击外部关闭 */ }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Card(
@@ -123,7 +124,8 @@ fun FileConflictDialog() {
                     // 按钮
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         TextButton(onClick = {
                             FileOperationManager.onConflictResolved(ConflictResult(ConflictAction.CANCEL))
@@ -131,10 +133,23 @@ fun FileConflictDialog() {
                             Text("取消", color = MaterialTheme.colorScheme.error)
                         }
                         TextButton(onClick = {
-                            FileOperationManager.onConflictResolved(ConflictResult(selected))
+                            FileOperationManager.onConflictResolved(ConflictResult(selected, applyToAll = applyToAll))
                         }) {
                             Text("确认")
                         }
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { applyToAll = !applyToAll }
+                            .padding(start = 4.dp)
+                    ) {
+                        Checkbox(
+                            checked = applyToAll,
+                            onCheckedChange = { applyToAll = it }
+                        )
+                        Text("自动应用此设置", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }

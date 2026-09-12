@@ -95,6 +95,10 @@ class CopyJob(
     @Volatile
     private var pendingCleanupTarget: String? = null
 
+    /** "自动应用此设置"：用户首次确认时记录选择，后续冲突自动应用 */
+    @Volatile
+    private var conflictAutoAction: ConflictAction? = null
+
     // ── 保险箱存储用量 delta 追踪 ──
     private val vaultBytesAdded = AtomicLong(0)
     private val vaultBytesRemoved = AtomicLong(0)
@@ -793,6 +797,20 @@ class CopyJob(
         // 目录→目录：合并（直接进入递归）
         if (isDirectory && operator.isDirectory(target)) return target
 
+        // 自动应用上次选择
+        val autoAction = conflictAutoAction
+        if (autoAction != null) {
+            return when (autoAction) {
+                ConflictAction.REPLACE -> target
+                ConflictAction.RENAME -> {
+                    val parent = target.substringBeforeLast('/')
+                    "$parent/${generateUniqueName(parent, sourceName, isDirectory).substringAfterLast('/')}"
+                }
+                ConflictAction.SKIP -> null
+                else -> null
+            }
+        }
+
         // 冲突：弹窗
         val request = ConflictRequest(
             sourceName = sourceName,
@@ -806,6 +824,10 @@ class CopyJob(
 
         val result = runBlocking {
             manager.resolveConflict(request)
+        }
+
+        if (result.applyToAll) {
+            conflictAutoAction = result.action
         }
 
         return when (result.action) {
@@ -842,6 +864,16 @@ class CopyJob(
         val outFile = File(targetDir, outName)
         if (!outFile.exists()) return true
 
+        // 自动应用上次选择
+        val autoAction = conflictAutoAction
+        if (autoAction != null) {
+            return when (autoAction) {
+                ConflictAction.REPLACE -> true
+                ConflictAction.SKIP -> false
+                else -> false
+            }
+        }
+
         val request = ConflictRequest(
             sourceName = srcFile.name,
             targetName = outName,
@@ -853,6 +885,9 @@ class CopyJob(
             allowRename = false
         )
         val result = runBlocking { manager.resolveConflict(request) }
+        if (result.applyToAll) {
+            conflictAutoAction = result.action
+        }
         return when (result.action) {
             ConflictAction.REPLACE -> true
             ConflictAction.SKIP -> false
