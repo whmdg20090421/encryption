@@ -124,7 +124,7 @@ fun EncryptionHomeScreen(
     }
     // 读取 version 触发 recomposition：CopyJob 写入 FolderSizeDb 后 version 递增
     @Suppress("UNUSED_VARIABLE")
-    val _ = folderSizeDb.version
+    val folderSizeVersion = folderSizeDb.version
     var showImportDialog by remember { mutableStateOf(false) }
     var importFolderUri by remember { mutableStateOf<Uri?>(null) }
     var importFolderName by remember { mutableStateOf("") }
