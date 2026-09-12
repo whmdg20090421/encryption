@@ -150,6 +150,7 @@ object FileOperationManager {
     ) {
         FileOpDiagnostics.clear()
         FileOpDiagnostics.setEnabled(debugMode)
+        _lastSummary.value = null
         _progress.value = FileOpProgress(phase = "正在复制", currentBytes = 0, totalBytes = 0, isScanning = true)
         val operator = FileOperator.create(accessLevel)
         val job = CopyJob(CopyPurpose.COPY, sources, targetDir, this, context, vaultContext).apply {
@@ -168,6 +169,7 @@ object FileOperationManager {
     ) {
         FileOpDiagnostics.clear()
         FileOpDiagnostics.setEnabled(debugMode)
+        _lastSummary.value = null
         _progress.value = FileOpProgress(phase = "正在移动", currentBytes = 0, totalBytes = 0, isScanning = true)
         val operator = FileOperator.create(accessLevel)
         val job = CopyJob(CopyPurpose.MOVE, sources, targetDir, this, context, vaultContext).apply {
@@ -186,6 +188,7 @@ object FileOperationManager {
         vaultFileCountDelta: Int = 0,
         vaultDir: java.io.File? = null
     ) {
+        _lastSummary.value = null
         _progress.value = FileOpProgress(phase = "正在删除", currentBytes = 0, totalBytes = 0, isScanning = true)
         val operator = FileOperator.create(accessLevel)
         val job = DeleteJob(entries, toRecycleBin, this, context, vaultId, vaultSizeDelta, vaultFileCountDelta, vaultDir).apply {
