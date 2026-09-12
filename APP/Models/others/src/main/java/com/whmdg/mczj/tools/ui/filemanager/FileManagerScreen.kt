@@ -264,21 +264,9 @@ fun FileManagerScreen(
     LaunchedEffect(vaultSession) {
         if (vaultSession != null) {
             vm.initVaultMode(vaultSession)
-            // 异步计算保险箱大小（仅首次未统计时）
-            if (vaultSession.record.storageSize == 0L) {
-                vm.calculateFolderSizeAsync(vaultSession.vaultDir.absolutePath) { totalSize ->
-                    vaultService?.setStorageSize(vaultSession.record.id, totalSize)
-                }
-            }
-            // 异步计算保险箱文件数量（仅首次未统计时）
-            if (vaultSession.record.fileCount == null) {
-                withContext(Dispatchers.IO) {
-                    val count = java.io.File(vaultSession.vaultDir.absolutePath)
-                        .walkTopDown().filter { it.isFile }.count()
-                    withContext(Dispatchers.Main) {
-                        vaultService?.setFileCount(vaultSession.record.id, count)
-                    }
-                }
+            // 增量冒泡：每个文件夹只统计深度1的子项，子文件夹大小从 DB 读取
+            withContext(Dispatchers.IO) {
+                vaultService?.refreshFolderSize(vaultSession.vaultDir, "")
             }
         }
     }

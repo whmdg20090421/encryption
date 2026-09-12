@@ -117,6 +117,11 @@ fun EncryptionHomeScreen(
     var showMenu by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
+    val folderSizeDb = remember {
+        com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(
+            com.whmdg.mczj.tools.AppDataPaths.fileManager(context)
+        )
+    }
     var showImportDialog by remember { mutableStateOf(false) }
     var importFolderUri by remember { mutableStateOf<Uri?>(null) }
     var importFolderName by remember { mutableStateOf("") }
@@ -194,7 +199,7 @@ fun EncryptionHomeScreen(
                     .padding(innerPadding)
             ) {
                 when (subTab) {
-                    0 -> VaultsListTab(vaultService = vaultService, settings = settings, onNavigate = onNavigate)
+                    0 -> VaultsListTab(vaultService = vaultService, settings = settings, onNavigate = onNavigate, folderSizeDb = folderSizeDb)
                     1 -> CloudSyncScreen(
                         vaultService = vaultService,
                         events = cloudSyncEvents,
@@ -302,8 +307,9 @@ fun EncryptionHomeScreen(
                                     )
                                     Text(
                                         buildString {
-                                            append(if (vault.storageSize > 0) FormatUtils.formatBytes(vault.storageSize) else "未统计")
-                                            if (vault.fileCount != null) append(" (${vault.fileCount} 个文件)")
+                                            val vaultDirPath = VaultPaths.resolveVault(context, vault.location, vault.relativePath).absolutePath
+                                            val size = folderSizeDb.get(vaultDirPath)?.size ?: 0L
+                                            append(if (size > 0) FormatUtils.formatBytes(size) else "未统计")
                                         },
                                         fontSize = 12.sp,
                                         fontFamily = FontFamily.Monospace,
@@ -521,7 +527,8 @@ fun EncryptionHomeScreen(
 fun VaultsListTab(
     vaultService: VaultService,
     settings: EncryptionSettings,
-    onNavigate: (Screen) -> Unit
+    onNavigate: (Screen) -> Unit,
+    folderSizeDb: com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -826,22 +833,6 @@ fun VaultsListTab(
             }
         }
     } else {
-        // 从 SyncDatabase 同步统计数据到 VaultService
-        LaunchedEffect(list) {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                list.forEach { vault ->
-                    try {
-                        val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, vault.name)
-                        val stats = syncDb.getStats()
-                        if (stats.localSize > 0 || stats.localFileCount > 0) {
-                            vaultService.setStorageSize(vault.id, stats.localSize)
-                            vaultService.setFileCount(vault.id, stats.localFileCount)
-                        }
-                    } catch (_: Exception) {}
-                }
-            }
-        }
-
         Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 12.dp)) {
             items(list) { vault ->
@@ -1021,9 +1012,15 @@ fun VaultsListTab(
                                 VaultInfoRow("存储路径", pathDisplay)
                                 Spacer(modifier = Modifier.height(10.dp))
                                 // 大小占位
+                                val vaultDirPath = VaultPaths.resolveVault(context, vault.location, vault.relativePath).absolutePath
+                                val vaultSize = folderSizeDb.get(vaultDirPath)?.size ?: 0L
+                                val vaultDir = java.io.File(vaultDirPath)
+                                val vaultFileCount = if (vaultDir.exists()) {
+                                    vaultDir.walkTopDown().filter { it.isFile }.count()
+                                } else 0
                                 VaultInfoRow("存储用量", buildString {
-                                    append(if (vault.storageSize > 0) com.whmdg.mczj.tools.util.FormatUtils.formatBytes(vault.storageSize) else "未统计")
-                                    if (vault.fileCount != null) append(" (${vault.fileCount} 个文件)")
+                                    append(if (vaultSize > 0) com.whmdg.mczj.tools.util.FormatUtils.formatBytes(vaultSize) else "未统计")
+                                    append(" ($vaultFileCount 个文件)")
                                 })
                                 Spacer(modifier = Modifier.height(10.dp))
                                 // 最后更改时间
