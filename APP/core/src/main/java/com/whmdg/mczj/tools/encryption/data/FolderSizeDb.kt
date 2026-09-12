@@ -1,6 +1,8 @@
 package com.whmdg.mczj.tools.encryption.data
 
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import java.io.File
 
@@ -59,7 +61,7 @@ class FolderSizeDb() {
     val folders: MutableMap<String, FolderSizeInfo> = mutableMapOf()
 
     /** 版本计数器：每次写操作递增，Compose 读取此字段可触发 recomposition */
-    var version by mutableIntStateOf(0)
+    var version by mutableStateOf(0)
         private set
 
     private fun bumpVersion() {
