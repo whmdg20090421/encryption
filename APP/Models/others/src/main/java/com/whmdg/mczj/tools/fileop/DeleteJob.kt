@@ -35,13 +35,20 @@ class DeleteJob(
 
     private var skipAllErrors = false
 
+    /** 已成功删除的文件大小累加（负值），用于向父目录抛出 delta */
+    private var deletedSizeDelta = 0L
+
+    /** 删除前预计算的每个 entry 的实际大小（目录递归统计），供 updateFolderSizeDb 使用 */
+    private lateinit var entrySizes: LongArray
+
     @Throws(Exception::class)
     override fun run() {
         try {
-            var totalSize = 0L
-            for (entry in entries) {
-                totalSize += calculateTotalSize(entry.path)
+            // 删除前预计算每个 entry 的实际大小（目录递归统计）
+            entrySizes = LongArray(entries.size) { i ->
+                entries[i].size.takeIf { it > 0 } ?: calculateTotalSize(entries[i].path)
             }
+            val totalSize = entrySizes.sum()
             var processedBytes = 0L
 
             manager.updateProgress(FileOpProgress(
@@ -65,7 +72,7 @@ class DeleteJob(
                     fileCount = entries.size
                 ))
 
-                val entrySize = entry.size.takeIf { it > 0 } ?: calculateTotalSize(entry.path)
+                val entrySize = entrySizes[index]
 
                 var retry: Boolean
                 do {
@@ -79,6 +86,7 @@ class DeleteJob(
                         }
                         heartbeat()
                         processedBytes += entrySize
+                        deletedSizeDelta -= entrySize
                     } catch (e: InterruptedIOException) {
                         throw e
                     } catch (e: Exception) {
@@ -105,6 +113,8 @@ class DeleteJob(
             Thread.interrupted()
 
             if (cancelFlag.get()) {
+                // 取消时也将已删除部分的 delta 写入 FolderSizeDb
+                updateFolderSizeDb()
                 // 步骤一：用户手动取消
                 // 1. 面板改为"正在取消"
                 manager.updateProgress(FileOpProgress(
@@ -136,16 +146,24 @@ class DeleteJob(
     /**
      * 删除完成后更新 FolderSizeDb：
      * 1. 移除被删除路径及其所有子路径
-     * 2. 从所有祖先路径中减去被删除的大小
+     * 2. 从所有祖先路径中减去已删除的大小（向上冒泡至根节点）
      * 3. 通知 UI 更新
+     *
+     * 使用 [deletedSizeDelta]（删除过程中累加的实际删除大小），
+     * 而非删除后再计算（此时文件已不存在，calculateTotalSize 返回 0）。
      */
     private fun updateFolderSizeDb() {
+        if (deletedSizeDelta == 0L) return
         val saveDir = AppDataPaths.fileManager(context)
         val db = FolderSizeDb.load(saveDir)
         val affectedSizes = mutableMapOf<String, Long>()
 
-        for (entry in entries) {
-            val deletedSize = entry.size.takeIf { it > 0 } ?: calculateTotalSize(entry.path)
+        // 按父目录聚合已删除的大小
+        val deletedByParent = mutableMapOf<String, Long>()
+        for ((i, entry) in entries.withIndex()) {
+            val entrySize = entrySizes[i]
+            val parent = File(entry.path).parentFile?.absolutePath ?: continue
+            deletedByParent[parent] = (deletedByParent[parent] ?: 0L) + entrySize
 
             // 移除被删除路径及其所有子路径
             if (entry.isDirectory) {
@@ -153,19 +171,20 @@ class DeleteJob(
             } else {
                 db.remove(entry.path)
             }
+        }
 
-            // 从所有祖先路径中减去被删除的大小
-            var parent = File(entry.path).parentFile
-            while (parent != null) {
-                val existing = db.get(parent.absolutePath)
-                if (existing == null) {
-                    // 没有缓存记录，说明已超出统计范围，停止向上遍历
-                    break
-                }
-                val newSize = maxOf(0L, existing.size - deletedSize)
-                db.put(parent.absolutePath, FolderSizeInfo(newSize, System.currentTimeMillis()))
-                affectedSizes[parent.absolutePath] = newSize
-                parent = parent.parentFile
+        // 从每个受影响的父目录向上冒泡至根节点
+        for ((parentPath, deleted) in deletedByParent) {
+            var dir = File(parentPath)
+            var remaining = deleted
+            while (remaining > 0) {
+                val existing = db.get(dir.absolutePath) ?: break
+                val deduction = minOf(remaining, existing.size)
+                val newSize = existing.size - deduction
+                db.put(dir.absolutePath, FolderSizeInfo(newSize, System.currentTimeMillis()))
+                affectedSizes[dir.absolutePath] = newSize
+                remaining -= deduction
+                dir = dir.parentFile ?: break
             }
         }
 
