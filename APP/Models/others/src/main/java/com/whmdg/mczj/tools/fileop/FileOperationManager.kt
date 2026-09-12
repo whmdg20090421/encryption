@@ -89,9 +89,9 @@ object FileOperationManager {
 
     // ── 进度更新（由 Job 调用） ──
     fun updateProgress(progress: FileOpProgress?) {
-        // 操作完成时保存摘要
+        // 操作完成时保存摘要（用户取消时不创建摘要，避免显示"已完成 0 个文件"）
         val prev = _progress.value
-        if (prev != null && progress == null) {
+        if (prev != null && progress == null && prev.phase != "正在取消") {
             _lastSummary.value = OperationSummary(
                 phase = prev.phase,
                 fileCount = prev.fileCount,

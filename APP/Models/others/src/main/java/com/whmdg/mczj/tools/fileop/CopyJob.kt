@@ -103,6 +103,9 @@ class CopyJob(
     private var folderSizeAccumulator: MutableMap<String, Long>? = null
     private var vaultDirForSave: java.io.File? = null
 
+    /** 保险箱加密中待写入的文件路径（cancel 时需清理未完成的 .whm） */
+    private val pendingVaultTargets = mutableListOf<String>()
+
     // ── 保险箱存储用量 delta 追踪 ──
     private val vaultBytesAdded = AtomicLong(0)
     private val vaultBytesRemoved = AtomicLong(0)
@@ -190,6 +193,13 @@ class CopyJob(
                         if (operator.exists(target)) operator.deleteFile(target)
                     } catch (_: Exception) {}
                     pendingCleanupTarget = null
+                }
+                // 清理保险箱中未完成的加密文件
+                synchronized(pendingVaultTargets) {
+                    for (target in pendingVaultTargets) {
+                        try { File(target).delete() } catch (_: Exception) {}
+                    }
+                    pendingVaultTargets.clear()
                 }
                 // 3. 清理完毕，关闭窗口
                 manager.updateProgress(null)
@@ -324,27 +334,44 @@ class CopyJob(
                     doneFiles++
                     continue
                 }
-                val fileDoneBytes = doneBytes
-                val encrypted = CryptoService.encryptIntoVault(
-                    context, ctx.targetSession, srcFile, subDir,
-                    overwrite = true,
-                    onProgress = { encryptedBytes, _ ->
-                        manager.updateProgress(FileOpProgress(
-                            phase = "正在加密",
-                            currentBytes = fileDoneBytes + encryptedBytes,
-                            totalBytes = totalSize,
-                            currentFileName = srcFile.name,
-                            fileIndex = doneFiles,
-                            fileCount = sources.size
-                        ))
-                    },
-                    cancelFlag = cancelFlag
-                )
-                vaultBytesAdded.addAndGet(encrypted.length())
-                vaultFilesAdded.incrementAndGet()
-                doneBytes += srcFile.length()
-                // 累加保险箱目录大小
-                accumulateFolderSize(acc, encrypted, ctx.targetSession.vaultDir, srcFile.length())
+                // 预计算加密输出路径，cancel 时清理残留
+                val outName = if (ctx.targetSession.record.encryptFilename) {
+                    FilenameCodec.encrypt(
+                        filename = srcFile.name,
+                        dek = ctx.targetSession.dek,
+                        aad = if (ctx.targetSession.record.customEncryption) FileConstants.aadCustomObf else null
+                    ).encoded
+                } else {
+                    "${srcFile.name}.whm"
+                }
+                val outDir = if (subDir.isEmpty()) ctx.targetSession.vaultDir else File(ctx.targetSession.vaultDir, subDir)
+                val pendingOut = File(outDir, outName).absolutePath
+                synchronized(pendingVaultTargets) { pendingVaultTargets.add(pendingOut) }
+                try {
+                    val fileDoneBytes = doneBytes
+                    val encrypted = CryptoService.encryptIntoVault(
+                        context, ctx.targetSession, srcFile, subDir,
+                        overwrite = true,
+                        onProgress = { encryptedBytes, _ ->
+                            manager.updateProgress(FileOpProgress(
+                                phase = "正在加密",
+                                currentBytes = fileDoneBytes + encryptedBytes,
+                                totalBytes = totalSize,
+                                currentFileName = srcFile.name,
+                                fileIndex = doneFiles,
+                                fileCount = sources.size
+                            ))
+                        },
+                        cancelFlag = cancelFlag
+                    )
+                    vaultBytesAdded.addAndGet(encrypted.length())
+                    vaultFilesAdded.incrementAndGet()
+                    doneBytes += srcFile.length()
+                    // 累加保险箱目录大小
+                    accumulateFolderSize(acc, encrypted, ctx.targetSession.vaultDir, srcFile.length())
+                } finally {
+                    synchronized(pendingVaultTargets) { pendingVaultTargets.remove(pendingOut) }
+                }
                 // MOVE：单文件加密完成后立即删除源文件
                 if (purpose == CopyPurpose.MOVE) {
                     srcFile.delete()
@@ -390,27 +417,44 @@ class CopyJob(
                 doneBytes += file.length()
                 continue
             }
-            val fileDoneBytes = doneBytes
-            val encrypted = CryptoService.encryptIntoVault(
-                context, session, file, fileSubDir,
-                overwrite = true,
-                onProgress = { encryptedBytes, _ ->
-                    manager.updateProgress(FileOpProgress(
-                        phase = "正在加密",
-                        currentBytes = baseBytes + fileDoneBytes + encryptedBytes,
-                        totalBytes = totalSize,
-                        currentFileName = file.name,
-                        fileIndex = baseFiles,
-                        fileCount = sources.size
-                    ))
-                },
-                cancelFlag = cancelFlag
-            )
-            vaultBytesAdded.addAndGet(encrypted.length())
-            vaultFilesAdded.incrementAndGet()
-            doneBytes += file.length()
-            // 累加保险箱目录大小
-            accumulateFolderSize(folderSizeAccumulator, encrypted, session.vaultDir, file.length())
+            // 预计算加密输出路径，cancel 时清理残留
+            val outName = if (session.record.encryptFilename) {
+                FilenameCodec.encrypt(
+                    filename = file.name,
+                    dek = session.dek,
+                    aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null
+                ).encoded
+            } else {
+                "${file.name}.whm"
+            }
+            val outDir = if (fileSubDir.isEmpty()) session.vaultDir else File(session.vaultDir, fileSubDir)
+            val pendingOut = File(outDir, outName).absolutePath
+            synchronized(pendingVaultTargets) { pendingVaultTargets.add(pendingOut) }
+            try {
+                val fileDoneBytes = doneBytes
+                val encrypted = CryptoService.encryptIntoVault(
+                    context, session, file, fileSubDir,
+                    overwrite = true,
+                    onProgress = { encryptedBytes, _ ->
+                        manager.updateProgress(FileOpProgress(
+                            phase = "正在加密",
+                            currentBytes = baseBytes + fileDoneBytes + encryptedBytes,
+                            totalBytes = totalSize,
+                            currentFileName = file.name,
+                            fileIndex = baseFiles,
+                            fileCount = sources.size
+                        ))
+                    },
+                    cancelFlag = cancelFlag
+                )
+                vaultBytesAdded.addAndGet(encrypted.length())
+                vaultFilesAdded.incrementAndGet()
+                doneBytes += file.length()
+                // 累加保险箱目录大小
+                accumulateFolderSize(folderSizeAccumulator, encrypted, session.vaultDir, file.length())
+            } finally {
+                synchronized(pendingVaultTargets) { pendingVaultTargets.remove(pendingOut) }
+            }
         }
     }
 
