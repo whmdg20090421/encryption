@@ -39,6 +39,7 @@ import com.whmdg.mczj.tools.util.FileAccessLevel
 import com.whmdg.mczj.tools.auth.PasswordDialog
 
 import androidx.compose.foundation.Image
+import android.graphics.BitmapFactory
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
@@ -5617,6 +5618,36 @@ private fun FileBrowserPanel(
     fileNameFontSize: Float = 12f
 ) {
     val isMultiSelectMode = selectedPaths.isNotEmpty()
+    val videoThumbnailCache = remember { mutableStateMapOf<String, android.graphics.Bitmap>() }
+    val extractSemaphore = remember { kotlinx.coroutines.sync.Semaphore(5) }
+    val decodeSemaphore = remember { kotlinx.coroutines.sync.Semaphore(10) }
+
+    // 视频缩略图预加载：可见范围 ±10
+    LaunchedEffect(entries) {
+        snapshotFlow { lazyListState.firstVisibleItemIndex to lazyListState.layoutInfo.visibleItemsInfo.size }
+            .collect { (firstVisible, visibleCount) ->
+                if (visibleCount == 0 || entries.isEmpty()) return@collect
+                val preloadStart = (firstVisible - 10).coerceAtLeast(0)
+                val preloadEnd = (firstVisible + visibleCount + 10).coerceAtMost(entries.size)
+                for (i in preloadStart until preloadEnd) {
+                    val entry = entries[i]
+                    if (entry.isDirectory || videoThumbnailCache.containsKey(entry.path)) continue
+                    val ext = entry.name.substringAfterLast('.', "").lowercase()
+                    if (ext in setOf("mp4","mkv","avi","mov","wmv","flv","webm","3gp","ts","rmvb","rm","vob","m4v","f4v")) {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            extractSemaphore.acquire()
+                            try {
+                                val bmp = com.whmdg.mczj.tools.util.VaultThumbnailExtractor.extractVideoThumbnailFromPlain(entry.path, context.cacheDir)
+                                if (bmp != null) videoThumbnailCache[entry.path] = bmp
+                            } finally {
+                                extractSemaphore.release()
+                            }
+                        }
+                    }
+                }
+            }
+    }
+
     Surface(
         modifier = modifier
             .fillMaxHeight()
@@ -5721,7 +5752,10 @@ private fun FileBrowserPanel(
                         thumbnail = thumb,
                         archiveContext = archiveContext,
                         vaultContext = vaultContext,
-                        fileNameFontSize = fileNameFontSize
+                        fileNameFontSize = fileNameFontSize,
+                        videoThumbnailCache = videoThumbnailCache,
+                        extractSemaphore = extractSemaphore,
+                        decodeSemaphore = decodeSemaphore
                     )
                 }
             }
@@ -5744,7 +5778,10 @@ private fun FileEntryRow(
     archiveContext: ArchiveContext? = null,
     vaultContext: VaultContext? = null,
     fileNameFontSize: Float = 12f,
-    cloudExtra: (@Composable () -> Unit)? = null
+    cloudExtra: (@Composable () -> Unit)? = null,
+    videoThumbnailCache: MutableMap<String, android.graphics.Bitmap>? = null,
+    extractSemaphore: kotlinx.coroutines.sync.Semaphore? = null,
+    decodeSemaphore: kotlinx.coroutines.sync.Semaphore? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -5896,7 +5933,52 @@ private fun FileEntryRow(
                             } else if (category == FileCategory.VIDEO) {
                                 val videoBitmap = remember { mutableStateOf<android.graphics.Bitmap?>(null) }
                                 LaunchedEffect(entry.path) {
-                                    videoBitmap.value = com.whmdg.mczj.tools.util.VaultThumbnailExtractor.extractVideoThumbnailFromPlain(entry.path, context.cacheDir)
+                                    val cached = videoThumbnailCache?.get(entry.path)
+                                    if (cached != null) {
+                                        videoBitmap.value = cached
+                                        return@LaunchedEffect
+                                    }
+                                    val decodeJob = if (decodeSemaphore != null) {
+                                        kotlinx.coroutines.async {
+                                            decodeSemaphore.acquire()
+                                            try {
+                                                val opts = BitmapFactory.Options().apply {
+                                                    inPreferredConfig = Bitmap.Config.RGB_565
+                                                }
+                                                val cacheFile = java.io.File(context.cacheDir, "video_thumbs/${entry.path.hashCode()}.thumb")
+                                                if (cacheFile.exists()) BitmapFactory.decodeFile(cacheFile.absolutePath, opts) else null
+                                            } finally {
+                                                decodeSemaphore.release()
+                                            }
+                                        }
+                                    } else null
+
+                                    if (decodeSemaphore == null || decodeJob == null) {
+                                        val result = com.whmdg.mczj.tools.util.VaultThumbnailExtractor.extractVideoThumbnailFromPlain(entry.path, context.cacheDir)
+                                        videoBitmap.value = result
+                                        if (result != null) videoThumbnailCache?.put(entry.path, result)
+                                    } else {
+                                        val fromDisk = decodeJob.await()
+                                        if (fromDisk != null) {
+                                            videoBitmap.value = fromDisk
+                                            videoThumbnailCache?.put(entry.path, fromDisk)
+                                        } else {
+                                            val extractResult = if (extractSemaphore != null) {
+                                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                    extractSemaphore.acquire()
+                                                    try {
+                                                        com.whmdg.mczj.tools.util.VaultThumbnailExtractor.extractVideoThumbnailFromPlain(entry.path, context.cacheDir)
+                                                    } finally {
+                                                        extractSemaphore.release()
+                                                    }
+                                                }
+                                            } else {
+                                                com.whmdg.mczj.tools.util.VaultThumbnailExtractor.extractVideoThumbnailFromPlain(entry.path, context.cacheDir)
+                                            }
+                                            videoBitmap.value = extractResult
+                                            if (extractResult != null) videoThumbnailCache?.put(entry.path, extractResult)
+                                        }
+                                    }
                                 }
                                 val bmp = videoBitmap.value
                                 if (bmp != null) {

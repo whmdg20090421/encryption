@@ -87,42 +87,57 @@ object VaultThumbnailExtractor {
     }
 
     /**
-     * 从普通视频文件提取首帧，带磁盘缓存。
+     * 从普通视频文件提取首帧，降采样后带磁盘缓存。
      * 缓存路径：{cacheDir}/video_thumbs/{pathHash}.thumb
      */
-    suspend fun extractVideoThumbnailFromPlain(videoPath: String, cacheDir: File): Bitmap? =
-        withContext(Dispatchers.IO) {
-            try {
-                val file = File(videoPath)
-                if (!file.exists()) return@withContext null
+    suspend fun extractVideoThumbnailFromPlain(
+        videoPath: String,
+        cacheDir: File,
+        targetSize: Int = 200
+    ): Bitmap? = withContext(Dispatchers.IO) {
+        try {
+            val file = File(videoPath)
+            if (!file.exists()) return@withContext null
 
-                val thumbFile = File(cacheDir, "video_thumbs/${videoPath.hashCode()}.thumb")
-                if (thumbFile.exists()) {
-                    val cached = BitmapFactory.decodeFile(thumbFile.absolutePath)
-                    if (cached != null) return@withContext cached
-                }
+            val thumbFile = File(cacheDir, "video_thumbs/${videoPath.hashCode()}.thumb")
+            if (thumbFile.exists()) {
+                val cached = BitmapFactory.decodeFile(thumbFile.absolutePath)
+                if (cached != null) return@withContext cached
+            }
 
-                val retriever = MediaMetadataRetriever()
-                val bitmap = try {
-                    retriever.setDataSource(file.absolutePath)
-                    retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                } catch (_: Exception) {
-                    null
-                } finally {
-                    try { retriever.release() } catch (_: Exception) {}
-                }
-
-                if (bitmap != null) {
-                    thumbFile.parentFile?.mkdirs()
-                    thumbFile.outputStream().use { out ->
-                        bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 80, out)
-                    }
-                }
-                bitmap
+            val retriever = MediaMetadataRetriever()
+            val fullBitmap = try {
+                retriever.setDataSource(file.absolutePath)
+                retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
             } catch (_: Exception) {
                 null
+            } finally {
+                try { retriever.release() } catch (_: Exception) {}
             }
+
+            if (fullBitmap != null) {
+                val scaled = scaleBitmap(fullBitmap, targetSize)
+                if (scaled !== fullBitmap) fullBitmap.recycle()
+                thumbFile.parentFile?.mkdirs()
+                thumbFile.outputStream().use { out ->
+                    scaled.compress(Bitmap.CompressFormat.WEBP_LOSSY, 80, out)
+                }
+                scaled
+            } else null
+        } catch (_: Exception) {
+            null
         }
+    }
+
+    private fun scaleBitmap(src: Bitmap, targetSize: Int): Bitmap {
+        val w = src.width
+        val h = src.height
+        if (w <= targetSize && h <= targetSize) return src
+        val scale = targetSize.toFloat() / maxOf(w, h)
+        val newW = (w * scale).toInt().coerceAtLeast(1)
+        val newH = (h * scale).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(src, newW, newH, true)
+    }
 
     private fun calculateInSampleSize(
         options: BitmapFactory.Options,
