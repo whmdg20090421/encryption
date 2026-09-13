@@ -5845,7 +5845,8 @@ private fun FileEntryRow(
                         } else {
                             entry.name
                         }
-                        val ext = extractExtension(originalName)
+                        val iconFileName = if (vaultContext != null) originalName.removeSuffix(".whm") else originalName
+                        val ext = extractExtension(iconFileName)
                         val category = categorizeFile(ext)
                         val isImageFile = category == FileCategory.IMAGE && !entry.isDirectory
                             && entry.name != "返回上一级"
