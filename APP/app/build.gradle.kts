@@ -261,6 +261,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.coil.compose)
     implementation(libs.coil.svg)
+    implementation(libs.coil.video)
     implementation(libs.libsu.core)
 
     testImplementation(libs.junit)
