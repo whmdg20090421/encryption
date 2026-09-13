@@ -5907,12 +5907,15 @@ private fun FileEntryRow(
                                         contentScale = ContentScale.Crop
                                     )
                                 } else {
-                                    Icon(
-                                        painter = painterResource(getFileTypeDrawableRes(category) ?: return@FileEntryRow),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(36.dp),
-                                        tint = Color.Unspecified
-                                    )
+                                    val videoIconRes = getFileTypeDrawableRes(category)
+                                    if (videoIconRes != null) {
+                                        Icon(
+                                            painter = painterResource(videoIconRes),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(36.dp),
+                                            tint = Color.Unspecified
+                                        )
+                                    }
                                 }
                             } else {
                                 val imagePlaceholder = getFileTypeDrawableRes(category)
