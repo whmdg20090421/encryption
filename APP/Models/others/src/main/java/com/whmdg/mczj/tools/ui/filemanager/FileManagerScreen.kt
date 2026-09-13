@@ -41,7 +41,7 @@ import com.whmdg.mczj.tools.auth.PasswordDialog
 import androidx.compose.foundation.Image
 
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
+
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.security.Permission
@@ -5619,43 +5619,6 @@ private fun FileBrowserPanel(
 ) {
     val context = LocalContext.current
     val isMultiSelectMode = selectedPaths.isNotEmpty()
-    val videoThumbnailCache = remember { mutableStateMapOf<String, android.graphics.Bitmap>() }
-    val extractSemaphore = remember { kotlinx.coroutines.sync.Semaphore(5) }
-
-    // 视频缩略图预加载：可见范围 ±10
-    val videoExts = setOf("mp4","mkv","avi","mov","wmv","flv","webm","3gp","ts","rmvb","rm","vob","m4v","f4v")
-    LaunchedEffect(entries) {
-        snapshotFlow { lazyListState.firstVisibleItemIndex to lazyListState.layoutInfo.visibleItemsInfo.size }
-            .collect { (firstVisible, visibleCount) ->
-                if (visibleCount == 0 || entries.isEmpty()) return@collect
-                val preloadStart = (firstVisible - 10).coerceAtLeast(0)
-                val preloadEnd = (firstVisible + visibleCount + 10).coerceAtMost(entries.size)
-                for (i in preloadStart until preloadEnd) {
-                    val entry = entries[i]
-                    if (entry.isDirectory || videoThumbnailCache.containsKey(entry.path)) continue
-                    val ext = entry.name.substringAfterLast('.', "").lowercase()
-                    if (ext in videoExts) {
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            extractSemaphore.acquire()
-                            try {
-                                val bmp = if (vaultContext != null) {
-                                    com.whmdg.mczj.tools.util.VaultThumbnailExtractor.extractVideoThumbnail(
-                                        encryptedPath = entry.path,
-                                        dek = vaultContext.dek,
-                                        customEncryption = vaultContext.customEncryption
-                                    )
-                                } else {
-                                    com.whmdg.mczj.tools.util.VaultThumbnailExtractor.extractVideoThumbnailFromPlain(entry.path, context.cacheDir)
-                                }
-                                if (bmp != null) videoThumbnailCache[entry.path] = bmp
-                            } finally {
-                                extractSemaphore.release()
-                            }
-                        }
-                    }
-                }
-            }
-    }
 
     Surface(
         modifier = modifier
@@ -5734,15 +5697,7 @@ private fun FileBrowserPanel(
                     } else if (archiveSizeProvider != null) {
                         archiveSizeProvider(entry)
                     } else ""
-                    val thumb = thumbnailLoader?.invoke(entry) ?: run {
-                        // 视频缩略图：从父组件缓存读取
-                        val ext = entry.name.substringAfterLast('.', "").lowercase()
-                        val videoExts = setOf("mp4","mkv","avi","mov","wmv","flv","webm","3gp","ts","rmvb","rm","vob","m4v","f4v")
-                        if (ext in videoExts && !entry.isDirectory) {
-                            val cached = videoThumbnailCache[entry.path]
-                            if (cached != null) cached.asImageBitmap() else null
-                        } else null
-                    }
+                    val thumb = thumbnailLoader?.invoke(entry)
                     FileEntryRow(
                         entry = entry,
                         isFocused = isFocused,
@@ -5942,24 +5897,17 @@ private fun FileEntryRow(
                                     error = imagePlaceholder?.let { painterResource(it) }
                                 )
                             } else if (category == FileCategory.VIDEO) {
-                                if (thumbnail != null) {
-                                    Image(
-                                        painter = BitmapPainter(thumbnail),
-                                        contentDescription = null,
-                                        modifier = Modifier.size(36.dp).clip(RoundedCornerShape(4.dp)),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                } else {
-                                    val videoIconRes = getFileTypeDrawableRes(category)
-                                    if (videoIconRes != null) {
-                                        Icon(
-                                            painter = painterResource(videoIconRes),
-                                            contentDescription = null,
-                                            modifier = Modifier.size(36.dp),
-                                            tint = Color.Unspecified
-                                        )
-                                    }
-                                }
+                                val imagePlaceholder = getFileTypeDrawableRes(category)
+                                val density = LocalDensity.current
+                                val px36 = with(density) { 36.dp.roundToPx() }
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context).data(entry.path).size(CoilSize(px36, px36)).build(),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(4.dp)),
+                                    contentScale = ContentScale.Crop,
+                                    placeholder = imagePlaceholder?.let { painterResource(it) },
+                                    error = imagePlaceholder?.let { painterResource(it) }
+                                )
                             } else {
                                 val imagePlaceholder = getFileTypeDrawableRes(category)
                                 val density = LocalDensity.current
