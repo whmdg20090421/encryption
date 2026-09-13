@@ -158,18 +158,8 @@ class DeleteJob(
         val db = FolderSizeDb.load(saveDir)
         val affectedSizes = mutableMapOf<String, Long>()
 
-        // 从所有 entry 路径中计算保险箱根目录（最长公共前缀）
-        val firstParent = File(entries.first().path.trimEnd('/')).parentFile
-            ?: return
-        var vaultRoot = firstParent.path.trimEnd('/')
-        for (entry in entries) {
-            val parentPath = File(entry.path.trimEnd('/')).parentFile
-                ?.path?.trimEnd('/') ?: continue
-            while (!parentPath.startsWith(vaultRoot)) {
-                vaultRoot = File(vaultRoot).parentFile?.path?.trimEnd('/')
-                    ?: break
-            }
-        }
+        // 直接使用传入的 vaultDir，与 CopyJob.accumulateFolderSize 保持一致
+        val vaultRoot = vaultDir?.path?.trimEnd('/') ?: return
 
         for ((i, entry) in entries.withIndex()) {
             val entrySize = entrySizes[i]
