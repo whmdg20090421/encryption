@@ -5617,6 +5617,7 @@ private fun FileBrowserPanel(
     vaultContext: VaultContext? = null,
     fileNameFontSize: Float = 12f
 ) {
+    val context = LocalContext.current
     val isMultiSelectMode = selectedPaths.isNotEmpty()
     val videoThumbnailCache = remember { mutableStateMapOf<String, android.graphics.Bitmap>() }
     val extractSemaphore = remember { kotlinx.coroutines.sync.Semaphore(5) }
@@ -5939,11 +5940,11 @@ private fun FileEntryRow(
                                         return@LaunchedEffect
                                     }
                                     val decodeJob = if (decodeSemaphore != null) {
-                                        kotlinx.coroutines.async {
+                                        coroutineScope.async {
                                             decodeSemaphore.acquire()
                                             try {
                                                 val opts = BitmapFactory.Options().apply {
-                                                    inPreferredConfig = Bitmap.Config.RGB_565
+                                                    inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
                                                 }
                                                 val cacheFile = java.io.File(context.cacheDir, "video_thumbs/${entry.path.hashCode()}.thumb")
                                                 if (cacheFile.exists()) BitmapFactory.decodeFile(cacheFile.absolutePath, opts) else null
