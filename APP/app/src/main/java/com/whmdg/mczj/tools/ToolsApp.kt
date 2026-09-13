@@ -70,7 +70,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
                 add(com.whmdg.mczj.tools.util.VaultThumbnailFetcher.Factory(context, context.cacheDir))
                 add(com.whmdg.mczj.tools.util.JxlDecoderFactory())
                 add(coil3.svg.SvgDecoder.Factory())
-                add(coil3.decode.VideoFrameDecoder.Factory())
+                add(coil3.video.VideoFrameDecoder.Factory())
             }
             .build()
     }
