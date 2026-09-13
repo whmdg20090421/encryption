@@ -158,6 +158,19 @@ class DeleteJob(
         val db = FolderSizeDb.load(saveDir)
         val affectedSizes = mutableMapOf<String, Long>()
 
+        // 从所有 entry 路径中计算保险箱根目录（最长公共前缀）
+        val firstParent = File(entries.first().path.trimEnd('/')).parentFile
+            ?: return
+        var vaultRoot = firstParent.path.trimEnd('/')
+        for (entry in entries) {
+            val parentPath = File(entry.path.trimEnd('/')).parentFile
+                ?.path?.trimEnd('/') ?: continue
+            while (!parentPath.startsWith(vaultRoot)) {
+                vaultRoot = File(vaultRoot).parentFile?.path?.trimEnd('/')
+                    ?: break
+            }
+        }
+
         for ((i, entry) in entries.withIndex()) {
             val entrySize = entrySizes[i]
             val normalizedEntryPath = entry.path.trimEnd('/')
@@ -170,17 +183,17 @@ class DeleteJob(
             }
 
             // 从被删除文件的父目录开始，逐层向上冒泡减去 delta
-            var dir = File(normalizedEntryPath).parentFile ?: continue
-            var remaining = entrySize
-            while (remaining > 0) {
+            // 与 accumulateFolderSize 完全对称：
+            // while (dir != null) + startsWith(vaultPath) 终止
+            var dir = File(normalizedEntryPath).parentFile
+            while (dir != null) {
                 val key = dir.path.trimEnd('/')
-                val existing = db.get(key) ?: break
-                val deduction = minOf(remaining, existing.size)
-                val newSize = existing.size - deduction
+                if (!key.startsWith(vaultRoot)) break
+                val oldSize = db.get(key)?.size ?: 0L
+                val newSize = maxOf(0L, oldSize - entrySize)
                 db.put(key, FolderSizeInfo(newSize, System.currentTimeMillis()))
                 affectedSizes[key] = newSize
-                remaining -= deduction
-                dir = dir.parentFile ?: break
+                dir = dir.parentFile
             }
         }
 
