@@ -21,9 +21,41 @@ import java.util.Locale
 
 class ToolsApp : Application(), SingletonImageLoader.Factory {
 
+    /**
+     * 限制 VideoFrameDecoder 并发数的包装。
+     * Coil 的 bitmapFactoryMaxParallelism 仅控制图片解码器，
+     * VideoFrameDecoder 无内置并发限制，需通过 Semaphore 控制。
+     */
+    private class ThrottledVideoFrameDecoder(
+        private val source: coil3.decode.ImageSource,
+        private val options: coil3.request.Options,
+    ) : coil3.decode.Decoder {
+
+        override suspend fun decode(): coil3.decode.DecodeResult {
+            videoDecodeSemaphore.acquire()
+            try {
+                return coil3.video.VideoFrameDecoder(source, options).decode()
+            } finally {
+                videoDecodeSemaphore.release()
+            }
+        }
+
+        private class Factory : coil3.decode.Decoder.Factory {
+            override fun create(
+                result: coil3.fetch.SourceFetchResult,
+                options: coil3.request.Options,
+                imageLoader: coil3.ImageLoader,
+            ): coil3.decode.Decoder? {
+                if (result.mimeType?.startsWith("video/") != true) return null
+                return ThrottledVideoFrameDecoder(result.source, options)
+            }
+        }
+    }
+
     companion object {
         lateinit var instance: ToolsApp
             private set
+        private val videoDecodeSemaphore = kotlinx.coroutines.sync.Semaphore(3)
     }
 
     override fun onCreate() {
@@ -70,7 +102,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
                 add(com.whmdg.mczj.tools.util.VaultThumbnailFetcher.Factory(context, context.cacheDir))
                 add(com.whmdg.mczj.tools.util.JxlDecoderFactory())
                 add(coil3.svg.SvgDecoder.Factory())
-                add(coil3.video.VideoFrameDecoder.Factory())
+                add(ThrottledVideoFrameDecoder.Factory())
             }
             .build()
     }
