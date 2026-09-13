@@ -40,6 +40,7 @@ import com.whmdg.mczj.tools.auth.PasswordDialog
 
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.security.Permission
@@ -5848,10 +5849,10 @@ private fun FileEntryRow(
                         val iconFileName = if (vaultContext != null) originalName.removeSuffix(".whm") else originalName
                         val ext = extractExtension(iconFileName)
                         val category = categorizeFile(ext)
-                        val isImageFile = category == FileCategory.IMAGE && !entry.isDirectory
-                            && entry.name != "返回上一级"
+                        val isMediaFile = (category == FileCategory.IMAGE || category == FileCategory.VIDEO)
+                            && !entry.isDirectory && entry.name != "返回上一级"
 
-                        if (isImageFile) {
+                        if (isMediaFile) {
                             if (thumbnail != null) {
                                 Image(
                                     painter = BitmapPainter(thumbnail),
@@ -5892,6 +5893,27 @@ private fun FileEntryRow(
                                     placeholder = imagePlaceholder?.let { painterResource(it) },
                                     error = imagePlaceholder?.let { painterResource(it) }
                                 )
+                            } else if (category == FileCategory.VIDEO) {
+                                val videoBitmap = remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+                                LaunchedEffect(entry.path) {
+                                    videoBitmap.value = com.whmdg.mczj.tools.util.VaultThumbnailExtractor.extractVideoThumbnailFromPlain(entry.path)
+                                }
+                                val bmp = videoBitmap.value
+                                if (bmp != null) {
+                                    Image(
+                                        painter = BitmapPainter(bmp.asImageBitmap()),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(36.dp).clip(RoundedCornerShape(4.dp)),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Icon(
+                                        painter = painterResource(getFileTypeDrawableRes(category) ?: return@FileEntryRow),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(36.dp),
+                                        tint = Color.Unspecified
+                                    )
+                                }
                             } else {
                                 val imagePlaceholder = getFileTypeDrawableRes(category)
                                 val density = LocalDensity.current

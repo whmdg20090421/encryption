@@ -18,21 +18,36 @@ class VaultThumbnailFetcher(
     private val options: Options,
     private val cacheDir: File
 ) : Fetcher {
+
+    private val videoExtensions = setOf(
+        "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "3gp",
+        "ts", "rmvb", "rm", "vob", "m4v", "f4v"
+    )
+
     override suspend fun fetch(): FetchResult {
         // 优先级 2→1→生成，同目录：原图 = {path}，缩略图 = {path}.thumb
         val baseFile = File(cacheDir, "vault_cache/${data.vaultName}/${data.entryPath}")
         val thumbFile = File("${baseFile.absolutePath}.thumb")
+        val isVideo = data.entryPath.substringAfterLast('.', "").lowercase() in videoExtensions
 
         val imageFile = when {
             baseFile.exists() -> baseFile
             thumbFile.exists() -> thumbFile
             else -> {
-                val bitmap = VaultThumbnailExtractor.extractThumbnail(
-                    encryptedPath = data.encryptedPath,
-                    dek = data.dek,
-                    customEncryption = data.customEncryption,
-                    targetSize = 200
-                ) ?: return ImageFetchResult(
+                val bitmap = if (isVideo) {
+                    VaultThumbnailExtractor.extractVideoThumbnail(
+                        encryptedPath = data.encryptedPath,
+                        dek = data.dek,
+                        customEncryption = data.customEncryption
+                    )
+                } else {
+                    VaultThumbnailExtractor.extractThumbnail(
+                        encryptedPath = data.encryptedPath,
+                        dek = data.dek,
+                        customEncryption = data.customEncryption,
+                        targetSize = 200
+                    )
+                } ?: return ImageFetchResult(
                     image = android.graphics.drawable.ColorDrawable(0).asImage(),
                     isSampled = false,
                     dataSource = DataSource.DISK
