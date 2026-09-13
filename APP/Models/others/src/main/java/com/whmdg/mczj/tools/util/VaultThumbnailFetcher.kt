@@ -27,24 +27,58 @@ class VaultThumbnailFetcher(
         "ts", "rmvb", "rm", "vob", "m4v", "f4v"
     )
 
-    private fun videoCacheFile(): File {
+    // ── 缓存路径 ──
+
+    private val videoCacheDir: File by lazy {
         val extDir = context.getExternalFilesDir(null)
             ?: File(context.filesDir, "video_cache")
-        return File(extDir, "视频缓存/${data.encryptedPath}")
+        // 保险箱相对路径：/sdcard/.../vault_1/secret/1.mp4 → secret/1.mp4
+        val relativePath = data.encryptedPath.removePrefix(data.vaultDir).removePrefix("/")
+        File(extDir, "视频缓存/${data.vaultName}/${File(relativePath).parent}")
     }
 
-    private fun isCacheValid(file: File): Boolean {
-        if (!file.exists()) return false
-        val ageMs = System.currentTimeMillis() - file.lastModified()
-        return ageMs < 12 * 60 * 60 * 1000 // 12 小时
+    private fun cacheFileForVideo(): File =
+        File(videoCacheDir, "${File(data.encryptedPath).name}.thumb")
+
+    private fun metaFileForVideo(): File =
+        File(videoCacheDir, "cache_meta.txt")
+
+    // ── 元数据读写 ──
+
+    private fun readMeta(): LinkedHashMap<String, Pair<Long, Long>> {
+        val metaFile = metaFileForVideo()
+        val map = linkedMapOf<String, Pair<Long, Long>>()
+        if (!metaFile.exists()) return map
+        metaFile.readLines().forEach { line ->
+            val parts = line.split("|")
+            if (parts.size == 3) {
+                val ts = parts[1].toLongOrNull() ?: return@forEach
+                val sz = parts[2].toLongOrNull() ?: return@forEach
+                map[parts[0]] = ts to sz
+            }
+        }
+        return map
     }
+
+    private fun writeMeta(map: LinkedHashMap<String, Pair<Long, Long>>) {
+        val metaFile = metaFileForVideo()
+        metaFile.parentFile?.mkdirs()
+        metaFile.writeText(map.entries.joinToString("\n") { (name, pair) ->
+            "$name|${pair.first}|${pair.second}"
+        })
+    }
+
+    private fun isEntryValid(meta: LinkedHashMap<String, Pair<Long, Long>>, filename: String): Boolean {
+        val srcFile = File(data.encryptedPath)
+        val recorded = meta[filename] ?: return false
+        return srcFile.lastModified() == recorded.first && srcFile.length() == recorded.second
+    }
+
+    // ── 入口 ──
 
     override suspend fun fetch(): FetchResult {
         val isVideo = data.entryPath.substringAfterLast('.', "").lowercase() in videoExtensions
-
-        if (isVideo) {
-            return fetchVideoThumbnail()
-        }
+        if (isVideo) return fetchVideoThumbnail()
 
         // 图片：沿用原有逻辑
         val baseFile = File(cacheDir, "vault_cache/${data.vaultName}/${data.entryPath}")
@@ -71,26 +105,28 @@ class VaultThumbnailFetcher(
         }
 
         val bitmap = BitmapFactory.decodeFile(imageFile.absolutePath) ?: return whiteResult()
-
-        return ImageFetchResult(
-            image = bitmap.asImage(),
-            isSampled = false,
-            dataSource = DataSource.DISK
-        )
+        return ImageFetchResult(image = bitmap.asImage(), isSampled = false, dataSource = DataSource.DISK)
     }
 
-    private fun fetchVideoThumbnail(): FetchResult {
-        val cacheFile = videoCacheFile()
+    // ── 视频缩略图 ──
 
-        // 1. 检查缓存（12 小时有效）
-        if (isCacheValid(cacheFile)) {
+    private fun fetchVideoThumbnail(): FetchResult {
+        val filename = File(data.encryptedPath).name
+        val cacheFile = cacheFileForVideo()
+        val meta = readMeta()
+
+        // 校验：元数据存在 + 缓存文件存在 + 源文件未变化
+        if (meta.containsKey(filename) && cacheFile.exists() && isEntryValid(meta, filename)) {
             val bitmap = BitmapFactory.decodeFile(cacheFile.absolutePath)
             if (bitmap != null) {
                 return ImageFetchResult(image = bitmap.asImage(), isSampled = false, dataSource = DataSource.DISK)
             }
         }
 
-        // 2. 内存解密 → Coil 提取帧
+        // 缓存失效 → 删除旧缓存
+        if (cacheFile.exists()) cacheFile.delete()
+
+        // 内存解密 → Coil 提取帧
         val bytes = VaultThumbnailExtractor.decryptToBytes(
             File(data.encryptedPath), data.dek, data.customEncryption
         ) ?: return whiteResult()
@@ -105,10 +141,17 @@ class VaultThumbnailFetcher(
         val image = result.image ?: return whiteResult()
         val bitmap = (image as? BitmapImage)?.bitmap ?: return whiteResult()
 
-        // 3. 保存缓存
+        // 保存缩略图缓存
         cacheFile.parentFile?.mkdirs()
         cacheFile.outputStream().use { out ->
             bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 80, out)
+        }
+
+        // 更新元数据
+        val srcFile = File(data.encryptedPath)
+        synchronized(meta) {
+            meta[filename] = srcFile.lastModified() to srcFile.length()
+            writeMeta(meta)
         }
 
         return ImageFetchResult(image = image, isSampled = false, dataSource = DataSource.MEMORY)
