@@ -87,15 +87,23 @@ object VaultThumbnailExtractor {
     }
 
     /**
-     * 从普通视频文件提取首帧。
+     * 从普通视频文件提取首帧，带磁盘缓存。
+     * 缓存路径：{cacheDir}/video_thumbs/{pathHash}.thumb
      */
-    suspend fun extractVideoThumbnailFromPlain(videoPath: String): Bitmap? =
+    suspend fun extractVideoThumbnailFromPlain(videoPath: String, cacheDir: File): Bitmap? =
         withContext(Dispatchers.IO) {
             try {
-                val file = java.io.File(videoPath)
+                val file = File(videoPath)
                 if (!file.exists()) return@withContext null
+
+                val thumbFile = File(cacheDir, "video_thumbs/${videoPath.hashCode()}.thumb")
+                if (thumbFile.exists()) {
+                    val cached = BitmapFactory.decodeFile(thumbFile.absolutePath)
+                    if (cached != null) return@withContext cached
+                }
+
                 val retriever = MediaMetadataRetriever()
-                try {
+                val bitmap = try {
                     retriever.setDataSource(file.absolutePath)
                     retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                 } catch (_: Exception) {
@@ -103,6 +111,14 @@ object VaultThumbnailExtractor {
                 } finally {
                     try { retriever.release() } catch (_: Exception) {}
                 }
+
+                if (bitmap != null) {
+                    thumbFile.parentFile?.mkdirs()
+                    thumbFile.outputStream().use { out ->
+                        bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 80, out)
+                    }
+                }
+                bitmap
             } catch (_: Exception) {
                 null
             }

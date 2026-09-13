@@ -5896,7 +5896,7 @@ private fun FileEntryRow(
                             } else if (category == FileCategory.VIDEO) {
                                 val videoBitmap = remember { mutableStateOf<android.graphics.Bitmap?>(null) }
                                 LaunchedEffect(entry.path) {
-                                    videoBitmap.value = com.whmdg.mczj.tools.util.VaultThumbnailExtractor.extractVideoThumbnailFromPlain(entry.path)
+                                    videoBitmap.value = com.whmdg.mczj.tools.util.VaultThumbnailExtractor.extractVideoThumbnailFromPlain(entry.path, context.cacheDir)
                                 }
                                 val bmp = videoBitmap.value
                                 if (bmp != null) {
