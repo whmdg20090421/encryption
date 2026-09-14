@@ -40,7 +40,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
             }
         }
 
-        private class Factory : coil3.decode.Decoder.Factory {
+        class Factory : coil3.decode.Decoder.Factory {
             override fun create(
                 result: coil3.fetch.SourceFetchResult,
                 options: coil3.request.Options,
