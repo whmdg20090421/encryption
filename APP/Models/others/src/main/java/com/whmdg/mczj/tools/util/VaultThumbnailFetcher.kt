@@ -123,14 +123,26 @@ class VaultThumbnailFetcher(
         // 缓存失效 → 删除旧缓存
         if (cacheFile.exists()) cacheFile.delete()
 
-        // 部分解密（4MB 足够覆盖视频头+首个关键帧）→ 临时文件 → 提取首帧
-        val bytes = VaultThumbnailExtractor.decryptPartialToBytes(
-            File(data.encryptedPath), data.dek, data.customEncryption, maxBytes = 4L * 1024 * 1024
+        // 先部分解密文件头，按 atom 链探测 moov（faststart）。
+        // MediaMetadataRetriever 需要结构完整的文件，只有 moov 位于头部时才可能提取首帧；
+        // moov 在尾部时（非 faststart）直接放弃，回退默认视频图标。
+        val headerBytes = VaultThumbnailExtractor.decryptPartialToBytes(
+            File(data.encryptedPath), data.dek, data.customEncryption, maxBytes = 2L * 1024 * 1024
         ) ?: return whiteResult()
 
-        val tmpFile = File.createTempFile("vault_vid_", ".tmp")
+        if (!VaultThumbnailExtractor.headerContainsMoov(headerBytes)) {
+            return whiteResult()
+        }
+
+        // moov 在头部 → 流式完整解密到临时文件（不占内存）→ MediaMetadataRetriever 提取首帧
+        val tmpFile = File.createTempFile("vault_vid_", ".mp4")
         val bitmap = try {
-            tmpFile.writeBytes(bytes)
+            if (!VaultThumbnailExtractor.decryptToFile(
+                    File(data.encryptedPath), tmpFile, data.dek, data.customEncryption
+                )
+            ) {
+                return whiteResult()
+            }
             val retriever = android.media.MediaMetadataRetriever()
             try {
                 retriever.setDataSource(tmpFile.absolutePath, null)
