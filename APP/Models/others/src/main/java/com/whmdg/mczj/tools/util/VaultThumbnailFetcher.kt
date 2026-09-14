@@ -4,15 +4,12 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import coil3.ImageLoader
-import coil3.SingletonImageLoader
 import coil3.asImage
-import coil3.BitmapImage
 import coil3.decode.DataSource
 import coil3.fetch.FetchResult
 import coil3.fetch.Fetcher
 import coil3.fetch.ImageFetchResult
 import coil3.request.Options
-import coil3.request.ImageRequest
 import java.io.File
 
 class VaultThumbnailFetcher(
@@ -126,20 +123,26 @@ class VaultThumbnailFetcher(
         // 缓存失效 → 删除旧缓存
         if (cacheFile.exists()) cacheFile.delete()
 
-        // 内存解密 → Coil 提取帧
+        // 内存解密 → 临时文件 → MediaMetadataRetriever 提取首帧
         val bytes = VaultThumbnailExtractor.decryptToBytes(
             File(data.encryptedPath), data.dek, data.customEncryption
         ) ?: return whiteResult()
 
-        val imageLoader = SingletonImageLoader.get(context)
-        val request = ImageRequest.Builder(context)
-            .data(bytes)
-            .size(options.size)
-            .build()
-        val result = imageLoader.execute(request)
-
-        val image = result.image ?: return whiteResult()
-        val bitmap = (image as? BitmapImage)?.bitmap ?: return whiteResult()
+        val tmpFile = File.createTempFile("vault_vid_", ".tmp")
+        val bitmap = try {
+            tmpFile.writeBytes(bytes)
+            val retriever = android.media.MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(tmpFile.absolutePath, null)
+                retriever.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            } catch (_: Exception) {
+                null
+            } finally {
+                try { retriever.release() } catch (_: Exception) {}
+            }
+        } finally {
+            tmpFile.delete()
+        } ?: return whiteResult()
 
         // 保存缩略图缓存
         cacheFile.parentFile?.mkdirs()
@@ -154,7 +157,7 @@ class VaultThumbnailFetcher(
             writeMeta(meta)
         }
 
-        return ImageFetchResult(image = image, isSampled = false, dataSource = DataSource.MEMORY)
+        return ImageFetchResult(image = bitmap.asImage(), isSampled = false, dataSource = DataSource.MEMORY)
     }
 
     private fun whiteResult() = ImageFetchResult(
