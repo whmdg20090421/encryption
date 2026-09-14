@@ -41,6 +41,7 @@ import com.whmdg.mczj.tools.auth.PasswordDialog
 import androidx.compose.foundation.Image
 
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
@@ -56,10 +57,14 @@ import com.whmdg.mczj.tools.fileop.VaultOperationContext
 import com.whmdg.mczj.tools.fileop.DeleteEntry
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateSetOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -5620,6 +5625,37 @@ private fun FileBrowserPanel(
     val context = LocalContext.current
     val isMultiSelectMode = selectedPaths.isNotEmpty()
 
+    // 视频缩略图：FIFO 队列 + 磁盘缓存
+    val thumbCache = remember { mutableStateMapOf<String, ImageBitmap?>() }
+    val submittedPaths = remember { mutableStateSetOf<String>() }
+    val videoThumbChannel = remember { Channel<String>(capacity = 50) }
+    val scope = rememberCoroutineScope()
+
+    // 3个 worker 从队列中按顺序取任务
+    val cacheDir = remember { context.cacheDir }
+    val videoThumbSemaphore = remember { Semaphore(3) }
+    remember(videoThumbChannel) {
+        repeat(3) {
+            scope.launch(Dispatchers.IO) {
+                for (path in videoThumbChannel) {
+                    if (thumbCache.containsKey(path)) continue
+                    val bitmap = try {
+                        videoThumbSemaphore.acquire()
+                        try {
+                            com.whmdg.mczj.tools.util.VaultThumbnailExtractor
+                                .extractVideoThumbnailFromPlain(path, cacheDir)
+                        } finally {
+                            videoThumbSemaphore.release()
+                        }
+                    } catch (_: Exception) { null }
+                    withContext(Dispatchers.Main) {
+                        thumbCache[path] = bitmap?.asImageBitmap()
+                    }
+                }
+            }
+        }
+    }
+
     Surface(
         modifier = modifier
             .fillMaxHeight()
@@ -5697,7 +5733,22 @@ private fun FileBrowserPanel(
                     } else if (archiveSizeProvider != null) {
                         archiveSizeProvider(entry)
                     } else ""
+
+                    // 普通视频：提交到 FIFO 队列加载缩略图
+                    val ext = entry.name.substringAfterLast('.', "").lowercase()
+                    val isVideo = ext in setOf("mp4","mkv","avi","mov","wmv","flv","webm","3gp","ts","rmvb","rm","vob","m4v","f4v")
+                    if (isVideo && !entry.isDirectory && vaultContext == null && archiveContext == null) {
+                        val path = entry.path
+                        LaunchedEffect(path) {
+                            if (path !in thumbCache && path !in submittedPaths) {
+                                submittedPaths += path
+                                videoThumbChannel.send(path)
+                            }
+                        }
+                    }
+
                     val thumb = thumbnailLoader?.invoke(entry)
+                        ?: thumbCache[entry.path]
                     FileEntryRow(
                         entry = entry,
                         isFocused = isFocused,
