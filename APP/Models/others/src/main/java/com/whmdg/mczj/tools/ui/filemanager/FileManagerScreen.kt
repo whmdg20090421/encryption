@@ -5600,22 +5600,36 @@ private fun computeParentPath(
 
 /**
  * 视频缩略图加载：先查磁盘缓存，未命中则用 Coil 提取首帧并写入缓存。
+ *
+ * 缓存路径与保险箱视频统一：视频缓存根 + 源文件绝对路径（去首斜杠）+ .thumb
+ * 并在缓存根下的 cache_meta.txt 中按「源文件绝对路径」记录 (lastModified, length)。
+ * 仅当 meta 存在且与当前源文件一致时才命中缓存。
  */
 private suspend fun loadVideoThumbnail(
     context: Context,
-    videoPath: String,
-    cacheDir: File
+    videoPath: String
 ): android.graphics.Bitmap? = withContext(Dispatchers.IO) {
     try {
         val file = java.io.File(videoPath)
         if (!file.exists()) return@withContext null
 
-        // 磁盘缓存：{cacheDir}/video_thumbs/{pathHash}.thumb
-        val thumbFile = java.io.File(cacheDir, "video_thumbs/${videoPath.hashCode()}.thumb")
-        if (thumbFile.exists()) {
+        // 缓存根：与保险箱共用的「视频缓存」目录
+        val videoCacheRoot = java.io.File(
+            context.getExternalFilesDir(null) ?: context.filesDir, "视频缓存"
+        )
+        val thumbFile = java.io.File(videoCacheRoot, "${videoPath.removePrefix("/")}.thumb")
+        val metaFile = java.io.File(videoCacheRoot, "cache_meta.txt")
+
+        // 校验：meta 存在 + 缩略图存在 + 源文件 lastModified/length 未变化
+        if (thumbFile.exists() &&
+            readVideoThumbMeta(metaFile, videoPath)?.let { it == (file.lastModified() to file.length()) } == true
+        ) {
             val cached = android.graphics.BitmapFactory.decodeFile(thumbFile.absolutePath)
             if (cached != null) return@withContext cached
         }
+
+        // 失效或无元数据 → 删除旧缩略图
+        if (thumbFile.exists()) thumbFile.delete()
 
         // Coil 提取首帧
         val loader = SingletonImageLoader.get(context)
@@ -5627,15 +5641,55 @@ private suspend fun loadVideoThumbnail(
         val image = result.image ?: return@withContext null
         val bitmap = (image as? BitmapImage)?.bitmap ?: return@withContext null
 
-        // 写入磁盘缓存
+        // 写入缩略图 + 元数据
         thumbFile.parentFile?.mkdirs()
         thumbFile.outputStream().use { out ->
             bitmap.compress(android.graphics.Bitmap.CompressFormat.WEBP_LOSSY, 80, out)
         }
+        writeVideoThumbMeta(metaFile, videoPath, file.lastModified() to file.length())
         bitmap
     } catch (_: Exception) {
         null
     }
+}
+
+/** 按源文件绝对路径读取目录级元数据（cache_meta.txt），缺失或格式异常返回 null。 */
+private fun readVideoThumbMeta(metaFile: File, sourcePath: String): Pair<Long, Long>? {
+    if (!metaFile.exists()) return null
+    return try {
+        metaFile.readLines().forEach { line ->
+            val parts = line.split("|")
+            if (parts.size == 3 && parts[0] == sourcePath) {
+                val ts = parts[1].toLongOrNull() ?: return null
+                val sz = parts[2].toLongOrNull() ?: return null
+                return ts to sz
+            }
+        }
+        null
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/** 更新目录级元数据中该源文件绝对路径的 (lastModified, length) 记录。 */
+private fun writeVideoThumbMeta(metaFile: File, sourcePath: String, info: Pair<Long, Long>) {
+    val entries = linkedMapOf<String, Pair<Long, Long>>()
+    if (metaFile.exists()) {
+        try {
+            metaFile.readLines().forEach { line ->
+                val parts = line.split("|")
+                if (parts.size == 3) {
+                    val ts = parts[1].toLongOrNull() ?: return@forEach
+                    val sz = parts[2].toLongOrNull() ?: return@forEach
+                    entries[parts[0]] = ts to sz
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+    entries[sourcePath] = info
+    metaFile.parentFile?.mkdirs()
+    metaFile.writeText(entries.entries.joinToString("\n") { (path, pair) -> "$path|${pair.first}|${pair.second}" })
 }
 
 @Composable
@@ -5674,7 +5728,6 @@ private fun FileBrowserPanel(
     val scope = rememberCoroutineScope()
 
     // 3个 worker 从队列中按顺序取任务
-    val cacheDir = remember { context.cacheDir }
     val videoThumbSemaphore = remember { Semaphore(3) }
     remember(videoThumbChannel) {
         repeat(3) {
@@ -5684,7 +5737,7 @@ private fun FileBrowserPanel(
                     val bitmap = try {
                         videoThumbSemaphore.acquire()
                         try {
-                            loadVideoThumbnail(context, path, cacheDir)
+                            loadVideoThumbnail(context, path)
                         } finally {
                             videoThumbSemaphore.release()
                         }
