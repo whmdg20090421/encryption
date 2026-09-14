@@ -5980,7 +5980,8 @@ private fun FileEntryRow(
                                         vaultDir = vaultContext.vaultDir,
                                         vaultName = vaultContext.vaultName,
                                         dek = vaultContext.dek,
-                                        customEncryption = vaultContext.customEncryption
+                                        customEncryption = vaultContext.customEncryption,
+                                        displayName = iconFileName
                                     ),
                                     contentDescription = null,
                                     modifier = Modifier.size(36.dp).clip(RoundedCornerShape(4.dp)),

@@ -74,7 +74,7 @@ class VaultThumbnailFetcher(
     // ── 入口 ──
 
     override suspend fun fetch(): FetchResult {
-        val isVideo = data.entryPath.substringAfterLast('.', "").lowercase() in videoExtensions
+        val isVideo = data.displayName.substringAfterLast('.', "").lowercase() in videoExtensions
         if (isVideo) return fetchVideoThumbnail()
 
         // 图片：沿用原有逻辑
@@ -160,11 +160,8 @@ class VaultThumbnailFetcher(
         return ImageFetchResult(image = bitmap.asImage(), isSampled = false, dataSource = DataSource.MEMORY)
     }
 
-    private fun whiteResult() = ImageFetchResult(
-        image = android.graphics.drawable.ColorDrawable(0).asImage(),
-        isSampled = false,
-        dataSource = DataSource.DISK
-    )
+    private fun whiteResult(): Nothing =
+        throw IllegalStateException("保险箱缩略图提取失败")
 
     class Factory(private val context: Context, private val cacheDir: File) : Fetcher.Factory<VaultThumbnailRequest> {
         override fun create(
