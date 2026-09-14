@@ -142,7 +142,7 @@ class VaultThumbnailFetcher(
             srcFile, data.dek, data.customEncryption, maxBytes = 2L * 1024 * 1024
         )
 
-        val bitmap: Bitmap? = if (headerBytes != null &&
+        val frame: Bitmap? = if (headerBytes != null &&
             VaultThumbnailExtractor.headerContainsMoov(headerBytes)
         ) {
             // moov 在头部 → 流式完整解密到临时文件（不占内存）→ MediaMetadataRetriever 提取首帧
@@ -152,7 +152,8 @@ class VaultThumbnailFetcher(
             extractViaMemory(srcFile)
         } else {
             null
-        } ?: return whiteResult()
+        }
+        val bitmap: Bitmap = frame ?: return whiteResult()
 
         // 保存缩略图缓存
         cacheFile.parentFile?.mkdirs()
