@@ -110,7 +110,7 @@ class VaultThumbnailFetcher(
 
     // ── 视频缩略图 ──
 
-    private fun fetchVideoThumbnail(): FetchResult {
+    private suspend fun fetchVideoThumbnail(): FetchResult {
         val filename = File(data.encryptedPath).name
         val cacheFile = cacheFileForVideo()
         val meta = readMeta()

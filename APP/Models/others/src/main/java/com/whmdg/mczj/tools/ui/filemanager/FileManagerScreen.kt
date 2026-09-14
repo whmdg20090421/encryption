@@ -67,8 +67,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import coil3.SingletonImageLoader
-import coil3.request.ImageRequest
-import coil3.size.Size
 import coil3.BitmapImage
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -5621,9 +5619,9 @@ private suspend fun loadVideoThumbnail(
 
         // Coil 提取首帧
         val loader = SingletonImageLoader.get(context)
-        val request = ImageRequest.Builder(context)
+        val request = coil3.request.ImageRequest.Builder(context)
             .data(videoPath)
-            .size(Size(200, 200))
+            .size(coil3.size.Size(200, 200))
             .build()
         val result = loader.execute(request)
         val image = result.image ?: return@withContext null
