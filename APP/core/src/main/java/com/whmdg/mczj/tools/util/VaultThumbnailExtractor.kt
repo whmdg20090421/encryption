@@ -52,14 +52,21 @@ object VaultThumbnailExtractor {
 
             val bytes = decryptToBytes(src, dek, customEncryption) ?: return@withContext null
 
-            val retriever = MediaMetadataRetriever()
+            // MediaMetadataRetriever 不接受 ByteArray，写入临时文件后提取
+            val tmpFile = File.createTempFile("vault_vid_", ".tmp")
             try {
-                retriever.setDataSource(bytes, null)
-                retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-            } catch (_: Exception) {
-                null
+                tmpFile.writeBytes(bytes)
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(tmpFile.absolutePath, null)
+                    retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                } catch (_: Exception) {
+                    null
+                } finally {
+                    try { retriever.release() } catch (_: Exception) {}
+                }
             } finally {
-                try { retriever.release() } catch (_: Exception) {}
+                tmpFile.delete()
             }
         } catch (_: Exception) {
             null

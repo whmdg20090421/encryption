@@ -66,6 +66,10 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
+import coil3.SingletonImageLoader
+import coil3.request.ImageRequest
+import coil3.size.Size
+import coil3.BitmapImage
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -5596,6 +5600,46 @@ private fun computeParentPath(
     return panelPath.goUp()?.displayPath
 }
 
+/**
+ * 视频缩略图加载：先查磁盘缓存，未命中则用 Coil 提取首帧并写入缓存。
+ */
+private suspend fun loadVideoThumbnail(
+    context: Context,
+    videoPath: String,
+    cacheDir: File
+): android.graphics.Bitmap? = withContext(Dispatchers.IO) {
+    try {
+        val file = java.io.File(videoPath)
+        if (!file.exists()) return@withContext null
+
+        // 磁盘缓存：{cacheDir}/video_thumbs/{pathHash}.thumb
+        val thumbFile = java.io.File(cacheDir, "video_thumbs/${videoPath.hashCode()}.thumb")
+        if (thumbFile.exists()) {
+            val cached = android.graphics.BitmapFactory.decodeFile(thumbFile.absolutePath)
+            if (cached != null) return@withContext cached
+        }
+
+        // Coil 提取首帧
+        val loader = SingletonImageLoader.get(context)
+        val request = ImageRequest.Builder(context)
+            .data(videoPath)
+            .size(Size(200, 200))
+            .build()
+        val result = loader.execute(request)
+        val image = result.image ?: return@withContext null
+        val bitmap = (image as? BitmapImage)?.bitmap ?: return@withContext null
+
+        // 写入磁盘缓存
+        thumbFile.parentFile?.mkdirs()
+        thumbFile.outputStream().use { out ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.WEBP_LOSSY, 80, out)
+        }
+        bitmap
+    } catch (_: Exception) {
+        null
+    }
+}
+
 @Composable
 private fun FileBrowserPanel(
     entries: List<FileEntry>,
@@ -5642,8 +5686,7 @@ private fun FileBrowserPanel(
                     val bitmap = try {
                         videoThumbSemaphore.acquire()
                         try {
-                            com.whmdg.mczj.tools.util.VaultThumbnailExtractor
-                                .extractVideoThumbnailFromPlain(path, cacheDir)
+                            loadVideoThumbnail(context, path, cacheDir)
                         } finally {
                             videoThumbSemaphore.release()
                         }
