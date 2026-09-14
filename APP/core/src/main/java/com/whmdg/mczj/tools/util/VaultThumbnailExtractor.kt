@@ -87,6 +87,19 @@ object VaultThumbnailExtractor {
     }
 
     /**
+     * 部分解密：仅解密前 [maxBytes] 字节，用于视频缩略图只需头部数据的场景。
+     */
+    fun decryptPartialToBytes(src: File, dek: ByteArray, customEncryption: Boolean, maxBytes: Long): ByteArray? {
+        return try {
+            val buffer = ByteArrayOutputStream()
+            FileCodec.decryptPartial(src, buffer, dek, customEncryption, maxBytes)
+            buffer.toByteArray()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
      * 从普通视频文件提取首帧，降采样后带磁盘缓存。
      * 缓存路径：{cacheDir}/video_thumbs/{pathHash}.thumb
      */

@@ -123,9 +123,9 @@ class VaultThumbnailFetcher(
         // 缓存失效 → 删除旧缓存
         if (cacheFile.exists()) cacheFile.delete()
 
-        // 内存解密 → 临时文件 → MediaMetadataRetriever 提取首帧
-        val bytes = VaultThumbnailExtractor.decryptToBytes(
-            File(data.encryptedPath), data.dek, data.customEncryption
+        // 部分解密（4MB 足够覆盖视频头+首个关键帧）→ 临时文件 → 提取首帧
+        val bytes = VaultThumbnailExtractor.decryptPartialToBytes(
+            File(data.encryptedPath), data.dek, data.customEncryption, maxBytes = 4L * 1024 * 1024
         ) ?: return whiteResult()
 
         val tmpFile = File.createTempFile("vault_vid_", ".tmp")
