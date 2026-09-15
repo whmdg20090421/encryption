@@ -5929,6 +5929,7 @@ private fun FileEntryRow(
     vaultContext: VaultContext? = null,
     fileNameFontSize: Float = 12f,
     cloudExtra: (@Composable () -> Unit)? = null,
+    sizeIsConflict: Boolean = false,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -6167,7 +6168,13 @@ private fun FileEntryRow(
                         else -> ""
                     }
                     if (rightLabel.isNotEmpty()) {
-                        Text(text = rightLabel, fontSize = 11.sp, color = if (rightLabel == "✕") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            text = rightLabel,
+                            fontSize = 11.sp,
+                            color = if (rightLabel == "✕") MaterialTheme.colorScheme.error
+                                    else if (sizeIsConflict) Color(0xFFEF4444)
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
                 } // inner Column (weight 9f)
@@ -6569,7 +6576,8 @@ private fun CloudPanelContent(
                                     isVerifying = cloudEntry.isVerifying
                                 )
                             }
-                        } else null
+                        } else null,
+                        sizeIsConflict = cloudEntry.conflictBySize
                     )
                 }
             }
@@ -6969,15 +6977,23 @@ private fun UploadConflictDialog(
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "本地: ${FormatUtils.formatBytes(conflict.localSize)} · ${conflict.localModified.take(19).replace('T', ' ')}",
+                                    text = "本地: ${FormatUtils.formatBytes(conflict.localSize)} · ${FormatUtils.formatIsoLocal(conflict.localModified)}",
                                     fontSize = 11.sp,
                                     color = Color(0xFFEF4444)
                                 )
                                 Text(
-                                    text = "云端: ${FormatUtils.formatBytes(conflict.cloudSize)} · ${conflict.cloudModified.take(19).replace('T', ' ')}",
+                                    text = "云端: ${FormatUtils.formatBytes(conflict.cloudSize)} · ${FormatUtils.formatIsoLocal(conflict.cloudModified)}",
                                     fontSize = 11.sp,
                                     color = Color(0xFF3B82F6)
                                 )
+                                if (conflict.reasons.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "冲突原因: ${conflict.reasons.joinToString("、")}",
+                                        fontSize = 11.sp,
+                                        color = warningColor
+                                    )
+                                }
                             }
                         }
                     }
@@ -7065,15 +7081,23 @@ private fun DownloadConflictDialog(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "本地: ${FormatUtils.formatBytes(conflict.localSize)} · ${conflict.localModified.take(19).replace('T', ' ')}",
+                    text = "本地: ${FormatUtils.formatBytes(conflict.localSize)} · ${FormatUtils.formatIsoLocal(conflict.localModified)}",
                     fontSize = 11.sp,
                     color = Color(0xFFE57373)
                 )
                 Text(
-                    text = "云端: ${FormatUtils.formatBytes(conflict.cloudSize)} · ${conflict.cloudModified.take(19).replace('T', ' ')}",
+                    text = "云端: ${FormatUtils.formatBytes(conflict.cloudSize)} · ${FormatUtils.formatIsoLocal(conflict.cloudModified)}",
                     fontSize = 11.sp,
                     color = Color(0xFF03A9F4)
                 )
+                if (conflict.reasons.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "冲突原因: ${conflict.reasons.joinToString("、")}",
+                        fontSize = 11.sp,
+                        color = warningColor
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(14.dp))
                 Row(

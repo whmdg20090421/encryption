@@ -1786,7 +1786,7 @@ private fun CloudSyncCard(
                     // 信息行
                     CloudInfoRow("名称", item.vaultName, isDarkMode)
                     Spacer(modifier = Modifier.height(4.dp))
-                    CloudInfoRow("最后同步", item.lastSyncTime, isDarkMode)
+                    CloudInfoRow("最后同步", if (item.lastSyncTime == "未同步") item.lastSyncTime else FormatUtils.formatIsoLocal(item.lastSyncTime), isDarkMode)
                     Spacer(modifier = Modifier.height(4.dp))
                     CloudInfoRow("本地大小", buildString {
                         append(FormatUtils.formatBytes(item.vaultSize))

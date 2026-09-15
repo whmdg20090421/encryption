@@ -1,9 +1,30 @@
 package com.whmdg.mczj.tools.util
 
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
 /**
  * 格式化工具类
  */
 object FormatUtils {
+    private val dateTimeFormatter: DateTimeFormatter =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+
+    /**
+     * 将 UTC ISO8601 时间字符串按设备本地时区格式化为 "yyyy-MM-dd HH:mm"。
+     * 解析失败时原样返回。
+     */
+    fun formatIsoLocal(iso: String): String {
+        return try {
+            Instant.parse(iso)
+                .atZone(ZoneId.systemDefault())
+                .format(dateTimeFormatter)
+        } catch (_: Exception) {
+            iso
+        }
+    }
+
     /**
      * 格式化字节数为人类可读格式
      */

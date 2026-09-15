@@ -114,7 +114,9 @@ class CloudPaneController(
         val localSize: Long,
         val localModified: String,
         val cloudSize: Long,
-        val cloudModified: String
+        val cloudModified: String,
+        /** 冲突原因（按判定经过的层级依次列出），如 ["大小不同"] 或 ["最后修改时间不同", "MD5 不同"] */
+        val reasons: List<String> = emptyList()
     )
 
     data class UploadConflictState(
@@ -129,6 +131,8 @@ class CloudPaneController(
         val localModified: String,
         val cloudSize: Long,
         val cloudModified: String,
+        /** 冲突原因（按判定经过的层级依次列出） */
+        val reasons: List<String> = emptyList(),
         /** true=覆盖本地，false=跳过本次同步 */
         val onConfirm: (overwrite: Boolean) -> Unit
     )
@@ -154,7 +158,9 @@ class CloudPaneController(
         /** 仅存在于云端，本地无对应文件（纯内存标识，不持久化） */
         val isCloudOnly: Boolean = false,
         /** 正在校验 MD5（冲突文件合并检测中） */
-        val isVerifying: Boolean = false
+        val isVerifying: Boolean = false,
+        /** 冲突由"大小不同"判定（而非 MD5 判定），用于列表大小文字标红 */
+        val conflictBySize: Boolean = false
     )
 
     /** 排除的系统文件 */
@@ -567,7 +573,8 @@ class CloudPaneController(
                                 localSize = localSize,
                                 localModified = Instant.ofEpochMilli(file.lastModified()).toString(),
                                 cloudSize = cloudSize,
-                                cloudModified = cloudEntry.lastModified
+                                cloudModified = cloudEntry.lastModified,
+                                reasons = listOf("大小不同")
                             ))
                             continue
                         }
@@ -610,7 +617,8 @@ class CloudPaneController(
                                     localSize = localSize,
                                     localModified = Instant.ofEpochMilli(file.lastModified()).toString(),
                                     cloudSize = cloudSize,
-                                    cloudModified = cloudEntry.lastModified
+                                    cloudModified = cloudEntry.lastModified,
+                                    reasons = listOf("最后修改时间不同", "MD5 不同")
                                 ))
                             }
                         } else {
@@ -622,7 +630,8 @@ class CloudPaneController(
                                     localSize = localSize,
                                     localModified = localModified,
                                     cloudSize = cloudSize,
-                                    cloudModified = cloudEntry.lastModified
+                                    cloudModified = cloudEntry.lastModified,
+                                    reasons = listOf("最后修改时间不同")
                                 ))
                             }
                         }
@@ -1174,7 +1183,7 @@ class CloudPaneController(
             withContext(Dispatchers.IO) {
                 val cloudSize = syncDb.getSyncedSize("cloud_entries")
                 val cloudFileCount = syncDb.getCompletedFileCount("cloud_entries")
-                val now = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+                val now = java.time.Instant.now().toString()
                 com.whmdg.mczj.tools.ui.encryption.CloudSyncStore.update(context, "vault_$vaultId") { item ->
                     item.copy(
                         cloudSize = cloudSize,
@@ -1258,6 +1267,11 @@ class CloudPaneController(
                     val hasConflict = localEntry != null && localEntry.status != SyncStatus.COMPLETED
 
                     if (hasConflict && localEntry != null) {
+                        // 实时重判冲突原因（与列表渲染时的三回合判定一致）
+                        val localFile = File(vaultDir, relPath.trimStart('/'))
+                        val reasons = withContext(Dispatchers.IO) {
+                            computeConflictReasons(localFile, localEntry, cloudEntry)
+                        }
                         val overwrite = suspendCancellableCoroutine<Boolean> { cont ->
                             state.downloadConflictDialog = DownloadConflictState(
                                 path = relPath,
@@ -1265,6 +1279,7 @@ class CloudPaneController(
                                 localModified = localEntry.lastModified,
                                 cloudSize = cloudEntry.size,
                                 cloudModified = cloudEntry.lastModified,
+                                reasons = reasons,
                                 onConfirm = { choice -> cont.resume(choice) {} }
                             )
                         }
@@ -2150,6 +2165,8 @@ class CloudPaneController(
                 // 文件：从 DB 查同步状态，优先用内存实时进度，回退到 DB 持久化进度
                 val dbEntry = syncDb.getEntry("local_entries", childRelativePath)
                 var status = dbEntry?.status ?: SyncStatus.PENDING
+                // 记录本次渲染时冲突是由"大小不同"判定的（用于大小文字标红）
+                var conflictBySize = false
 
                 // 渲染时冲突检测：COMPLETED 文件检查本地是否已修改
                 if (status == SyncStatus.COMPLETED) {
@@ -2169,7 +2186,8 @@ class CloudPaneController(
                                     java.time.Instant.parse(cloudEntry.lastModified).epochSecond
                                 } catch (_: Exception) { 0L }
 
-                                val isChanged = if (localSize != cloudSize) {
+                                val sizeChanged = localSize != cloudSize
+                                val isChanged = if (sizeChanged) {
                                     true  // size 不同，直接判定改变
                                 } else if (localTime != cloudTime) {
                                     // size 相同但 time 不同，计算 MD5 对比
@@ -2180,6 +2198,7 @@ class CloudPaneController(
                                 }
 
                                 if (isChanged) {
+                                    conflictBySize = sizeChanged
                                     // 刷新 local_entries，重置为 PENDING
                                     syncDb.updateEntry("local_entries", childRelativePath) { row ->
                                         row.copy(
@@ -2234,7 +2253,8 @@ class CloudPaneController(
                     uploadingSize = 0,
                     redSize = redSize,
                     lastModified = file.lastModified(),
-                    syncStatus = status
+                    syncStatus = status,
+                    conflictBySize = conflictBySize
                 ))
             }
         }
@@ -2337,10 +2357,21 @@ class CloudPaneController(
             val isConflict = localEntry != null &&
                              localEntry.status == SyncStatus.PENDING &&
                              name in localNames
+            // 本地实时文件大小（用于"大小不同"判定，与列表渲染检测一致）
+            val localFileForEntry = File(vaultDir, childRelativePath.trimStart('/'))
+            val localRealSize = if (localFileForEntry.exists()) localFileForEntry.length() else (localEntry?.size ?: 0L)
+            val conflictBySize = localRealSize != cloudEntry.size
 
             if (isConflict) {
                 // 冲突文件：检查 MD5 是否相同（智能合并）
-                val localFile = File(vaultDir, childRelativePath.trimStart('/'))
+                val localFile = localFileForEntry
+                // 同步标记本地条目（listLocalFiles 中已添加，显示在前）
+                if (conflictBySize) {
+                    val localIdx = entries.indexOfFirst { it.relativePath == childRelativePath && !it.isCloudOnly }
+                    if (localIdx >= 0) {
+                        entries[localIdx] = entries[localIdx].copy(conflictBySize = true)
+                    }
+                }
 
                 val cloudMd5 = cloudEntry.md5
                 if (localFile.exists() && cloudMd5 != null) {
@@ -2380,7 +2411,8 @@ class CloudPaneController(
                             lastModified = parseCloudLastModified(cloudEntry.lastModified),
                             syncStatus = SyncStatus.COMPLETED,
                             isCloudOnly = true,
-                            isVerifying = true
+                            isVerifying = true,
+                            conflictBySize = conflictBySize
                         ))
                         // 启动异步校验
                         scope.launch(Dispatchers.IO) {
@@ -2404,7 +2436,8 @@ class CloudPaneController(
                     cloudOnlySize = cloudEntry.size,
                     lastModified = parseCloudLastModified(cloudEntry.lastModified),
                     syncStatus = SyncStatus.COMPLETED,
-                    isCloudOnly = true
+                    isCloudOnly = true,
+                    conflictBySize = isConflict && conflictBySize
                 ))
             }
         }
@@ -2426,6 +2459,50 @@ class CloudPaneController(
                 isCloudOnly = true
             ))
         }
+    }
+
+    /**
+     * 实时重判冲突原因，返回导致冲突的判定层级。
+     * 判定顺序：大小不同 → 直接冲突；大小相同但时间不同 → 进入 MD5；MD5 不同 → 冲突。
+     */
+    private fun computeConflictReasons(
+        localFile: File,
+        localEntry: SyncEntryRow,
+        cloudEntry: SyncEntryRow
+    ): List<String> {
+        val reasons = mutableListOf<String>()
+        val localSize = if (localFile.exists()) localFile.length() else localEntry.size
+        val cloudSize = cloudEntry.size
+
+        if (localSize != cloudSize) {
+            reasons.add("大小不同")
+            return reasons
+        }
+
+        // 大小相同 → 检查最后修改时间
+        val localModified = if (localFile.exists()) {
+            java.time.Instant.ofEpochMilli(localFile.lastModified()).toString()
+        } else {
+            localEntry.lastModified
+        }
+        if (localModified == cloudEntry.lastModified) {
+            // 大小、时间都相同但状态未同步，属于状态层面的冲突
+            reasons.add("状态未同步")
+            return reasons
+        }
+
+        // 时间不同 → 进入 MD5 校验
+        reasons.add("最后修改时间不同")
+        val cloudMd5 = cloudEntry.md5
+        if (localFile.exists() && !cloudMd5.isNullOrEmpty()) {
+            val localMd5 = calculateMd5(localFile)
+            if (localMd5 != cloudMd5) {
+                reasons.add("MD5 不同")
+            }
+        } else {
+            reasons.add("MD5 不同")
+        }
+        return reasons
     }
 
     /** 递归聚合云端文件夹下所有文件的总大小 */
