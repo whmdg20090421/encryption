@@ -1205,11 +1205,12 @@ class CloudPaneController(
                 val all = syncDb.getAllEntries("cloud_entries")
                     .filter { !it.path.endsWith("/") }
                 val prefix = if (relativePath.endsWith("/")) relativePath else "$relativePath/"
-                if (isDirectory) {
+                val selected = if (isDirectory) {
                     all.filter { it.path.startsWith(prefix) }
                 } else {
                     all.filter { it.path == relativePath }
-                }.sortedWith(naturalOrderFileName)
+                }
+                selected.sortedWith(naturalOrderFileName)
             }
 
             if (cloudFiles.isEmpty()) {
@@ -1246,7 +1247,7 @@ class CloudPaneController(
                     }
                     val hasConflict = localEntry != null && localEntry.status != SyncStatus.COMPLETED
 
-                    if (hasConflict) {
+                    if (hasConflict && localEntry != null) {
                         val overwrite = suspendCancellableCoroutine<Boolean> { cont ->
                             state.downloadConflictDialog = DownloadConflictState(
                                 path = relPath,
@@ -2635,7 +2636,7 @@ class CloudPaneController(
     }
 
     /** 按相对路径自然排序（用于下载队列） */
-    private val naturalOrderFileName = Comparator<String> { a, b -> naturalCompare(a, b) }
+    private val naturalOrderFileName = Comparator<SyncEntryRow> { a, b -> naturalCompare(a.path, b.path) }
 
     private fun naturalCompare(a: String, b: String): Int {
         var i = 0
