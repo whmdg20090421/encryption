@@ -2681,8 +2681,7 @@ class PanelCoordinator(
         vaultDir: String,
         vaultId: Int,
         vaultName: String,
-        vaultSession: com.whmdg.mczj.tools.encryption.services.VaultSession? = null,
-        recalculateFolderSize: suspend (String) -> Unit = {}
+        vaultSession: com.whmdg.mczj.tools.encryption.services.VaultSession? = null
     ) {
         isCloudLoading = true
         // 保存左面板状态
@@ -2699,7 +2698,6 @@ class PanelCoordinator(
             vaultId = vaultId,
             vaultName = vaultName,
             folderSizeDb = folderSizeDb,
-            recalculateFolderSize = recalculateFolderSize,
             vaultSession = vaultSession
         )
 
@@ -3431,23 +3429,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      *
      * 完成后将 FolderSizeDb 持久化并刷新当前面板列表。
      */
-    /** 静默重新计算指定路径的文件夹大小（用于云盘列表自动修复 >100% 异常） */
-    suspend fun recalculateFolderSize(absolutePath: String) {
-        val saveDir = AppDataPaths.fileManager(context)
-        val permission = detectMaxAvailablePermission()
-        val accessor = FileAccessor.create(permission, context)
-        calculateFolderSize(
-            rootPath = absolutePath,
-            accessor = accessor,
-            db = folderSizeDb,
-            onTotal = {},
-            onScanned = { _, _ -> },
-            onProgress = { _, _, _ -> },
-            isCancelled = { false }
-        )
-        folderSizeDb.save(saveDir)
-    }
-
     fun calculateFolderSizeAsync(rootPath: String, onTotalSizeReady: ((Long) -> Unit)? = null) {
         if (SizeCalcManager.isCalculating) {
             Toast.makeText(context, "已有统计任务在进行中", Toast.LENGTH_SHORT).show()

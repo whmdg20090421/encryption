@@ -957,8 +957,7 @@ fun CloudSyncScreen(
                                         vaultDir = recoveryVaultDir,
                                         vaultId = recoveryVaultId,
                                         vaultName = recoveryVaultName,
-                                        folderSizeDb = { com.whmdg.mczj.tools.encryption.data.FolderSizeDb() },
-                                        recalculateFolderSize = {}
+                                        folderSizeDb = { com.whmdg.mczj.tools.encryption.data.FolderSizeDb() }
                                     )
                                     val dbUploaded = controller.uploadCloudDb()
                                     com.whmdg.mczj.tools.AppDataPaths.syncLock(context, recoveryVaultId).delete()

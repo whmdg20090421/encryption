@@ -38,7 +38,6 @@ class CloudPaneController(
     private val vaultId: Int,
     private val vaultName: String,
     private val folderSizeDb: () -> FolderSizeDb,
-    private val recalculateFolderSize: suspend (String) -> Unit,
     private val vaultSession: com.whmdg.mczj.tools.encryption.services.VaultSession? = null
 ) {
     /** MD5 同步计算阈值：小于此值的文件在渲染时同步计算 MD5，大于此值则异步计算 */
@@ -192,8 +191,15 @@ class CloudPaneController(
         navigateTo("/")
     }
 
+    /** 导航代次：只接受最新一次导航的结果，丢弃过期导航的写入 */
+    private var navigationGeneration = 0
+
     /** 导航到本地保险箱内的相对路径 */
     fun navigateTo(path: String) {
+        // 先更新 currentPath，再进行耗时的目录加载：
+        // 避免加载期间其它协程读取到过期的旧路径（例如异常重算回调用它刷新，会把用户弹回上级目录）
+        val generation = ++navigationGeneration
+        state.currentPath = path
         scope.launch {
             state.isLoading = true
             state.loadError = null
@@ -201,7 +207,8 @@ class CloudPaneController(
                 val entries = withContext(Dispatchers.IO) {
                     listLocalFiles(path)
                 }
-                state.currentPath = path
+                // 过期导航：期间已发生新的导航，丢弃本次结果，避免覆盖新目录
+                if (generation != navigationGeneration) return@launch
                 state.entries = entries
 
                 // 后台异步检测文件变更（不阻塞 UI）
@@ -209,10 +216,13 @@ class CloudPaneController(
                     detectFileChanges(path)
                 }
             } catch (e: Exception) {
+                if (generation != navigationGeneration) return@launch
                 state.loadError = e
                 state.entries = emptyList()
             }
-            state.isLoading = false
+            if (generation == navigationGeneration) {
+                state.isLoading = false
+            }
         }
     }
 
@@ -2232,18 +2242,17 @@ class CloudPaneController(
         // 合并云端-only 条目：cloud_entries 中有但本地没有的
         mergeCloudOnlyEntries(relativePath, localNames, entries)
 
-        // 检测到文件夹大小异常时，异步触发重新计算
+        // 检测到文件夹大小异常（uploadedSize > folderSize，说明 SyncDatabase 索引不自洽）
+        // 注意：这里不再触发 FolderSizeDb 重算并回调 navigateTo——原因有二：
+        //   1) 该判据来自 SyncDatabase，而 recalculateFolderSize 只写 FolderSizeDb，无法消除异常，会导致每次进入都重演
+        //   2) 脱离的协程在导航过程中回调 navigateTo(state.currentPath) 会读到过期路径，把用户弹回上级目录
+        // 仅记录异常路径供 UI 提示，随后自动清除，不影响导航。
         if (anomalyPaths.isNotEmpty()) {
             state.sizeAnomalyPaths = anomalyPaths
-            scope.launch(Dispatchers.IO) {
-                for (path in anomalyPaths) {
-                    val absolutePath = File(vaultDir, path.trimStart('/')).absolutePath
-                    recalculateFolderSize(absolutePath)
-                }
-                // 重新计算完成后刷新列表
-                withContext(Dispatchers.Main) {
+            scope.launch {
+                delay(1500L)
+                if (state.sizeAnomalyPaths == anomalyPaths) {
                     state.sizeAnomalyPaths = emptySet()
-                    navigateTo(state.currentPath)
                 }
             }
         }
@@ -2375,7 +2384,7 @@ class CloudPaneController(
                         ))
                         // 启动异步校验
                         scope.launch(Dispatchers.IO) {
-                            verifyAndMergeConflict(childRelativePath, localFile, cloudMd5)
+                            verifyAndMergeConflict(relativePath, childRelativePath, localFile, cloudMd5)
                         }
                         continue
                     }
@@ -2446,6 +2455,7 @@ class CloudPaneController(
 
     /** 异步校验冲突文件 MD5 并合并（大文件后台校验） */
     private suspend fun verifyAndMergeConflict(
+        parentPath: String,
         relativePath: String,
         localFile: File,
         cloudMd5: String
@@ -2466,9 +2476,11 @@ class CloudPaneController(
             }
             // MD5 不同则不操作，保持 PENDING 状态
 
-            // 刷新列表（移除校验状态，显示最终颜色）
+            // 仅在用户仍停留在该目录时刷新，避免校验完成后把已切走的用户拉回
             withContext(Dispatchers.Main) {
-                navigateTo(state.currentPath)
+                if (state.currentPath == parentPath) {
+                    navigateTo(parentPath)
+                }
             }
         } catch (e: Exception) {
             // 校验失败，保持原状（不刷新，避免死循环）
