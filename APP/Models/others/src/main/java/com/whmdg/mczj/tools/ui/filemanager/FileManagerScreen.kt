@@ -6520,7 +6520,38 @@ private fun CloudPanelContent(
             // ── 文件列表 ──
         if (cloudState.isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
+                    // 第一行：当前阶段；第二行：进度 + 当前文件
+                    cloudState.loadProgress?.let { p ->
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = p.reason,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        val progressText = buildString {
+                            if (p.total > 0) {
+                                append("${p.current}/${p.total}")
+                                if (p.currentFile.isNotBlank()) append("  ")
+                            }
+                            if (p.currentFile.isNotBlank()) append(p.currentFile)
+                        }
+                        if (progressText.isNotBlank()) {
+                            Text(
+                                text = progressText,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(0.8f)
+                            )
+                        }
+                    }
+                }
             }
         } else if (cloudState.loadError != null) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

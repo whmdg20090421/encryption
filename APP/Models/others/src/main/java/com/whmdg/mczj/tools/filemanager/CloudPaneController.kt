@@ -58,6 +58,8 @@ class CloudPaneController(
         var entries by mutableStateOf<List<CloudFileEntry>>(emptyList())
         var isLoading by mutableStateOf(false)
         var loadError by mutableStateOf<Throwable?>(null)
+        /** 加载/校验进度（null=无进度显示）。用于在转圈下方展示当前阶段与进度。 */
+        var loadProgress by mutableStateOf<LoadProgress?>(null)
         var selectedPaths by mutableStateOf<Set<String>>(emptySet())
         var syncTask by mutableStateOf(SyncTaskState())
         var vaultFolderName by mutableStateOf("")
@@ -84,6 +86,18 @@ class CloudPaneController(
         /** 下载冲突确认对话框（null=隐藏） */
         var downloadConflictDialog by mutableStateOf<DownloadConflictState?>(null)
     }
+
+    /** 加载/校验进度：在转圈下方展示当前阶段与进度 */
+    data class LoadProgress(
+        /** 第一行：当前正在做什么（如"正在计算 MD5"） */
+        val reason: String,
+        /** 第二行：已处理数量 */
+        val current: Int = 0,
+        /** 第二行：总数量（<=0 表示未知） */
+        val total: Int = 0,
+        /** 第二行：当前处理中的文件（可为空） */
+        val currentFile: String = ""
+    )
 
     /** cloud.db 同步弹窗状态 */
     data class CloudDbSyncState(
@@ -211,6 +225,7 @@ class CloudPaneController(
         scope.launch {
             state.isLoading = true
             state.loadError = null
+            state.loadProgress = LoadProgress(reason = "正在读取目录")
             val startMs = System.currentTimeMillis()
             try {
                 val entries = withContext(Dispatchers.IO) {
@@ -242,6 +257,7 @@ class CloudPaneController(
             }
             if (generation == navigationGeneration) {
                 state.isLoading = false
+                state.loadProgress = null
             }
         }
     }
@@ -2149,12 +2165,26 @@ class CloudPaneController(
             return entries.sortedWith(naturalOrderComparator())
         }
 
-        for (file in children) {
+        for ((index, file) in children.withIndex()) {
             if (file.name in excludedFiles) continue
             localNames.add(file.name)
             val childRelativePath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
 
+            // 更新进度：当前正在处理的文件
+            state.loadProgress = LoadProgress(
+                reason = "正在读取目录",
+                current = index + 1,
+                total = children.size,
+                currentFile = file.name
+            )
+
             if (file.isDirectory) {
+                state.loadProgress = LoadProgress(
+                    reason = "正在统计文件夹",
+                    current = index + 1,
+                    total = children.size,
+                    currentFile = file.name
+                )
                 // 文件夹大小：从 SyncDatabase 递归累加整个子树的原始文件大小（避免 FolderSizeDb 的加密文件膨胀问题）
                 val prefix = if (childRelativePath.endsWith("/")) childRelativePath else "$childRelativePath/"
                 val folderSize = syncDb.getEntriesByParent("local_entries", childRelativePath)
@@ -2196,6 +2226,12 @@ class CloudPaneController(
                     if (cloudEntry != null) {
                         // 一次 stat 获取 size 和 time
                         val statResult = try {
+                            state.loadProgress = LoadProgress(
+                                reason = "正在校验文件（stat）",
+                                current = index + 1,
+                                total = children.size,
+                                currentFile = file.name
+                            )
                             ShellExecutor.execute(Permission.MIN, "stat -c '%s %Y' '${file.absolutePath}'").trim()
                         } catch (_: Exception) { null }
                         if (statResult != null) {
@@ -2213,6 +2249,12 @@ class CloudPaneController(
                                     true  // size 不同，直接判定改变
                                 } else if (localTime != cloudTime) {
                                     // size 相同但 time 不同，计算 MD5 对比
+                                    state.loadProgress = LoadProgress(
+                                        reason = "正在计算 MD5",
+                                        current = index + 1,
+                                        total = children.size,
+                                        currentFile = file.name
+                                    )
                                     val localMd5 = calculateMd5(file)
                                     localMd5 != cloudEntry.md5
                                 } else {
