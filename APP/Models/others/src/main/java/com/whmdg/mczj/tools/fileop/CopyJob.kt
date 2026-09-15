@@ -9,6 +9,7 @@ import com.whmdg.mczj.tools.encryption.core.FileConstants
 import com.whmdg.mczj.tools.encryption.core.EncryptionTraceLog
 import com.whmdg.mczj.tools.encryption.services.CryptoService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
+import com.whmdg.mczj.tools.util.AuditLog
 import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.IOException
@@ -891,9 +892,36 @@ class CopyJob(
             targetModifiedTime = operator.lastModified(target)
         )
 
+        AuditLog.event(
+            event = "file.conflict",
+            detail = linkedMapOf(
+                "kind" to "copy",
+                "source" to sourcePath,
+                "target" to target,
+                "isDir" to isDirectory,
+                "srcSize" to request.sourceSize,
+                "dstSize" to request.targetSize,
+                "srcMtime" to request.sourceModifiedTime,
+                "dstMtime" to request.targetModifiedTime,
+                "rule" to "target 已存在（目录合并除外）"
+            ),
+            message = "检测到文件冲突，等待用户选择"
+        )
+
         val result = runBlocking {
             manager.resolveConflict(request)
         }
+
+        AuditLog.event(
+            event = "file.conflict.resolved",
+            detail = linkedMapOf(
+                "source" to sourcePath,
+                "target" to target,
+                "action" to result.action.name,
+                "newName" to result.newName,
+                "applyToAll" to result.applyToAll
+            )
+        )
 
         if (result.applyToAll) {
             conflictAutoAction = result.action
@@ -953,10 +981,35 @@ class CopyJob(
             targetModifiedTime = outFile.lastModified(),
             allowRename = false
         )
+        AuditLog.event(
+            event = "vault.conflict",
+            detail = linkedMapOf(
+                "kind" to "externalToVault",
+                "vault" to session.record.name,
+                "source" to srcFile.absolutePath,
+                "target" to outFile.absolutePath,
+                "srcSize" to request.sourceSize,
+                "dstSize" to request.targetSize,
+                "srcMtime" to request.sourceModifiedTime,
+                "dstMtime" to request.targetModifiedTime,
+                "encryptFilename" to session.record.encryptFilename,
+                "rule" to "目标加密文件已存在"
+            ),
+            message = "保险箱加密引入检测到重名，等待用户选择"
+        )
         val result = runBlocking { manager.resolveConflict(request) }
         if (result.applyToAll) {
             conflictAutoAction = result.action
         }
+        AuditLog.event(
+            event = "vault.conflict.resolved",
+            detail = linkedMapOf(
+                "vault" to session.record.name,
+                "target" to outFile.absolutePath,
+                "action" to result.action.name,
+                "applyToAll" to result.applyToAll
+            )
+        )
         return when (result.action) {
             ConflictAction.REPLACE -> true
             ConflictAction.SKIP -> false

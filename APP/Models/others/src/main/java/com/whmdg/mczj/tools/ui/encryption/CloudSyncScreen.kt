@@ -42,6 +42,7 @@ import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
 import com.whmdg.mczj.tools.ui.theme.LocalIsDarkMode
 import com.whmdg.mczj.tools.ui.components.glowEffect
 import com.whmdg.mczj.tools.util.FormatUtils
+import com.whmdg.mczj.tools.util.AuditLog
 import android.content.Context
 import android.net.Uri
 import android.os.Build
@@ -297,17 +298,37 @@ fun CloudSyncScreen(
         } catch (e: TimeoutCancellationException) {
             catalogSyncProgress = null
             syncErrorMessage = "同步超时：云端在两分钟内未响应，请检查网络后重试。"
+            AuditLog.error(
+                event = "cloud.catalog.timeout",
+                error = e,
+                detail = linkedMapOf("host" to config.host, "port" to config.port, "path" to config.relativePath)
+            )
         } catch (_: CancellationException) {
             // 取消时临时下载文件会由各同步步骤的 finally 删除。
             catalogSyncProgress = null
         } catch (e: java.io.IOException) {
             catalogSyncProgress = null
             syncErrorMessage = "网络同步失败：${e.message ?: "连接中断"}"
+            AuditLog.error(
+                event = "cloud.catalog.ioError",
+                error = e,
+                detail = linkedMapOf("host" to config.host, "port" to config.port, "path" to config.relativePath)
+            )
         } catch (e: IllegalStateException) {
             catalogSyncProgress = null
             syncErrorMessage = e.message ?: "同步数据不完整"
+            AuditLog.error(
+                event = "cloud.catalog.badState",
+                error = e,
+                detail = linkedMapOf("host" to config.host, "port" to config.port, "path" to config.relativePath)
+            )
         } catch (e: Throwable) {
             catalogSyncProgress = null
+            AuditLog.error(
+                event = "cloud.catalog.unexpected",
+                error = e,
+                detail = linkedMapOf("host" to config.host, "port" to config.port, "path" to config.relativePath)
+            )
             com.whmdg.mczj.tools.util.DiagnosticLog.exportCrashReport(
                 context, e, "云盘同步发生未预期错误"
             )
@@ -1354,6 +1375,14 @@ fun CloudSyncScreen(
                                 } catch (e: Exception) {
                                     creationError = e.message ?: "创建失败"
                                     isCreating = false
+                                    AuditLog.error(
+                                        event = "cloud.vault.create.failed",
+                                        error = e,
+                                        detail = linkedMapOf(
+                                            "vault" to (creatingVault?.vaultName ?: "?"),
+                                            "dir" to (selectedDirectory ?: "?")
+                                        )
+                                    )
                                 }
                             }
                         },
@@ -1535,6 +1564,15 @@ private fun WebDavSettingsDialog(
                                     true
                                 } catch (e: Exception) {
                                     testResult = "连接失败: ${e.message}"
+                                    AuditLog.error(
+                                        event = "cloud.connect.failed",
+                                        error = e,
+                                        detail = linkedMapOf(
+                                            "host" to parsed.second,
+                                            "port" to parsed.third,
+                                            "path" to effectivePath
+                                        )
+                                    )
                                     false
                                 }
                             }
@@ -2100,6 +2138,11 @@ private fun DiffScanDialog(
                         }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) { step2Text = "检查失败: ${e.message}" }
+                        AuditLog.error(
+                            event = "cloud.diff.checkFailed",
+                            error = e,
+                            detail = linkedMapOf("vault" to vaultName, "remote" to remotePath)
+                        )
                         false
                     }
 
@@ -2182,6 +2225,11 @@ private fun DiffScanDialog(
                             withContext(Dispatchers.Main) {
                                 step2Text = "同步失败: ${e.message}"
                             }
+                            AuditLog.error(
+                                event = "cloud.diff.mergeFailed",
+                                error = e,
+                                detail = linkedMapOf("vault" to vaultName, "remote" to remotePath)
+                            )
                         }
                     }
                 } else {
@@ -2273,6 +2321,11 @@ private fun DiffScanDialog(
             }
         } catch (e: Exception) {
             step1Text = "扫描失败: ${e.message}"
+            AuditLog.error(
+                event = "cloud.diff.scanFailed",
+                error = e,
+                detail = linkedMapOf("vault" to vaultName)
+            )
             kotlinx.coroutines.delay(2000)
             onComplete(DiffScanResult(0, 0, 0, 0, 0))
         }

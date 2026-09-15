@@ -69,7 +69,6 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
             .setTimeout(10))
         installGlobalCrashHandler()
         AnrWatchdog.start(this)
-        ProcessMonitorService.start(this)
         migrateWebViewData()
         AppIconHelper.init(this)
         WebView.setDataDirectorySuffix("app")
@@ -77,6 +76,11 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
         // OCR 悬浮窗：监听应用前后台切换
         androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(
             com.whmdg.mczj.tools.ui.accounting.OcrLifecycleObserver(this)
+        )
+
+        // 日志监控：随应用前后台启停（前台抓取，后台停止）
+        androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(
+            ProcessMonitorLifecycleObserver(this)
         )
 
         // WebDAV: 初始化 Client 认证器

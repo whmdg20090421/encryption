@@ -5,6 +5,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import com.whmdg.mczj.tools.util.AuditLog
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -104,9 +105,29 @@ object ShellExecutor {
         return try {
             ShellDaemon.execute(resolved, command)
         } catch (e: ShellException) {
+            AuditLog.error(
+                event = "shell.failed",
+                error = e,
+                detail = linkedMapOf(
+                    "cmd" to command.take(300),
+                    "perm" to permission.name,
+                    "resolved" to resolved.name,
+                    "exit" to e.exitCode,
+                    "stderr" to e.stderr.take(300)
+                )
+            )
             Log.e("ShellExecutor", "执行失败: ${e.message}", e)
             throw e
         } catch (e: Exception) {
+            AuditLog.error(
+                event = "shell.exception",
+                error = e,
+                detail = linkedMapOf(
+                    "cmd" to command.take(300),
+                    "perm" to permission.name,
+                    "resolved" to resolved.name
+                )
+            )
             Log.e("ShellExecutor", "执行异常: ${e.message}", e)
             throw ShellException(
                 message = "执行异常: ${e.message}",
@@ -143,9 +164,29 @@ object ShellExecutor {
         try {
             ShellDaemon.executeStreaming(resolved, command, onOutputLine, cancelFlag)
         } catch (e: ShellException) {
+            AuditLog.error(
+                event = "shell.stream.failed",
+                error = e,
+                detail = linkedMapOf(
+                    "cmd" to command.take(300),
+                    "perm" to permission.name,
+                    "resolved" to resolved.name,
+                    "exit" to e.exitCode,
+                    "stderr" to e.stderr.take(300)
+                )
+            )
             Log.e("ShellExecutor", "流式执行失败: ${e.message}", e)
             throw e
         } catch (e: Exception) {
+            AuditLog.error(
+                event = "shell.stream.exception",
+                error = e,
+                detail = linkedMapOf(
+                    "cmd" to command.take(300),
+                    "perm" to permission.name,
+                    "resolved" to resolved.name
+                )
+            )
             Log.e("ShellExecutor", "流式执行异常: ${e.message}", e)
             throw ShellException(
                 message = "流式执行异常: ${e.message}",

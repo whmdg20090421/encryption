@@ -18,6 +18,7 @@
     <!-- 前台服务 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- 相机/麦克风 -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -89,6 +90,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="true"
         android:theme="@style/Theme.工具箱">
         <activity
             android:name=".MainActivity"
@@ -190,11 +192,16 @@
             android:exported="true"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
-        <!-- 独立进程日志监控（主进程崩溃不受影响） -->
+        <!-- 独立进程日志监控（前台保活，主进程崩溃不受影响） -->
         <service
             android:name=".ProcessMonitorService"
             android:process=":monitor"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="log_monitoring" />
+        </service>
     </application>
 
 </manifest>
