@@ -837,8 +837,12 @@ fun ThemeSettingsScreen(onBack: () -> Unit) {
 fun FunctionalTestScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_RP_HUB, Context.MODE_PRIVATE) }
+    val cloudPrefs = remember { context.getSharedPreferences(AppDataPaths.PREFS_CLOUD_SYNC, Context.MODE_PRIVATE) }
     var debugMode by remember { mutableStateOf(prefs.getBoolean("debug_mode", false)) }
     var cloudLogEnabled by remember { mutableStateOf(com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.isEnabled(context)) }
+    var cloudOpLogEnabled by remember {
+        mutableStateOf(cloudPrefs.getBoolean(AppDataPaths.PREF_KEY_CLOUD_OP_LOG, false))
+    }
     val hasDebugPerm = PermissionManager.has(Feature.DEBUG_MODE)
 
     Scaffold(
@@ -902,6 +906,17 @@ fun FunctionalTestScreen(onBack: () -> Unit) {
                         onCheckedChange = {
                             cloudLogEnabled = it
                             com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.setEnabled(context, it)
+                        }
+                    )
+                    CompactSettingsToggle(
+                        title = "云盘操作实时记录",
+                        subtitle = "记录进入目录/上传/下载/删除等操作，每秒落盘到诊断日志/云盘日志；关闭时不记录以节省性能",
+                        icon = Icons.Default.CloudUpload,
+                        checked = cloudOpLogEnabled,
+                        onCheckedChange = {
+                            cloudOpLogEnabled = it
+                            cloudPrefs.edit().putBoolean(AppDataPaths.PREF_KEY_CLOUD_OP_LOG, it).apply()
+                            com.whmdg.mczj.tools.util.DiagnosticLog.setOperationLogEnabled(it)
                         }
                     )
                 }

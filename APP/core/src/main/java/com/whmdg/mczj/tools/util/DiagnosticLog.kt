@@ -16,20 +16,46 @@ import java.util.concurrent.ConcurrentLinkedDeque
  * 设计思路：一个用户意图 = 一个 Session（如"进入文件管理器""点击文件夹 Foo"），
  * 每开新会话即清空旧事件。导出报告时只包含当前会话的事件，不会污染上下文。
  *
- * - 没有崩溃时不会留下任何文件
- * - 崩溃时只写当前 session 的事件 + 异常 + 设备信息 + 全线程栈
+ * - 崩溃时写完整报告（当前 session 事件 + 异常 + 设备信息 + 全线程栈）
+ * - 同时把事件**实时落盘**到独立文件（AppDataPaths.operationLog()），
+ *   有事件时最多每秒写一次，无事件时不写。供随时查看用户操作动向。
  */
 object DiagnosticLog {
 
     data class Entry(val timeMs: Long, val thread: String, val tag: String, val message: String)
-    private data class Session(
-        val name: String,
-        val startMs: Long,
+    private class Session(val name: String, val startMs: Long) {
         val events: ConcurrentLinkedDeque<Entry> = ConcurrentLinkedDeque()
-    )
+    }
 
     @Volatile
     private var session: Session? = null
+
+    /** appContext, 由 [init] 注入；为空则跳过实时落盘 */
+    @Volatile
+    private var appContext: Context? = null
+
+    /** 本进程的实时日志文件（进程生命周期内唯一，不随 beginSession 轮转） */
+    @Volatile
+    private var opLogFile: File? = null
+
+    /** 已落盘的事件游标（跨会话累积，对应 events 队列的逻辑序号） */
+    @Volatile
+    private var flushedCount = 0L
+
+    /** 有未落盘事件时唤醒写盘线程 */
+    private val flushSignal = Object()
+
+    @Volatile
+    private var flusherRunning = false
+
+    /**
+     * 实时落盘开关（默认关闭）。关闭时 [log] 仍写 logcat 与内存会话供崩溃报告，
+     * 但不产生任何文件 IO，避免性能开销。由调试设置里的开关控制。
+     */
+    @Volatile
+    private var opLogEnabled = false
+
+    private const val FLUSH_INTERVAL_MS = 1000L
 
     private val timeFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.ROOT)
     private val fileTimeFmt = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.ROOT)
@@ -37,24 +63,114 @@ object DiagnosticLog {
 
     /** 开启新会话。旧会话事件被清掉（如果旧会话没出错就直接丢弃）。 */
     fun beginSession(name: String) {
-        session = Session(name, System.currentTimeMillis())
+        // 先把旧会话尚未落盘的事件刷掉，避免丢失
+        try {
+            flushPending()
+        } catch (_: Exception) {}
+        synchronized(flushSignal) {
+            session = Session(name, System.currentTimeMillis())
+            // 新会话事件队列重置，实时落盘游标一并归零（文件保持追加，不轮转）
+            flushedCount = 0L
+        }
         Log.d("DiagSession", "▶ 开始: $name")
     }
 
+    /**
+     * 注入应用 Context，用于实时落盘。建议在 Application.onCreate 调用一次。
+     * 未注入时 [log] 仍只走 logcat。
+     */
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
+
+    /** 开启/关闭实时落盘。关闭时不产生文件 IO。 */
+    fun setOperationLogEnabled(enabled: Boolean) {
+        opLogEnabled = enabled
+    }
+
+    /** 实时落盘是否开启。 */
+    fun isOperationLogEnabled(): Boolean = opLogEnabled
+
     /** 给当前会话追加一条事件。无 session 时只走 logcat。 */
     fun log(tag: String, message: String) {
-        val s = session
-        if (s != null) {
-            s.events.addLast(
-                Entry(
-                    timeMs = System.currentTimeMillis(),
-                    thread = Thread.currentThread().name,
-                    tag = tag,
-                    message = message
+        synchronized(flushSignal) {
+            val s = session
+            if (s != null) {
+                s.events.addLast(
+                    Entry(
+                        timeMs = System.currentTimeMillis(),
+                        thread = Thread.currentThread().name,
+                        tag = tag,
+                        message = message
+                    )
                 )
-            )
+                if (opLogEnabled) {
+                    ensureFlusher()
+                    flushSignal.notifyAll()
+                }
+            }
         }
         Log.d(tag, message)
+    }
+
+    /** 惰性启动写盘线程（每进程一个）。 */
+    private fun ensureFlusher() {
+        if (flusherRunning) return
+        flusherRunning = true
+        Thread({
+            while (true) {
+                try {
+                    synchronized(flushSignal) {
+                        while (true) {
+                            val s = session
+                            if (s != null && flushedCount < s.events.size) break
+                            flushSignal.wait()
+                        }
+                    }
+                    flushPending()
+                    // 至多每秒写一次：期间新事件合并到下次提交
+                    Thread.sleep(FLUSH_INTERVAL_MS)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                } catch (e: Exception) {
+                    Log.e("DiagnosticLog", "实时落盘失败", e)
+                }
+            }
+        }, "DiagLogFlusher").apply { isDaemon = true }.start()
+    }
+
+    /** 把尚未落盘的事件追加写入文件。 */
+    private fun flushPending() {
+        if (!opLogEnabled) return
+        val ctx = appContext ?: return
+
+        val toWrite: List<Entry>
+        synchronized(flushSignal) {
+            val s = session ?: return
+            val all = s.events.toList()
+            if (flushedCount >= all.size) return
+            toWrite = all.subList(flushedCount.toInt(), all.size).toList()
+            flushedCount = all.size.toLong()
+        }
+        if (toWrite.isEmpty()) return
+
+        try {
+            val file = opLogFile ?: File(
+                AppDataPaths.operationLog(ctx),
+                "op_${fileTimeFmt.format(Date())}.log"
+            ).also { opLogFile = it }
+
+            val sb = StringBuilder()
+            for (e in toWrite) {
+                sb.append(timeFmt.format(Date(e.timeMs)))
+                sb.append(" [").append(e.thread).append("] ")
+                sb.append(e.tag).append(": ").append(e.message)
+                sb.append('\n')
+            }
+            file.appendText(sb.toString(), Charsets.UTF_8)
+        } catch (e: Exception) {
+            Log.e("DiagnosticLog", "写入实时日志失败", e)
+        }
     }
 
     /**

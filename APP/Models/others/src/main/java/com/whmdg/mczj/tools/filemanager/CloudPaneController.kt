@@ -19,6 +19,7 @@ import com.whmdg.mczj.tools.fileop.sync.SyncPhase
 import com.whmdg.mczj.tools.fileop.sync.SyncTaskState
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerConfig
+import com.whmdg.mczj.tools.util.DiagnosticLog
 import kotlinx.coroutines.*
 import java.io.File
 import java.time.Instant
@@ -206,16 +207,25 @@ class CloudPaneController(
         // 避免加载期间其它协程读取到过期的旧路径（例如异常重算回调用它刷新，会把用户弹回上级目录）
         val generation = ++navigationGeneration
         state.currentPath = path
+        DiagnosticLog.log("CloudPane", "打开目录 path='$path' generation=$generation")
         scope.launch {
             state.isLoading = true
             state.loadError = null
+            val startMs = System.currentTimeMillis()
             try {
                 val entries = withContext(Dispatchers.IO) {
                     listLocalFiles(path)
                 }
                 // 过期导航：期间已发生新的导航，丢弃本次结果，避免覆盖新目录
-                if (generation != navigationGeneration) return@launch
+                if (generation != navigationGeneration) {
+                    DiagnosticLog.log("CloudPane", "丢弃过期导航 path='$path' generation=$generation")
+                    return@launch
+                }
                 state.entries = entries
+                DiagnosticLog.log(
+                    "CloudPane",
+                    "目录加载完成 path='$path' entries=${entries.size} 耗时=${System.currentTimeMillis() - startMs}ms"
+                )
 
                 // 后台异步检测文件变更（不阻塞 UI）
                 launch(Dispatchers.IO) {
@@ -225,6 +235,10 @@ class CloudPaneController(
                 if (generation != navigationGeneration) return@launch
                 state.loadError = e
                 state.entries = emptyList()
+                DiagnosticLog.log(
+                    "CloudPane",
+                    "目录加载失败 path='$path' 耗时=${System.currentTimeMillis() - startMs}ms ${e.javaClass.simpleName}: ${e.message}"
+                )
             }
             if (generation == navigationGeneration) {
                 state.isLoading = false
@@ -253,15 +267,18 @@ class CloudPaneController(
 
     /** 上传单个文件或文件夹 */
     fun uploadFile(relativePath: String) {
+        DiagnosticLog.log("CloudPane", "请求上传 path='$relativePath'")
         // 并发保护：检查是否有文件正在上传
         val uploading = syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
         if (uploading.isNotEmpty()) {
+            DiagnosticLog.log("CloudPane", "上传被拒绝（已有上传任务进行中） path='$relativePath'")
             android.widget.Toast.makeText(context, "当前有文件正在上传，请等待完成", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
 
         val localFile = File(vaultDir, relativePath.trimStart('/'))
         if (!localFile.exists()) {
+            DiagnosticLog.log("CloudPane", "上传失败：本地文件不存在 path='$relativePath'")
             android.widget.Toast.makeText(context, "本地文件不存在", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
@@ -1210,9 +1227,11 @@ class CloudPaneController(
      * 仅将 syncTask.mode 设为 CLOUD_TO_LOCAL，箭头自动变为 ↓。
      */
     fun downloadEntry(relativePath: String, isDirectory: Boolean) {
+        DiagnosticLog.log("CloudPane", "请求下载 path='$relativePath' isDir=$isDirectory")
         // 并发保护：上传/下载进行中不允许再次触发
         val busy = syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING).isNotEmpty()
         if (busy) {
+            DiagnosticLog.log("CloudPane", "下载被拒绝（有上传任务进行中） path='$relativePath'")
             android.widget.Toast.makeText(context, "当前有任务正在进行，请等待完成", android.widget.Toast.LENGTH_SHORT).show()
             return
         }
@@ -1411,6 +1430,7 @@ class CloudPaneController(
 
     /** 删除本地文件 + 从本地表移除 */
     fun deleteLocal(relativePath: String, onComplete: (() -> Unit)? = null) {
+        DiagnosticLog.log("CloudPane", "请求删除本地 path='$relativePath'")
         scope.launch {
             withContext(Dispatchers.IO) {
                 // 统计删除前的数量和大小
@@ -1445,6 +1465,7 @@ class CloudPaneController(
 
     /** 删除云端文件 + 从云端表移除 */
     fun deleteCloud(relativePath: String, onComplete: (() -> Unit)? = null) {
+        DiagnosticLog.log("CloudPane", "请求删除云端 path='$relativePath'")
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -1497,6 +1518,7 @@ class CloudPaneController(
 
     /** 同时删除本地和云端 */
     fun deleteBoth(relativePath: String, onComplete: (() -> Unit)? = null) {
+        DiagnosticLog.log("CloudPane", "请求同时删除本地+云端 path='$relativePath'")
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {

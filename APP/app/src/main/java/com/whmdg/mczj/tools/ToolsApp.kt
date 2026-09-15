@@ -61,6 +61,11 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        DiagnosticLog.init(this)
+        DiagnosticLog.setOperationLogEnabled(
+            getSharedPreferences(AppDataPaths.PREFS_CLOUD_SYNC, MODE_PRIVATE)
+                .getBoolean(AppDataPaths.PREF_KEY_CLOUD_OP_LOG, false)
+        )
         ShellExecutor.init(this)
         JBindingClient.init(this)
         // libsu: 配置全局 root shell（首次 Shell.cmd() 时懒创建，后续复用）

@@ -216,6 +216,13 @@ object AppDataPaths {
         return dir
     }
 
+    /** 云盘操作实时日志目录（DiagnosticLog 定时落盘） */
+    fun operationLog(context: Context): File {
+        val dir = File(diagnostics(context), "云盘日志")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     // ── SharedPreferences 名称常量 ──
 
     /** 文件管理器 SharedPreferences（同一个界面的设置存在同一个 XML） */
@@ -277,6 +284,9 @@ object AppDataPaths {
 
     /** 云盘同步 SharedPreferences */
     const val PREFS_CLOUD_SYNC = "cloud_sync_prefs"
+
+    /** 云盘操作实时落盘开关 Key（存于 PREFS_CLOUD_SYNC） */
+    const val PREF_KEY_CLOUD_OP_LOG = "cloud_op_log_enabled"
 
     /** P7zip 守护进程 SharedPreferences（权限持久化 + PID） */
     const val PREFS_P7ZIP_DAEMON = "p7zip_daemon_prefs"
