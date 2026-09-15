@@ -1666,6 +1666,20 @@ fun FileManagerScreen(
                         }
                     )
                 }
+                val downloadConflict = cloudStateForOverlay.downloadConflictDialog
+                if (downloadConflict != null) {
+                    DownloadConflictDialog(
+                        conflict = downloadConflict,
+                        onSkip = {
+                            downloadConflict.onConfirm(false)
+                            cloudStateForOverlay.downloadConflictDialog = null
+                        },
+                        onOverwrite = {
+                            downloadConflict.onConfirm(true)
+                            cloudStateForOverlay.downloadConflictDialog = null
+                        }
+                    )
+                }
                 // 进度异常弹窗
                 val anomalyInfo = cloudStateForOverlay.anomalyDialogInfo
                 if (anomalyInfo != null) {
@@ -2490,8 +2504,30 @@ fun FileManagerScreen(
                                                 )
                                             }
                                         }
-                                        // 右列留空（后续放其他功能）
-                                        Box(modifier = Modifier.weight(1f))
+                                        // 第二列：下载
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    vm.panels.cloud?.downloadEntry(cloudEntry.relativePath, cloudEntry.isDirectory)
+                                                    selectedCloudEntry = null
+                                                }
+                                                .padding(vertical = 16.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    Icons.Default.CloudDownload,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                                Text(
+                                                    "下载",
+                                                    style = MaterialTheme.typography.bodyLarge
+                                                )
+                                            }
+                                        }
                                     }
                                     HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
                                     // 第二行：删除
@@ -6972,6 +7008,90 @@ private fun UploadConflictDialog(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         Text("覆盖云端 (${conflicts.size})", fontSize = 13.sp, color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==================== 下载冲突确认对话框 ====================
+
+@Composable
+private fun DownloadConflictDialog(
+    conflict: CloudPaneController.DownloadConflictState,
+    onSkip: () -> Unit,
+    onOverwrite: () -> Unit
+) {
+    val isDarkMode = LocalIsDarkMode.current
+    val cardColor = if (isDarkMode) Color(0xFF1E293B) else Color.White
+    val textColor = if (isDarkMode) Color(0xFFE2E8F0) else Color(0xFF1E293B)
+    val subTextColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+    val warningColor = Color(0xFFF59E0B)
+    val fileName = conflict.path.substringAfterLast('/')
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(0.85f),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = cardColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+                Text(
+                    text = "下载冲突",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "本地与云端存在同名但内容不同的文件：",
+                    fontSize = 13.sp,
+                    color = subTextColor,
+                    lineHeight = 18.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "• $fileName",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "本地: ${FormatUtils.formatBytes(conflict.localSize)} · ${conflict.localModified.take(19).replace('T', ' ')}",
+                    fontSize = 11.sp,
+                    color = Color(0xFFE57373)
+                )
+                Text(
+                    text = "云端: ${FormatUtils.formatBytes(conflict.cloudSize)} · ${conflict.cloudModified.take(19).replace('T', ' ')}",
+                    fontSize = 11.sp,
+                    color = Color(0xFF03A9F4)
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onSkip) {
+                        Text("跳过本次同步", fontSize = 13.sp, color = subTextColor)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = onOverwrite,
+                        colors = ButtonDefaults.buttonColors(containerColor = warningColor),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Text("覆盖本地", fontSize = 13.sp, color = Color.White)
                     }
                 }
             }
