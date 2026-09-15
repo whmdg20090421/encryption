@@ -225,7 +225,7 @@ class CloudPaneController(
         scope.launch {
             state.isLoading = true
             state.loadError = null
-            state.loadProgress = LoadProgress(reason = "正在读取目录")
+            state.loadProgress = null
             val startMs = System.currentTimeMillis()
             try {
                 val entries = withContext(Dispatchers.IO) {
@@ -2170,21 +2170,8 @@ class CloudPaneController(
             localNames.add(file.name)
             val childRelativePath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
 
-            // 更新进度：当前正在处理的文件
-            state.loadProgress = LoadProgress(
-                reason = "正在读取目录",
-                current = index + 1,
-                total = children.size,
-                currentFile = file.name
-            )
-
             if (file.isDirectory) {
-                state.loadProgress = LoadProgress(
-                    reason = "正在统计文件夹",
-                    current = index + 1,
-                    total = children.size,
-                    currentFile = file.name
-                )
+                // 文件夹统计不显示进度，仅保留转圈
                 // 文件夹大小：从 SyncDatabase 递归累加整个子树的原始文件大小（避免 FolderSizeDb 的加密文件膨胀问题）
                 val prefix = if (childRelativePath.endsWith("/")) childRelativePath else "$childRelativePath/"
                 val folderSize = syncDb.getEntriesByParent("local_entries", childRelativePath)
@@ -2226,12 +2213,6 @@ class CloudPaneController(
                     if (cloudEntry != null) {
                         // 一次 stat 获取 size 和 time
                         val statResult = try {
-                            state.loadProgress = LoadProgress(
-                                reason = "正在校验文件（stat）",
-                                current = index + 1,
-                                total = children.size,
-                                currentFile = file.name
-                            )
                             ShellExecutor.execute(Permission.MIN, "stat -c '%s %Y' '${file.absolutePath}'").trim()
                         } catch (_: Exception) { null }
                         if (statResult != null) {
@@ -2255,8 +2236,12 @@ class CloudPaneController(
                                         total = children.size,
                                         currentFile = file.name
                                     )
-                                    val localMd5 = calculateMd5(file)
-                                    localMd5 != cloudEntry.md5
+                                    try {
+                                        val localMd5 = calculateMd5(file)
+                                        localMd5 != cloudEntry.md5
+                                    } finally {
+                                        state.loadProgress = null
+                                    }
                                 } else {
                                     false  // size 和 time 都相同
                                 }

@@ -194,7 +194,12 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
         }
     }
 
-    /** 从解压出的云端 SQLite 文件导入 cloud_entries，保留本地 local_entries。 */
+    /**
+     * 从解压出的云端 SQLite 文件全量替换 cloud_entries，保留本地 local_entries。
+     *
+     * 云端数据库是权威全量快照：导入前先清空本地 cloud_entries，再写入云端条目。
+     * 使用替换而非合并语义，确保云端已删除的文件不会残留在本地（否则旧文件结构会阴魂不散）。
+     */
     fun importCloudEntriesFromFile(sourceFile: File) {
         if (!sourceFile.exists()) return
         val source = SQLiteDatabase.openDatabase(sourceFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
@@ -203,9 +208,24 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
             source.query("cloud_entries", null, null, null, null, null, "path").use { cursor ->
                 while (cursor.moveToNext()) entries.add(cursorToRow(cursor))
             }
-            upsertEntries("cloud_entries", entries)
+            replaceEntries("cloud_entries", entries)
         } finally {
             source.close()
+        }
+    }
+
+    /** 全量替换表内容：在单个事务内先清空再写入，失败时回滚，保留旧数据。 */
+    private fun replaceEntries(table: String, entries: List<SyncEntryRow>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete(table, null, null)
+            for (entry in entries) {
+                db.insertWithOnConflict(table, null, rowToValues(entry), SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
         }
     }
 
