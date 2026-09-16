@@ -2176,40 +2176,11 @@ private fun DiffScanDialog(
 
                             val remoteDbFile = java.io.File(extractDir, "vault_sync.db")
                             if (remoteDbFile.exists()) {
-                                val remoteDb = android.database.sqlite.SQLiteDatabase.openDatabase(
-                                    remoteDbFile.absolutePath, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY
-                                )
-                                try {
-                                    val cursor = remoteDb.query("cloud_entries", null, null, null, null, null, null)
-                                    var mergedCount = 0
-                                    cursor.use {
-                                        while (it.moveToNext()) {
-                                            val path = it.getString(it.getColumnIndexOrThrow("path"))
-                                            val size = it.getLong(it.getColumnIndexOrThrow("size"))
-                                            val uploadedSize = it.getLong(it.getColumnIndexOrThrow("uploaded_size"))
-                                            val lastModified = it.getString(it.getColumnIndexOrThrow("last_modified"))
-                                            val md5 = it.getString(it.getColumnIndexOrThrow("md5"))
-                                            val cloudHash = it.getString(it.getColumnIndexOrThrow("cloud_hash"))
-                                            val status = com.whmdg.mczj.tools.encryption.data.SyncStatus.valueOf(
-                                                it.getString(it.getColumnIndexOrThrow("status"))
-                                            )
-                                            val lastSyncTime = it.getString(it.getColumnIndexOrThrow("last_sync_time"))
-                                            val failReason = it.getString(it.getColumnIndexOrThrow("fail_reason"))
-
-                                            val localEntry = syncDb.getEntry("cloud_entries", path)
-                                            if (localEntry == null || (lastSyncTime ?: "") > (localEntry.lastSyncTime ?: "")) {
-                                                syncDb.upsertEntry("cloud_entries", com.whmdg.mczj.tools.encryption.data.SyncEntryRow(
-                                                    path, size, uploadedSize, lastModified, md5, cloudHash, status, lastSyncTime, failReason
-                                                ))
-                                                mergedCount++
-                                            }
-                                        }
-                                    }
-                                    withContext(Dispatchers.Main) {
-                                        step2Text = "合并云端数据完成 (更新 $mergedCount 个)"
-                                    }
-                                } finally {
-                                    remoteDb.close()
+                                // 云端数据库是权威全量快照：整表替换 cloud_entries（保留设备私有的 local_entries）。
+                                // 不能用只增不删的逐行 upsert，否则云端已删除的文件会残留在本地，导致蓝色文件夹阴魂不散。
+                                syncDb.importCloudEntriesFromFile(remoteDbFile)
+                                withContext(Dispatchers.Main) {
+                                    step2Text = "合并云端数据完成"
                                 }
 
                                 // 更新元数据缓存

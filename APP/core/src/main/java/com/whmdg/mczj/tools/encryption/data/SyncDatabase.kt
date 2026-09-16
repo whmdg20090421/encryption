@@ -214,6 +214,46 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
         }
     }
 
+    /**
+     * 导出仅含 cloud_entries 的离线快照到目标文件（用于上传到云端）。
+     *
+     * 云端数据库是各设备共享的权威云端快照，只应包含 cloud_entries；
+     * local_entries 是每台设备私有的本地状态记录，绝不上传。
+     * 目标文件若已存在会被覆盖，且文件名必须为 vault_sync.db（压缩包内的条目名）。
+     */
+    fun exportCloudOnlyTo(destFile: File) {
+        if (destFile.exists()) destFile.delete()
+        val snapshot = SQLiteDatabase.openOrCreateDatabase(destFile, null)
+        try {
+            snapshot.execSQL("""
+                CREATE TABLE cloud_entries (
+                    path          TEXT PRIMARY KEY,
+                    size          INTEGER NOT NULL,
+                    uploaded_size INTEGER NOT NULL DEFAULT 0,
+                    last_modified TEXT NOT NULL,
+                    md5           TEXT NOT NULL,
+                    cloud_hash    TEXT,
+                    status        TEXT NOT NULL DEFAULT 'PENDING',
+                    last_sync_time TEXT,
+                    fail_reason   TEXT
+                )
+            """.trimIndent())
+            snapshot.execSQL("CREATE INDEX idx_cloud_status ON cloud_entries(status)")
+            val entries = getAllEntries("cloud_entries")
+            snapshot.beginTransaction()
+            try {
+                for (entry in entries) {
+                    snapshot.insertWithOnConflict("cloud_entries", null, rowToValues(entry), SQLiteDatabase.CONFLICT_REPLACE)
+                }
+                snapshot.setTransactionSuccessful()
+            } finally {
+                snapshot.endTransaction()
+            }
+        } finally {
+            snapshot.close()
+        }
+    }
+
     /** 全量替换表内容：在单个事务内先清空再写入，失败时回滚，保留旧数据。 */
     private fun replaceEntries(table: String, entries: List<SyncEntryRow>) {
         val db = writableDatabase

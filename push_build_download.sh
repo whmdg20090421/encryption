@@ -16,6 +16,14 @@ ARTIFACT_NAME="工具箱-arm64-v8a-release"
 POLL_INTERVAL=30
 APK_OUTPUT_DIR="$PROJECT_ROOT/应用安装包"
 TEMP_DIR=""
+PROXY_HOST="127.0.0.1"
+PROXY_PORT="7890"
+PROXY_URL="http://$PROXY_HOST:$PROXY_PORT"
+# 统一让本脚本后续的 gh / curl 等命令全部走 VPN 代理。
+export HTTP_PROXY="$PROXY_URL"
+export HTTPS_PROXY="$PROXY_URL"
+export http_proxy="$PROXY_URL"
+export https_proxy="$PROXY_URL"
 
 RED='\033[31m'
 GREEN='\033[32m'
@@ -50,27 +58,56 @@ require_command du
 require_command awk
 require_command curl
 require_command unzip
+require_command aria2c
+
+# 仅检查本地 VPN 代理端口是否在监听，未监听则提示后退出。
+# 不请求任何外网地址（避免 GitHub 限流 / 无网等误判）。
+require_vpn_proxy() {
+    if curl -sS --max-time 3 -o /dev/null "$PROXY_URL"; then
+        return 0
+    fi
+    printf '%b请先开启 VPN（本地代理端口 %s 未监听），再重新运行本脚本。%b\n' \
+        "$RED" "$PROXY_URL" "$RESET" >&2
+    exit 1
+}
 
 [ -x "$GH_BIN" ] || die "GitHub CLI was not found: $GH_BIN"
 "$GH_BIN" auth status --hostname github.com >/dev/null 2>&1 \
     || die "GitHub CLI is not authenticated with $GH_CONFIG_DIR."
 
+require_vpn_proxy
+
 REQUESTED_SHA=$("$GH_BIN" api "repos/$REPO/commits/$BRANCH" --jq '.sha') \
     || die "Unable to resolve the current commit on $BRANCH."
 REQUESTED_SHORT_SHA=$(printf '%s' "$REQUESTED_SHA" | cut -c1-7)
-SUCCESS_RUN_ID=$("$GH_BIN" run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BRANCH" \
-    --limit 20 --json databaseId,headSha,status,conclusion --jq \
-    ".[] | select(.headSha == \"$REQUESTED_SHA\" and .status == \"completed\" and .conclusion == \"success\") | .databaseId" \
-    2>/dev/null | head -n 1 || true)
-ACTIVE_RUN_ID=$("$GH_BIN" run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BRANCH" \
-    --limit 20 --json databaseId,headSha,status --jq \
-    ".[] | select(.headSha == \"$REQUESTED_SHA\" and .status != \"completed\") | .databaseId" \
-    2>/dev/null | head -n 1 || true)
-RUN_ID="${SUCCESS_RUN_ID:-$ACTIVE_RUN_ID}"
 
-if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
-    printf '%bFound an existing workflow run for %s; skipping trigger.%b\n' \
+# 查询当前 commit 的所有工作流运行记录（最新在前）。
+RUN_LIST=$("$GH_BIN" run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BRANCH" \
+    --limit 30 --json databaseId,headSha,status,conclusion,url \
+    --jq ".[] | select(.headSha == \"$REQUESTED_SHA\") | [.databaseId, .status, .conclusion, .url] | @tsv" \
+    2>/dev/null || true)
+
+# 优先级：正在运行 > 已成功 > 已失败 > 从未运行
+ACTIVE_RUN_ID=$(printf '%s\n' "$RUN_LIST" | awk -F '\t' '$2 != "completed" {print $1; exit}')
+SUCCESS_RUN_ID=$(printf '%s\n' "$RUN_LIST" | awk -F '\t' '$2 == "completed" && $3 == "success" {print $1; exit}')
+FAILED_RUN_ID=$(printf '%s\n' "$RUN_LIST" | awk -F '\t' '$2 == "completed" && $3 != "success" {print $1; exit}')
+
+if [ -n "$ACTIVE_RUN_ID" ]; then
+    RUN_ID="$ACTIVE_RUN_ID"
+    printf '%bFound an active workflow run for %s; monitoring it.%b\n' \
         "$GREEN" "$REQUESTED_SHORT_SHA" "$RESET"
+elif [ -n "$SUCCESS_RUN_ID" ]; then
+    RUN_ID="$SUCCESS_RUN_ID"
+    printf '%bFound a successful workflow run for %s; reusing its artifact.%b\n' \
+        "$GREEN" "$REQUESTED_SHORT_SHA" "$RESET"
+elif [ -n "$FAILED_RUN_ID" ]; then
+    FAILED_URL=$(printf '%s\n' "$RUN_LIST" | awk -F '\t' -v id="$FAILED_RUN_ID" '$1 == id {print $4; exit}')
+    printf '%b当前版本 %s 已编译失败，未重新触发编译。%b\n' \
+        "$RED" "$REQUESTED_SHORT_SHA" "$RESET" >&2
+    printf '%b请修复后重新提交（push）生成新的提交，再运行本脚本。%b\n' \
+        "$RED" "$RESET" >&2
+    [ -n "$FAILED_URL" ] && printf 'Failed run: %s\n' "$FAILED_URL" >&2
+    exit 1
 else
     printf '%bTriggering GitHub Actions workflow for %s @ %s...%b\n' \
         "$CYAN" "$BRANCH" "$REQUESTED_SHORT_SHA" "$RESET"
@@ -81,7 +118,7 @@ else
     attempt=1
     while [ "$attempt" -le 12 ]; do
         RUN_ID=$("$GH_BIN" run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BRANCH" \
-            --limit 20 --json databaseId,headSha,status --jq \
+            --limit 30 --json databaseId,headSha,status --jq \
             ".[] | select(.headSha == \"$REQUESTED_SHA\" and .status != \"completed\") | .databaseId" \
             2>/dev/null | head -n 1 || true)
         if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
@@ -131,30 +168,35 @@ ARTIFACT_ID=$("$GH_BIN" api "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
 
 ARCHIVE_FILE="$TEMP_DIR/artifact.zip"
 TOKEN=$("$GH_BIN" auth token) || die "Unable to read GitHub authentication token."
+API_URL="https://api.github.com/repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip"
+
+# 先解析 302 拿到 Azure Blob 的签名下载地址。
+# 不能把 GitHub 的 Authorization 头带过重定向——Azure 会以 errorCode=24
+# "Authorization failed" 拒绝；而签名 URL 本身已含鉴权，无需再带头。
+DOWNLOAD_URL=$(curl -sSL -o /dev/null --max-time 30 -x "$PROXY_URL" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Accept: application/vnd.github+json" \
+    -w '%{url_effective}' "$API_URL" 2>/dev/null || true)
+[ -n "$DOWNLOAD_URL" ] || die "Unable to resolve artifact download URL."
+
+# 多线程分片下载（10 连接），显著改善单连接被限速的问题。
 DOWNLOAD_ATTEMPT=1
 while [ "$DOWNLOAD_ATTEMPT" -le 3 ]; do
-    : > "$ARCHIVE_FILE"
     START_TIME=$(date +%s)
-    curl -fL --retry 0 \
-        -H "Authorization: Bearer $TOKEN" \
-        -H "Accept: application/vnd.github+json" \
-        "https://api.github.com/repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" \
-        -o "$ARCHIVE_FILE" &
-    DOWNLOAD_PID=$!
-    while kill -0 "$DOWNLOAD_PID" 2>/dev/null; do
-        sleep 1
-        BYTES=$(wc -c < "$ARCHIVE_FILE" 2>/dev/null || printf '0')
-        ELAPSED=$(( $(date +%s) - START_TIME ))
-        [ "$ELAPSED" -gt 0 ] || ELAPSED=1
-        AVG=$(awk -v bytes="$BYTES" -v seconds="$ELAPSED" 'BEGIN { printf "%.1f", bytes / seconds / 1048576 }')
-        SIZE=$(awk -v bytes="$BYTES" 'BEGIN { printf "%.1f", bytes / 1048576 }')
-        printf '\rDownloaded: %s MB | Average speed: %s MB/s' "$SIZE" "$AVG"
-    done
-    if wait "$DOWNLOAD_PID"; then
+    aria2c -x 10 -s 10 -k 1M \
+        --allow-overwrite=true --auto-file-renaming=false \
+        --file-allocation=none --console-log-level=warn --summary-interval=1 \
+        --all-proxy="$PROXY_URL" \
+        --header="Accept: application/vnd.github+json" \
+        --dir="$TEMP_DIR" --out="artifact.zip" \
+        "$DOWNLOAD_URL"
+    ARIA_STATUS=$?
+    if [ "$ARIA_STATUS" -eq 0 ] && [ -s "$ARCHIVE_FILE" ]; then
         printf '\n'
         break
     fi
     printf '\nDownload interrupted; retry %s/3...\n' "$DOWNLOAD_ATTEMPT"
+    rm -f "$ARCHIVE_FILE" "$ARCHIVE_FILE.aria2"
     DOWNLOAD_ATTEMPT=$((DOWNLOAD_ATTEMPT + 1))
     [ "$DOWNLOAD_ATTEMPT" -le 3 ] && sleep 3
 done

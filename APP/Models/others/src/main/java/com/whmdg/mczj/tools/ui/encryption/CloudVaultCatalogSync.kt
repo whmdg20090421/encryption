@@ -66,12 +66,19 @@ object CloudVaultCatalogSync {
         configFile: File
     ): Boolean = withContext(Dispatchers.IO) {
         val zipFile = File(context.cacheDir, "${vaultName}_vault_sync_upload.db.7z")
+        val snapshotDir = File(context.cacheDir, "sync_db_snapshot_${vaultName}")
         try {
             if (!dbFile.exists()) throw IllegalStateException("数据库文件不存在: ${dbFile.absolutePath}")
 
+            // 只导出 cloud_entries 生成上传快照：local_entries 是设备私有状态，不上传
+            snapshotDir.mkdirs()
+            val snapshotDb = File(snapshotDir, "vault_sync.db")
+            val sourceDb = SyncDatabase.getInstance(context, vaultName)
+            sourceDb.exportCloudOnlyTo(snapshotDb)
+
             // 压缩数据库和配置文件
             com.whmdg.mczj.tools.util.JBindingClient.compress(
-                sourcePaths = listOf(dbFile.absolutePath, configFile.absolutePath),
+                sourcePaths = listOf(snapshotDb.absolutePath, configFile.absolutePath),
                 outputPath = zipFile.absolutePath,
                 format = "7z", level = 9,
                 password = "mczj", useAes = true, encryptNames = true
@@ -93,6 +100,7 @@ object CloudVaultCatalogSync {
             throw IllegalStateException("上传保险箱「${vaultName}」同步数据库失败: ${e.message}", e)
         } finally {
             zipFile.delete()
+            snapshotDir.deleteRecursively()
         }
     }
 
