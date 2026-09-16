@@ -2119,23 +2119,14 @@ private fun DiffScanDialog(
                     }
                     val metaFile = java.io.File(com.whmdg.mczj.tools.AppDataPaths.cloudDbMeta(context), "${vaultName}_meta.json")
 
-                    val needsSync = try {
+                    // 手动点击"刷新差异文件"必须强制从云端下载最新数据库并整表替换，
+                    // 不做 meta 缓存短路（否则云端已删除的文件会残留在本地）。
+                    val remoteExists = try {
                         val remoteMeta = webdavClient.getFileMetadata(remotePath)
                         if (remoteMeta == null) {
                             withContext(Dispatchers.Main) { step2Text = "云端数据库不存在" }
                             false
-                        } else if (!metaFile.exists()) {
-                            withContext(Dispatchers.Main) { step2Text = "本地无缓存，需要同步" }
-                            true
-                        } else {
-                            val localMeta = org.json.JSONObject(metaFile.readText())
-                            val changed = remoteMeta.size != localMeta.getLong("size") ||
-                                         remoteMeta.lastModified != localMeta.getLong("lastModified")
-                            withContext(Dispatchers.Main) {
-                                step2Text = if (changed) "云端数据库已更新，需要同步" else "云端数据库未变化"
-                            }
-                            changed
-                        }
+                        } else true
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) { step2Text = "检查失败: ${e.message}" }
                         AuditLog.error(
@@ -2146,7 +2137,7 @@ private fun DiffScanDialog(
                         false
                     }
 
-                    if (needsSync) {
+                    if (remoteExists) {
                         withContext(Dispatchers.Main) {
                             step2Progress = 0.3f
                             step2Text = "下载云端数据库"
