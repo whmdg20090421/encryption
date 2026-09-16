@@ -1442,14 +1442,15 @@ class CloudPaneController(
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    // 统计删除前的数量和大小
-                    val entries = if (relativePath.endsWith("/")) {
-                        syncDb.getEntriesByParent("cloud_entries", relativePath)
-                    } else {
-                        listOfNotNull(syncDb.getEntry("cloud_entries", relativePath))
-                    }
-                    val deletedCount = entries.count { !it.path.endsWith("/") }
-                    val deletedSize = entries.filter { !it.path.endsWith("/") }.sumOf { it.size }
+                    // 收集本次要删除的云端条目（含传入路径自身及其整个子树）。
+                    // 注意：文件夹的 relativePath 不以 "/" 结尾，不能靠 endsWith("/") 判断，
+                    // 必须同时按前缀收集子树（文件夹）和精确匹配自身（文件）。
+                    val selfEntry = syncDb.getEntry("cloud_entries", relativePath)
+                    val subtree = syncDb.getEntriesByPrefix("cloud_entries", relativePath)
+                    val entries = (listOfNotNull(selfEntry) + subtree).distinctBy { it.path }
+                    val fileEntries = entries.filter { !it.path.endsWith("/") }
+                    val deletedCount = fileEntries.size
+                    val deletedSize = fileEntries.sumOf { it.size }
 
                     // 删除云端文件（WebDAV 支持递归删除文件夹）
                     val remotePath = "$remoteBasePath/${relativePath.trimStart('/')}"
@@ -1462,14 +1463,24 @@ class CloudPaneController(
                         }
                     }
 
-                    // 从云端表移除（递归删除子条目）
+                    // 删除云端表条目（递归删除子条目）
                     syncDb.deleteEntry("cloud_entries", relativePath)
                     syncDb.deleteEntriesByPrefix("cloud_entries", relativePath)
 
-                    // 本地状态重置为 PENDING
-                    val localEntry = syncDb.getEntry("local_entries", relativePath)
-                    if (localEntry != null) {
-                        syncDb.updateStatus("local_entries", relativePath, SyncStatus.PENDING)
+                    // 按条目颜色处理本地表：
+                    //   绿色（local_entries 存在）→ 重置为待上传（红），清除残留进度
+                    //   蓝色（local_entries 不存在，仅云端有）→ 无需处理
+                    for (entry in fileEntries) {
+                        val localEntry = syncDb.getEntry("local_entries", entry.path)
+                        if (localEntry != null) {
+                            syncDb.updateEntry("local_entries", entry.path) { row ->
+                                row.copy(
+                                    status = SyncStatus.PENDING,
+                                    uploadedSize = 0,
+                                    failReason = null
+                                )
+                            }
+                        }
                     }
 
                     // 更新统计

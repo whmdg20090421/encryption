@@ -174,6 +174,30 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
         }
     }
 
+    /**
+     * 获取指定路径前缀下的所有条目（用于删除文件夹时收集整棵子树）。
+     * 前缀规范化与 deleteEntriesByPrefix 保持一致：path >= prefix/ AND path < prefix/￿。
+     * 注意：结果不含传入路径自身。
+     */
+    fun getEntriesByPrefix(table: String, prefix: String): List<SyncEntryRow> {
+        val db = readableDatabase
+        val prefixNorm = if (prefix.endsWith("/")) prefix else "$prefix/"
+        val upperBound = prefixNorm + "￿"
+        val cursor = db.query(
+            table, null,
+            "path >= ? AND path < ?",
+            arrayOf(prefixNorm, upperBound),
+            null, null, "path"
+        )
+        return cursor.use {
+            val list = mutableListOf<SyncEntryRow>()
+            while (it.moveToNext()) {
+                list.add(cursorToRow(it))
+            }
+            list
+        }
+    }
+
     // ── 写入 ──
 
     fun upsertEntry(table: String, entry: SyncEntryRow) {
