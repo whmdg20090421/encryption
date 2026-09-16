@@ -225,7 +225,7 @@ class CloudPaneController(
         scope.launch {
             state.isLoading = true
             state.loadError = null
-            state.loadProgress = null
+            state.loadProgress = LoadProgress(reason = "正在加载目录")
             val startMs = System.currentTimeMillis()
             try {
                 val entries = withContext(Dispatchers.IO) {
@@ -2179,18 +2179,20 @@ class CloudPaneController(
                                     true  // size 不同，直接判定改变
                                 } else if (localTime != cloudTime) {
                                     // size 相同但 time 不同，计算 MD5 对比
-                                    state.loadProgress = LoadProgress(
+                                    // 就地更新进度，保持提示块常驻，避免 null/非 null 切换导致闪烁
+                                    state.loadProgress = state.loadProgress?.copy(
+                                        reason = "正在计算 MD5",
+                                        current = index + 1,
+                                        total = children.size,
+                                        currentFile = file.name
+                                    ) ?: LoadProgress(
                                         reason = "正在计算 MD5",
                                         current = index + 1,
                                         total = children.size,
                                         currentFile = file.name
                                     )
-                                    try {
-                                        val localMd5 = calculateMd5(file)
-                                        localMd5 != cloudEntry.md5
-                                    } finally {
-                                        state.loadProgress = null
-                                    }
+                                    val localMd5 = calculateMd5(file)
+                                    localMd5 != cloudEntry.md5
                                 } else {
                                     false  // size 和 time 都相同
                                 }
