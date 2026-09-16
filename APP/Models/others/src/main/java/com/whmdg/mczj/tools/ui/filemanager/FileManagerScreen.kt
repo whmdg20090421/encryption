@@ -5866,7 +5866,7 @@ private fun FileBrowserPanel(
 
                     // 普通视频：提交到 FIFO 队列加载缩略图
                     val ext = entry.name.substringAfterLast('.', "").lowercase()
-                    val isVideo = ext in setOf("mp4","mkv","avi","mov","wmv","flv","webm","3gp","ts","rmvb","rm","vob","m4v","f4v")
+                    val isVideo = ext in com.whmdg.mczj.tools.ui.components.VIDEO_EXTENSIONS
                     if (isVideo && !entry.isDirectory && vaultContext == null && archiveContext == null) {
                         val path = entry.path
                         LaunchedEffect(path) {

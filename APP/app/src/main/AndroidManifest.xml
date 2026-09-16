@@ -128,6 +128,13 @@
             android:label="查看器"
             android:theme="@style/Theme.工具箱" />
 
+        <!-- 视频播放器 Activity（与 ViewerActivity 并列） -->
+        <activity
+            android:name=".ui.viewer.VideoPlayerActivity"
+            android:exported="false"
+            android:label="视频播放器"
+            android:theme="@style/Theme.工具箱" />
+
         <receiver
             android:name=".security.MyDeviceAdminReceiver"
             android:label="@string/app_name"

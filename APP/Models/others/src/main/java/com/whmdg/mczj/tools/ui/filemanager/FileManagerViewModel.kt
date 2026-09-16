@@ -62,6 +62,7 @@ import com.whmdg.mczj.tools.encryption.services.CryptoService
 import com.whmdg.mczj.tools.encryption.services.VaultKeyHolder
 import com.whmdg.mczj.tools.encryption.services.VaultViewContext
 import com.whmdg.mczj.tools.ui.viewer.ViewerActivity
+import com.whmdg.mczj.tools.ui.viewer.VideoPlayerActivity
 
 @Serializable
 data class RecycleBinEntry(
@@ -3803,7 +3804,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             "kt", "java", "py", "sh", "bat", "log", "csv", "yaml", "yml",
             "toml", "ini", "conf", "cfg", "properties", "gradle", "kts",
             "c", "cpp", "h", "hpp", "rs", "go", "rb", "php", "sql",
-            "lua", "r", "swift", "dart", "ts", "jsx", "tsx", "vue"
+            "lua", "r", "swift", "dart", "jsx", "tsx", "vue"
+            // 注意：不包含 "ts"——.ts 优先按视频处理，播放失败时再询问是否改用文本编辑器
         )
         val ext = entry.name.substringAfterLast('.', "").lowercase()
         if (ext in textExtensions) {
@@ -3882,6 +3884,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 archivePath = archivePath, archiveName = archiveName,
                 archiveEntryPaths = archiveEntryPaths, archivePassword = archivePassword,
                 archivePermissionLevel = archivePermissionLevel))
+            return
+        }
+        if (ext in com.whmdg.mczj.tools.ui.components.VIDEO_EXTENSIONS) {
+            DiagnosticLog.log("OpenFile", "内置播放器打开: ${entry.name}")
+            context.startActivity(VideoPlayerActivity.createVideoIntent(context, entry.path))
             return
         }
         // 外部 Intent

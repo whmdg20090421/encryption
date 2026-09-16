@@ -27,7 +27,7 @@ import com.whmdg.mczj.tools.core.R
 enum class FileCategory {
     DOCUMENT,   // 文档类：txt, pdf, doc, docx, xls, xlsx, ppt, pptx, csv, rtf, md
     IMAGE,      // 图片类：jpg, jpeg, png, gif, bmp, webp, svg, ico, tiff, heic, heif
-    VIDEO,      // 视频类：mp4, mkv, avi, mov, wmv, flv, webm, 3gp, ts, rmvb
+    VIDEO,      // 视频类：见 VIDEO_EXTENSIONS（取自 Media3 官方 FileTypes 视频容器家族）
     AUDIO,      // 音频类：mp3, flac, wav, aac, ogg, wma, m4a, opus, amr
 
     APK,        // 安装包：apk, xapk, apks, aab
@@ -35,6 +35,16 @@ enum class FileCategory {
     ARCHIVE,    // 压缩包：zip, 7z, rar, tar, gz, bz2, xz, lz4, zst, lzma, cab, iso, dmg
     OTHER       // 其他：无法识别的后缀
 }
+
+/**
+ * 视频后缀集合（唯一数据源，供图标 / 缩略图 / 打开路由共用）。
+ *
+ * 取自 Media3 官方 FileTypes 中属于视频容器家族的后缀：FLV / MATROSKA / MP4 / PS / TS / AVI。
+ * 仅收录视频意义明确的后缀，避免把 .m4a 等纯音频误判为视频。
+ */
+val VIDEO_EXTENSIONS: Set<String> = setOf(
+    "mp4", "m4v", "mkv", "webm", "flv", "ps", "mpg", "mpeg", "m2p", "ts", "avi"
+)
 
 /** 从文件名提取后缀（小写，不含点号） */
 fun extractExtension(filename: String): String {
@@ -52,8 +62,7 @@ fun categorizeFile(extension: String): FileCategory = when (extension) {
     "csv", "rtf", "md", "epub", "mobi", "pages", "numbers", "keynote" -> FileCategory.DOCUMENT
     "jpg", "jpeg", "png", "gif", "bmp", "webp", "svg", "ico",
     "tiff", "tif", "heic", "heif", "raw", "cr2", "nef", "avif" -> FileCategory.IMAGE
-    "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "3gp",
-    "ts", "rmvb", "rm", "vob", "m4v", "f4v" -> FileCategory.VIDEO
+    in VIDEO_EXTENSIONS -> FileCategory.VIDEO
     "mp3", "flac", "wav", "aac", "ogg", "wma", "m4a", "opus",
     "amr", "ape", "aiff", "mid", "midi" -> FileCategory.AUDIO
     "zip", "7z", "rar", "tar", "gz", "bz2", "xz", "lz4", "zst",
