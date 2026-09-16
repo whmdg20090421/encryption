@@ -1844,18 +1844,10 @@ class CloudPaneController(
                 password = "mczj"
             ).getOrThrow()
 
-            // 读取远程 db 的 cloud_entries，合并到本地
+            // 读取远程 db 的 cloud_entries，整表替换本地 cloud_entries（云端为权威快照）
             val remoteDbFile = File(extractDir, "vault_sync.db")
             if (remoteDbFile.exists()) {
-                val remoteDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, "${vaultName}_remote")
-                // 远程 db 的 cloud_entries 合并到本地 cloud_entries
-                val remoteEntries = remoteDb.getAllEntries("cloud_entries")
-                for (entry in remoteEntries) {
-                    val localEntry = syncDb.getEntry("cloud_entries", entry.path)
-                    if (localEntry == null || (entry.lastSyncTime ?: "") > (localEntry.lastSyncTime ?: "")) {
-                        syncDb.upsertEntry("cloud_entries", entry)
-                    }
-                }
+                syncDb.importCloudEntriesFromFile(remoteDbFile)
             }
 
             // 更新本地元数据
