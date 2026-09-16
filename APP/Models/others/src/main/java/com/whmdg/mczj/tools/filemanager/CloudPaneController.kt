@@ -791,33 +791,7 @@ class CloudPaneController(
 
             withContext(Dispatchers.Main) { android.widget.Toast.makeText(context, "开始上传 ${finalQueue.size} 个文件", android.widget.Toast.LENGTH_SHORT).show() }
 
-            // ⑬ 预计算文件夹聚合值（避免上传过程中 O(n²) 全量遍历）
-            val folderTotalSize = mutableMapOf<String, Long>()
-            for ((file, relPath) in finalQueue) {
-                val fileSize = file.length()
-                var parent = relPath.substringBeforeLast('/', "/")
-                while (parent.isNotEmpty()) {
-                    folderTotalSize[parent] = (folderTotalSize[parent] ?: 0L) + fileSize
-                    val next = parent.substringBeforeLast('/', "")
-                    if (next == parent) break
-                    parent = next
-                }
-            }
-            // 将预计算的 totalSize 写入当前视图中的文件夹条目
-            withContext(Dispatchers.Main) {
-                val entries = state.entries.toMutableList()
-                var changed = false
-                for ((folderPath, totalSize) in folderTotalSize) {
-                    val idx = entries.indexOfFirst { it.relativePath == folderPath && it.isDirectory }
-                    if (idx >= 0) {
-                        entries[idx] = entries[idx].copy(totalSize = totalSize)
-                        changed = true
-                    }
-                }
-                if (changed) state.entries = entries
-            }
-
-            // ⑭ 创建日志文件 + SyncEngine
+            // ⑬ 创建日志文件 + SyncEngine
             val logDir = com.whmdg.mczj.tools.AppDataPaths.cloudSyncLogs(context)
             val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
             val logFileName = "${vaultName}_batch_${timestamp}.log"
@@ -1132,28 +1106,11 @@ class CloudPaneController(
                                 if (!event.success && event.error != null) {
                                     com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败: ${event.path} - ${event.error}")
                                 }
-                                // 增量更新父文件夹
-                                // 从 fileSizes 获取剩余字节数（StatusChange 时记录的）
-                                val completedRemaining = fileSizes[event.path] ?: event.fileSize
-                                if (event.success) {
-                                    // 成功：绿色增加（文件从 yellow 移到 green）
-                                    updateFolderAggregates(event.path, addGreen = completedRemaining)
-                                } else {
-                                    // 失败：红色增加（文件回到"待上传"状态）
-                                    updateFolderAggregates(event.path, addRed = completedRemaining)
-                                }
-                                fileSizes.remove(event.path)  // 清理
-                                // 完整更新文件状态（含 DB 读取）
+                                // 完整更新文件状态（含 DB 读取），内部对父文件夹做全量重算
                                 updateSingleEntry(event.path)
                             }
                             is UploadEvent.StatusChange -> {
-                                // 文件开始上传：红色减少（文件从红移到黄，黄色自动增加）
-                                val fileEntry = state.entries.find { it.relativePath == event.path }
-                                if (fileEntry != null) {
-                                    val remaining = fileEntry.totalSize - fileEntry.uploadedSize
-                                    fileSizes[event.path] = remaining  // 记录剩余字节数
-                                    updateFolderAggregates(event.path, addRed = -remaining)
-                                }
+                                // 文件开始上传：完整更新文件状态，内部对父文件夹做全量重算
                                 updateSingleEntry(event.path)
                             }
                         }
@@ -2148,7 +2105,7 @@ class CloudPaneController(
 
     /**
      * 列出本地保险箱目录，合并云端-only 条目。
-     * 文件夹大小从 FolderSizeDb 缓存读取，同步状态只统计直接子文件。
+     * 文件夹大小累加整棵子树（与 updateSingleEntry / refreshParentAggregates 保持同一口径）。
      * 返回的列表已排序：文件夹在前，文件在后，自然排序。
      */
     private fun listLocalFiles(relativePath: String): List<CloudFileEntry> {
@@ -2662,11 +2619,9 @@ class CloudPaneController(
         if (idx >= 0) {
             val old = entries[idx]
             val newEntry = if (old.isDirectory) {
+                // folderSize 与 listLocalFiles 保持同一口径：累加整棵子树的所有文件
                 val folderSize = syncDb.getEntriesByParent("local_entries", relativePath)
-                    .filter { entry ->
-                        // 只累加直接子文件（排除子文件夹和子孙文件）
-                        !entry.path.endsWith("/") && entry.path.substringBeforeLast('/') == relativePath.trimEnd('/')
-                    }
+                    .filter { entry -> !entry.path.endsWith("/") }
                     .sumOf { it.size }
                 val syncAgg = aggregateDirectChildren(relativePath)
                 val localPaths = syncDb.getEntriesByParent("local_entries", relativePath)
@@ -2713,11 +2668,9 @@ class CloudPaneController(
         while (parent.isNotEmpty()) {
             val idx = entries.indexOfFirst { it.relativePath == parent && it.isDirectory }
             if (idx >= 0) {
+                // folderSize 与 listLocalFiles 保持同一口径：累加整棵子树的所有文件
                 val folderSize = syncDb.getEntriesByParent("local_entries", parent)
-                    .filter { entry ->
-                        // 只累加直接子文件（排除子文件夹和子孙文件）
-                        !entry.path.endsWith("/") && entry.path.substringBeforeLast('/') == parent.trimEnd('/')
-                    }
+                    .filter { entry -> !entry.path.endsWith("/") }
                     .sumOf { it.size }
                 val syncAgg = aggregateDirectChildren(parent)
                 val localPaths = syncDb.getEntriesByParent("local_entries", parent)
@@ -2738,32 +2691,6 @@ class CloudPaneController(
             parent = next
         }
         return changed
-    }
-
-    /** 增量更新父文件夹聚合值（O(深度)，不遍历文件）
-     *  @param addGreen 绿色增加量（已上传字节）
-     *  @param addRed 红色增加量（本地未上传字节，负数表示减少）
-     *  @param addBlue 蓝色增加量（云端独有字节）
-     */
-    private fun updateFolderAggregates(changedPath: String, addGreen: Long = 0, addRed: Long = 0, addBlue: Long = 0) {
-        var parent = changedPath.substringBeforeLast('/', "/")
-        while (parent.isNotEmpty()) {
-            val entries = state.entries
-            val idx = entries.indexOfFirst { it.relativePath == parent && it.isDirectory }
-            if (idx >= 0) {
-                val old = entries[idx]
-                val newEntries = entries.toMutableList()
-                newEntries[idx] = old.copy(
-                    uploadedSize = (old.uploadedSize + addGreen).coerceAtLeast(0L),
-                    redSize = (old.redSize + addRed).coerceAtLeast(0L),
-                    cloudOnlySize = (old.cloudOnlySize + addBlue).coerceAtLeast(0L)
-                )
-                state.entries = newEntries
-            }
-            val next = parent.substringBeforeLast('/', "")
-            if (next == parent) break
-            parent = next
-        }
     }
 
     /** 自然排序比较器：路径按深度优先 + 数字按自然序（file2 < file10） */
