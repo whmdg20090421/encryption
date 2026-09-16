@@ -2511,7 +2511,7 @@ class CloudPaneController(
         return reasons
     }
 
-    /** 递归聚合云端文件夹下所有文件的总大小 */
+    /** 递归聚合云端文件夹下所有文件的总大小（累加整棵子树，与本地 folderSize 口径一致） */
     private fun aggregateCloudFolderSize(relativePath: String): Long {
         val cloudChildren = syncDb.getEntriesByParent("cloud_entries", relativePath)
         val prefix = if (relativePath.endsWith("/")) relativePath else "$relativePath/"
@@ -2519,8 +2519,8 @@ class CloudPaneController(
         for (entry in cloudChildren) {
             val remainder = entry.path.removePrefix(prefix)
             if (remainder.isEmpty()) continue
-            // 只累加直接文件（不含子文件夹的文件，getEntriesByParent 已返回所有子孙）
-            if ('/' !in remainder) {
+            // 累加整棵子树的所有文件（getEntriesByParent 已返回所有子孙）
+            if (!entry.path.endsWith("/")) {
                 totalSize += entry.size
             }
         }
