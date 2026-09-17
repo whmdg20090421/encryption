@@ -13,9 +13,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -33,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -94,8 +97,7 @@ private fun VideoPlayerScreen(
     val context = LocalContext.current
 
     // 顶部栏需要避开系统状态栏（时间/WiFi 那条常驻栏），向下偏移其高度
-    val statusBarHeight = androidx.compose.foundation.layout.WindowInsets.statusBars
-        .getTop(androidx.compose.ui.platform.LocalDensity.current)
+    val statusBarHeight = with(LocalDensity.current) { WindowInsets.statusBars.getTop(this) }
 
     // 播放失败信息（null = 无错误）
     var error by remember { mutableStateOf<PlaybackErrorInfo?>(null) }
