@@ -76,33 +76,12 @@ dependencies {
     implementation("com.highcapable.yukihookapi:api:${libs.versions.yukihookapi.get()}")
     ksp("com.highcapable.yukihookapi:ksp-xposed:${libs.versions.yukihookapi.get()}")
 
-    // ========== GSYVideoPlayer（视频播放器） ==========
-    // 当前：仅引入核心，后续按需开启扩展功能
-    // 完整模块列表见下方注释，取消注释即可启用
-    val gsyVersion = "13.2.1"
+    // ========== 视频播放（Media3 ExoPlayer 直用） ==========
+    // 直接使用 Media3：可拿到完整 PlaybackException（真实错误码 / 错误名 / 异常链），
+    // 且每个 Activity 独立持有播放器实例，不经过 GSYVideoPlayer 的全局单例。
+    val media3Version = "1.10.1"
 
-    // --- 核心（已启用） ---
-    implementation("io.github.carguo:gsyvideoplayer-java:$gsyVersion")       // 核心 Java 类（播放器逻辑/UI/缩略图）
-    implementation("io.github.carguo:gsyvideoplayer-exo2:$gsyVersion")       // Media3/ExoPlayer 播放引擎
-    implementation("io.github.carguo:gsyvideoplayer-compose:$gsyVersion")    // Jetpack Compose 集成（Wrapper + Native）
-
-    // --- 可选：IJK 引擎（与 exo2 二选一，用于格式兼容性更好的场景） ---
-    // implementation("io.github.carguo:gsyvideoplayer-arm64:$gsyVersion")    // IJK 引擎 arm64-v8a native so
-    // implementation("io.github.carguo:gsyvideoplayer-armv7a:$gsyVersion")  // IJK 引擎 armeabi-v7a native so
-    // implementation("io.github.carguo:gsyvideoplayer-armv5:$gsyVersion")   // IJK 引擎 armeabi native so（极老设备）
-    // implementation("io.github.carguo:gsyvideoplayer-x86:$gsyVersion")     // IJK 引擎 x86 native so（模拟器）
-    // implementation("io.github.carguo:gsyvideoplayer-x64:$gsyVersion")     // IJK 引擎 x86_64 native so（模拟器）
-    // implementation("io.github.carguo:gsyvideoplayer-ex_so:$gsyVersion")   // 扩展 IJK so（mpeg/rtsp/concat/crypto/16K页/更多编码）
-
-    // --- 可选：流媒体协议 ---
-    // implementation("io.github.carguo:gsyvideoplayer-rtmp:$gsyVersion")    // RTMP 直播推流（注：exo2 已内置 RTMP 支持）
-
-    // --- 可选：其他播放引擎 ---
-    // implementation("io.github.carguo:gsyvideoplayer-aliplay:$gsyVersion") // 阿里云播放器引擎（AliPlayer）
-
-    // --- 可选：投屏 ---
-    // implementation("io.github.carguo:gsyvideoplayer-cast:$gsyVersion")    // DLNA/UPnP 电视投屏（minSdk 26）
-
-    // --- 可选：序列化 ---
-    // implementation("io.github.carguo:gsyvideoplayer-gson:$gsyVersion")    // Gson 序列化支持（播放状态保存/恢复）
+    implementation("androidx.media3:media3-common:$media3Version")           // MediaItem / PlaybackException
+    implementation("androidx.media3:media3-exoplayer:$media3Version")        // ExoPlayer 内核
+    implementation("androidx.media3:media3-ui:$media3Version")               // PlayerView（默认控制条）
 }

@@ -169,6 +169,11 @@ src/main/java/com/whmdg/mczj/tools/
     │   ├── TextEditorScreen.kt        # 代码/文本编辑器
     │   ├── FileOperationDialogs.kt    # 文件操作冲突/错误弹窗
     │   └── WebDavEditDialog.kt        # WebDAV 服务器编辑对话框
+    ├── viewer/                        # 独立浏览器 Activity（与 FileManager 导航隔离）
+    │   ├── ViewerActivity.kt          # 承载图片查看器 / 文本编辑器
+    │   ├── ImageViewerScreen.kt       # 图片查看器
+    │   ├── TextEditorScreen.kt        # 代码/文本编辑器
+    │   └── VideoPlayerActivity.kt     # 视频播放器（直用 Media3 ExoPlayer，输出真实 PlaybackException 原文）
     ├── encryption/                    # 加密 UI
     │   ├── EncryptionRoute.kt / EncryptionModuleScreen.kt
     │   ├── EncryptionHomeScreen.kt     # 保险箱卡片 UI（渐变+光晕）+ 保持打开计时器（JNI HMAC 防篡改）
@@ -454,6 +459,7 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 | Shizuku `api` + `provider` | 13.1.5 | 特权 shell 命令执行 |
 | `libsu` | 6.0.0 | Root shell 执行 |
 | Coil 3 | 3.2.0 | 图片加载（含 JXL/SVG 解码） |
+| Media3 `media3-common` / `media3-exoplayer` / `media3-ui` | 1.10.1 | 视频播放（`VideoPlayerActivity` 直用 ExoPlayer + PlayerView） |
 | YukiHookAPI | 1.3.2 | Xposed Hook 框架 |
 | OkHttp | 4.12.0 | HTTP 客户端（WebDAV） |
 | dav4jvm | — | WebDAV 协议支持 |
