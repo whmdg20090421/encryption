@@ -445,6 +445,14 @@ private fun android.view.View.attachSeekGesture(
                 return true
             }
 
+            /** 单击（已确认不是双击）：切换控制条显隐。双击走 [onDoubleTap]，两者互斥。 */
+            override fun onSingleTapConfirmed(e: android.view.MotionEvent): Boolean {
+                (this@attachSeekGesture as? PlayerView)?.let { pv ->
+                    if (pv.isControllerVisible) pv.hideController() else pv.showController()
+                }
+                return true
+            }
+
             /** 双击画面：在播放 / 暂停之间切换。返回 true 表示已消费该手势。 */
             override fun onDoubleTap(e: android.view.MotionEvent): Boolean {
                 if (player.isPlaying) {
@@ -515,9 +523,10 @@ private fun android.view.View.attachSeekGesture(
                 longPressSpeedup = false
             }
         }
-        // 始终返回 false：seeking 已在滑动手势里完成，
-        // 事件继续交给 PlayerView 处理，保持"点一下弹控制条"的默认行为。
-        false
+        // 返回 true 消费画面上的触摸：单击/双击/长按/滑动全部由本手势检测器统一处理，
+        // 避免 PlayerView 内置的单击切换控制条与双击播放暂停互相干扰而闪烁。
+        // 控制条上的按钮是子 View，触摸由它们先行消费，不受此处影响。
+        true
     }
 }
 
