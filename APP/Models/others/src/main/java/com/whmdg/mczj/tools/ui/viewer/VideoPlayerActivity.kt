@@ -167,6 +167,11 @@ private fun VideoPlayerScreen(
                     )
                     // 出错后由 Compose 覆盖层接管；播放器控件在错误态下也一并隐藏
                     useController = true
+                    // 关闭"播放/暂停/结束等状态变化时自动弹出控制条"。
+                    // 否则双击暂停会连带弹出控制条（Media3 的 shouldShowControllerIndefinitely()
+                    // 在 playWhenReady=false 时返回 true 所致）。控制条显隐改为完全由
+                    // 本页面的手势逻辑控制（单击切换），showController() 手动调用仍然有效。
+                    controllerAutoShow = false
                     // 注册全屏回调（注册后全屏按钮才会显示）；点击时切换横竖屏并更新图标
                     setFullscreenButtonClickListener { enterFullscreen ->
                         val activity = ctx as? android.app.Activity ?: return@setFullscreenButtonClickListener
@@ -232,7 +237,6 @@ private fun VideoPlayerScreen(
                 if (error != null) {
                     // 出错：停止渲染并把控件与加载动画全部隐藏
                     view.hideController()
-                    view.controllerAutoShow = false
                     view.useController = false
                     view.visibility = android.view.View.INVISIBLE
                 }
