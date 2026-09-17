@@ -75,6 +75,14 @@ fun TextEditorScreen(
     // 编辑器色板跟随当前主题亮度
     val isDarkMode = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
+    // 同步撤销/重做可用态。
+    // 注意：CodeEditor.undo()/redo() 内部会设置 ignoreModification，不派发 ContentChangeEvent，
+    // 因此点击按钮后必须显式刷新，否则状态会滞后一拍。
+    fun syncHistoryState(editor: CodeEditor?) {
+        undoAvailable = editor?.canUndo() == true
+        redoAvailable = editor?.canRedo() == true
+    }
+
     // 读取文件并检测编码
     val fileState = remember {
         try {
@@ -173,7 +181,10 @@ fun TextEditorScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                     Spacer(modifier = Modifier.weight(1f))
-                    IconButton(onClick = { editorRef?.undo() }, enabled = undoAvailable) {
+                    IconButton(onClick = {
+                        editorRef?.undo()
+                        syncHistoryState(editorRef)
+                    }, enabled = undoAvailable) {
                         Icon(
                             Icons.AutoMirrored.Filled.Undo,
                             contentDescription = "撤销",
@@ -181,7 +192,10 @@ fun TextEditorScreen(
                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         )
                     }
-                    IconButton(onClick = { editorRef?.redo() }, enabled = redoAvailable) {
+                    IconButton(onClick = {
+                        editorRef?.redo()
+                        syncHistoryState(editorRef)
+                    }, enabled = redoAvailable) {
                         Icon(
                             Icons.AutoMirrored.Filled.Redo,
                             contentDescription = "重做",
@@ -244,8 +258,7 @@ fun TextEditorScreen(
                     )
                     subscribeAlways<ContentChangeEvent> { _ ->
                         if (!hasChanges) hasChanges = true
-                        undoAvailable = this.canUndo()
-                        redoAvailable = this.canRedo()
+                        syncHistoryState(this)
                     }
                     subscribeAlways<SelectionChangeEvent> { event ->
                         cursorLine = event.left.line + 1
