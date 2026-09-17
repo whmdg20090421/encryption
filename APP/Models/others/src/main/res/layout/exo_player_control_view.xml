@@ -30,14 +30,21 @@
       android:gravity="center_vertical"
       android:layoutDirection="ltr">
 
+    <!-- 上一集/下一集保留在布局中但隐藏：Media3 内部会 findViewById 后设置可见性，
+         直接删除可能导致空指针；gone 可保证视觉上去掉且不影响库逻辑。 -->
     <ImageButton android:id="@id/exo_prev"
-        style="@style/ExoStyledControls.Button.Center.Previous"/>
+        style="@style/ExoStyledControls.Button.Center.Previous"
+        android:visibility="gone"/>
 
     <ImageButton android:id="@id/exo_play_pause"
-        style="@style/ExoStyledControls.Button.Center.PlayPause"/>
+        style="@style/ExoStyledControls.Button.Center.PlayPause"
+        android:layout_width="@dimen/exo_play_pause_icon_size"
+        android:layout_height="@dimen/exo_play_pause_icon_size"
+        android:background="@android:color/transparent"/>
 
     <ImageButton android:id="@id/exo_next"
-        style="@style/ExoStyledControls.Button.Center.Next"/>
+        style="@style/ExoStyledControls.Button.Center.Next"
+        android:visibility="gone"/>
 
     <View android:id="@id/exo_progress_placeholder"
         android:layout_width="0dp"

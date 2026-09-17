@@ -10,15 +10,21 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -97,7 +103,12 @@ private fun VideoPlayerScreen(
     val context = LocalContext.current
 
     // 顶部栏需要避开系统状态栏（时间/WiFi 那条常驻栏），向下偏移其高度
-    val statusBarHeight = with(LocalDensity.current) { WindowInsets.statusBars.getTop(this) }
+    val density = LocalDensity.current
+    val statusBarHeight = with(density) { WindowInsets.statusBars.getTop(this) }
+    // 底部栏需要避开系统虚拟导航条（手势横杠/三键导航），向上偏移其高度
+    val navigationBarHeight = with(density) { WindowInsets.navigationBars.getBottom(this) }
+    // 状态栏高度转成 dp，供 Compose 布局使用
+    val statusBarHeightDp = with(density) { statusBarHeight.toDp() }
 
     // 播放失败信息（null = 无错误）
     var error by remember { mutableStateOf<PlaybackErrorInfo?>(null) }
@@ -105,6 +116,10 @@ private fun VideoPlayerScreen(
     var showTextFallbackDialog by remember { mutableStateOf(false) }
     // 横向滑动拖进度时显示的预览文本（null = 未在滑动）
     var seekPreview by remember { mutableStateOf<String?>(null) }
+    // 设置按钮的下拉菜单是否展开
+    var settingsMenuVisible by remember { mutableStateOf(false) }
+    // 视频详情浮层内容（null = 不显示）
+    var videoDetails by remember { mutableStateOf<String?>(null) }
 
     // 每个 Composable 持有自己的 ExoPlayer，退出时释放
     val player = remember {
@@ -174,6 +189,10 @@ private fun VideoPlayerScreen(
                     findViewById<android.widget.TextView>(R.id.video_title)?.text =
                         File(filePath).name
 
+                    // 顶部栏右侧设置按钮：展开左上角下拉菜单
+                    findViewById<android.view.View>(R.id.video_settings_button)
+                        ?.setOnClickListener { settingsMenuVisible = true }
+
                     // 画面横向滑动拖进度：滑动时间 = 距离dp × 系数 × 速度倍率
                     attachSeekGesture(
                         player = player,
@@ -189,6 +208,15 @@ private fun VideoPlayerScreen(
                         if (lp.topMargin != statusBarHeight) {
                             lp.topMargin = statusBarHeight
                             top.layoutParams = lp
+                        }
+                    }
+                }
+                // 底栏避开虚拟导航条：设置 bottomMargin 为导航栏高度
+                view.findViewById<android.view.View>(androidx.media3.ui.R.id.exo_bottom_bar)?.let { bottom ->
+                    (bottom.layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
+                        if (lp.bottomMargin != navigationBarHeight) {
+                            lp.bottomMargin = navigationBarHeight
+                            bottom.layoutParams = lp
                         }
                     }
                 }
@@ -217,8 +245,89 @@ private fun VideoPlayerScreen(
             )
         }
 
-        error?.let { info ->
+        // 设置下拉菜单：从右上角按钮处向左下展开
+        if (settingsMenuVisible) {
+            // 点击菜单以外的区域关闭
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Transparent)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { settingsMenuVisible = false }
+            )
             Column(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = statusBarHeightDp + 56.dp + 4.dp, end = 8.dp)
+                    .background(
+                        color = Color.Black.copy(alpha = 0.85f),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    .padding(vertical = 4.dp)
+                    .widthIn(min = 120.dp)
+            ) {
+                Text(
+                    text = "视频详情",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            settingsMenuVisible = false
+                            // 打开详情前先暂停，避免信息变化且便于阅读
+                            player.pause()
+                            videoDetails = buildVideoDetails(player, filePath)
+                        }
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                )
+            }
+        }
+
+        // 视频详情浮层：半透明黑底，叠在画面中央
+        videoDetails?.let { details ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { videoDetails = null },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .heightIn(max = 480.dp)
+                        .background(
+                            color = Color.Black.copy(alpha = 0.85f),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { /* 拦截点击，避免点到浮层本身也关闭 */ }
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "视频详情",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = details,
+                        color = Color.White.copy(alpha = 0.9f),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+
+        error?.let { info ->            Column(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .fillMaxWidth(0.9f)
@@ -284,6 +393,7 @@ private const val SEEK_SPEED_MAX = 3.0f      // 快速滑动的速度倍率上�
 private const val SEEK_SPEED_REF = 1000f     // 速度倍率的参考速度（dp/秒）
 private const val SEEK_MIN_TRIGGER_DP = 8f   // 最小触发距离（dp）：区分"点击弹控制条"与"滑动拖进度"
 private const val SEEK_EDGE_RATIO = 0.15f    // 左右各 15% 为忽略区，仅中央 70% 宽度可起手滑动
+private const val LONG_PRESS_SPEED = 2.0f    // 长按画面时临时使用 2 倍速，松手恢复原速
 
 /**
  * 给播放画面的左右滑动绑定拖进度手势：
@@ -296,6 +406,7 @@ private const val SEEK_EDGE_RATIO = 0.15f    // 左右各 15% 为忽略区，仅
  * - 水平位移需超过 [SEEK_MIN_TRIGGER_DP] 才触发，避免把"点一下弹控制条"误判为滑动。
  * - 滑动过程实时 seek，画面中央通过 [onPreview] 显示目标时间；松手调用 [onPreviewEnd]。
  * - 单击（未达阈值）不 Seek，事件继续交给 PlayerView，全屏任意位置都可弹控制条。
+ * - 双击画面（任意位置）在播放 / 暂停之间切换。
  */
 private fun android.view.View.attachSeekGesture(
     player: ExoPlayer,
@@ -305,6 +416,9 @@ private fun android.view.View.attachSeekGesture(
     val context = context
     val density = resources.displayMetrics.density
     val minTriggerPx = SEEK_MIN_TRIGGER_DP * density
+    // 长按加速状态保存于此，供 ACTION_UP/CANCEL 时恢复原速度
+    var speedBeforeLongPress = 1f
+    var longPressSpeedup = false
     val gestureDetector = android.view.GestureDetector(
         context,
         object : android.view.GestureDetector.SimpleOnGestureListener() {
@@ -329,6 +443,24 @@ private fun android.view.View.attachSeekGesture(
                 eligible = width <= 0f ||
                     (e.x >= width * SEEK_EDGE_RATIO && e.x <= width * (1f - SEEK_EDGE_RATIO))
                 return true
+            }
+
+            /** 双击画面：在播放 / 暂停之间切换。返回 true 表示已消费该手势。 */
+            override fun onDoubleTap(e: android.view.MotionEvent): Boolean {
+                if (player.isPlaying) {
+                    player.pause()
+                } else {
+                    player.play()
+                }
+                return true
+            }
+
+            /** 长按画面：临时切到 [LONG_PRESS_SPEED] 倍速，松手后恢复原速度。 */
+            override fun onLongPress(e: android.view.MotionEvent) {
+                if (longPressSpeedup) return
+                speedBeforeLongPress = player.playbackParameters.speed
+                player.setPlaybackSpeed(LONG_PRESS_SPEED)
+                longPressSpeedup = true
             }
 
             override fun onScroll(
@@ -377,6 +509,11 @@ private fun android.view.View.attachSeekGesture(
             event.actionMasked == android.view.MotionEvent.ACTION_CANCEL
         ) {
             onPreviewEnd()
+            // 长按加速结束：恢复长按前的原始速度
+            if (longPressSpeedup) {
+                player.setPlaybackSpeed(speedBeforeLongPress)
+                longPressSpeedup = false
+            }
         }
         // 始终返回 false：seeking 已在滑动手势里完成，
         // 事件继续交给 PlayerView 处理，保持"点一下弹控制条"的默认行为。
@@ -391,6 +528,115 @@ private fun formatSeekMs(ms: Long): String {
     val m = totalSec / 60
     val s = totalSec % 60
     return "%s%02d:%02d".format(sign, m, s)
+}
+
+/**
+ * 采集并格式化视频详情文本，用于设置菜单里的「视频详情」浮层。
+ *
+ * - 名称 / 路径：直接取文件信息。
+ * - 大小：读取文件长度，格式化为人类可读单位。
+ * - 比特率：优先取视频轨 [androidx.media3.common.Format.bitrate]；
+ *   容器未写入时按 `文件大小 × 8 ÷ 时长` 估算，并标注「估算」。
+ * - 时长：取播放器已知时长。
+ * - 画面尺寸：取 [ExoPlayer.getVideoSize]，格式为 `宽x高`；
+ *   命中 480P/720P/1080P/2K/4K 等常见档位时在括号内标注。
+ */
+private fun buildVideoDetails(player: ExoPlayer, filePath: String): String {
+    val file = File(filePath)
+    val sizeBytes = file.length().takeIf { it > 0L }
+
+    val durationMs = player.duration.takeIf { it > 0L }
+
+    // 优先使用视频轨声明的比特率
+    var declaredBitrate: Int? = null
+    for (group in player.currentTracks.groups) {
+        for (i in 0 until group.length) {
+            val format = group.getTrackFormat(i)
+            if (format.sampleMimeType?.startsWith("video/") == true && format.bitrate > 0) {
+                declaredBitrate = format.bitrate
+                break
+            }
+        }
+        if (declaredBitrate != null) break
+    }
+
+    val videoSize = player.videoSize
+    val hasVideoSize = videoSize.width > 0 && videoSize.height > 0
+
+    return buildString {
+        append("名称: ").append(file.name).append('\n')
+        append("路径: ").append(filePath).append('\n')
+        append("大小: ")
+        append(sizeBytes?.let { formatFileSize(it) } ?: "未知")
+        append('\n')
+
+        append("比特率: ")
+        if (declaredBitrate != null) {
+            append(formatBitrate(declaredBitrate))
+        } else if (sizeBytes != null && durationMs != null) {
+            // 容器没有写入比特率：用总大小和时长估算
+            val estimated = (sizeBytes * 8L * 1000L / durationMs).toInt()
+            append(formatBitrate(estimated)).append("（估算）")
+        } else {
+            append("未知")
+        }
+        append('\n')
+
+        append("时长: ")
+        append(durationMs?.let { formatDuration(it) } ?: "未知")
+
+        if (hasVideoSize) {
+            append('\n')
+            append("画面: ").append(videoSize.width).append('x').append(videoSize.height)
+            resolutionLabel(videoSize.width, videoSize.height)?.let {
+                append(" (").append(it).append(')')
+            }
+        }
+    }
+}
+
+/** 把字节数格式化为 B / KB / MB / GB。 */
+private fun formatFileSize(bytes: Long): String {
+    if (bytes < 1024L) return "$bytes B"
+    val kb = bytes / 1024.0
+    if (kb < 1024.0) return "%.1f KB".format(kb)
+    val mb = kb / 1024.0
+    if (mb < 1024.0) return "%.1f MB".format(mb)
+    return "%.2f GB".format(mb / 1024.0)
+}
+
+/** 把比特率格式化为 kbps / Mbps。 */
+private fun formatBitrate(bps: Int): String {
+    val kbps = bps / 1000.0
+    return if (kbps < 1000.0) "%.0f kbps".format(kbps) else "%.2f Mbps".format(kbps / 1000.0)
+}
+
+/** 把毫秒格式化为 `hh:mm:ss`（不足一小时为 `mm:ss`）。 */
+private fun formatDuration(ms: Long): String {
+    val totalSec = ms / 1000
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    val s = totalSec % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+}
+
+/**
+ * 按较短边（纵向分辨率）识别常见档位，命中则返回 `720P` 这类标注，否则返回 null。
+ * 采用较短边判断，竖屏视频（如 1080x1920）同样能命中 1080P。
+ */
+private fun resolutionLabel(width: Int, height: Int): String? {
+    val shortSide = minOf(width, height)
+    return when (shortSide) {
+        240 -> "240P"
+        360 -> "360P"
+        480 -> "480P"
+        540 -> "540P"
+        720 -> "720P"
+        1080 -> "1080P"
+        1440 -> "2K"
+        2160 -> "4K"
+        else -> null
+    }
 }
 
 

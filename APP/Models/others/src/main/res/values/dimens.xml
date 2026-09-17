@@ -6,8 +6,8 @@
        默认 52dp 用于把进度条抬到控制条上方、与中央按钮分离。这里改为 0，使进度条能嵌入
        exo_player_control_view 的底部行内，与「上一集/暂停播放/下一集」及时间文本保持同一行。
 
-    2. 图标尺寸整体缩小（约为默认值的一半），否则底部单行里 3 个 52dp 的按钮 + 48dp 的底部按钮
-       会把进度条完全挤没。
+    2. 图标尺寸整体缩小，避免底部单行里的大按钮把进度条完全挤没；
+       播放/暂停按钮单独放大到 exo_play_pause_icon_size。
 -->
 <resources>
     <dimen name="exo_styled_progress_margin_bottom">0dp</dimen>
@@ -29,4 +29,7 @@
 
     <!-- 进度条容器高度：48dp → 32dp，避免高出新的行高 -->
     <dimen name="exo_styled_progress_layout_height">32dp</dimen>
+
+    <!-- 播放/暂停按钮：放大到 40dp（约为其他按钮的 1.5 倍） -->
+    <dimen name="exo_play_pause_icon_size">40dp</dimen>
 </resources>
