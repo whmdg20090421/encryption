@@ -35,6 +35,7 @@ import com.whmdg.mczj.tools.encryption.core.FileCodec
 import com.whmdg.mczj.tools.encryption.services.VaultKeyHolder
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.TextEncodingDetector
+import com.whmdg.mczj.tools.util.UndoStackInspector
 import io.github.rosemoe.sora.event.ContentChangeEvent
 import io.github.rosemoe.sora.event.SelectionChangeEvent
 import io.github.rosemoe.sora.widget.CodeEditor
@@ -71,6 +72,9 @@ fun TextEditorScreen(
     var cursorColumn by remember { mutableStateOf(1) }
     var editorRef by remember { mutableStateOf<CodeEditor?>(null) }
     var showSaveDialog by remember { mutableStateOf(false) }
+    // 脏状态基准：优先用撤销栈指针（O(1)），反射不可用时降级为内容比较
+    var savedStackPointer by remember { mutableStateOf<Int?>(null) }
+    var savedText by remember { mutableStateOf("") }
 
     // 编辑器色板跟随当前主题亮度
     val isDarkMode = MaterialTheme.colorScheme.background.luminance() < 0.5f
@@ -81,6 +85,18 @@ fun TextEditorScreen(
     fun syncHistoryState(editor: CodeEditor?) {
         undoAvailable = editor?.canUndo() == true
         redoAvailable = editor?.canRedo() == true
+    }
+
+    // 判断当前内容是否与已保存内容不同。
+    // 正常路径：比较撤销栈指针（O(1)，与文件大小无关）。
+    // 降级路径：反射不可用时比较全文（O(n)）。
+    fun computeDirty(editor: CodeEditor?): Boolean {
+        val pointer = UndoStackInspector.readStackPointer(editor)
+        val baseline = savedStackPointer
+        if (pointer != null && baseline != null) {
+            return pointer != baseline
+        }
+        return editor?.text?.toString() != savedText
     }
 
     // 读取文件并检测编码
@@ -129,6 +145,9 @@ fun TextEditorScreen(
                     file.writeBytes(output)
                 }
                 hasChanges = false
+                // 保存点前移：更新脏状态基准
+                savedStackPointer = UndoStackInspector.readStackPointer(editorRef)
+                savedText = content
                 DiagnosticLog.log("TextEditor", "保存成功: $filePath")
             } catch (e: Exception) {
                 Toast.makeText(context, "保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -184,6 +203,7 @@ fun TextEditorScreen(
                     IconButton(onClick = {
                         editorRef?.undo()
                         syncHistoryState(editorRef)
+                        hasChanges = computeDirty(editorRef)
                     }, enabled = undoAvailable) {
                         Icon(
                             Icons.AutoMirrored.Filled.Undo,
@@ -195,6 +215,7 @@ fun TextEditorScreen(
                     IconButton(onClick = {
                         editorRef?.redo()
                         syncHistoryState(editorRef)
+                        hasChanges = computeDirty(editorRef)
                     }, enabled = redoAvailable) {
                         Icon(
                             Icons.AutoMirrored.Filled.Redo,
@@ -265,6 +286,9 @@ fun TextEditorScreen(
                         cursorColumn = event.left.column + 1
                     }
                     editorRef = this
+                    // 以打开时的状态作为脏状态基准
+                    savedText = fileContent
+                    savedStackPointer = UndoStackInspector.readStackPointer(this)
                 }
             },
             modifier = Modifier
