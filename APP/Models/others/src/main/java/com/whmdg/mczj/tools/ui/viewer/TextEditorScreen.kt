@@ -3,26 +3,57 @@ package com.whmdg.mczj.tools.ui.viewer
 import android.graphics.Typeface
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.whmdg.mczj.tools.encryption.core.FileCodec
 import com.whmdg.mczj.tools.encryption.services.VaultKeyHolder
 import com.whmdg.mczj.tools.util.DiagnosticLog
+import com.whmdg.mczj.tools.util.TextEncodingDetector
 import io.github.rosemoe.sora.event.ContentChangeEvent
+import io.github.rosemoe.sora.event.SelectionChangeEvent
 import io.github.rosemoe.sora.widget.CodeEditor
 import io.github.rosemoe.sora.widget.subscribeAlways
 import io.github.rosemoe.sora.langs.java.JavaLanguage
+import io.github.rosemoe.sora.widget.schemes.SchemeDarcula
 import java.io.File
+import java.nio.charset.Charset
 
-@OptIn(ExperimentalMaterial3Api::class)
+private const val TOP_BAR_HEIGHT_DP = 48
+private const val FILE_INFO_BAR_HEIGHT_DP = 24
+
+private data class FileState(
+    val content: String,
+    val encodingName: String,
+    val charset: Charset,
+    val bom: ByteArray
+)
+
 @Composable
 fun TextEditorScreen(
     filePath: String,
@@ -32,19 +63,49 @@ fun TextEditorScreen(
     val context = LocalContext.current
     val file = remember { File(filePath) }
     val wordwrapEnabled = remember { true }
+
     var hasChanges by remember { mutableStateOf(false) }
+    var undoAvailable by remember { mutableStateOf(false) }
+    var redoAvailable by remember { mutableStateOf(false) }
+    var cursorLine by remember { mutableStateOf(1) }
+    var cursorColumn by remember { mutableStateOf(1) }
     var editorRef by remember { mutableStateOf<CodeEditor?>(null) }
     var showSaveDialog by remember { mutableStateOf(false) }
+
+    // 编辑器色板跟随当前主题亮度
+    val isDarkMode = MaterialTheme.colorScheme.background.luminance() < 0.5f
+
+    // 读取文件并检测编码
+    val fileState = remember {
+        try {
+            val bytes = file.readBytes()
+            val detect = TextEncodingDetector.detect(bytes)
+            val charset: Charset = detect.charset ?: Charsets.UTF_8
+            // 剥离 BOM 后解码显示，保存时按 detect.bom 原样补回
+            val contentBytes = if (detect.hasBom) bytes.copyOfRange(detect.bom.size, bytes.size) else bytes
+            FileState(
+                content = String(contentBytes, charset),
+                encodingName = detect.displayName,
+                charset = charset,
+                bom = detect.bom
+            )
+        } catch (e: Exception) {
+            DiagnosticLog.log("TextEditor", "读取失败: $filePath ${e.message}")
+            FileState("", "未知", Charsets.UTF_8, ByteArray(0))
+        }
+    }
+    val fileContent = fileState.content
+    val encodingName = fileState.encodingName
+    val encoding = fileState.charset
 
     fun saveContent() {
         editorRef?.text?.toString()?.let { content ->
             try {
+                val output = fileState.bom + content.toByteArray(encoding)
                 if (vaultSessionId != null) {
                     val ctx = VaultKeyHolder.get(vaultSessionId)
                     if (ctx != null) {
-                        // 写入临时文件
-                        file.writeText(content)
-                        // 重新加密写回保险箱（覆盖原加密文件）
+                        file.writeBytes(output)
                         FileCodec.encrypt(
                             src = file,
                             dst = File(ctx.originalEncryptedPath),
@@ -57,7 +118,7 @@ fun TextEditorScreen(
                         return
                     }
                 } else {
-                    file.writeText(content)
+                    file.writeBytes(output)
                 }
                 hasChanges = false
                 DiagnosticLog.log("TextEditor", "保存成功: $filePath")
@@ -93,28 +154,42 @@ fun TextEditorScreen(
         )
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = file.name,
-                        maxLines = 1,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                },
-                navigationIcon = {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Surface(color = MaterialTheme.colorScheme.surface) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.statusBars)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(TOP_BAR_HEIGHT_DP.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     IconButton(onClick = {
                         if (hasChanges) showSaveDialog = true else onBack()
                     }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
-                },
-                actions = {
-                    IconButton(
-                        onClick = { saveContent() },
-                        enabled = hasChanges
-                    ) {
+                    Spacer(modifier = Modifier.weight(1f))
+                    IconButton(onClick = { editorRef?.undo() }, enabled = undoAvailable) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Undo,
+                            contentDescription = "撤销",
+                            tint = if (undoAvailable) MaterialTheme.colorScheme.onSurface
+                                   else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
+                    IconButton(onClick = { editorRef?.redo() }, enabled = redoAvailable) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Redo,
+                            contentDescription = "重做",
+                            tint = if (redoAvailable) MaterialTheme.colorScheme.onSurface
+                                   else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
+                    IconButton(onClick = { saveContent() }, enabled = hasChanges) {
                         Icon(
                             Icons.Default.Save,
                             contentDescription = "保存",
@@ -122,19 +197,39 @@ fun TextEditorScreen(
                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         )
                     }
+                    IconButton(onClick = { /* 仅 UI，无功能 */ }) {
+                        Icon(Icons.Default.Edit, contentDescription = "编辑")
+                    }
+                    IconButton(onClick = { /* 仅 UI，无功能 */ }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "更多")
+                    }
                 }
-            )
-        }
-    ) { padding ->
-        val fileContent = remember {
-            try {
-                file.readText()
-            } catch (e: Exception) {
-                DiagnosticLog.log("TextEditor", "读取失败: $filePath ${e.message}")
-                ""
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(FILE_INFO_BAR_HEIGHT_DP.dp)
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = file.name,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = "$cursorLine:$cursorColumn  $encodingName",
+                        maxLines = 1,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
-        val langExt = remember { file.extension.lowercase() }
 
         AndroidView(
             factory = { ctx ->
@@ -142,21 +237,26 @@ fun TextEditorScreen(
                     setText(fileContent)
                     typefaceText = Typeface.MONOSPACE
                     setWordwrap(wordwrapEnabled)
-                    // 根据后缀设置语言
+                    if (isDarkMode) colorScheme = SchemeDarcula()
                     setEditorLanguage(
-                        if (langExt in listOf("java", "kt", "kts")) JavaLanguage()
+                        if (file.extension.lowercase() in listOf("java", "kt", "kts")) JavaLanguage()
                         else null
                     )
-                    // 监听文本变化
-                    subscribeAlways<ContentChangeEvent> {
+                    subscribeAlways<ContentChangeEvent> { _ ->
                         if (!hasChanges) hasChanges = true
+                        undoAvailable = this.canUndo()
+                        redoAvailable = this.canRedo()
+                    }
+                    subscribeAlways<SelectionChangeEvent> { event ->
+                        cursorLine = event.left.line + 1
+                        cursorColumn = event.left.column + 1
                     }
                     editorRef = this
                 }
             },
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
+                .windowInsetsPadding(WindowInsets.navigationBars)
         )
     }
 
