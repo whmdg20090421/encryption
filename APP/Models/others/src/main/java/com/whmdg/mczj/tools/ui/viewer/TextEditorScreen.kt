@@ -31,6 +31,7 @@ fun TextEditorScreen(
 ) {
     val context = LocalContext.current
     val file = remember { File(filePath) }
+    val wordwrapEnabled = remember { true }
     var hasChanges by remember { mutableStateOf(false) }
     var editorRef by remember { mutableStateOf<CodeEditor?>(null) }
     var showSaveDialog by remember { mutableStateOf(false) }
@@ -140,6 +141,7 @@ fun TextEditorScreen(
                 CodeEditor(ctx).apply {
                     setText(fileContent)
                     typefaceText = Typeface.MONOSPACE
+                    setWordwrap(wordwrapEnabled)
                     // 根据后缀设置语言
                     setEditorLanguage(
                         if (langExt in listOf("java", "kt", "kts")) JavaLanguage()
