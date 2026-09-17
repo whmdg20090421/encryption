@@ -415,8 +415,10 @@ private fun android.view.View.attachSeekGesture(
 
             /** 单击（已确认不是双击）：切换控制条显隐。双击走 [onDoubleTap]，两者互斥。 */
             override fun onSingleTapConfirmed(e: android.view.MotionEvent): Boolean {
+                // 与 Media3 内部 toggleControllerVisibility() 的判定保持一致：
+                // 完全可见则隐藏，否则显示。
                 (this@attachSeekGesture as? PlayerView)?.let { pv ->
-                    if (pv.isControllerVisible) pv.hideController() else pv.showController()
+                    if (pv.isControllerFullyVisible) pv.hideController() else pv.showController()
                 }
                 return true
             }
