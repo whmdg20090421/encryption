@@ -93,6 +93,10 @@ private fun VideoPlayerScreen(
 ) {
     val context = LocalContext.current
 
+    // 顶部栏需要避开系统状态栏（时间/WiFi 那条常驻栏），向下偏移其高度
+    val statusBarHeight = androidx.compose.foundation.layout.WindowInsets.statusBars
+        .getTop(androidx.compose.ui.platform.LocalDensity.current)
+
     // 播放失败信息（null = 无错误）
     var error by remember { mutableStateOf<PlaybackErrorInfo?>(null) }
     // .ts 播放失败时询问是否改用文本编辑器打开
@@ -177,6 +181,15 @@ private fun VideoPlayerScreen(
                 }
             },
             update = { view ->
+                // 顶栏避开状态栏：设置 topMargin 为状态栏高度
+                view.findViewById<android.view.View>(R.id.exo_top_controls)?.let { top ->
+                    (top.layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
+                        if (lp.topMargin != statusBarHeight) {
+                            lp.topMargin = statusBarHeight
+                            top.layoutParams = lp
+                        }
+                    }
+                }
                 // 根据当前方向同步全屏按钮图标（系统旋转或返回键退出全屏后也保持一致）
                 view.setFullscreenButtonState(isLandscape)
                 if (error != null) {

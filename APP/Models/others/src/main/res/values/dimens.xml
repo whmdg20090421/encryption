@@ -2,10 +2,31 @@
 <!--
     覆盖 Media3 的 dimens 值。
 
-    exo_styled_progress_margin_bottom：库会把进度条（DefaultTimeBar）的下外边距强制设为该值，
-    默认 52dp 用于把进度条抬到控制条上方、与中央按钮分离。这里改为 0，使进度条能嵌入
-    exo_player_control_view 的底部行内，与「上一集/暂停播放/下一集」及时间文本保持同一行。
+    1. exo_styled_progress_margin_bottom：库会把进度条（DefaultTimeBar）的下外边距强制设为该值，
+       默认 52dp 用于把进度条抬到控制条上方、与中央按钮分离。这里改为 0，使进度条能嵌入
+       exo_player_control_view 的底部行内，与「上一集/暂停播放/下一集」及时间文本保持同一行。
+
+    2. 图标尺寸整体缩小（约为默认值的一半），否则底部单行里 3 个 52dp 的按钮 + 48dp 的底部按钮
+       会把进度条完全挤没。
 -->
 <resources>
     <dimen name="exo_styled_progress_margin_bottom">0dp</dimen>
+
+    <!-- 中央按钮（此处挪到了底部行，仍复用 Center 样式）：52dp → 28dp -->
+    <dimen name="exo_icon_size">28dp</dimen>
+    <dimen name="exo_icon_horizontal_margin">0dp</dimen>
+    <dimen name="exo_icon_padding">1dp</dimen>
+
+    <!-- 底部按钮（全屏等）：48dp → 26dp，内边距同步缩小 -->
+    <dimen name="exo_small_icon_width">26dp</dimen>
+    <dimen name="exo_small_icon_height">26dp</dimen>
+    <dimen name="exo_small_icon_horizontal_margin">0dp</dimen>
+    <dimen name="exo_small_icon_padding_horizontal">3dp</dimen>
+    <dimen name="exo_small_icon_padding_vertical">3dp</dimen>
+
+    <!-- 底部行高：60dp → 40dp -->
+    <dimen name="exo_styled_bottom_bar_height">40dp</dimen>
+
+    <!-- 进度条容器高度：48dp → 32dp，避免高出新的行高 -->
+    <dimen name="exo_styled_progress_layout_height">32dp</dimen>
 </resources>

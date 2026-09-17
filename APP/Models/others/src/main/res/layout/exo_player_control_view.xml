@@ -47,22 +47,25 @@
     <LinearLayout android:id="@id/exo_time"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:paddingStart="@dimen/exo_styled_bottom_bar_time_padding"
-        android:paddingEnd="@dimen/exo_styled_bottom_bar_time_padding"
-        android:paddingLeft="@dimen/exo_styled_bottom_bar_time_padding"
-        android:paddingRight="@dimen/exo_styled_bottom_bar_time_padding"
         android:gravity="center_vertical"
         android:layoutDirection="ltr"
         android:importantForAccessibility="noHideDescendants">
 
       <TextView android:id="@id/exo_position"
-          style="@style/ExoStyledControls.TimeText.Position"/>
+          style="@style/ExoStyledControls.TimeText.Position"
+          android:paddingLeft="2dp"
+          android:paddingRight="0dp"/>
 
       <TextView
-          style="@style/ExoStyledControls.TimeText.Separator"/>
+          style="@style/ExoStyledControls.TimeText.Separator"
+          android:paddingLeft="1dp"
+          android:paddingRight="1dp"
+          android:text="/"/>
 
       <TextView android:id="@id/exo_duration"
-          style="@style/ExoStyledControls.TimeText.Duration"/>
+          style="@style/ExoStyledControls.TimeText.Duration"
+          android:paddingLeft="0dp"
+          android:paddingRight="2dp"/>
 
     </LinearLayout>
 
