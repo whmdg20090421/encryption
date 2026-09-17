@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -91,15 +94,15 @@ private fun VideoPlayerScreen(
         autoPlay = true
     )
 
-    // 播放失败提示（null = 无错误）
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    // 播放失败信息（null = 无错误）
+    var error by remember { mutableStateOf<PlaybackErrorInfo?>(null) }
     // .ts 播放失败时询问是否改用文本编辑器打开
     var showTextFallbackDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(controller) {
         controller.events.collect { event ->
             if (event is GSYPlayerEvent.Error) {
-                errorMessage = describePlaybackError(event.what)
+                error = PlaybackErrorInfo(event.what, event.extra)
                 // .ts 是 TS 视频与 TypeScript 源码的共用后缀；播放失败时提供文本编辑器兜底
                 if (filePath.substringAfterLast('.', "").equals("ts", ignoreCase = true)) {
                     showTextFallbackDialog = true
@@ -117,19 +120,27 @@ private fun VideoPlayerScreen(
             showDefaultControls = true
         )
 
-        errorMessage?.let { message ->
+        error?.let { info ->
             Column(
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .fillMaxWidth(0.8f),
+                    .fillMaxWidth(0.85f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    text = message,
+                    text = info.summary,
                     color = Color.White,
                     textAlign = TextAlign.Center,
                     style = MaterialTheme.typography.bodyLarge
+                )
+                Text(
+                    text = info.detail,
+                    color = Color.White.copy(alpha = 0.7f),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodySmall
                 )
                 Button(onClick = onBack) { Text("返回") }
             }
@@ -159,23 +170,73 @@ private fun VideoPlayerScreen(
 }
 
 /**
- * 按 Media3 PlaybackException 错误码精确分类。
+ * 播放失败信息：summary 为分类后的中文提示，detail 为原始错误码明细。
  *
  * GSY Exo2 内核在 onPlayerError 中原样透传 PlaybackException.errorCode 作为 what，
- * 因此这里可直接与 PlaybackException 常量比对，而非捕获通用异常。
+ * extra 固定为 IMediaPlayer.MEDIA_ERROR_UNKNOWN，因此按 Media3 错误码精确分类。
  */
-private fun describePlaybackError(what: Int): String = when (what) {
-    PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
-    PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
-    PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
-    PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "该视频格式暂不支持播放"
+private data class PlaybackErrorInfo(val what: Int, val extra: Int) {
 
-    PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "文件不存在或无法访问"
-    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "网络连接失败"
-    PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
-    PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE,
-    PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "读取文件失败"
+    val summary: String = when (what) {
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "该视频格式暂不支持播放"
 
-    else -> "播放失败"
+        PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "文件不存在或无法访问"
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "网络连接失败"
+        PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+        PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE,
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "读取文件失败"
+
+        else -> "播放失败"
+    }
+
+    /** 错误码明细：优先使用中文说明，未命中匹配时回退为英文原文。 */
+    val detail: String = "${errorCodeDescription(what)} ($what)\nextra: $extra"
+
+    private fun errorCodeDescription(code: Int): String = when (code) {
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "容器格式损坏，无法解析"
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED -> "容器格式不受支持"
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED -> "清单文件损坏，无法解析"
+        PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED -> "清单文件格式不受支持"
+
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "解码器初始化失败"
+        PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED -> "解码器查询失败"
+        PlaybackException.ERROR_CODE_DECODING_FAILED -> "音视频解码失败"
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES -> "编码规格超出设备解码能力"
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "解码格式不受支持"
+
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED -> "音频轨道初始化失败"
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED -> "音频轨道写入失败"
+
+        PlaybackException.ERROR_CODE_IO_UNSPECIFIED -> "输入/输出错误（未指明）"
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "网络连接失败"
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "网络连接超时"
+        PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE -> "HTTP 响应内容类型无效"
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "HTTP 状态码异常"
+        PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND -> "文件不存在"
+        PlaybackException.ERROR_CODE_IO_NO_PERMISSION -> "没有读取权限"
+        PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED -> "禁止明文网络传输"
+        PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE -> "读取位置超出文件范围"
+
+        PlaybackException.ERROR_CODE_DRM_UNSPECIFIED -> "DRM 错误（未指明）"
+        PlaybackException.ERROR_CODE_DRM_SCHEME_UNSUPPORTED -> "DRM 方案不受支持"
+        PlaybackException.ERROR_CODE_DRM_PROVISIONING_FAILED -> "DRM 设备预配置失败"
+        PlaybackException.ERROR_CODE_DRM_CONTENT_ERROR -> "DRM 内容错误"
+        PlaybackException.ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED -> "DRM 许可证获取失败"
+        PlaybackException.ERROR_CODE_DRM_DISALLOWED_OPERATION -> "DRM 操作不被允许"
+        PlaybackException.ERROR_CODE_DRM_SYSTEM_ERROR -> "DRM 系统错误"
+        PlaybackException.ERROR_CODE_DRM_DEVICE_REVOKED -> "DRM 设备已被吊销"
+        PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED -> "DRM 许可证已过期"
+
+        PlaybackException.ERROR_CODE_UNSPECIFIED -> "未指明的错误"
+        PlaybackException.ERROR_CODE_REMOTE_ERROR -> "远端返回错误"
+        PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW -> "直播进度落后于窗口"
+        PlaybackException.ERROR_CODE_TIMEOUT -> "操作超时"
+        PlaybackException.ERROR_CODE_FAILED_RUNTIME_CHECK -> "运行时检查失败"
+
+        else -> "UNKNOWN"
+    }
 }
