@@ -132,6 +132,7 @@
         <activity
             android:name=".ui.viewer.VideoPlayerActivity"
             android:exported="false"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
             android:label="视频播放器"
             android:theme="@style/Theme.工具箱" />
 

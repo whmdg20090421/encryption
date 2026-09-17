@@ -84,14 +84,11 @@
       <ImageButton android:id="@id/exo_subtitle"
           style="@style/ExoStyledControls.Button.Bottom.CC"/>
 
-      <ImageButton android:id="@id/exo_settings"
-          style="@style/ExoStyledControls.Button.Bottom.Settings"/>
+      <ImageButton android:id="@id/exo_overflow_show"
+          style="@style/ExoStyledControls.Button.Bottom.OverflowShow"/>
 
       <ImageButton android:id="@id/exo_fullscreen"
           style="@style/ExoStyledControls.Button.Bottom.FullScreen"/>
-
-      <ImageButton android:id="@id/exo_overflow_show"
-          style="@style/ExoStyledControls.Button.Bottom.OverflowShow"/>
 
     </LinearLayout>
 
@@ -140,17 +137,53 @@
       android:clipToPadding="false"
       android:layoutDirection="ltr"/>
 
+  <!-- 顶部控制条：左侧返回按钮 + 居中视频名称。随控制条一起淡入淡出。 -->
   <LinearLayout
       android:id="@+id/exo_top_controls"
-      android:layout_width="wrap_content"
-      android:layout_height="wrap_content"
-      android:layout_gravity="top|end"
-      android:background="@android:color/transparent">
+      android:layout_width="match_parent"
+      android:layout_height="56dp"
+      android:layout_gravity="top"
+      android:background="@color/exo_bottom_bar_background"
+      android:orientation="horizontal"
+      android:gravity="center_vertical"
+      android:layoutDirection="ltr">
+
+    <ImageButton
+        android:id="@+id/video_back_button"
+        android:layout_width="56dp"
+        android:layout_height="match_parent"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:contentDescription="返回"
+        android:src="@drawable/ic_video_back"
+        android:scaleType="centerInside"/>
+
+    <TextView
+        android:id="@+id/video_title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:ellipsize="middle"
+        android:gravity="center"
+        android:maxLines="1"
+        android:textColor="@color/exo_white"
+        android:textSize="16sp"/>
+
+    <!-- 右侧自定义设置按钮（宽度与返回按钮一致，保证标题视觉居中）。点击行为待接入。 -->
+    <ImageButton
+        android:id="@+id/video_settings_button"
+        android:layout_width="56dp"
+        android:layout_height="match_parent"
+        android:background="?android:attr/selectableItemBackgroundBorderless"
+        android:contentDescription="设置"
+        android:src="@drawable/ic_video_settings"
+        android:scaleType="centerInside"/>
+
     <View
         android:id="@+id/exo_media_route_button_placeholder"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:visibility="gone"/>
+
   </LinearLayout>
 
 </merge>
