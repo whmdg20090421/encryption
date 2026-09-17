@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -107,8 +106,6 @@ private fun VideoPlayerScreen(
     val statusBarHeight = with(density) { WindowInsets.statusBars.getTop(this) }
     // 底部栏需要避开系统虚拟导航条（手势横杠/三键导航），向上偏移其高度
     val navigationBarHeight = with(density) { WindowInsets.navigationBars.getBottom(this) }
-    // 状态栏高度转成 dp，供 Compose 布局使用
-    val statusBarHeightDp = with(density) { statusBarHeight.toDp() }
 
     // 播放失败信息（null = 无错误）
     var error by remember { mutableStateOf<PlaybackErrorInfo?>(null) }
@@ -116,8 +113,6 @@ private fun VideoPlayerScreen(
     var showTextFallbackDialog by remember { mutableStateOf(false) }
     // 横向滑动拖进度时显示的预览文本（null = 未在滑动）
     var seekPreview by remember { mutableStateOf<String?>(null) }
-    // 设置按钮的下拉菜单是否展开
-    var settingsMenuVisible by remember { mutableStateOf(false) }
     // 视频详情浮层内容（null = 不显示）
     var videoDetails by remember { mutableStateOf<String?>(null) }
 
@@ -189,9 +184,21 @@ private fun VideoPlayerScreen(
                     findViewById<android.widget.TextView>(R.id.video_title)?.text =
                         File(filePath).name
 
-                    // 顶部栏右侧设置按钮：展开左上角下拉菜单
+                    // 顶部栏右侧设置按钮：以按钮自身为锚点弹出菜单（系统负责定位与边缘避让）
                     findViewById<android.view.View>(R.id.video_settings_button)
-                        ?.setOnClickListener { settingsMenuVisible = true }
+                        ?.setOnClickListener { anchor ->
+                            showVideoSettingsMenu(anchor) { item ->
+                                when (item.itemId) {
+                                    R.id.action_video_details -> {
+                                        // 打开详情前先暂停，避免信息变化且便于阅读
+                                        player.pause()
+                                        videoDetails = buildVideoDetails(player, filePath)
+                                        true
+                                    }
+                                    else -> false
+                                }
+                            }
+                        }
 
                     // 画面横向滑动拖进度：滑动时间 = 距离dp × 系数 × 速度倍率
                     attachSeekGesture(
@@ -245,46 +252,6 @@ private fun VideoPlayerScreen(
             )
         }
 
-        // 设置下拉菜单：从右上角按钮处向左下展开
-        if (settingsMenuVisible) {
-            // 点击菜单以外的区域关闭
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Transparent)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { settingsMenuVisible = false }
-            )
-            Column(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = statusBarHeightDp + 56.dp + 4.dp, end = 8.dp)
-                    .background(
-                        color = Color.Black.copy(alpha = 0.85f),
-                        shape = RoundedCornerShape(8.dp)
-                    )
-                    .padding(vertical = 4.dp)
-                    .widthIn(min = 120.dp)
-            ) {
-                Text(
-                    text = "视频详情",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            settingsMenuVisible = false
-                            // 打开详情前先暂停，避免信息变化且便于阅读
-                            player.pause()
-                            videoDetails = buildVideoDetails(player, filePath)
-                        }
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                )
-            }
-        }
-
         // 视频详情浮层：半透明黑底，叠在画面中央
         videoDetails?.let { details ->
             Box(
@@ -327,7 +294,8 @@ private fun VideoPlayerScreen(
             }
         }
 
-        error?.let { info ->            Column(
+        error?.let { info ->
+            Column(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .fillMaxWidth(0.9f)
@@ -505,7 +473,9 @@ private fun android.view.View.attachSeekGesture(
                 val deltaMs = (dx / density * SEEK_MS_PER_DP * speedFactor).toLong()
                 val target = (startPositionMs + deltaMs).coerceIn(0L, durationMs)
                 player.seekTo(target)
-                onPreview("${formatSeekMs(target - startPositionMs)}  ${formatSeekMs(target)}")
+                // 预览格式：`增减量 / 目标时间点`，如 `+00:15 / 01:23`。
+                // 增量带符号表示快进/后退方向，目标时间点是绝对位置，不加符号。
+                onPreview("${formatOffsetMs(target - startPositionMs)} / ${formatPositionMs(target)}")
                 return true
             }
         }
@@ -530,13 +500,47 @@ private fun android.view.View.attachSeekGesture(
     }
 }
 
-/** 把毫秒格式化为 `mm:ss` 或 `+mm:ss` / `-mm:ss`，用于滑动进度的预览文本。 */
-private fun formatSeekMs(ms: Long): String {
-    val sign = if (ms < 0) "-" else "+"
+/**
+ * 在 [anchor]（顶部栏右侧设置按钮）处弹出视频设置菜单。
+ *
+ * 使用系统 [android.widget.PopupMenu]：
+ * - 锚点、展开方向、屏幕边缘避让由系统按 [anchor] 计算，无需硬编码坐标；
+ * - 菜单内容来自 menu 资源，新增功能只需追加 <item>；
+ * - 生命周期由系统管理，不存在浮层被提前回收的问题；
+ * - 半透明黑底样式经 [R.style.VideoPlayerPopupMenuTheme] 指定。
+ *
+ * @param anchor 菜单锚点，通常是设置按钮本身。
+ * @param onItemClick 菜单项点击回调，返回 true 表示已处理。
+ */
+private fun showVideoSettingsMenu(
+    anchor: android.view.View,
+    onItemClick: (android.view.MenuItem) -> Boolean
+) {
+    val themedContext = android.view.ContextThemeWrapper(
+        anchor.context,
+        R.style.VideoPlayerPopupMenuTheme
+    )
+    android.widget.PopupMenu(themedContext, anchor).apply {
+        menuInflater.inflate(R.menu.video_player_menu, menu)
+        setOnMenuItemClickListener(onItemClick)
+        show()
+    }
+}
+
+
+/** 把时间点（毫秒）格式化为 `mm:ss`，超过一小时为 `hh:mm:ss`，不带正负号。 */
+private fun formatPositionMs(ms: Long): String {
     val totalSec = kotlin.math.abs(ms) / 1000
-    val m = totalSec / 60
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
     val s = totalSec % 60
-    return "%s%02d:%02d".format(sign, m, s)
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+}
+
+/** 把相对增量（毫秒）格式化为带正负号的 `mm:ss`，用于表示拖动产生的快进/后退量。 */
+private fun formatOffsetMs(ms: Long): String {
+    val sign = if (ms < 0) "-" else "+"
+    return sign + formatPositionMs(ms)
 }
 
 /**
@@ -592,7 +596,7 @@ private fun buildVideoDetails(player: ExoPlayer, filePath: String): String {
         append('\n')
 
         append("时长: ")
-        append(durationMs?.let { formatDuration(it) } ?: "未知")
+        append(durationMs?.let { formatPositionMs(it) } ?: "未知")
 
         if (hasVideoSize) {
             append('\n')
@@ -618,15 +622,6 @@ private fun formatFileSize(bytes: Long): String {
 private fun formatBitrate(bps: Int): String {
     val kbps = bps / 1000.0
     return if (kbps < 1000.0) "%.0f kbps".format(kbps) else "%.2f Mbps".format(kbps / 1000.0)
-}
-
-/** 把毫秒格式化为 `hh:mm:ss`（不足一小时为 `mm:ss`）。 */
-private fun formatDuration(ms: Long): String {
-    val totalSec = ms / 1000
-    val h = totalSec / 3600
-    val m = (totalSec % 3600) / 60
-    val s = totalSec % 60
-    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
 }
 
 /**

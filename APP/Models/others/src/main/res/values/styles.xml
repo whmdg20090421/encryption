@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    视频播放器设置菜单的样式。
+
+    1. VideoPlayerPopupMenu：PopupMenu 外层背景由 android:popupBackground 指定，
+       该属性需经 theme 的 android:popupMenuStyle 间接生效（见 VideoPlayerPopupMenuTheme）。
+    2. android:textColor 放在 theme 层：菜单项使用的是系统内置布局，其 TextView
+       读取的是 theme 的 android:textColor，放在 style 层不会生效。
+-->
+<resources>
+    <style name="VideoPlayerPopupMenu" parent="@android:style/Widget.PopupMenu">
+        <item name="android:popupBackground">@drawable/bg_video_menu</item>
+    </style>
+
+    <style name="VideoPlayerPopupMenuTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:popupMenuStyle">@style/VideoPlayerPopupMenu</item>
+        <item name="android:textColor">@android:color/white</item>
+        <item name="android:textColorPrimary">@android:color/white</item>
+        <item name="android:textColorSecondary">@android:color/white</item>
+    </style>
+</resources>

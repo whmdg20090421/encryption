@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    覆盖 Media3 默认的暂停图标（默认样式为圆形底 + 镂空图形）。
+    这里使用纯白色实心双竖线，无任何背景圆底。
+    资源名与库内一致，Media3 会优先使用本模块的定义。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="@dimen/exo_play_pause_icon_size"
+    android:height="@dimen/exo_play_pause_icon_size"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7,5 H10 V19 H7 Z M14,5 H17 V19 H14 Z"/>
+</vector>

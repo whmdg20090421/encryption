@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    视频播放器右上角设置菜单。
+
+    新增功能时在 <menu> 内追加 <item>，并在 VideoPlayerActivity 的
+    showVideoSettingsMenu 调用处按 id 处理即可，无需改动菜单的定位/样式代码。
+-->
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/action_video_details"
+        android:title="@string/video_player_menu_details"/>
+</menu>

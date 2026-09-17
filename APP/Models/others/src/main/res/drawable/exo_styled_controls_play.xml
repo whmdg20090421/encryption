@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    覆盖 Media3 默认的播放图标（默认样式为圆形底 + 镂空图形）。
+    这里使用纯白色实心三角，无任何背景圆底。
+    资源名与库内一致，Media3 会优先使用本模块的定义。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="@dimen/exo_play_pause_icon_size"
+    android:height="@dimen/exo_play_pause_icon_size"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M8,5 L19,12 L8,19 Z"/>
+</vector>
