@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    覆盖 Media3 的 dimens 值。
+
+    exo_styled_progress_margin_bottom：库会把进度条（DefaultTimeBar）的下外边距强制设为该值，
+    默认 52dp 用于把进度条抬到控制条上方、与中央按钮分离。这里改为 0，使进度条能嵌入
+    exo_player_control_view 的底部行内，与「上一集/暂停播放/下一集」及时间文本保持同一行。
+-->
+<resources>
+    <dimen name="exo_styled_progress_margin_bottom">0dp</dimen>
+</resources>
