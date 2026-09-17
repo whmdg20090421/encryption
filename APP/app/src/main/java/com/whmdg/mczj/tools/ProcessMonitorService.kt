@@ -69,6 +69,14 @@ class ProcessMonitorService : Service() {
         /** 抓取线程是否已在运行，防止重复启动 */
         private val workerRunning = AtomicBoolean(false)
 
+        /**
+         * 是否由 [stopLogcat] 主动停止。
+         * 主动销毁 logcat 进程会使读取线程抛出 InterruptedIOException，
+         * 这属于预期内的关闭信号，不应作为错误记录。
+         */
+        @Volatile
+        private var stoppingIntentionally = false
+
         /** 当前是否已提升为前台 Service */
         @Volatile
         private var foreground = false
@@ -191,6 +199,7 @@ class ProcessMonitorService : Service() {
             return
         }
         crashDetectedForSelfStop = false
+        stoppingIntentionally = false
 
         try {
             val logDir = File(AppDataPaths.diagnostics(this), "process_monitor")
@@ -263,7 +272,13 @@ class ProcessMonitorService : Service() {
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Logcat 读取循环异常", e)
+                    // 主动停止时销毁 logcat 进程会中断阻塞中的 readLine()，
+                    // 抛出 InterruptedIOException —— 这是预期内的关闭信号，不作为错误。
+                    if (stoppingIntentionally) {
+                        Log.d(TAG, "Logcat 抓取已按请求停止")
+                    } else {
+                        Log.e(TAG, "Logcat 读取循环异常", e)
+                    }
                 } finally {
                     try {
                         writer?.flush()
@@ -288,6 +303,8 @@ class ProcessMonitorService : Service() {
     /** 停止 logcat 抓取进程。写入线程读到 EOF 会自行收尾并把 [workerRunning] 复位。 */
     private fun stopLogcat() {
         val proc = logcatProcess
+        // 先置标志再销毁进程，确保读取线程捕获中断时能识别为主动停止
+        stoppingIntentionally = true
         logcatProcess = null
         try {
             proc?.destroy()
@@ -376,6 +393,8 @@ class ProcessMonitorService : Service() {
     }
 
     override fun onDestroy() {
+        // Service 销毁属主动停止，避免读取线程把中断异常记成错误
+        stoppingIntentionally = true
         logcatProcess?.destroy()
         logcatProcess = null
         workerRunning.set(false)
