@@ -87,7 +87,10 @@ class AudioPlayerActivity : ComponentActivity() {
             val maxWidth = (screenWidth * 0.8).toInt()
             val maxHeight = (screenHeight * 0.7).toInt()
 
-            window.setLayout(maxWidth, maxHeight)
+            window.attributes = window.attributes.apply {
+                width = maxWidth
+                this.maxHeight = maxHeight
+            }
             window.setGravity(android.view.Gravity.CENTER)
         }
 
@@ -100,6 +103,7 @@ class AudioPlayerActivity : ComponentActivity() {
             工具箱Theme(darkTheme = isDarkMode) {
                 AudioPlayerScreen(
                     filePath = filePath,
+                    isDarkMode = isDarkMode,
                     onBack = { finish() }
                 )
             }
@@ -110,6 +114,7 @@ class AudioPlayerActivity : ComponentActivity() {
 @Composable
 private fun AudioPlayerScreen(
     filePath: String,
+    isDarkMode: Boolean,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -159,10 +164,16 @@ private fun AudioPlayerScreen(
         }
     }
 
+    // 根据主题设置背景色和文字颜色
+    val backgroundColor = if (isDarkMode) Color.Black else Color.White
+    val contentColor = if (isDarkMode) Color.White else Color.Black
+    val iconTint = contentColor
+    val secondaryColor = if (isDarkMode) Color.LightGray else Color.DarkGray
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(backgroundColor)
     ) {
         Column(
             modifier = Modifier
@@ -180,14 +191,14 @@ private fun AudioPlayerScreen(
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "关闭",
-                        tint = Color.White
+                        tint = iconTint
                     )
                 }
                 Text(
                     text = fileName,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White,
+                    color = contentColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
@@ -218,14 +229,14 @@ private fun AudioPlayerScreen(
                         modifier = Modifier
                             .size(200.dp)
                             .clip(CircleShape)
-                            .background(Color.DarkGray),
+                            .background(secondaryColor),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.MusicNote,
                             contentDescription = null,
                             modifier = Modifier.size(80.dp),
-                            tint = Color.LightGray
+                            tint = if (isDarkMode) Color.LightGray else Color.Gray
                         )
                     }
                 }
@@ -239,7 +250,7 @@ private fun AudioPlayerScreen(
             ) {
                 Text(
                     text = formatTime(if (isSeeking) (seekPosition * duration).toLong() else currentPosition),
-                    color = Color.White,
+                    color = contentColor,
                     style = MaterialTheme.typography.bodySmall,
                     textAlign = TextAlign.End,
                     modifier = Modifier.width(40.dp)
@@ -260,13 +271,13 @@ private fun AudioPlayerScreen(
                     },
                     modifier = Modifier.weight(1f),
                     colors = SliderDefaults.colors(
-                        thumbColor = Color.White,
-                        activeTrackColor = Color.White
+                        thumbColor = contentColor,
+                        activeTrackColor = contentColor
                     )
                 )
                 Text(
                     text = formatTime(duration),
-                    color = Color.White,
+                    color = contentColor,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.width(40.dp)
                 )
@@ -284,7 +295,7 @@ private fun AudioPlayerScreen(
                         imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isPlaying) "暂停" else "播放",
                         modifier = Modifier.size(64.dp),
-                        tint = Color.White
+                        tint = iconTint
                     )
                 }
             }
