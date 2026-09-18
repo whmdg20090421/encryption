@@ -183,9 +183,11 @@ DOWNLOAD_URL=$(curl -sSL -o /dev/null --max-time 30 -x "$PROXY_URL" \
 DOWNLOAD_ATTEMPT=1
 while [ "$DOWNLOAD_ATTEMPT" -le 3 ]; do
     START_TIME=$(date +%s)
+    # 仅保留单行实时进度（console readout，\r 原地刷新），关闭周期性汇总表格。
     aria2c -x 10 -s 10 -k 1M \
         --allow-overwrite=true --auto-file-renaming=false \
-        --file-allocation=none --console-log-level=warn --summary-interval=1 \
+        --file-allocation=none --console-log-level=warn --summary-interval=0 \
+        --show-console-readout=true --enable-color=true \
         --all-proxy="$PROXY_URL" \
         --header="Accept: application/vnd.github+json" \
         --dir="$TEMP_DIR" --out="artifact.zip" \
