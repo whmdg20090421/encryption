@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -64,6 +65,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -315,7 +317,8 @@ private fun AudioPlayerScreen(
     ) {
         // ① 标题 + ② 内容区 + ③ 进度条，合并为一块自适应区域。
         // 歌单显示时整块被覆盖层取代，因此覆盖层底部精确停在控制行顶边，无需 dp 估算。
-        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+        // clipToBounds：覆盖层退出下滑时裁掉越界部分，避免窜入 ④ 控制行区域。
+        Box(modifier = Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
             Column(modifier = Modifier.fillMaxSize()) {
                 // ── ① 标题行 ──
                 Row(
@@ -691,6 +694,7 @@ private fun LyricsView(
             .fillMaxSize()
             // 单一手势状态机：拖动超过 touchSlop 进入浏览模式，否则抬起时视为点击。
             // 合并到同一个 pointerInput，避免拖动与点击互相抢夺指针事件。
+            // 滚动采用 ScrollableState.scrollBy（公开 API），在 userScrollEnabled=false 下依然精确生效。
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -701,8 +705,8 @@ private fun LyricsView(
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) {
-                            // 抬起：未进入拖动则视为点击
-                            if (!isDragging) onToggle()
+                            // 抬起：未进入拖动，且事件未被内部可点击控件（跳转按钮）消费，才视为点击切换
+                            if (!isDragging && !change.isConsumed) onToggle()
                             break
                         }
                         val dy = change.position.y - down.position.y
@@ -713,7 +717,7 @@ private fun LyricsView(
                         if (isDragging) {
                             change.consume()
                             lastInteractionAt = System.currentTimeMillis()
-                            listState.dispatchRawDelta(-change.positionChange().y)
+                            listState.scrollBy(-change.positionChange().y)
                         }
                     }
 
@@ -771,15 +775,20 @@ private fun LyricsView(
                     .background(contentColor.copy(alpha = 0.15f))
             )
             if (snappedIndex in lyrics.indices && lyrics[snappedIndex].isTimed) {
-                IconButton(
-                    onClick = {
-                        onSeek(lyrics[snappedIndex].timeMs)
-                        isBrowsing = false
-                        snappedIndex = -1
-                    },
+                // 用可点击 Box 包住图标，扩大热区；命中后由该子节点消费事件，
+                // 外层手势状态机检测到 isConsumed 便不会误判为「切换封面」。
+                Box(
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
-                        .padding(end = 8.dp)
+                        .clickable(
+                            onClick = {
+                                onSeek(lyrics[snappedIndex].timeMs)
+                                isBrowsing = false
+                                snappedIndex = -1
+                            }
+                        )
+                        .padding(JUMP_BUTTON_HIT_PADDING_DP.dp),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.SkipNext,
@@ -795,6 +804,9 @@ private fun LyricsView(
 private const val BROWSE_IDLE_TIMEOUT_MS = 5_000L
 private const val CENTER_INDICATOR_HEIGHT_DP = 2
 private const val MAX_CENTER_ATTEMPTS = 5
+
+/** 歌词跳转按钮的热区扩展内边距。 */
+private const val JUMP_BUTTON_HIT_PADDING_DP = 12
 
 /** 进度条行高度：Material3 Slider 默认约 48dp，此处压缩约 22% 以减小上下粗度。 */
 private const val PROGRESS_SLIDER_HEIGHT_DP = 37
