@@ -78,19 +78,14 @@ class AudioPlayerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 设置窗口大小：宽80%，高自适应最大70%
+        // 设置窗口大小：宽80%，高自适应
         window?.let { window ->
             val displayMetrics = resources.displayMetrics
             val screenWidth = displayMetrics.widthPixels
-            val screenHeight = displayMetrics.heightPixels
 
             val maxWidth = (screenWidth * 0.8).toInt()
-            val maxHeight = (screenHeight * 0.7).toInt()
 
-            window.attributes = window.attributes.apply {
-                width = maxWidth
-                this.maxHeight = maxHeight
-            }
+            window.setLayout(maxWidth, android.view.WindowManager.LayoutParams.WRAP_CONTENT)
             window.setGravity(android.view.Gravity.CENTER)
         }
 
@@ -99,11 +94,15 @@ class AudioPlayerActivity : ComponentActivity() {
         val isDarkMode = getSharedPreferences("theme_prefs", MODE_PRIVATE)
             .getBoolean("is_dark_mode", true)
 
+        // 计算最大高度（屏幕的70%）
+        val maxHeight = (resources.displayMetrics.heightPixels * 0.7).toInt()
+
         setContent {
             工具箱Theme(darkTheme = isDarkMode) {
                 AudioPlayerScreen(
                     filePath = filePath,
                     isDarkMode = isDarkMode,
+                    maxHeight = maxHeight,
                     onBack = { finish() }
                 )
             }
@@ -115,6 +114,7 @@ class AudioPlayerActivity : ComponentActivity() {
 private fun AudioPlayerScreen(
     filePath: String,
     isDarkMode: Boolean,
+    maxHeight: Int,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -177,7 +177,8 @@ private fun AudioPlayerScreen(
     ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .heightIn(max = maxHeight.dp)
                 .padding(24.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
