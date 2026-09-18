@@ -164,15 +164,6 @@ private fun AudioPlayerScreen(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = fileName,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
                 IconButton(onClick = onBack) {
                     Icon(
                         imageVector = Icons.Default.Close,
@@ -180,6 +171,18 @@ private fun AudioPlayerScreen(
                         tint = Color.White
                     )
                 }
+                Text(
+                    text = fileName,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f)
+                )
+                // 占位，保持标题居中
+                IconButton(onClick = {}, enabled = false) {}
             }
 
             // ── 内容区域（封面） ──
