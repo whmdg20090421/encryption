@@ -3889,7 +3889,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (ext in com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS) {
             // 构建同目录音频播放列表：保持当前面板的实际排序，不递归子目录。
-            val audioPaths = ctrl.entries
+            val audioPaths = ctrl.state.entries
                 .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS }
                 .map { it.path }
             val startIndex = audioPaths.indexOf(entry.path)
