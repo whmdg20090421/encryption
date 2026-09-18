@@ -46,6 +46,14 @@ val VIDEO_EXTENSIONS: Set<String> = setOf(
     "mp4", "m4v", "mkv", "webm", "flv", "ps", "mpg", "mpeg", "m2p", "ts", "avi"
 )
 
+/**
+ * 音频后缀集合（唯一数据源，供打开路由共用）。
+ */
+val AUDIO_EXTENSIONS: Set<String> = setOf(
+    "mp3", "flac", "wav", "aac", "ogg", "wma", "m4a", "opus",
+    "amr", "ape", "aiff", "mid", "midi"
+)
+
 /** 从文件名提取后缀（小写，不含点号） */
 fun extractExtension(filename: String): String {
     val dotIndex = filename.lastIndexOf('.')
@@ -63,8 +71,7 @@ fun categorizeFile(extension: String): FileCategory = when (extension) {
     "jpg", "jpeg", "png", "gif", "bmp", "webp", "svg", "ico",
     "tiff", "tif", "heic", "heif", "raw", "cr2", "nef", "avif" -> FileCategory.IMAGE
     in VIDEO_EXTENSIONS -> FileCategory.VIDEO
-    "mp3", "flac", "wav", "aac", "ogg", "wma", "m4a", "opus",
-    "amr", "ape", "aiff", "mid", "midi" -> FileCategory.AUDIO
+    in AUDIO_EXTENSIONS -> FileCategory.AUDIO
     "zip", "7z", "rar", "tar", "gz", "bz2", "xz", "lz4", "zst",
     "lzma", "cab", "iso", "dmg" -> FileCategory.ARCHIVE
     "apk", "xapk", "apks", "aab" -> FileCategory.APK

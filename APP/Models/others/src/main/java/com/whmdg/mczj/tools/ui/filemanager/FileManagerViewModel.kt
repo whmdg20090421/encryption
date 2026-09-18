@@ -62,6 +62,7 @@ import com.whmdg.mczj.tools.encryption.services.CryptoService
 import com.whmdg.mczj.tools.encryption.services.VaultKeyHolder
 import com.whmdg.mczj.tools.encryption.services.VaultViewContext
 import com.whmdg.mczj.tools.ui.viewer.ViewerActivity
+import com.whmdg.mczj.tools.ui.viewer.AudioPlayerActivity
 import com.whmdg.mczj.tools.ui.viewer.VideoPlayerActivity
 
 @Serializable
@@ -3884,6 +3885,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 archivePath = archivePath, archiveName = archiveName,
                 archiveEntryPaths = archiveEntryPaths, archivePassword = archivePassword,
                 archivePermissionLevel = archivePermissionLevel))
+            return
+        }
+        if (ext in com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS) {
+            DiagnosticLog.log("OpenFile", "音频播放器打开: ${entry.name}")
+            context.startActivity(AudioPlayerActivity.createAudioIntent(context, entry.path))
             return
         }
         if (ext in com.whmdg.mczj.tools.ui.components.VIDEO_EXTENSIONS) {
