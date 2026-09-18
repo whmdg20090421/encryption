@@ -12,8 +12,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -66,6 +66,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -303,183 +304,186 @@ private fun AudioPlayerScreen(
     val iconTint = contentColor
     val secondaryColor = if (isDarkMode) Color.LightGray else Color.DarkGray
 
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .background(backgroundColor)
+            .padding(
+                horizontal = 12.dp,
+                vertical = CONTENT_VERTICAL_PADDING_DP.dp
+            )
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(
-                    horizontal = 12.dp,
-                    vertical = CONTENT_VERTICAL_PADDING_DP.dp
-                ),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // ── 标题行 ──
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .requiredHeight(TITLE_ROW_HEIGHT_DP.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "关闭",
-                        tint = iconTint
-                    )
-                }
-                Text(
-                    text = currentFileName,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = contentColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.weight(1f)
-                )
-                // 有封面且有歌词时，提供封面/歌词切换
-                if (coverBytes != null && lyrics.isNotEmpty()) {
-                    IconButton(onClick = { showLyrics = !showLyrics }) {
+        // ① 标题 + ② 内容区 + ③ 进度条，合并为一块自适应区域。
+        // 歌单显示时整块被覆盖层取代，因此覆盖层底部精确停在控制行顶边，无需 dp 估算。
+        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // ── ① 标题行 ──
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .requiredHeight(TITLE_ROW_HEIGHT_DP.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onBack) {
                         Icon(
-                            imageVector = if (showLyrics) Icons.Default.MusicNote
-                            else Icons.AutoMirrored.Filled.Subject,
-                            contentDescription = if (showLyrics) "显示封面" else "显示歌词",
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "关闭",
                             tint = iconTint
                         )
                     }
-                } else {
-                    IconButton(onClick = {}, enabled = false) {}
-                }
-            }
-
-            // ── 内容区域（封面 / 歌词，点击圆形区域切换） ──
-            // 占满窗口剩余高度；封面圆按宽度比例绘制，避免被高度撑大
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
-            ) {
-                val canToggle = lyrics.isNotEmpty()
-                if (showLyrics && canToggle) {
-                    LyricsView(
-                        lyrics = lyrics,
-                        currentPosition = currentPosition,
-                        contentColor = contentColor,
-                        secondaryColor = secondaryColor,
-                        onToggle = { showLyrics = false },
-                        onSeek = { player.seekTo(it) }
+                    Text(
+                        text = currentFileName,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = contentColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.weight(1f)
                     )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .aspectRatio(1f, matchHeightConstraintsFirst = true)
-                            .clip(CircleShape)
-                            .background(if (coverBytes != null) backgroundColor else secondaryColor)
-                            .then(
-                                if (canToggle) Modifier.clickable { showLyrics = true } else Modifier
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (coverBytes != null) {
-                            AsyncImage(
-                                model = coverBytes,
-                                contentDescription = "封面",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else {
+                    // 有封面且有歌词时，提供封面/歌词切换
+                    if (coverBytes != null && lyrics.isNotEmpty()) {
+                        IconButton(onClick = { showLyrics = !showLyrics }) {
                             Icon(
-                                imageVector = Icons.Default.MusicNote,
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize(0.4f),
-                                tint = if (isDarkMode) Color.LightGray else Color.Gray
+                                imageVector = if (showLyrics) Icons.Default.MusicNote
+                                else Icons.AutoMirrored.Filled.Subject,
+                                contentDescription = if (showLyrics) "显示封面" else "显示歌词",
+                                tint = iconTint
                             )
+                        }
+                    } else {
+                        IconButton(onClick = {}, enabled = false) {}
+                    }
+                }
+
+                // ── ② 内容区域（封面 / 歌词，点击圆形区域切换） ──
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val canToggle = lyrics.isNotEmpty()
+                    if (showLyrics && canToggle) {
+                        LyricsView(
+                            lyrics = lyrics,
+                            currentPosition = currentPosition,
+                            contentColor = contentColor,
+                            secondaryColor = secondaryColor,
+                            onToggle = { showLyrics = false },
+                            onSeek = { timeMs ->
+                                // 立即同步本地位置，避免跟随逻辑用过期索引产生回弹
+                                currentPosition = timeMs
+                                player.seekTo(timeMs)
+                            }
+                        )
+                    } else {
+                        // 封面直径按内容区宽度比例绘制，其余空间由背景色填充
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(COVER_SIZE_RATIO)
+                                .aspectRatio(1f)
+                                .clip(CircleShape)
+                                .background(if (coverBytes != null) backgroundColor else secondaryColor)
+                                .then(
+                                    if (canToggle) Modifier.clickable { showLyrics = true } else Modifier
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (coverBytes != null) {
+                                AsyncImage(
+                                    model = coverBytes,
+                                    contentDescription = "封面",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.MusicNote,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxSize(0.4f),
+                                    tint = if (isDarkMode) Color.LightGray else Color.Gray
+                                )
+                            }
                         }
                     }
                 }
-            }
 
-            // ── 进度条行 ──
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = formatTime(if (isSeeking) (seekPosition * duration).toLong() else currentPosition),
-                    color = contentColor,
-                    style = MaterialTheme.typography.bodySmall,
-                    textAlign = TextAlign.End,
-                    modifier = Modifier.width(32.dp)
-                )
-                Slider(
-                    value = if (isSeeking) seekPosition else {
-                        if (duration > 0) currentPosition.toFloat() / duration else 0f
-                    },
-                    onValueChange = { value ->
-                        isSeeking = true
-                        seekPosition = value
-                    },
-                    onValueChangeFinished = {
-                        val target = (seekPosition * duration).toLong()
-                        player.seekTo(target)
-                        currentPosition = target
-                        isSeeking = false
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .requiredHeight(PROGRESS_SLIDER_HEIGHT_DP.dp),
-                    colors = SliderDefaults.colors(
-                        thumbColor = contentColor,
-                        activeTrackColor = contentColor
+                // ── ③ 进度条行 ──
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = formatTime(if (isSeeking) (seekPosition * duration).toLong() else currentPosition),
+                        color = contentColor,
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.width(32.dp)
                     )
-                )
-                Text(
-                    text = formatTime(duration),
-                    color = contentColor,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.width(32.dp)
-                )
+                    Slider(
+                        value = if (isSeeking) seekPosition else {
+                            if (duration > 0) currentPosition.toFloat() / duration else 0f
+                        },
+                        onValueChange = { value ->
+                            isSeeking = true
+                            seekPosition = value
+                        },
+                        onValueChangeFinished = {
+                            val target = (seekPosition * duration).toLong()
+                            player.seekTo(target)
+                            currentPosition = target
+                            isSeeking = false
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .requiredHeight(PROGRESS_SLIDER_HEIGHT_DP.dp),
+                        colors = SliderDefaults.colors(
+                            thumbColor = contentColor,
+                            activeTrackColor = contentColor
+                        )
+                    )
+                    Text(
+                        text = formatTime(duration),
+                        color = contentColor,
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = TextAlign.Start,
+                        modifier = Modifier.width(32.dp)
+                    )
+                }
             }
 
-            // ── 控制行：循环模式 / 上一集 / 播放暂停 / 下一集 / 歌单 ──
-            PlayerControlsRow(
-                isPlaying = isPlaying,
-                hasPrevious = hasPrevious,
-                hasNext = hasNext,
-                repeatMode = repeatMode,
-                isPlaylistVisible = showPlaylist,
-                tint = iconTint,
-                onToggleRepeat = { repeatMode = repeatMode.next() },
-                onPrevious = { player.seekToPreviousMediaItem() },
-                onPlayPause = { if (isPlaying) player.pause() else player.play() },
-                onNext = { player.seekToNextMediaItem() },
-                onTogglePlaylist = { showPlaylist = !showPlaylist }
+            // ── 播放列表覆盖层：覆盖 ①②③，底部停在控制行顶边 ──
+            PlaylistOverlay(
+                visible = showPlaylist,
+                mediaPaths = mediaPaths,
+                currentIndex = currentMediaIndex,
+                title = "播放列表",
+                backgroundColor = backgroundColor,
+                contentColor = contentColor,
+                secondaryColor = secondaryColor,
+                onClose = { showPlaylist = false },
+                onSelect = { index ->
+                    player.seekTo(index, 0L)
+                    player.play()
+                }
             )
         }
 
-        // ── 播放列表覆盖层：从进度条上沿向上覆盖，底部控制条保持可见 ──
-        PlaylistOverlay(
-            visible = showPlaylist,
-            mediaPaths = mediaPaths,
-            currentIndex = currentMediaIndex,
-            title = "播放列表",
-            backgroundColor = backgroundColor,
-            contentColor = contentColor,
-            secondaryColor = secondaryColor,
-            onClose = { showPlaylist = false },
-            onSelect = { index ->
-                player.seekTo(index, 0L)
-                player.play()
-            },
-            bottomInsetDp = CONTROL_ROW_HEIGHT_DP + PROGRESS_ROW_HEIGHT_DP + CONTENT_VERTICAL_PADDING_DP
+        // ── ④ 控制行：循环模式 / 上一集 / 播放暂停 / 下一集 / 歌单（始终可见） ──
+        PlayerControlsRow(
+            isPlaying = isPlaying,
+            hasPrevious = hasPrevious,
+            hasNext = hasNext,
+            repeatMode = repeatMode,
+            isPlaylistVisible = showPlaylist,
+            tint = iconTint,
+            onToggleRepeat = { repeatMode = repeatMode.next() },
+            onPrevious = { player.seekToPreviousMediaItem() },
+            onPlayPause = { if (isPlaying) player.pause() else player.play() },
+            onNext = { player.seekToNextMediaItem() },
+            onTogglePlaylist = { showPlaylist = !showPlaylist }
         )
     }
 }
@@ -574,8 +578,7 @@ private fun PlaylistOverlay(
     contentColor: Color,
     secondaryColor: Color,
     onClose: () -> Unit,
-    onSelect: (Int) -> Unit,
-    bottomInsetDp: Int
+    onSelect: (Int) -> Unit
 ) {
     AnimatedVisibility(
         visible = visible,
@@ -585,7 +588,6 @@ private fun PlaylistOverlay(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(bottom = bottomInsetDp.dp)
                 .background(backgroundColor)
         ) {
             Row(
@@ -687,28 +689,36 @@ private fun LyricsView(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            // 拖动优先：进入浏览模式并跟手滚动
+            // 单一手势状态机：拖动超过 touchSlop 进入浏览模式，否则抬起时视为点击。
+            // 合并到同一个 pointerInput，避免拖动与点击互相抢夺指针事件。
             .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = {
-                        isBrowsing = true
-                        lastInteractionAt = System.currentTimeMillis()
-                    },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        lastInteractionAt = System.currentTimeMillis()
-                        listState.dispatchRawDelta(-dragAmount.y)
-                    },
-                    onDragEnd = { snapToNearestLine() },
-                    onDragCancel = {
-                        isBrowsing = false
-                        snappedIndex = -1
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val touchSlop = viewConfiguration.touchSlop
+                    var isDragging = false
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            // 抬起：未进入拖动则视为点击
+                            if (!isDragging) onToggle()
+                            break
+                        }
+                        val dy = change.position.y - down.position.y
+                        if (!isDragging && kotlin.math.abs(dy) > touchSlop) {
+                            isDragging = true
+                            isBrowsing = true
+                        }
+                        if (isDragging) {
+                            change.consume()
+                            lastInteractionAt = System.currentTimeMillis()
+                            listState.dispatchRawDelta(-change.positionChange().y)
+                        }
                     }
-                )
-            }
-            // 单击切换回封面
-            .pointerInput(Unit) {
-                detectTapGestures(onTap = { onToggle() })
+
+                    if (isDragging) snapToNearestLine()
+                }
             }
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -718,7 +728,9 @@ private fun LyricsView(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(vertical = halfViewport),
-                horizontalAlignment = Alignment.CenterHorizontally
+                horizontalAlignment = Alignment.CenterHorizontally,
+                // 用户滚动由外层手势状态机统一驱动，避免与内部 scrollable 抢占事件
+                userScrollEnabled = false
             ) {
                 itemsIndexed(lyrics) { index, line ->
                     val isCurrent = index == currentIndex
@@ -787,11 +799,11 @@ private const val MAX_CENTER_ATTEMPTS = 5
 /** 进度条行高度：Material3 Slider 默认约 48dp，此处压缩约 22% 以减小上下粗度。 */
 private const val PROGRESS_SLIDER_HEIGHT_DP = 37
 
-/** 底部控制行高度，用于计算播放列表覆盖层的底部留白。 */
-private const val CONTROL_ROW_HEIGHT_DP = 56
+/** 封面圆形直径相对内容区宽度的比例，其余空间由背景色填充。 */
+private const val COVER_SIZE_RATIO = 0.7f
 
-/** 进度条行的实际高度（含 Slider 与文字）。 */
-private const val PROGRESS_ROW_HEIGHT_DP = 48
+/** 底部控制行高度。 */
+private const val CONTROL_ROW_HEIGHT_DP = 56
 
 /** 播放/暂停图标尺寸，较其他控制图标更大以突出主操作。 */
 private const val PLAY_PAUSE_ICON_SIZE_DP = 64
@@ -806,17 +818,14 @@ private const val CONTENT_VERTICAL_PADDING_DP = 24
 private suspend fun LazyListState.scrollItemToCenter(index: Int) {
     if (index < 0) return
     animateScrollToItem(index)
+    // 逐步逼近垂直中心：animateScrollToItem 会将目标行停在视口顶部，
+    // 此处再按行中心与视口中心的偏差滚动，最多修正数次以吸收布局估算误差。
     repeat(MAX_CENTER_ATTEMPTS) {
-        val info = layoutInfo.visibleItemsInfo.find { it.index == index }
-        if (info == null) {
-            animateScrollToItem(index)
-        } else {
-            val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
-            val itemCenter = info.offset + info.size / 2
-            val delta = itemCenter - viewportCenter
-            if (delta == 0) return
-            animateScrollBy(delta.toFloat())
-        }
+        val info = layoutInfo.visibleItemsInfo.find { it.index == index } ?: return
+        val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
+        val delta = (info.offset + info.size / 2) - viewportCenter
+        if (kotlin.math.abs(delta) <= 1) return
+        animateScrollBy(delta.toFloat())
     }
 }
 
