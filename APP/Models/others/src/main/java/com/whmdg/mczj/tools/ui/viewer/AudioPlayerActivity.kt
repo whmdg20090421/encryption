@@ -14,7 +14,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -67,6 +66,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
@@ -694,7 +694,7 @@ private fun LyricsView(
             .fillMaxSize()
             // 单一手势状态机：拖动超过 touchSlop 进入浏览模式，否则抬起时视为点击。
             // 合并到同一个 pointerInput，避免拖动与点击互相抢夺指针事件。
-            // 滚动采用 ScrollableState.scrollBy（公开 API），在 userScrollEnabled=false 下依然精确生效。
+            // 受限挂起作用域内只能调用 ScrollableState.dispatchRawDelta（普通成员函数）进行滚动。
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -702,8 +702,8 @@ private fun LyricsView(
                     var isDragging = false
 
                     while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        val event = awaitPointerEvent(PointerEventPass.Main)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: continue
                         if (!change.pressed) {
                             // 抬起：未进入拖动，且事件未被内部可点击控件（跳转按钮）消费，才视为点击切换
                             if (!isDragging && !change.isConsumed) onToggle()
@@ -715,9 +715,9 @@ private fun LyricsView(
                             isBrowsing = true
                         }
                         if (isDragging) {
-                            change.consume()
                             lastInteractionAt = System.currentTimeMillis()
-                            listState.scrollBy(-change.positionChange().y)
+                            listState.dispatchRawDelta(-change.positionChange().y)
+                            change.consume()
                         }
                     }
 
