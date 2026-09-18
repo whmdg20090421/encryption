@@ -141,7 +141,7 @@
             android:name=".ui.viewer.AudioPlayerActivity"
             android:exported="false"
             android:label="音频播放器"
-            android:theme="@style/Theme.工具箱" />
+            android:theme="@style/Theme.工具箱.AudioPlayer" />
 
         <receiver
             android:name=".security.MyDeviceAdminReceiver"

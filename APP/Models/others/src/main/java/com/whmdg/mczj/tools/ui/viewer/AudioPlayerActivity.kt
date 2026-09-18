@@ -77,7 +77,19 @@ class AudioPlayerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+
+        // 设置窗口大小：宽80%，高自适应最大70%
+        window?.let { window ->
+            val displayMetrics = resources.displayMetrics
+            val screenWidth = displayMetrics.widthPixels
+            val screenHeight = displayMetrics.heightPixels
+
+            val maxWidth = (screenWidth * 0.8).toInt()
+            val maxHeight = (screenHeight * 0.7).toInt()
+
+            window.setLayout(maxWidth, maxHeight)
+            window.setGravity(android.view.Gravity.CENTER)
+        }
 
         val filePath = intent.getStringExtra(EXTRA_FILE_PATH) ?: run { finish(); return }
 

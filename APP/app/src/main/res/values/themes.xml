@@ -2,4 +2,17 @@
 <resources>
 
     <style name="Theme.工具箱" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- 音频播放器弹窗式 Activity -->
+    <style name="Theme.工具箱.AudioPlayer" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- 半透明黑色背景 -->
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <!-- 窗口大小：宽80%，高自适应最大70% -->
+        <item name="android:windowIsFloating">true</item>
+        <!-- 居中显示 -->
+        <item name="android:windowAnimationStyle">@android:style/Animation.Dialog</item>
+    </style>
 </resources>
