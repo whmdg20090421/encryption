@@ -7,18 +7,26 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Subject
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
@@ -44,6 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,7 +62,11 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import coil3.compose.AsyncImage
 import com.whmdg.mczj.tools.ui.theme.工具箱Theme
+import com.whmdg.mczj.tools.util.AudioTagReader
+import com.whmdg.mczj.tools.util.LrcParser
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -81,9 +94,7 @@ class AudioPlayerActivity : ComponentActivity() {
         // 设置窗口大小：宽80%，高自适应
         window?.let { window ->
             val displayMetrics = resources.displayMetrics
-            val screenWidth = displayMetrics.widthPixels
-
-            val maxWidth = (screenWidth * 0.8).toInt()
+            val maxWidth = (displayMetrics.widthPixels * 0.8).toInt()
 
             window.setLayout(maxWidth, android.view.WindowManager.LayoutParams.WRAP_CONTENT)
             window.setGravity(android.view.Gravity.CENTER)
@@ -94,15 +105,15 @@ class AudioPlayerActivity : ComponentActivity() {
         val isDarkMode = getSharedPreferences("theme_prefs", MODE_PRIVATE)
             .getBoolean("is_dark_mode", true)
 
-        // 计算最大高度（屏幕的70%）
-        val maxHeight = (resources.displayMetrics.heightPixels * 0.7).toInt()
+        // 中间封面/歌词容器的最大高度：屏幕高度的 60%
+        val artworkMaxHeightPx = (resources.displayMetrics.heightPixels * 0.6f).toInt()
 
         setContent {
             工具箱Theme(darkTheme = isDarkMode) {
                 AudioPlayerScreen(
                     filePath = filePath,
                     isDarkMode = isDarkMode,
-                    maxHeight = maxHeight,
+                    artworkMaxHeightPx = artworkMaxHeightPx,
                     onBack = { finish() }
                 )
             }
@@ -114,7 +125,7 @@ class AudioPlayerActivity : ComponentActivity() {
 private fun AudioPlayerScreen(
     filePath: String,
     isDarkMode: Boolean,
-    maxHeight: Int,
+    artworkMaxHeightPx: Int,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -123,9 +134,18 @@ private fun AudioPlayerScreen(
     var isPlaying by remember { mutableStateOf(false) }
     var currentPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
-    var artworkUri by remember { mutableStateOf<Uri?>(null) }
+    var coverBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var lyrics by remember { mutableStateOf<List<LrcParser.LyricLine>>(emptyList()) }
+    var showLyrics by remember { mutableStateOf(false) }
     var isSeeking by remember { mutableStateOf(false) }
     var seekPosition by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(filePath) {
+        val tags = withContext(Dispatchers.IO) { AudioTagReader.read(filePath) }
+        coverBytes = tags.coverBytes
+        lyrics = LrcParser.parse(tags.lyrics)
+        showLyrics = coverBytes == null && lyrics.isNotEmpty()
+    }
 
     val player = remember {
         ExoPlayer.Builder(context).build().apply {
@@ -144,7 +164,6 @@ private fun AudioPlayerScreen(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY) {
                     duration = player.duration
-                    artworkUri = player.currentMediaItem?.mediaMetadata?.artworkUri
                 }
             }
         }
@@ -172,13 +191,12 @@ private fun AudioPlayerScreen(
 
     Box(
         modifier = Modifier
-            .fillMaxSize()
+            .fillMaxWidth()
             .background(backgroundColor)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = maxHeight.dp)
                 .padding(24.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
@@ -205,40 +223,66 @@ private fun AudioPlayerScreen(
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f)
                 )
-                // 占位，保持标题居中
-                IconButton(onClick = {}, enabled = false) {}
+                // 有封面且有歌词时，提供封面/歌词切换
+                if (coverBytes != null && lyrics.isNotEmpty()) {
+                    IconButton(onClick = { showLyrics = !showLyrics }) {
+                        Icon(
+                            imageVector = if (showLyrics) Icons.Default.MusicNote
+                            else Icons.AutoMirrored.Filled.Subject,
+                            contentDescription = if (showLyrics) "显示封面" else "显示歌词",
+                            tint = iconTint
+                        )
+                    }
+                } else {
+                    IconButton(onClick = {}, enabled = false) {}
+                }
             }
 
-            // ── 内容区域（封面） ──
+            // ── 内容区域（封面 / 歌词，点击圆形区域切换） ──
+            // 容器高度固定为屏幕高度的 60%；正方形内容等比缩放以适应容器
+            val artworkMaxHeight = with(LocalDensity.current) { artworkMaxHeightPx.toDp() }
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
+                    .height(artworkMaxHeight),
                 contentAlignment = Alignment.Center
             ) {
-                if (artworkUri != null) {
-                    AsyncImage(
-                        model = artworkUri,
-                        contentDescription = "封面",
-                        modifier = Modifier
-                            .size(200.dp)
-                            .clip(CircleShape),
-                        contentScale = ContentScale.Crop
+                val canToggle = lyrics.isNotEmpty()
+                if (showLyrics && canToggle) {
+                    LyricsView(
+                        lyrics = lyrics,
+                        currentPosition = currentPosition,
+                        contentColor = contentColor,
+                        secondaryColor = secondaryColor,
+                        onSeek = { player.seekTo(it) }
                     )
                 } else {
                     Box(
                         modifier = Modifier
-                            .size(200.dp)
+                            .fillMaxHeight()
+                            .aspectRatio(1f, matchHeightConstraintsFirst = true)
                             .clip(CircleShape)
-                            .background(secondaryColor),
+                            .background(if (coverBytes != null) backgroundColor else secondaryColor)
+                            .then(
+                                if (canToggle) Modifier.clickable { showLyrics = true } else Modifier
+                            ),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.MusicNote,
-                            contentDescription = null,
-                            modifier = Modifier.size(80.dp),
-                            tint = if (isDarkMode) Color.LightGray else Color.Gray
-                        )
+                        if (coverBytes != null) {
+                            AsyncImage(
+                                model = coverBytes,
+                                contentDescription = "封面",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.MusicNote,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(0.4f),
+                                tint = if (isDarkMode) Color.LightGray else Color.Gray
+                            )
+                        }
                     }
                 }
             }
@@ -299,6 +343,54 @@ private fun AudioPlayerScreen(
                         tint = iconTint
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LyricsView(
+    lyrics: List<LrcParser.LyricLine>,
+    currentPosition: Long,
+    contentColor: Color,
+    secondaryColor: Color,
+    onSeek: (Long) -> Unit
+) {
+    val listState = rememberLazyListState()
+    val currentIndex = remember(lyrics, currentPosition) {
+        LrcParser.currentIndex(lyrics, currentPosition)
+    }
+
+    LaunchedEffect(currentIndex) {
+        if (currentIndex >= 0) {
+            listState.animateScrollToItem(currentIndex)
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            itemsIndexed(lyrics) { index, line ->
+                val isCurrent = index == currentIndex
+                Text(
+                    text = line.text,
+                    color = if (isCurrent) contentColor else secondaryColor,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                    style = if (isCurrent) MaterialTheme.typography.titleMedium
+                    else MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp)
+                        .then(
+                            if (line.isTimed) Modifier.clickable { onSeek(line.timeMs) }
+                            else Modifier
+                        )
+                )
             }
         }
     }
