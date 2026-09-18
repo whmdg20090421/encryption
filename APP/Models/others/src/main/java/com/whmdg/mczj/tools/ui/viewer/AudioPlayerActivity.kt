@@ -33,6 +33,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Subject
 import androidx.compose.material.icons.filled.Close
@@ -309,6 +310,8 @@ private fun AudioPlayerScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            // 圆角：窗口背景透明，裁剪后圆角外透出下层，形成小圆角弹窗
+            .clip(RoundedCornerShape(WINDOW_CORNER_RADIUS_DP.dp))
             .background(backgroundColor)
             .padding(
                 horizontal = 12.dp,
@@ -665,12 +668,21 @@ private fun LyricsView(
     var isBrowsing by remember { mutableStateOf(false) }
     var snappedIndex by remember { mutableIntStateOf(-1) }
     var lastInteractionAt by remember { mutableLongStateOf(0L) }
+    // 吸附后需要平滑居中到指定行的请求（受限于手势作用域无法直接调用挂起动画，改由 LaunchedEffect 执行）
+    var centerRequest by remember { mutableStateOf<Int?>(null) }
 
     // 跟随模式：自动将当前播放行滚动到垂直居中
     LaunchedEffect(currentIndex, isBrowsing) {
         if (!isBrowsing && currentIndex >= 0) {
             listState.scrollItemToCenter(currentIndex)
         }
+    }
+
+    // 吸附后：将选中行平滑滚动到垂直中心，使中央横线穿过该行
+    LaunchedEffect(centerRequest) {
+        val target = centerRequest ?: return@LaunchedEffect
+        listState.scrollItemToCenter(target)
+        centerRequest = null
     }
 
     // 浏览模式：5 秒无操作后自动回到跟随模式
@@ -685,7 +697,9 @@ private fun LyricsView(
     }
 
     fun snapToNearestLine() {
-        snappedIndex = listState.nearestIndexToCenter()
+        val nearest = listState.nearestIndexToCenter()
+        snappedIndex = nearest
+        if (nearest >= 0) centerRequest = nearest
         lastInteractionAt = System.currentTimeMillis()
     }
 
@@ -713,6 +727,8 @@ private fun LyricsView(
                         if (!isDragging && kotlin.math.abs(dy) > touchSlop) {
                             isDragging = true
                             isBrowsing = true
+                            // 取消尚未完成的吸附居中动画，避免与手工拖动相互争夺滚动
+                            centerRequest = null
                         }
                         if (isDragging) {
                             lastInteractionAt = System.currentTimeMillis()
@@ -807,6 +823,9 @@ private const val MAX_CENTER_ATTEMPTS = 5
 
 /** 歌词跳转按钮的热区扩展内边距。 */
 private const val JUMP_BUTTON_HIT_PADDING_DP = 12
+
+/** 播放器弹窗圆角半径（仅轻微圆角）。 */
+private const val WINDOW_CORNER_RADIUS_DP = 12
 
 /** 进度条行高度：Material3 Slider 默认约 48dp，此处压缩约 22% 以减小上下粗度。 */
 private const val PROGRESS_SLIDER_HEIGHT_DP = 37
