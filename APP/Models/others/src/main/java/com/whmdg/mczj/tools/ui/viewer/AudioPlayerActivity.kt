@@ -845,14 +845,17 @@ private const val TITLE_ROW_HEIGHT_DP = 48
 /** 主内容列的水平/垂直内边距。 */
 private const val CONTENT_VERTICAL_PADDING_DP = 24
 
-/** 将 [index] 行滚动到列表垂直中心。 */
+/** 将 [index] 行平滑滚动到列表垂直中心。 */
 private suspend fun LazyListState.scrollItemToCenter(index: Int) {
     if (index < 0) return
-    animateScrollToItem(index)
-    // 逐步逼近垂直中心：animateScrollToItem 会将目标行停在视口顶部，
-    // 此处再按行中心与视口中心的偏差滚动，最多修正数次以吸收布局估算误差。
+    // 目标行已可见时直接按偏差平滑调整；不可见时瞬时定位（无动画）后再居中。
+    // 不使用 animateScrollToItem，避免其「先滚到视口顶部再修正」产生可见折返。
     repeat(MAX_CENTER_ATTEMPTS) {
-        val info = layoutInfo.visibleItemsInfo.find { it.index == index } ?: return
+        val info = layoutInfo.visibleItemsInfo.find { it.index == index }
+        if (info == null) {
+            scrollToItem(index)
+            return@repeat
+        }
         val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
         val delta = (info.offset + info.size / 2) - viewportCenter
         if (kotlin.math.abs(delta) <= 1) return

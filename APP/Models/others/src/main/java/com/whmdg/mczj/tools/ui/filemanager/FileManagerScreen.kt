@@ -57,6 +57,7 @@ import com.whmdg.mczj.tools.fileop.VaultOperationContext
 import com.whmdg.mczj.tools.fileop.DeleteEntry
 import com.whmdg.mczj.tools.fileop.webdav.WebDavServerStore
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateSetOf
 import androidx.compose.runtime.rememberCoroutineScope
@@ -315,7 +316,23 @@ fun FileManagerScreen(
     var diagnosticError by remember { mutableStateOf<Throwable?>(null) }
 
     // ── 滚动状态（按面板索引：0=左, 1=右） ──
-    val listStates = listOf(rememberLazyListState(), rememberLazyListState())
+    // 列表状态与目录内容绑定：当面板路径变化或新一轮内容提交（listGeneration 自增）时，
+    // 以面板记录的初始偏移重建 LazyListState，使新目录第一帧即处于正确位置，
+    // 避免"先顶部渲染再滚动"的可见跳动。
+    val listStates = listOf(
+        key(vm.左.path, vm.左.listGeneration) {
+            rememberLazyListState(
+                initialFirstVisibleItemIndex = vm.左.initialScrollIndex,
+                initialFirstVisibleItemScrollOffset = vm.左.initialScrollOffset
+            )
+        },
+        key(vm.右.path, vm.右.listGeneration) {
+            rememberLazyListState(
+                initialFirstVisibleItemIndex = vm.右.initialScrollIndex,
+                initialFirstVisibleItemScrollOffset = vm.右.initialScrollOffset
+            )
+        }
+    )
 
     // ── UI 本地状态 ──
     var showDrawer by remember { mutableStateOf(false) }
@@ -624,15 +641,6 @@ fun FileManagerScreen(
                 }
             }
         }
-    }
-
-    // ── 处理滚动位置恢复（绑定跳转+渲染） ──
-    LaunchedEffect(vm.pendingScrollTo) {
-        val pending = vm.pendingScrollTo ?: return@LaunchedEffect
-        val (path, index, offset) = pending
-        val listState = if (vm.focusedPanel == FocusedPanel.LEFT) listStates[0] else listStates[1]
-        listState.scrollToItem(index, offset)
-        vm.currentPanel.pendingScrollTo = null
     }
 
     // ── 持续同步滚动位置到 ViewModel（供 refreshCurrent 读取） ──
@@ -1029,11 +1037,7 @@ fun FileManagerScreen(
                                     } else if (vm.isWebDavMode) {
                                         vm.webDavGoBack()
                                     } else {
-                                        val targetPath = vm.goBack()
-                                        if (targetPath != null) {
-                                            val saved = vm.getScrollPosition(targetPath)
-                                            vm.currentPanel.pendingScrollTo = Triple(targetPath.displayPath, saved?.first ?: 0, saved?.second ?: 0)
-                                        }
+                                        vm.goBack()
                                     }
                                 },
                                 enabled = if (vm.isInArchiveMode) !vm.isAtArchiveRoot()
@@ -1050,11 +1054,7 @@ fun FileManagerScreen(
                         ) {
                             IconButton(
                                 onClick = {
-                                    val targetPanelPath = vm.goForward()
-                                    if (targetPanelPath != null) {
-                                        val saved = vm.getScrollPosition(targetPanelPath)
-                                        vm.currentPanel.pendingScrollTo = Triple(targetPanelPath.displayPath, saved?.first ?: 0, saved?.second ?: 0)
-                                    }
+                                    vm.goForward()
                                 },
                                 enabled = !vm.isInArchiveMode && vm.currentNavState.canGoForward
                             ) {
@@ -4232,11 +4232,7 @@ fun FileManagerScreen(
                                         }
 
                                         showPermissionEditor = false
-                                        listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
-                                        val targetPanelPath = vm.currentPanel.path
-                                        val saved = vm.getScrollPosition(targetPanelPath)
                                         vm.refreshCurrent()
-                                        if (saved != null) vm.currentPanel.pendingScrollTo = Triple(targetPanelPath.displayPath, saved.first, saved.second)
 
                                         // 后台验证
                                         val failed = withContext(Dispatchers.IO) {

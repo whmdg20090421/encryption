@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.whmdg.mczj.tools.core"
-    ndkVersion = "27.3.13750724"
+    ndkVersion = "27.1.12297006"
     compileSdk {
         version = release(37)
     }

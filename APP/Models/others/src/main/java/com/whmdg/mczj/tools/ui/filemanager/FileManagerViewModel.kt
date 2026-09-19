@@ -233,8 +233,33 @@ class FilePaneController(
         val isWebDavMode: Boolean get() = webDavClient != null
 
         // ── 滚动 ──
-        var pendingScrollTo by mutableStateOf<Triple<String, Int, Int>?>(null)
+        /**
+         * 新目录首次组合时的初始滚动偏移。
+         *
+         * 在导航发起时（目标 [path] 尚未提交前）写入，由 UI 层在 [path] 变化、
+         * 列表重建时读取并以 initialFirstVisibleItem* 注入 LazyListState，
+         * 使新目录第一帧就处于正确位置，避免"先顶部再滚动"的可见跳动。
+         * 该值由导航发起方设置，并由 [listGeneration] 变化驱动列表重建时读取。
+         */
+        var initialScrollIndex by mutableIntStateOf(0)
             internal set
+        var initialScrollOffset by mutableIntStateOf(0)
+            internal set
+
+        /** 设置新目录的初始滚动偏移（导航发起时调用）。 */
+        fun setInitialScroll(index: Int, offset: Int) {
+            initialScrollIndex = index
+            initialScrollOffset = offset
+        }
+
+        /**
+         * 列表内容世代号。每当一批新的目录内容被提交（导航完成 / 刷新完成）时自增，
+         * 用作 Composable 的 remember key，促使 LazyListState 以最新 [initialScrollIndex]/
+         * [initialScrollOffset] 重建，从而在内容就绪的同一帧完成定位。
+         */
+        var listGeneration by mutableIntStateOf(0)
+            internal set
+
         var pendingScrollToFile by mutableStateOf<String?>(null)
             internal set
         var currentScrollIndex by mutableIntStateOf(0)
@@ -543,6 +568,7 @@ class FilePaneController(
                     panel.path = panelPath
                 }
                 panel.entries = sorted
+                panel.listGeneration++
                 onComplete?.invoke(targetPath)
             }
 
@@ -728,6 +754,7 @@ class FilePaneController(
                     panel.path = panelPath
                 }
                 panel.entries = sorted
+                panel.listGeneration++
                 onComplete?.invoke(targetPath)
             }
         }
@@ -742,8 +769,14 @@ class FilePaneController(
         panel: FilePaneController.VmPanelState,
         isRefresh: Boolean = false,
         onComplete: ((String) -> Unit)? = null,
-        panelPath: PanelPath = PanelPath.FileSystem(targetPath)
+        panelPath: PanelPath = PanelPath.FileSystem(targetPath),
+        scrollSeed: Pair<Int, Int>? = null
     ) {
+        // 在加载发起时确定新目录的初始滚动偏移：显式 seed 优先，否则从顶部开始。
+        // 内容提交（listGeneration 自增）时列表会以该偏移重建，第一帧即定位。
+        val seed = scrollSeed ?: (0 to 0)
+        panel.setInitialScroll(seed.first, seed.second)
+
         panel.loadJob?.cancel()
         panel.loadVersion++
         panel.entries = emptyList()
@@ -1086,21 +1119,32 @@ class FilePaneController(
      */
 
     /** 核心导航：切换路径 + 刷新列表（异步） */
-    fun navigateTo(path: String, onComplete: ((String) -> Unit)? = null, onPathChanged: (() -> Unit)? = null) {
+    fun navigateTo(
+        path: String,
+        onComplete: ((String) -> Unit)? = null,
+        onPathChanged: (() -> Unit)? = null,
+        scrollSeed: Pair<Int, Int>? = null
+    ) {
         val panel = state
         if (panel.isInRecycleBin) panel.isInRecycleBin = false
         val vaultDir = (panel.path as? PanelPath.Vault)?.vaultDir
         val panelPath: PanelPath = if (vaultDir != null) PanelPath.Vault(path, vaultDir)
         else PanelPath.FileSystem(path, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
-        if (panel.path == panelPath) return
+        if (panel.path == panelPath) {
+            // 目标即当前目录：无需重新加载，直接以指定偏移重建列表
+            if (scrollSeed != null) {
+                panel.setInitialScroll(scrollSeed.first, scrollSeed.second)
+                panel.listGeneration++
+            }
+            return
+        }
         panel.navState = panel.navState.navigate(panelPath)
-        loadDirectory(path, panel = panel, onComplete = onComplete, panelPath = panelPath)
+        loadDirectory(path, panel = panel, onComplete = onComplete, panelPath = panelPath, scrollSeed = scrollSeed)
         onPathChanged?.invoke()
     }
 
     fun navigateToWithScroll(path: PanelPath, scrollToIndex: Int = 0, scrollToOffset: Int = 0) {
-        navigateTo(path.fileSystemPath)
-        state.pendingScrollTo = Triple(path.displayPath, scrollToIndex, scrollToOffset)
+        navigateTo(path.fileSystemPath, scrollSeed = scrollToIndex to scrollToOffset)
     }
 
     /** 后退一步：更新 nav state index + 异步加载目录，返回目标路径 */
@@ -1117,7 +1161,7 @@ class FilePaneController(
             vaultSession = null
         }
 
-        navigateToPanelPath(backPath, panel)
+        navigateToPanelPath(backPath, panel, getScrollPosition(backPath, panel))
         return backPath
     }
 
@@ -1127,12 +1171,12 @@ class FilePaneController(
         val fwd = panel.navState.forward() ?: return null
         panel.navState = fwd
         val fwdPath = fwd.current
-        navigateToPanelPath(fwdPath, panel)
+        navigateToPanelPath(fwdPath, panel, getScrollPosition(fwdPath, panel))
         return fwdPath
     }
 
     /** 根据 PanelPath 类型执行导航 */
-    private fun navigateToPanelPath(panelPath: PanelPath, panel: VmPanelState) {
+    private fun navigateToPanelPath(panelPath: PanelPath, panel: VmPanelState, scrollSeed: Pair<Int, Int>? = null) {
         when (panelPath) {
             is PanelPath.Archive -> {
                 panel.path = panelPath
@@ -1141,10 +1185,10 @@ class FilePaneController(
                 }
             }
             is PanelPath.FileSystem -> {
-                loadDirectory(panelPath.path, panel = panel, panelPath = panelPath)
+                loadDirectory(panelPath.path, panel = panel, panelPath = panelPath, scrollSeed = scrollSeed)
             }
             is PanelPath.Vault -> {
-                loadDirectory(panelPath.path, panel = panel, panelPath = panelPath)
+                loadDirectory(panelPath.path, panel = panel, panelPath = panelPath, scrollSeed = scrollSeed)
             }
         }
     }
@@ -1269,9 +1313,14 @@ class FilePaneController(
      * 加载当前 WebDAV 路径的文件列表到指定面板。
      * 在 IO 线程执行网络操作，在主线程更新 UI 状态。
      */
-    internal fun loadWebDavEntries(panel: FilePaneController.VmPanelState = state) {
+    internal fun loadWebDavEntries(
+        panel: FilePaneController.VmPanelState = state,
+        scrollSeed: Pair<Int, Int>? = null
+    ) {
         val client = panel.webDavClient ?: return
         val config = panel.webDavConfig
+        val seed = scrollSeed ?: (0 to 0)
+        panel.setInitialScroll(seed.first, seed.second)
 
         scope.launch {
             try {
@@ -1295,6 +1344,7 @@ class FilePaneController(
                     }
 
                     panel.entries = sortEntries(entries)
+                    panel.listGeneration++
                     panel.loadError = null
                 }
 
@@ -2382,26 +2432,25 @@ class FilePaneController(
 
     fun refreshCurrent() {
         val panel = state
-        val idx = panel.currentScrollIndex
-        val off = panel.currentScrollOffset
-        if (idx != 0 || off != 0) {
-            panel.pendingScrollTo = Triple(panel.path.displayPath, idx, off)
-        }
+        // 刷新保持当前滚动位置：以当前位置作为重新加载的播种偏移
+        val seed = panel.currentScrollIndex to panel.currentScrollOffset
         when (val p = panel.path) {
             is PanelPath.Archive -> {
+                panel.setInitialScroll(seed.first, seed.second)
                 panel.archiveSession?.let { session ->
                     panel.entries = session.currentEntries
                 }
+                panel.listGeneration++
             }
             is PanelPath.FileSystem -> {
                 if (panel.isWebDavMode) {
-                    loadWebDavEntries(panel)
+                    loadWebDavEntries(panel, scrollSeed = seed)
                 } else {
-                    loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p)
+                    loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p, scrollSeed = seed)
                 }
             }
             is PanelPath.Vault -> {
-                loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p)
+                loadDirectory(p.path, panel = panel, isRefresh = true, panelPath = p, scrollSeed = seed)
             }
         }
     }
@@ -3217,11 +3266,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
 
 
-    // ── 待滚动状态（面板级状态已移入 VmPanelState） ──
-    /** 向后兼容：当前聚焦面板的待滚动状态 */
-    val pendingScrollTo: Triple<String, Int, Int>? get() = currentPanel.pendingScrollTo
-
-
     // ── 核心导航：切换路径 + 刷新列表（异步） ──
     fun navigateTo(path: String, onComplete: ((String) -> Unit)? = null) {
         focusedController.navigateTo(path, onComplete, onPathChanged = { checkVaultPanelExit(focusedController) })
@@ -3242,23 +3286,20 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val vaultDir = (panel.path as? PanelPath.Vault)?.vaultDir
         val navPanelPath: PanelPath? = if (vaultDir != null) PanelPath.Vault(displayPath, vaultDir) else null
 
+        // 进入子目录：默认从顶部开始（除非调用方显式指定了目标偏移）
+        val scrollSeed = if (scrollToIndex != 0 || scrollToOffset != 0) scrollToIndex to scrollToOffset else null
+
         if (hasShellEngine) {
             loadDirectory(displayPath, panel = panel, onComplete = { path ->
                 addHistory(entry.name, path, true)
-                if (scrollToIndex != 0 || scrollToOffset != 0) {
-                    panel.pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
-                }
-            }, panelPath = navPanelPath ?: PanelPath.FileSystem(displayPath))
+            }, panelPath = navPanelPath ?: PanelPath.FileSystem(displayPath), scrollSeed = scrollSeed)
         } else {
             val testDir = File(displayPath)
             val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
             if (accessible != null) {
                 loadDirectory(displayPath, panel = panel, onComplete = { path ->
                     addHistory(entry.name, path, true)
-                    if (scrollToIndex != 0 || scrollToOffset != 0) {
-                        panel.pendingScrollTo = Triple(path, scrollToIndex, scrollToOffset)
-                    }
-                }, panelPath = navPanelPath ?: PanelPath.FileSystem(displayPath))
+                }, panelPath = navPanelPath ?: PanelPath.FileSystem(displayPath), scrollSeed = scrollSeed)
             } else if (!testDir.exists()) {
                 panel.loadError = RuntimeException("文件夹不存在: ${entry.name}\n路径: $displayPath")
             } else {
