@@ -1149,8 +1149,8 @@ class FilePaneController(
         navigateTo(path.fileSystemPath, scrollSeed = scrollToIndex to scrollToOffset)
     }
 
-    /** 后退一步：更新 nav state index + 异步加载目录，返回目标路径 */
-    fun goBack(): PanelPath? {
+    /** 后退一步：更新 nav state index + 异步加载目录，返回目标路径。scrollPositionOf 由上层提供以恢复目标滚动。 */
+    fun goBack(scrollPositionOf: (PanelPath) -> Pair<Int, Int>? = { null }): PanelPath? {
         val panel = state
         val back = panel.navState.back() ?: return null
         panel.navState = back
@@ -1163,17 +1163,17 @@ class FilePaneController(
             vaultSession = null
         }
 
-        navigateToPanelPath(backPath, panel, getScrollPosition(backPath, panel))
+        navigateToPanelPath(backPath, panel, scrollPositionOf(backPath))
         return backPath
     }
 
-    /** 前进一步：更新 nav state index + 异步加载目录，返回目标路径 */
-    fun goForward(): PanelPath? {
+    /** 前进一步：更新 nav state index + 异步加载目录，返回目标路径。scrollPositionOf 由上层提供以恢复目标滚动。 */
+    fun goForward(scrollPositionOf: (PanelPath) -> Pair<Int, Int>? = { null }): PanelPath? {
         val panel = state
         val fwd = panel.navState.forward() ?: return null
         panel.navState = fwd
         val fwdPath = fwd.current
-        navigateToPanelPath(fwdPath, panel, getScrollPosition(fwdPath, panel))
+        navigateToPanelPath(fwdPath, panel, scrollPositionOf(fwdPath))
         return fwdPath
     }
 
@@ -3118,14 +3118,17 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun goBack(): PanelPath? {
         val ctrl = focusedController
         val currentPath = ctrl.state.path
-        val result = ctrl.goBack()
+        val result = ctrl.goBack { path -> getScrollPosition(path, ctrl.state) }
         // 主动检查：如果从 Vault 退出到 FileSystem，清理临时文件
         if (currentPath is PanelPath.Vault && result is PanelPath.FileSystem) {
             cleanupVaultTempFiles()
         }
         return result
     }
-    fun goForward(): PanelPath? = focusedController.goForward()
+    fun goForward(): PanelPath? {
+        val ctrl = focusedController
+        return ctrl.goForward { path -> getScrollPosition(path, ctrl.state) }
+    }
     fun goUp(): PanelPath? {
         val ctrl = focusedController
         val currentPath = ctrl.state.path
@@ -3291,19 +3294,21 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val navPanelPath: PanelPath? = if (vaultDir != null) PanelPath.Vault(displayPath, vaultDir) else null
 
         // 进入子目录：默认从顶部开始（除非调用方显式指定了目标偏移）
-        val scrollSeed = if (scrollToIndex != 0 || scrollToOffset != 0) scrollToIndex to scrollToOffset else null
+        if (scrollToIndex != 0 || scrollToOffset != 0) {
+            panel.setInitialScroll(scrollToIndex, scrollToOffset)
+        }
 
         if (hasShellEngine) {
             loadDirectory(displayPath, panel = panel, onComplete = { path ->
                 addHistory(entry.name, path, true)
-            }, panelPath = navPanelPath ?: PanelPath.FileSystem(displayPath), scrollSeed = scrollSeed)
+            }, panelPath = navPanelPath ?: PanelPath.FileSystem(displayPath))
         } else {
             val testDir = File(displayPath)
             val accessible = try { testDir.listFiles() } catch (_: Exception) { null }
             if (accessible != null) {
                 loadDirectory(displayPath, panel = panel, onComplete = { path ->
                     addHistory(entry.name, path, true)
-                }, panelPath = navPanelPath ?: PanelPath.FileSystem(displayPath), scrollSeed = scrollSeed)
+                }, panelPath = navPanelPath ?: PanelPath.FileSystem(displayPath))
             } else if (!testDir.exists()) {
                 panel.loadError = RuntimeException("文件夹不存在: ${entry.name}\n路径: $displayPath")
             } else {

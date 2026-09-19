@@ -676,6 +676,16 @@ fun FileManagerScreen(
         }
     }
 
+    // 后退/前进：先保存当前滚动位置，再由 ViewModel 在加载目标目录时恢复其历史滚动位置
+    val goBackWithScroll: () -> Boolean = {
+        listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
+        vm.goBack() != null
+    }
+    val goForwardWithScroll: () -> Boolean = {
+        listStates[vm.focusedPanel.index].let { _s -> vm.saveScrollPosition(_s.firstVisibleItemIndex, _s.firstVisibleItemScrollOffset) }
+        vm.goForward() != null
+    }
+
     // ── 弹窗栈式管理：每个弹窗用 registerOverlay 注册，BackHandler 只调栈顶 ──
     data class OverlayEntry(val id: String, val cleanup: () -> Unit)
     val overlayStack = remember { mutableStateListOf<OverlayEntry>() }
@@ -1037,7 +1047,7 @@ fun FileManagerScreen(
                                     } else if (vm.isWebDavMode) {
                                         vm.webDavGoBack()
                                     } else {
-                                        vm.goBack()
+                                        goBackWithScroll()
                                     }
                                 },
                                 enabled = if (vm.isInArchiveMode) !vm.isAtArchiveRoot()
@@ -1054,7 +1064,7 @@ fun FileManagerScreen(
                         ) {
                             IconButton(
                                 onClick = {
-                                    vm.goForward()
+                                    goForwardWithScroll()
                                 },
                                 enabled = !vm.isInArchiveMode && vm.currentNavState.canGoForward
                             ) {
