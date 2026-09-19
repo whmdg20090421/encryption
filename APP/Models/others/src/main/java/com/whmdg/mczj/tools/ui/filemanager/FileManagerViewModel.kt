@@ -125,10 +125,21 @@ class FilePaneController(
     private val sortOrder: () -> SortOrder,
     private val folderSizeDb: () -> FolderSizeDb
 ) {
+    private companion object {
+        /** 保险箱系统配置文件名（明文存储，需在列表与打开路由中过滤） */
+        val VAULT_CONFIG_FILE_NAMES = setOf(
+            "vault_config.json",
+            "vault_config.backup.json",
+            "name_mappings.json",
+            "folder_sizes.json"
+        )
+    }
+
     // ── Vault 会话（每个 Controller 独立持有，由 Coordinator 注入） ──
     var vaultSession by mutableStateOf<VaultSession?>(null)
         internal set
     val isVaultMode: Boolean get() = vaultSession != null
+
     // ── 面板状态（沙箱数据，不含任何身份标识） ──
     val state = VmPanelState("/storage/emulated/0")
 
@@ -517,10 +528,7 @@ class FilePaneController(
             val escaped = ShellEscape.escape(normalized)
 
             // vault 配置文件名，用于过滤
-            val vaultConfigNames = if (isVaultMode) setOf(
-                "vault_config.json", "vault_config.backup.json",
-                "name_mappings.json", "folder_sizes.json"
-            ) else emptySet()
+            val vaultConfigNames = if (isVaultMode) VAULT_CONFIG_FILE_NAMES else emptySet()
 
             // ── Phase 1: ls -1aF 获取文件名（阻塞，快速） ──
             val lsCmd = "ls -1aF $escaped"
@@ -661,13 +669,7 @@ class FilePaneController(
     internal fun sortEntries(entries: List<FileEntry>): List<FileEntry> {
         // vault 模式过滤配置文件
         val filtered = if (isVaultMode) {
-            entries.filter { entry ->
-                val name = entry.name
-                name != "vault_config.json" &&
-                name != "vault_config.backup.json" &&
-                name != "name_mappings.json" &&
-                name != "folder_sizes.json"
-            }
+            entries.filter { entry -> entry.name !in VAULT_CONFIG_FILE_NAMES }
         } else entries
 
         // 填充创建时间（异步阶段，不在首次渲染时执行 NIO）
@@ -748,7 +750,19 @@ class FilePaneController(
                 return@launch
             }
 
-            val sorted = sortEntries(entries)
+            // vault 模式：与 loadDirectoryAsync 对齐——过滤系统配置文件，并将非目录条目的磁盘名（.whm / <hex>.whm）解密为明文名
+            val vaultEntries = if (isVaultMode) {
+                val session = vaultSession
+                if (session == null) entries
+                else entries
+                    .filter { it.name !in VAULT_CONFIG_FILE_NAMES }
+                    .map { entry ->
+                        if (entry.isDirectory) entry
+                        else entry.copy(name = decryptVaultFileName(entry.name, session))
+                    }
+            } else entries
+
+            val sorted = sortEntries(vaultEntries)
             withContext(Dispatchers.Main) {
                 if (myVersion != panel.loadVersion) return@withContext
                 panel.isLoading = false
@@ -990,13 +1004,8 @@ class FilePaneController(
         // vault 模式：过滤配置文件 + 文件名解密
         if (isVaultMode) {
             val session = vaultSession!!
-            entries = entries.filter { entry ->
-                val name = entry.name
-                name != "vault_config.json" &&
-                name != "vault_config.backup.json" &&
-                name != "name_mappings.json" &&
-                name != "folder_sizes.json"
-            }.map { entry ->
+            entries = entries.filter { entry -> entry.name !in VAULT_CONFIG_FILE_NAMES }
+                .map { entry ->
                 if (entry.isDirectory) {
                     entry
                 } else {
@@ -3852,9 +3861,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             pendingSymlinkEntry = entry
             return
         }
-        // vault 模式：仅加密文件（.whm）走解密路径，已解密的明文文件走正常路由
+        // vault 模式：仅加密文件（.whm）走解密路径，已解密的明文文件走正常路由。
+        // 以磁盘路径判断（面板条目的 name 在两种引擎下均已归一为明文，path 始终是 .whm 源路径）。
         val ctrl = originPanel ?: focusedController
-        if (ctrl.isVaultMode && entry.name.endsWith(".whm", ignoreCase = true)) {
+        if (ctrl.isVaultMode && entry.path.endsWith(".whm", ignoreCase = true)) {
             openVaultFile(entry)
             return
         }
