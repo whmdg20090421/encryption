@@ -55,9 +55,8 @@ dependencies {
     implementation(libs.jxl.coder)
     // XLSX 生成（使用时长数据导出，fastexcel 仅 131KB）
     implementation("org.dhatim:fastexcel:0.20.2")
-    implementation(platform(libs.sora.editor.bom))
-    implementation(libs.sora.editor)
-    implementation(libs.sora.language.java)
+    implementation(project(":libs:sora-editor:editor"))
+    implementation(project(":libs:sora-editor:language-java"))
     implementation(libs.libsu.core)
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)

@@ -30,4 +30,5 @@ include(":APP:Models:accounting")
 include(":APP:Models:others")
 include(":libs:libxposed-api")
 include(":libs:xposed-api")
- 
+include(":libs:sora-editor:editor")
+include(":libs:sora-editor:language-java")
