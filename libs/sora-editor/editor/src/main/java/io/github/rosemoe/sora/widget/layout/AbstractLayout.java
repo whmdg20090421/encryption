@@ -55,9 +55,13 @@ public abstract class AbstractLayout implements Layout {
     private static final ThreadPoolExecutor executor;
 
     static {
-        final int corePoolSize = 4;
-        int maximumPoolSize = Math.max(corePoolSize, Runtime.getRuntime().availableProcessors()); // available processor count changes during runtime
-        executor = new ThreadPoolExecutor(corePoolSize, maximumPoolSize, 1, TimeUnit.MINUTES, new LinkedBlockingQueue<>(128));
+        // ThreadPoolExecutor only grows past corePoolSize once the queue is full. With
+        // corePoolSize = 4 and a 128-slot queue, the 8-16 subtasks of a full-document
+        // wordwrap never fill the queue, so they ran with only 4-way parallelism. Setting
+        // the core size to the processor count makes the existing subtasks run concurrently
+        // without changing any layout result.
+        final int processors = Math.max(2, Runtime.getRuntime().availableProcessors());
+        executor = new ThreadPoolExecutor(processors, processors, 1, TimeUnit.MINUTES, new LinkedBlockingQueue<>());
     }
 
     protected CodeEditor editor;

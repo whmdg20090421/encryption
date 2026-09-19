@@ -23,30 +23,33 @@
  */
 package io.github.rosemoe.sora.util;
 
+/**
+ * Thread-local char buffer for temporary text measurement.
+ * <p>
+ * Previously this used a single process-wide slot guarded by a global lock. Layout tasks run
+ * concurrently on a thread pool, so every worker contended on the same lock and repeatedly
+ * allocated a new array whenever another thread had already taken the shared slot. The result
+ * was severe lock contention plus GC pressure during a full-document wordwrap. A thread-local
+ * buffer removes both problems and stays allocation-free for repeated measurements on the same
+ * thread.
+ */
 public class TemporaryCharBuffer {
 
-    private static char[] sTemp = null;
+    private static final ThreadLocal<char[]> sTemp = new ThreadLocal<>();
+    private static final int MAX_CACHED_LEN = 8192;
 
     public static char[] obtain(int len) {
-        char[] buf;
-
-        synchronized (TemporaryCharBuffer.class) {
-            buf = sTemp;
-            sTemp = null;
-        }
-
+        char[] buf = sTemp.get();
         if (buf == null || buf.length < len) {
             buf = new char[len];
+            sTemp.set(buf);
         }
-
         return buf;
     }
 
     public static void recycle(char[] temp) {
-        if (temp.length > 1000) return;
-
-        synchronized (TemporaryCharBuffer.class) {
-            sTemp = temp;
+        if (temp.length > MAX_CACHED_LEN) {
+            sTemp.remove();
         }
     }
 }

@@ -23,45 +23,31 @@
  */
 package io.github.rosemoe.sora.util;
 
+/**
+ * Thread-local float buffer for text measurement.
+ * <p>
+ * Layout tasks run concurrently on a thread pool. The previous implementation used a single
+ * process-wide slot guarded by a global lock, so parallel wordwrap subtasks serialized on the
+ * lock and kept allocating new arrays. A thread-local buffer removes the contention entirely.
+ */
 public class TemporaryFloatBuffer {
 
-    private static final FloatArrayCache sCache = new FloatArrayCache();
+    private static final ThreadLocal<float[]> sCache = new ThreadLocal<>();
+    private static final int MAX_CACHED_LEN = 8192;
 
     public static float[] obtain(int len) {
-        return sCache.obtain(len);
+        float[] buf = sCache.get();
+        if (buf == null || buf.length < len) {
+            buf = new float[len];
+            sCache.set(buf);
+        }
+        return buf;
     }
 
     public static void recycle(float[] temp) {
-        sCache.recycle(temp);
-    }
-
-    public static class FloatArrayCache {
-
-        private float[] temp = null;
-
-        public float[] obtain(int len) {
-            float[] buf;
-
-            synchronized (this) {
-                buf = temp;
-                temp = null;
-            }
-
-            if (buf == null || buf.length < len) {
-                buf = new float[len];
-            }
-
-            return buf;
+        if (temp.length > MAX_CACHED_LEN) {
+            sCache.remove();
         }
-
-        public void recycle(float[] temp) {
-            if (temp.length > 1000) return;
-
-            synchronized (this) {
-                this.temp = temp;
-            }
-        }
-
     }
 
 }
