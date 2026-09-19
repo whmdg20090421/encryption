@@ -3112,6 +3112,27 @@ fun FileManagerScreen(
         )
     }
 
+    // ── 保险箱大文件解密确认弹窗 ──
+    vm.pendingVaultDecryptEntry?.let { entry ->
+        val displayName = if (entry.name.endsWith(".whm", ignoreCase = true))
+            entry.name.removeSuffix(".whm") else entry.name
+        StandardDialog(
+            onDismissRequest = { vm.pendingVaultDecryptEntry = null },
+            title = { Text("需要解密后打开") },
+            text = { Text("「$displayName」需要先从保险箱解密到缓存后才能打开，解密可能耗时并占用缓存空间，是否继续？") },
+            confirmButton = {
+                TextButton(onClick = { vm.confirmVaultDecrypt() }) {
+                    Text("解密打开")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.pendingVaultDecryptEntry = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
     // ── 7z 信息弹窗 ──
     val sevenZipDialogEntry = vm.sevenZipInfo
     if (sevenZipDialogEntry != null || vm.sevenZipAnalyzing) {

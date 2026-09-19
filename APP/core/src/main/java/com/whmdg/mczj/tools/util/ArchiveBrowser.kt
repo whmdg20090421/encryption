@@ -19,11 +19,8 @@ object ArchiveBrowser {
 
     private const val TAG = "ArchiveBrowser"
 
-    /** 支持的压缩包扩展名 */
-    private val ARCHIVE_EXTENSIONS = setOf(
-        "zip", "7z", "rar", "tar", "gz", "bz2", "xz",
-        "lz4", "zst", "lzma", "cab", "iso", "dmg", "ar", "cpio", "wim", "xar"
-    )
+    /** 支持的压缩包扩展名（唯一数据源见 FileTypeIcon.ARCHIVE_EXTENSIONS） */
+    private val ARCHIVE_EXTENSIONS = com.whmdg.mczj.tools.ui.components.ARCHIVE_EXTENSIONS
 
     /** 判断文件名是否为压缩包 */
     fun isArchiveFile(name: String): Boolean {

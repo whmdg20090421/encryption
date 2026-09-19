@@ -61,6 +61,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -100,6 +101,7 @@ class AudioPlayerActivity : ComponentActivity() {
         const val EXTRA_FILE_PATH = "file_path"
         const val EXTRA_AUDIO_PATHS = "audio_paths"
         const val EXTRA_START_INDEX = "start_index"
+        const val EXTRA_VAULT_SESSION_ID = "vault_session_id"
 
         /**
          * 创建音频播放器 Intent。
@@ -107,18 +109,21 @@ class AudioPlayerActivity : ComponentActivity() {
          * @param filePath 当前音频路径（[audioPaths] 为空时作为单曲播放的唯一条目）
          * @param audioPaths 同目录音频播放列表，保持文件管理器中的显示顺序
          * @param startIndex [audioPaths] 中当前音频的索引，越界时回退为 0
+         * @param vaultSessionId 保险箱会话 ID；非空时按需解密每一首
          */
         fun createAudioIntent(
             context: Context,
             filePath: String,
             audioPaths: List<String> = emptyList(),
-            startIndex: Int = 0
+            startIndex: Int = 0,
+            vaultSessionId: String? = null
         ): Intent {
             return Intent(context, AudioPlayerActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 putExtra(EXTRA_FILE_PATH, filePath)
                 putStringArrayListExtra(EXTRA_AUDIO_PATHS, ArrayList(audioPaths))
                 putExtra(EXTRA_START_INDEX, startIndex)
+                if (vaultSessionId != null) putExtra(EXTRA_VAULT_SESSION_ID, vaultSessionId)
             }
         }
     }
@@ -140,6 +145,7 @@ class AudioPlayerActivity : ComponentActivity() {
         val filePath = intent.getStringExtra(EXTRA_FILE_PATH) ?: run { finish(); return }
         val playlist = intent.getStringArrayListExtra(EXTRA_AUDIO_PATHS).orEmpty()
         val startIndex = intent.getIntExtra(EXTRA_START_INDEX, 0)
+        val vaultSessionId = intent.getStringExtra(EXTRA_VAULT_SESSION_ID)
 
         val isDarkMode = getSharedPreferences("theme_prefs", MODE_PRIVATE)
             .getBoolean("is_dark_mode", true)
@@ -150,6 +156,7 @@ class AudioPlayerActivity : ComponentActivity() {
                     initialFilePath = filePath,
                     playlist = playlist,
                     startIndex = startIndex,
+                    vaultSessionId = vaultSessionId,
                     isDarkMode = isDarkMode,
                     onBack = { finish() },
                     onShowLyricsChanged = { showLyrics ->
@@ -170,6 +177,7 @@ private fun AudioPlayerScreen(
     initialFilePath: String,
     playlist: List<String>,
     startIndex: Int,
+    vaultSessionId: String?,
     isDarkMode: Boolean,
     onBack: () -> Unit,
     onShowLyricsChanged: (Boolean) -> Unit
@@ -203,12 +211,35 @@ private fun AudioPlayerScreen(
     var isSeeking by remember { mutableStateOf(false) }
     var seekPosition by remember { mutableFloatStateOf(0f) }
 
+    /**
+     * 保险箱模式：确保指定缓存路径对应的明文已解密。
+     * 非保险箱模式直接返回文件是否存在。
+     */
+    suspend fun ensureDecrypted(cachePath: String): Boolean {
+        val sessionId = vaultSessionId ?: return File(cachePath).exists()
+        val ctx = com.whmdg.mczj.tools.encryption.services.VaultKeyHolder.get(sessionId)
+            ?: return File(cachePath).exists()
+        val encryptedPath = ctx.vaultAudioEntries[cachePath]
+            ?: return File(cachePath).exists()
+        return com.whmdg.mczj.tools.encryption.services.VaultDecryptCache.decryptToCache(
+            context = context,
+            vaultDir = ctx.vaultDir,
+            encryptedPath = encryptedPath,
+            dek = ctx.dek,
+            customEncryption = ctx.customEncryption,
+            type = com.whmdg.mczj.tools.encryption.services.VaultCacheType.AUDIO
+        ).isSuccess
+    }
+
     // 曲目切换时重新读取封面与歌词。
     // 仅首次加载时根据内容自动决定视图；后续切歌保留用户当前的封面/歌词偏好。
     var isInitialTagLoad by remember { mutableStateOf(true) }
     LaunchedEffect(currentFilePath) {
         coverBytes = null
         lyrics = emptyList()
+        // 保险箱模式：读取标签前确保明文已解密
+        val ready = withContext(Dispatchers.IO) { ensureDecrypted(currentFilePath) }
+        if (!ready) return@LaunchedEffect
         val tags = withContext(Dispatchers.IO) { AudioTagReader.read(currentFilePath) }
         val parsedLyrics = LrcParser.parse(tags.lyrics)
         coverBytes = tags.coverBytes
@@ -228,15 +259,26 @@ private fun AudioPlayerScreen(
     }
 
     val player = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItems(
-                mediaPaths.map { MediaItem.fromUri(resolveMediaUri(it)) },
-                initialIndex,
-                0L
-            )
-            prepare()
-            playWhenReady = true
-        }
+        ExoPlayer.Builder(context).build()
+    }
+
+    // 曲目重播令牌：SINGLE 模式循环同一首时也需重新装载，强制 LaunchedEffect 重跑
+    var playToken by remember { mutableIntStateOf(0) }
+
+    // 供播放器监听器读取最新快照，避免 DisposableEffect 闭包捕获旧值
+    val repeatModeState = rememberUpdatedState(repeatMode)
+    val mediaPathsState = rememberUpdatedState(mediaPaths)
+    val currentIndexState = rememberUpdatedState(currentMediaIndex)
+
+    // 播放当前曲目：保险箱模式下按需解密后再装载，实现「点哪首解哪首」。
+    // 每次 currentMediaIndex / playToken 变化都重新装载单曲；播放列表语义由 UI 层维护。
+    LaunchedEffect(currentMediaIndex, playToken, mediaPaths) {
+        val path = mediaPaths.getOrElse(currentMediaIndex) { initialFilePath }
+        val ready = withContext(Dispatchers.IO) { ensureDecrypted(path) }
+        if (!ready) return@LaunchedEffect
+        player.setMediaItem(MediaItem.fromUri(resolveMediaUri(path)))
+        player.prepare()
+        player.playWhenReady = true
     }
 
     DisposableEffect(player) {
@@ -249,23 +291,39 @@ private fun AudioPlayerScreen(
                 if (playbackState == Player.STATE_READY) {
                     duration = player.duration
                 }
+                if (playbackState == Player.STATE_ENDED) {
+                    val paths = mediaPathsState.value
+                    val index = currentIndexState.value
+                    when (repeatModeState.value) {
+                        RepeatPlaybackMode.SINGLE -> playToken++
+                        RepeatPlaybackMode.SHUFFLE -> {
+                            if (paths.size > 1) {
+                                val next = paths.indices.filter { it != index }.random()
+                                currentMediaIndex = next
+                            } else {
+                                playToken++
+                            }
+                        }
+                        RepeatPlaybackMode.SEQUENTIAL -> {
+                            val next = index + 1
+                            if (next in paths.indices) {
+                                currentMediaIndex = next
+                            }
+                        }
+                    }
+                }
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                currentMediaIndex = player.currentMediaItemIndex
-                hasPrevious = player.hasPreviousMediaItem()
-                hasNext = player.hasNextMediaItem()
-            }
-
-            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
-                hasPrevious = player.hasPreviousMediaItem()
-                hasNext = player.hasNextMediaItem()
+                val index = currentIndexState.value
+                hasPrevious = index > 0
+                hasNext = index < mediaPathsState.value.size - 1
             }
         }
         player.addListener(listener)
         // 初始化导航状态
-        hasPrevious = player.hasPreviousMediaItem()
-        hasNext = player.hasNextMediaItem()
+        hasPrevious = currentMediaIndex > 0
+        hasNext = currentMediaIndex < mediaPaths.size - 1
         onDispose {
             player.removeListener(listener)
             player.release()
@@ -281,24 +339,11 @@ private fun AudioPlayerScreen(
         }
     }
 
-    // 循环模式变更时同步到播放器
-    LaunchedEffect(repeatMode) {
-        when (repeatMode) {
-            RepeatPlaybackMode.SEQUENTIAL -> {
-                player.shuffleModeEnabled = false
-                player.repeatMode = Player.REPEAT_MODE_OFF
-            }
-            RepeatPlaybackMode.SINGLE -> {
-                player.shuffleModeEnabled = false
-                player.repeatMode = Player.REPEAT_MODE_ONE
-            }
-            RepeatPlaybackMode.SHUFFLE -> {
-                player.shuffleModeEnabled = true
-                player.repeatMode = Player.REPEAT_MODE_OFF
-            }
-        }
-        hasPrevious = player.hasPreviousMediaItem()
-        hasNext = player.hasNextMediaItem()
+    // 循环模式变更时刷新导航按钮状态。
+    // 播放列表语义（顺序/循环/随机）由 UI 层维护：player 始终只装载当前单曲。
+    LaunchedEffect(repeatMode, mediaPaths) {
+        hasPrevious = currentMediaIndex > 0
+        hasNext = currentMediaIndex < mediaPaths.size - 1
     }
 
     // 根据主题设置背景色和文字颜色
@@ -471,8 +516,8 @@ private fun AudioPlayerScreen(
                 secondaryColor = secondaryColor,
                 onClose = { showPlaylist = false },
                 onSelect = { index ->
-                    player.seekTo(index, 0L)
-                    player.play()
+                    currentMediaIndex = index
+                    showPlaylist = false
                 }
             )
         }
@@ -486,9 +531,9 @@ private fun AudioPlayerScreen(
             isPlaylistVisible = showPlaylist,
             tint = iconTint,
             onToggleRepeat = { repeatMode = repeatMode.next() },
-            onPrevious = { player.seekToPreviousMediaItem() },
+            onPrevious = { if (currentMediaIndex > 0) currentMediaIndex-- },
             onPlayPause = { if (isPlaying) player.pause() else player.play() },
-            onNext = { player.seekToNextMediaItem() },
+            onNext = { if (currentMediaIndex < mediaPaths.size - 1) currentMediaIndex++ },
             onTogglePlaylist = { showPlaylist = !showPlaylist }
         )
     }

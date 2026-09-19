@@ -2,7 +2,6 @@ package com.whmdg.mczj.tools.util
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.MediaMetadataRetriever
 import com.whmdg.mczj.tools.encryption.core.FileCodec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -10,69 +9,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 
 object VaultThumbnailExtractor {
-    suspend fun extractThumbnail(
-        encryptedPath: String,
-        dek: ByteArray,
-        customEncryption: Boolean,
-        targetSize: Int
-    ): Bitmap? = withContext(Dispatchers.IO) {
-        try {
-            val src = File(encryptedPath)
-            if (!src.exists()) return@withContext null
-
-            val buffer = ByteArrayOutputStream()
-            FileCodec.decryptToStream(src, buffer, dek, customEncryption)
-
-            val opts = BitmapFactory.Options().apply {
-                inJustDecodeBounds = true
-            }
-            BitmapFactory.decodeByteArray(buffer.toByteArray(), 0, buffer.size(), opts)
-
-            opts.inSampleSize = calculateInSampleSize(opts, targetSize, targetSize)
-            opts.inJustDecodeBounds = false
-            opts.inPreferredConfig = Bitmap.Config.RGB_565
-
-            BitmapFactory.decodeByteArray(buffer.toByteArray(), 0, buffer.size(), opts)
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /**
-     * 从加密视频文件提取首帧。内存解密后通过 MediaMetadataRetriever 提取。
-     */
-    suspend fun extractVideoThumbnail(
-        encryptedPath: String,
-        dek: ByteArray,
-        customEncryption: Boolean
-    ): Bitmap? = withContext(Dispatchers.IO) {
-        try {
-            val src = File(encryptedPath)
-            if (!src.exists()) return@withContext null
-
-            val bytes = decryptToBytes(src, dek, customEncryption) ?: return@withContext null
-
-            // MediaMetadataRetriever 不接受 ByteArray，写入临时文件后提取
-            val tmpFile = File.createTempFile("vault_vid_", ".tmp")
-            try {
-                tmpFile.writeBytes(bytes)
-                val retriever = MediaMetadataRetriever()
-                try {
-                    retriever.setDataSource(tmpFile.absolutePath, null)
-                    retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                } catch (_: Exception) {
-                    null
-                } finally {
-                    try { retriever.release() } catch (_: Exception) {}
-                }
-            } finally {
-                tmpFile.delete()
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     /**
      * 内存解密：将加密文件完整解密为 [ByteArray]，用于缩略图提取等场景。
      */
@@ -96,21 +32,6 @@ object VaultThumbnailExtractor {
             buffer.toByteArray()
         } catch (_: Exception) {
             null
-        }
-    }
-
-    /**
-     * 流式完整解密到 [dst] 文件（不占内存）。用于视频缩略图：MediaMetadataRetriever
-     * 需要一个结构完整的文件才能随机访问。
-     */
-    fun decryptToFile(src: File, dst: File, dek: ByteArray, customEncryption: Boolean): Boolean {
-        return try {
-            dst.outputStream().use { out ->
-                FileCodec.decryptToStream(src, out, dek, customEncryption)
-            }
-            true
-        } catch (_: Exception) {
-            false
         }
     }
 
@@ -142,56 +63,24 @@ object VaultThumbnailExtractor {
     }
 
     /**
-     * 从普通视频文件提取首帧，降采样后带磁盘缓存。
-     * 缓存路径：{cacheDir}/video_thumbs/{pathHash}.thumb
+     * 从已解密的明文图片文件提取缩略图（降采样解码）。
      */
-    suspend fun extractVideoThumbnailFromPlain(
-        videoPath: String,
-        cacheDir: File,
-        targetSize: Int = 200
+    suspend fun extractThumbnailFromPlain(
+        plainPath: String,
+        targetSize: Int
     ): Bitmap? = withContext(Dispatchers.IO) {
         try {
-            val file = File(videoPath)
-            if (!file.exists()) return@withContext null
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(plainPath, opts)
+            if (opts.outWidth <= 0 || opts.outHeight <= 0) return@withContext null
 
-            val thumbFile = File(cacheDir, "video_thumbs/${videoPath.hashCode()}.thumb")
-            if (thumbFile.exists()) {
-                val cached = BitmapFactory.decodeFile(thumbFile.absolutePath)
-                if (cached != null) return@withContext cached
-            }
-
-            val retriever = MediaMetadataRetriever()
-            val fullBitmap = try {
-                retriever.setDataSource(file.absolutePath)
-                retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-            } catch (_: Exception) {
-                null
-            } finally {
-                try { retriever.release() } catch (_: Exception) {}
-            }
-
-            if (fullBitmap != null) {
-                val scaled = scaleBitmap(fullBitmap, targetSize)
-                if (scaled !== fullBitmap) fullBitmap.recycle()
-                thumbFile.parentFile?.mkdirs()
-                thumbFile.outputStream().use { out ->
-                    scaled.compress(Bitmap.CompressFormat.WEBP_LOSSY, 80, out)
-                }
-                scaled
-            } else null
+            opts.inSampleSize = calculateInSampleSize(opts, targetSize, targetSize)
+            opts.inJustDecodeBounds = false
+            opts.inPreferredConfig = Bitmap.Config.RGB_565
+            BitmapFactory.decodeFile(plainPath, opts)
         } catch (_: Exception) {
             null
         }
-    }
-
-    private fun scaleBitmap(src: Bitmap, targetSize: Int): Bitmap {
-        val w = src.width
-        val h = src.height
-        if (w <= targetSize && h <= targetSize) return src
-        val scale = targetSize.toFloat() / maxOf(w, h)
-        val newW = (w * scale).toInt().coerceAtLeast(1)
-        val newH = (h * scale).toInt().coerceAtLeast(1)
-        return Bitmap.createScaledBitmap(src, newW, newH, true)
     }
 
     private fun calculateInSampleSize(

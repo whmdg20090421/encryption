@@ -186,26 +186,29 @@ private fun VaultImagePage(
             val ctx = com.whmdg.mczj.tools.encryption.services.VaultKeyHolder.get(vaultSessionId)
             val encryptedPath = ctx?.vaultImageEntries?.get(file.absolutePath)
             if (ctx != null && encryptedPath != null) {
-                try {
-                    com.whmdg.mczj.tools.encryption.core.FileCodec.decrypt(
-                        src = java.io.File(encryptedPath),
-                        dst = file,
-                        dek = ctx.dek,
-                        customEncryption = ctx.customEncryption
-                    )
-                    loadState = 1
-                } catch (e: Exception) {
-                    DiagnosticLog.log("VaultImage", "解密失败: ${e.javaClass.simpleName}: ${e.message}, file=${file.name}, encryptedPath=$encryptedPath")
-                    loadError = buildString {
-                        appendLine("解密失败")
-                        appendLine()
-                        appendLine("文件: ${file.name}")
-                        appendLine("异常: ${e.javaClass.simpleName}")
-                        appendLine("原因: ${e.message ?: "(无)"}")
-                        e.cause?.let { appendLine("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
+                val result = com.whmdg.mczj.tools.encryption.services.VaultDecryptCache.decryptToCache(
+                    context = context,
+                    vaultDir = ctx.vaultDir,
+                    encryptedPath = encryptedPath,
+                    dek = ctx.dek,
+                    customEncryption = ctx.customEncryption,
+                    type = com.whmdg.mczj.tools.encryption.services.VaultCacheType.IMAGE
+                )
+                result.fold(
+                    onSuccess = { loadState = 1 },
+                    onFailure = { e ->
+                        DiagnosticLog.log("VaultImage", "解密失败: ${e.javaClass.simpleName}: ${e.message}, file=${file.name}, encryptedPath=$encryptedPath")
+                        loadError = buildString {
+                            appendLine("解密失败")
+                            appendLine()
+                            appendLine("文件: ${file.name}")
+                            appendLine("异常: ${e.javaClass.simpleName}")
+                            appendLine("原因: ${e.message ?: "(无)"}")
+                            e.cause?.let { appendLine("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
+                        }
+                        loadState = 2
                     }
-                    loadState = 2
-                }
+                )
             } else {
                 loadError = "会话已过期，请重新打开保险箱"
                 loadState = 2

@@ -13,6 +13,8 @@ import coil3.fetch.Fetcher
 import coil3.fetch.ImageFetchResult
 import coil3.request.ImageRequest
 import coil3.request.Options
+import com.whmdg.mczj.tools.encryption.services.VaultCacheType
+import com.whmdg.mczj.tools.encryption.services.VaultDecryptCache
 import java.io.File
 
 class VaultThumbnailFetcher(
@@ -22,85 +24,44 @@ class VaultThumbnailFetcher(
     private val cacheDir: File
 ) : Fetcher {
 
-    private val videoExtensions = setOf(
-        "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "3gp",
-        "ts", "rmvb", "rm", "vob", "m4v", "f4v"
-    )
-
     /**
      * 头部 moov 探测失败时，允许完整解密到内存交给 Coil 提帧的最大文件大小。
      * 超过此值不做内存解密，避免 OOM，直接回退默认视频图标。
      */
     private val memoryFallbackLimit = 20L * 1024 * 1024
 
-    // ── 缓存路径 ──
-
-    /**
-     * 视频缓存根目录。普通视频与保险箱视频共用，缓存路径统一为：
-     * 视频缓存根 + 源文件绝对路径（去首斜杠）+ .thumb
-     * 保险箱源文件即磁盘上的加密文件（.whm）绝对路径，不做特殊处理。
-     */
-    private val videoCacheRoot: File by lazy {
-        val extDir = context.getExternalFilesDir(null)
-            ?: File(context.filesDir, "video_cache")
-        File(extDir, "视频缓存")
-    }
-
-    private fun cacheFileForVideo(): File =
-        File(videoCacheRoot, "${data.encryptedPath.removePrefix("/")}.thumb")
-
-    private fun metaFileForVideo(): File =
-        File(videoCacheRoot, "cache_meta.txt")
-
-    // ── 元数据读写 ──
-
-    private fun readMeta(): LinkedHashMap<String, Pair<Long, Long>> {
-        val metaFile = metaFileForVideo()
-        val map = linkedMapOf<String, Pair<Long, Long>>()
-        if (!metaFile.exists()) return map
-        metaFile.readLines().forEach { line ->
-            val parts = line.split("|")
-            if (parts.size == 3) {
-                val ts = parts[1].toLongOrNull() ?: return@forEach
-                val sz = parts[2].toLongOrNull() ?: return@forEach
-                map[parts[0]] = ts to sz
-            }
-        }
-        return map
-    }
-
-    private fun writeMeta(map: LinkedHashMap<String, Pair<Long, Long>>) {
-        val metaFile = metaFileForVideo()
-        metaFile.parentFile?.mkdirs()
-        metaFile.writeText(map.entries.joinToString("\n") { (name, pair) ->
-            "$name|${pair.first}|${pair.second}"
-        })
-    }
-
-    private fun isEntryValid(meta: LinkedHashMap<String, Pair<Long, Long>>, sourcePath: String): Boolean {
-        val srcFile = File(sourcePath)
-        val recorded = meta[sourcePath] ?: return false
-        return srcFile.lastModified() == recorded.first && srcFile.length() == recorded.second
-    }
-
     // ── 入口 ──
 
     override suspend fun fetch(): FetchResult {
-        val isVideo = data.displayName.substringAfterLast('.', "").lowercase() in videoExtensions
+        val isVideo = data.displayName
+            .substringAfterLast('.', "")
+            .lowercase() in com.whmdg.mczj.tools.ui.components.VIDEO_EXTENSIONS
         if (isVideo) return fetchVideoThumbnail()
+        return fetchImageThumbnail()
+    }
 
-        // 图片：沿用原有逻辑
-        val baseFile = File(cacheDir, "vault_cache/${data.vaultName}/${data.entryPath}")
+    // ── 图片缩略图 ──
+
+    private suspend fun fetchImageThumbnail(): FetchResult {
+        // 解密后的明文基文件（统一走 VaultDecryptCache）
+        val basePath = VaultDecryptCache.decryptToCache(
+            context = context,
+            vaultDir = data.vaultDir,
+            encryptedPath = data.encryptedPath,
+            dek = data.dek,
+            customEncryption = data.customEncryption,
+            type = VaultCacheType.IMAGE
+        ).getOrElse { return whiteResult() }
+
+        val baseFile = File(basePath)
         val thumbFile = File("${baseFile.absolutePath}.thumb")
 
         val imageFile = when {
-            baseFile.exists() -> baseFile
-            thumbFile.exists() -> thumbFile
+            // 缩略图比明文基文件新才算有效（基文件被重新解密会更新 mtime）
+            thumbFile.exists() && thumbFile.lastModified() >= baseFile.lastModified() -> thumbFile
             else -> {
-                val bitmap = VaultThumbnailExtractor.extractThumbnail(
-                    encryptedPath = data.encryptedPath,
-                    dek = data.dek,
-                    customEncryption = data.customEncryption,
+                val bitmap = VaultThumbnailExtractor.extractThumbnailFromPlain(
+                    plainPath = baseFile.absolutePath,
                     targetSize = 200
                 ) ?: return whiteResult()
 
@@ -120,24 +81,34 @@ class VaultThumbnailFetcher(
     // ── 视频缩略图 ──
 
     private suspend fun fetchVideoThumbnail(): FetchResult {
-        val sourcePath = data.encryptedPath
-        val cacheFile = cacheFileForVideo()
-        val meta = readMeta()
+        val srcFile = File(data.encryptedPath)
+        if (!srcFile.exists()) return whiteResult()
 
-        // 校验：元数据存在 + 缓存文件存在 + 源文件未变化
-        if (meta.containsKey(sourcePath) && cacheFile.exists() && isEntryValid(meta, sourcePath)) {
-            val bitmap = BitmapFactory.decodeFile(cacheFile.absolutePath)
-            if (bitmap != null) {
-                return ImageFetchResult(image = bitmap.asImage(), isSampled = false, dataSource = DataSource.DISK)
+        // 缩略图缓存命中：明文视频缓存有效（由统一索引判定）且 .thumb 存在时直接复用
+        val videoCachePath = VaultDecryptCache.cachePathFor(
+            context = context,
+            vaultDir = data.vaultDir,
+            encryptedPath = data.encryptedPath,
+            type = VaultCacheType.VIDEO
+        )
+        val thumbFile = File("$videoCachePath.thumb")
+        val cachedBitmap = if (thumbFile.exists()) {
+            val plainFile = File(videoCachePath)
+            // 缩略图需比明文视频文件新；明文文件被重新解密会更新 mtime
+            if (plainFile.exists() && thumbFile.lastModified() >= plainFile.lastModified()) {
+                BitmapFactory.decodeFile(thumbFile.absolutePath)
+            } else {
+                null
             }
+        } else {
+            null
         }
-
-        // 缓存失效 → 删除旧缓存
-        if (cacheFile.exists()) cacheFile.delete()
+        if (cachedBitmap != null) {
+            return ImageFetchResult(image = cachedBitmap.asImage(), isSampled = false, dataSource = DataSource.DISK)
+        }
 
         // 先部分解密文件头，按 atom 链探测 moov（faststart）。
         // MediaMetadataRetriever 需要结构完整的文件，只有 moov 位于头部时才可能提取首帧。
-        val srcFile = File(sourcePath)
         val headerBytes = VaultThumbnailExtractor.decryptPartialToBytes(
             srcFile, data.dek, data.customEncryption, maxBytes = 2L * 1024 * 1024
         )
@@ -145,55 +116,43 @@ class VaultThumbnailFetcher(
         val frame: Bitmap? = if (headerBytes != null &&
             VaultThumbnailExtractor.headerContainsMoov(headerBytes)
         ) {
-            // moov 在头部 → 流式完整解密到临时文件（不占内存）→ MediaMetadataRetriever 提取首帧
-            extractViaTempFile(srcFile)
+            // moov 在头部 → 通过统一缓存解密成完整明文文件 → MediaMetadataRetriever 提取首帧
+            val plainPath = VaultDecryptCache.decryptToCache(
+                context = context,
+                vaultDir = data.vaultDir,
+                encryptedPath = data.encryptedPath,
+                dek = data.dek,
+                customEncryption = data.customEncryption,
+                type = VaultCacheType.VIDEO
+            ).getOrElse { return whiteResult() }
+            extractFrameViaFile(File(plainPath))
         } else if (srcFile.length() < memoryFallbackLimit) {
             // 头部探测失败或不支持，且文件小于 20MB → 完整解密到内存流交给 Coil 提帧
-            extractViaMemory(srcFile)
+            extractFrameViaMemory(srcFile)
         } else {
             null
         }
         val bitmap: Bitmap = frame ?: return whiteResult()
 
-        // 保存缩略图缓存
-        cacheFile.parentFile?.mkdirs()
-        cacheFile.outputStream().use { out ->
+        // 保存缩略图缓存（复用统一视频缓存路径 + .thumb 后缀）
+        thumbFile.parentFile?.mkdirs()
+        thumbFile.outputStream().use { out ->
             bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 80, out)
-        }
-
-        // 更新元数据
-        synchronized(meta) {
-            meta[sourcePath] = srcFile.lastModified() to srcFile.length()
-            writeMeta(meta)
         }
 
         return ImageFetchResult(image = bitmap.asImage(), isSampled = false, dataSource = DataSource.MEMORY)
     }
 
-    /**
-     * moov 在头部：流式完整解密到临时文件 → MediaMetadataRetriever 提取首帧。
-     * 除最终缩略图外不落任何持久文件，临时文件提取后立即删除。
-     */
-    private fun extractViaTempFile(srcFile: File): Bitmap? {
-        val tmpFile = File.createTempFile("vault_vid_", ".mp4")
+    /** moov 在头部：从已解密的完整明文文件用 MediaMetadataRetriever 提取首帧。 */
+    private fun extractFrameViaFile(plainFile: File): Bitmap? {
+        val retriever = android.media.MediaMetadataRetriever()
         return try {
-            if (!VaultThumbnailExtractor.decryptToFile(
-                    srcFile, tmpFile, data.dek, data.customEncryption
-                )
-            ) {
-                return null
-            }
-            val retriever = android.media.MediaMetadataRetriever()
-            try {
-                retriever.setDataSource(tmpFile.absolutePath, null)
-                retriever.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-            } catch (_: Exception) {
-                null
-            } finally {
-                try { retriever.release() } catch (_: Exception) {}
-            }
+            retriever.setDataSource(plainFile.absolutePath, null)
+            retriever.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        } catch (_: Exception) {
+            null
         } finally {
-            tmpFile.delete()
+            try { retriever.release() } catch (_: Exception) {}
         }
     }
 
@@ -205,7 +164,7 @@ class VaultThumbnailFetcher(
      * VideoFrameDecoder 会直接以内存数据源提帧（setDataSource(mediaDataSource)），
      * 不会落地临时文件。
      */
-    private suspend fun extractViaMemory(srcFile: File): Bitmap? {
+    private suspend fun extractFrameViaMemory(srcFile: File): Bitmap? {
         val bytes = VaultThumbnailExtractor.decryptToBytes(srcFile, data.dek, data.customEncryption)
             ?: return null
         val loader = SingletonImageLoader.get(context)

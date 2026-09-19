@@ -56,11 +56,13 @@ import java.util.Locale
 import kotlinx.serialization.Serializable
 import com.whmdg.mczj.tools.encryption.services.VaultSession
 import com.whmdg.mczj.tools.encryption.core.FilenameCodec
-import com.whmdg.mczj.tools.encryption.core.FileCodec
 import com.whmdg.mczj.tools.encryption.core.FileConstants
 import com.whmdg.mczj.tools.encryption.services.CryptoService
 import com.whmdg.mczj.tools.encryption.services.VaultKeyHolder
 import com.whmdg.mczj.tools.encryption.services.VaultViewContext
+import com.whmdg.mczj.tools.encryption.services.VaultDecryptCache
+import com.whmdg.mczj.tools.encryption.services.VaultCacheType
+import com.whmdg.mczj.tools.ui.components.extractExtension
 import com.whmdg.mczj.tools.ui.viewer.ViewerActivity
 import com.whmdg.mczj.tools.ui.viewer.AudioPlayerActivity
 import com.whmdg.mczj.tools.ui.viewer.VideoPlayerActivity
@@ -2960,6 +2962,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var pendingExternalEntry by mutableStateOf<FileEntry?>(null)
     var pendingApkEntry by mutableStateOf<FileEntry?>(null)
+    /** 保险箱大文件（视频/压缩包/APK 等）打开前的解密确认；非空时由 UI 弹窗询问 */
+    var pendingVaultDecryptEntry by mutableStateOf<FileEntry?>(null)
     var sevenZipInfo by mutableStateOf<ArchiveBrowser.SevenZipInfo?>(null)
     var sevenZipAnalyzing by mutableStateOf(false)
     /** 7z 整体解压相关状态 */
@@ -3365,7 +3369,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
 
-    /** vault 模式下打开文件：解密到临时文件后启动 ViewerActivity */
+    /** vault 模式下打开文件：解密到统一缓存目录后启动对应 Viewer */
     fun openVaultFile(entry: FileEntry) {
         val ctrl = focusedController
         val session = ctrl.vaultSession ?: return
@@ -3393,11 +3397,39 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             entry.name
         }
+        val ext = extractExtension(originalName)
+        val cacheType = vaultCacheTypeOf(ext)
 
+        // 视频 / 压缩包 / APK 等大文件：解密耗时长且占缓存空间，先弹窗确认
+        val needsConfirm = cacheType == VaultCacheType.VIDEO ||
+            ext in com.whmdg.mczj.tools.ui.components.ARCHIVE_EXTENSIONS ||
+            ext in com.whmdg.mczj.tools.ui.components.APK_EXTENSIONS
+        if (needsConfirm) {
+            pendingVaultDecryptEntry = entry
+            return
+        }
+
+        performVaultDecrypt(entry, session, ctrl, cacheType)
+    }
+
+    /** 由后缀推导保险箱缓存类型。 */
+    private fun vaultCacheTypeOf(ext: String): VaultCacheType = when {
+        ext in com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS -> VaultCacheType.IMAGE
+        ext in com.whmdg.mczj.tools.ui.components.VIDEO_EXTENSIONS -> VaultCacheType.VIDEO
+        ext in com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS -> VaultCacheType.AUDIO
+        ext in com.whmdg.mczj.tools.ui.components.TEXT_EXTENSIONS -> VaultCacheType.TEXT
+        else -> VaultCacheType.OTHER
+    }
+
+    /** 执行保险箱文件解密并交给 openFile 路由。 */
+    private fun performVaultDecrypt(
+        entry: FileEntry,
+        session: VaultSession,
+        ctrl: FilePaneController,
+        cacheType: VaultCacheType
+    ) {
         // 计算相对路径：从 vaultDir 到当前文件的路径
         val vaultDirPath = session.vaultDir.absolutePath
-        val relativePath = entry.path.removePrefix(vaultDirPath).removePrefix("/")
-        // 例如：relativePath = "photos/image.jpg.whm"
 
         // 生成 sessionId
         val sessionId = "vault_${System.currentTimeMillis()}_${entry.name.hashCode()}"
@@ -3405,53 +3437,56 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 取消上一个未完成的预览解密
         ctrl.vaultPreviewJob?.cancel()
         ctrl.vaultPreviewJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val cacheBase = File(context.cacheDir, "vault_cache/${session.record.name}")
-                cacheBase.mkdirs()
+            val result = VaultDecryptCache.decryptToCache(
+                context = context,
+                vaultDir = vaultDirPath,
+                encryptedPath = entry.path,
+                dek = session.dek,
+                customEncryption = session.record.customEncryption,
+                type = cacheType
+            )
+            result.fold(
+                onSuccess = { destPath ->
+                    withContext(Dispatchers.Main) {
+                        // 存入 VaultKeyHolder（只存当前文件的基本信息）
+                        VaultKeyHolder.put(sessionId, VaultViewContext(
+                            dek = session.dek,
+                            vaultDir = vaultDirPath,
+                            originalEncryptedPath = entry.path,
+                            customEncryption = session.record.customEncryption,
+                            vaultId = session.record.id,
+                            vaultImageEntries = emptyMap()  // 由 openFile 构建
+                        ))
 
-                // 清理该保险箱过期缓存（>1天）
-                val now = System.currentTimeMillis()
-                cacheBase.listFiles()?.filter { !it.name.endsWith(".thumb") }?.forEach { f ->
-                    if (now - f.lastModified() > 86_400_000L) f.delete()
+                        // 调用 openFile，让文件管理器判断怎么打开
+                        openFile(context, entry.copy(path = destPath, name = File(destPath).name),
+                            vaultSessionId = sessionId, originPanel = ctrl)
+                    }
+                },
+                onFailure = { e ->
+                    VaultKeyHolder.clear(sessionId)
+                    withContext(Dispatchers.Main) {
+                        ctrl.state.loadError = e
+                    }
                 }
-
-                // 缓存路径 = vault_cache/{vaultName}/{相对路径}（与缩略图同目录）
-                // relativePath = "photos/image.jpg.whm" → destPath = "photos/image.jpg"
-                val destPath = relativePath.removeSuffix(".whm")
-                val destFile = File(cacheBase, destPath)
-                destFile.parentFile?.mkdirs()
-
-                if (!destFile.exists()) {
-                    FileCodec.decrypt(
-                        src = File(entry.path),
-                        dst = destFile,
-                        dek = session.dek,
-                        customEncryption = session.record.customEncryption
-                    )
-                }
-
-                withContext(Dispatchers.Main) {
-                    // 存入 VaultKeyHolder（只存当前文件的基本信息）
-                    VaultKeyHolder.put(sessionId, VaultViewContext(
-                        dek = session.dek,
-                        vaultDir = vaultDirPath,
-                        originalEncryptedPath = entry.path,
-                        customEncryption = session.record.customEncryption,
-                        vaultId = session.record.id,
-                        vaultImageEntries = emptyMap()  // 由 openFile 构建
-                    ))
-
-                    // 调用 openFile，让文件管理器判断怎么打开
-                    openFile(context, entry.copy(path = destFile.absolutePath, name = destFile.name),
-                        vaultSessionId = sessionId, originPanel = ctrl)
-                }
-            } catch (e: Exception) {
-                VaultKeyHolder.clear(sessionId)
-                withContext(Dispatchers.Main) {
-                    ctrl.state.loadError = e
-                }
-            }
+            )
         }
+    }
+
+    /** 用户在解密确认弹窗点击「解密打开」后调用。 */
+    fun confirmVaultDecrypt() {
+        val entry = pendingVaultDecryptEntry ?: return
+        pendingVaultDecryptEntry = null
+        val ctrl = focusedController
+        val session = ctrl.vaultSession ?: return
+        val originalName = if (entry.name.endsWith(".whm", ignoreCase = true)) {
+            entry.name.substring(0, entry.name.length - 4)
+        } else {
+            entry.name
+        }
+        val ext = extractExtension(originalName)
+        val cacheType = vaultCacheTypeOf(ext)
+        performVaultDecrypt(entry, session, ctrl, cacheType)
     }
 
 
@@ -3746,9 +3781,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val destFile = File(cacheDir, "${session.archiveName}/${entry.path}")
 
         // 收集压缩包内所有图片文件，用于翻页预览
-        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
         val imageEntries = session.currentEntries.filter {
-            !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions
+            !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS
         }
         val cacheRoot = File(context.cacheDir, "archive_cache/${session.archiveName}")
         val imagePaths = imageEntries.map { File(cacheRoot, it.path).absolutePath }
@@ -3841,66 +3875,42 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
             return
         }
-        val textExtensions = setOf(
-            "txt", "md", "json", "xml", "html", "htm", "css", "js",
-            "kt", "java", "py", "sh", "bat", "log", "csv", "yaml", "yml",
-            "toml", "ini", "conf", "cfg", "properties", "gradle", "kts",
-            "c", "cpp", "h", "hpp", "rs", "go", "rb", "php", "sql",
-            "lua", "r", "swift", "dart", "jsx", "tsx", "vue"
-            // 注意：不包含 "ts"——.ts 优先按视频处理，播放失败时再询问是否改用文本编辑器
-        )
         val ext = entry.name.substringAfterLast('.', "").lowercase()
-        if (ext in textExtensions) {
+        if (ext in com.whmdg.mczj.tools.ui.components.TEXT_EXTENSIONS) {
             DiagnosticLog.log("OpenFile", "内置编辑器打开: ${entry.name}")
             context.startActivity(ViewerActivity.createTextIntent(context, entry.path))
             return
         }
-        val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "jxl", "thumb")
-        if (ext in imageExtensions) {
+        if (ext in com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS || ext == "thumb") {
             DiagnosticLog.log("OpenFile", "内置查看器打开: ${entry.name}")
 
             var imagePaths = overrideImagePaths
-            var imageEntryMap = mutableMapOf<String, String>()
 
             if (vaultSessionId != null) {
-                // 保险箱模式：从文件系统读取当前目录，构建图片列表和映射
+                // 保险箱模式：面板条目的 name 已是明文名、path 仍是加密源路径，
+                // 直接沿用面板顺序构建图片缓存路径列表与「缓存路径 → 加密源路径」映射
                 val ctx = VaultKeyHolder.get(vaultSessionId)
                 if (ctx != null) {
-                    // entry.path 是解密后的缓存路径，如 vault_cache/我的保险箱/photos/image.jpg
-                    // 需要找到对应的加密源文件
-                    val cacheBase = File(context.cacheDir, "vault_cache/${File(ctx.vaultDir).name}")
-                    val vaultDirPath = ctx.vaultDir
-
-                    // 从缓存路径反推相对路径，再找到加密源目录
-                    // entry.path.removePrefix(cacheBase.absolutePath) = "/photos/image.jpg"
-                    val relativePath = entry.path.removePrefix(cacheBase.absolutePath).removePrefix("/")
-                    val encryptedDir = File(vaultDirPath, File(relativePath).parent ?: "")
-
-                    // 读取加密源目录下所有 .whm 文件
-                    val whmFiles = encryptedDir.listFiles()
-                        ?.filter { it.isFile && it.name.endsWith(".whm", ignoreCase = true) }
-                        ?: emptyList()
-
-                    // 筛选图片文件并构建映射
                     val imageFiles = mutableListOf<String>()
                     val newImageEntryMap = mutableMapOf<String, String>()
 
-                    for (whmFile in whmFiles) {
-                        // 原始文件名：image.jpg.whm → image.jpg
-                        val originalName = whmFile.name.substring(0, whmFile.name.length - 4)
-                        val fileExt = originalName.substringAfterLast('.').lowercase()
+                    for (panelEntry in ctrl.state.entries) {
+                        if (panelEntry.isDirectory) continue
+                        val fileExt = extractExtension(panelEntry.name)
 
-                        if (fileExt in imageExtensions) {
-                            // 缓存路径 = cacheBase + 相对路径
-                            val cacheRelativePath = whmFile.absolutePath.removePrefix(vaultDirPath).removePrefix("/").removeSuffix(".whm")
-                            val cachePath = File(cacheBase, cacheRelativePath).absolutePath
+                        if (fileExt in com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS || fileExt == "thumb") {
+                            val cachePath = VaultDecryptCache.cachePathFor(
+                                context = context,
+                                vaultDir = ctx.vaultDir,
+                                encryptedPath = panelEntry.path,
+                                type = VaultCacheType.IMAGE
+                            )
                             imageFiles.add(cachePath)
-                            newImageEntryMap[cachePath] = whmFile.absolutePath
+                            newImageEntryMap[cachePath] = panelEntry.path
                         }
                     }
 
                     imagePaths = imageFiles
-                    imageEntryMap = newImageEntryMap
 
                     // 更新 VaultKeyHolder 中的映射
                     VaultKeyHolder.put(vaultSessionId, ctx.copy(vaultImageEntries = newImageEntryMap))
@@ -3908,7 +3918,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             } else if (overrideImagePaths.isNullOrEmpty()) {
                 // 普通模式：从当前面板读取
                 imagePaths = currentPanel.entries
-                    .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in imageExtensions }
+                    .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS }
                     .map { it.path }
             }
 
@@ -3930,6 +3940,40 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (ext in com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS) {
             // 构建同目录音频播放列表：保持当前面板的实际排序，不递归子目录。
+            if (vaultSessionId != null) {
+                // 保险箱模式：面板条目的 name 已是明文名、path 仍是加密源路径，
+                // 直接沿用面板顺序构建明文缓存路径列表与按需解密映射
+                val ctx = VaultKeyHolder.get(vaultSessionId)
+                if (ctx != null) {
+                    val audioPaths = mutableListOf<String>()
+                    val newAudioEntryMap = mutableMapOf<String, String>()
+                    for (panelEntry in ctrl.state.entries) {
+                        if (panelEntry.isDirectory) continue
+                        val fileExt = extractExtension(panelEntry.name)
+                        if (fileExt in com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS) {
+                            val cachePath = VaultDecryptCache.cachePathFor(
+                                context = context,
+                                vaultDir = ctx.vaultDir,
+                                encryptedPath = panelEntry.path,
+                                type = VaultCacheType.AUDIO
+                            )
+                            audioPaths.add(cachePath)
+                            newAudioEntryMap[cachePath] = panelEntry.path
+                        }
+                    }
+
+                    VaultKeyHolder.put(vaultSessionId, ctx.copy(vaultAudioEntries = newAudioEntryMap))
+
+                    val startIndex = audioPaths.indexOf(entry.path)
+                    DiagnosticLog.log("OpenFile", "保险箱音频播放器打开: ${entry.name} index=$startIndex total=${audioPaths.size}")
+                    context.startActivity(
+                        AudioPlayerActivity.createAudioIntent(
+                            context, entry.path, audioPaths, startIndex, vaultSessionId
+                        )
+                    )
+                    return
+                }
+            }
             val audioPaths = ctrl.state.entries
                 .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS }
                 .map { it.path }

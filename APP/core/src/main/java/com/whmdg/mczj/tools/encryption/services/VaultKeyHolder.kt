@@ -13,8 +13,10 @@ data class VaultViewContext(
     val originalEncryptedPath: String,  // 加密文件的原始路径
     val customEncryption: Boolean,      // 是否自定义加密
     val vaultId: Int,                   // 保险箱记录 ID
-    /** 缓存路径 → 加密源路径映射，用于 Compose 层按需解密 */
-    val vaultImageEntries: Map<String, String> = emptyMap()
+    /** 图片缓存路径 → 加密源路径映射，用于 Compose 层按需解密 */
+    val vaultImageEntries: Map<String, String> = emptyMap(),
+    /** 音频缓存路径 → 加密源路径映射，用于播放器切歌时按需解密 */
+    val vaultAudioEntries: Map<String, String> = emptyMap()
 )
 
 /**
