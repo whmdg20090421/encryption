@@ -73,6 +73,15 @@ public class WordwrapLayout extends AbstractLayout {
     private final boolean antiWordBreaking;
     private final boolean supportRtlRow;
     private List<RowRegion> rowTable;
+    /** Tracks which subtasks have already been merged into {@link #rowTable}. Guarded by {@link #mergeLock}. */
+    private boolean[] mergedTasks;
+    /** Tracks which subtasks have been submitted to the executor already. Guarded by {@link #mergeLock}. */
+    private boolean[] submittedTasks;
+    private final Object mergeLock = new Object();
+    /** Line ranges of each subtask, indexed by subtask id. Used to follow the viewport. */
+    private int[] taskStartLines;
+    private int[] taskEndLines;
+    private TaskMonitor taskMonitor;
 
     public WordwrapLayout(@NonNull CodeEditor editor, @NonNull Content text, boolean antiWordBreaking, boolean supportRtlRow, @Nullable WordwrapLayout oldLayout, boolean clearCache) {
         super(editor, text);
@@ -88,42 +97,190 @@ public class WordwrapLayout extends AbstractLayout {
         breakAllLines();
     }
 
+    /**
+     * Determine the logical line that is currently visible so its fragment can be processed first.
+     * During construction the editor still holds the previous layout, so we map the viewport row
+     * through the old layout. After this layout is installed, we map through ourselves (the row
+     * table is either reused or progressively filled).
+     */
+    private int getVisibleLine() {
+        var editor = this.editor;
+        if (editor == null) {
+            return 0;
+        }
+        try {
+            var firstRow = editor.getFirstVisibleRow();
+            var currentLayout = editor.getLayout();
+            if (currentLayout != null && currentLayout != this) {
+                return Math.max(0, currentLayout.getLineNumberForRow(firstRow));
+            }
+            // This layout is already installed (viewport following during incremental merge)
+            if (rowTable == null || rowTable.isEmpty()) {
+                return 0;
+            }
+            return Math.max(0, getLineNumberForRow(firstRow));
+        } catch (Exception ignored) {
+            // Fall through to default
+        }
+        return 0;
+    }
+
     private void breakAllLines() {
-        var taskCount = Math.min(SUBTASK_COUNT, (int) Math.ceil((float) text.getLineCount() / MIN_LINE_COUNT_FOR_SUBTASK));
-        var sizeEachTask = text.getLineCount() / taskCount;
-        var monitor = new TaskMonitor(taskCount, (results, cancelledCount) -> {
-            final var editor = this.editor;
-            if (editor != null) {
-                List<WordwrapResult> r2 = new ArrayList<>();
-                for (Object result : results) {
-                    r2.add((WordwrapResult) result);
-                }
-                Collections.sort(r2);
-                editor.postInLifecycle(() -> {
-                    if (WordwrapLayout.this.editor != editor) {
-                        // This layout could have been abandoned when waiting for Runnable execution
-                        // See #307
+        var lineCount = text.getLineCount();
+        // Adaptive subtask count: about one subtask per LINES_PER_SUBTASK lines, clamped to [SUBTASK_COUNT, SUBTASK_COUNT_MAX]
+        var adaptive = (int) Math.ceil((float) lineCount / LINES_PER_SUBTASK);
+        var taskCount = Math.max(SUBTASK_COUNT, Math.min(SUBTASK_COUNT_MAX, adaptive));
+        taskCount = Math.min(taskCount, Math.max(1, lineCount));
+
+        // Build contiguous, roughly equal line ranges for each subtask
+        var startLines = new int[taskCount];
+        var endLines = new int[taskCount];
+        var sizeEachTask = Math.max(1, lineCount / taskCount);
+        for (int i = 0; i < taskCount; i++) {
+            startLines[i] = sizeEachTask * i;
+            endLines[i] = (i + 1 == taskCount) ? (lineCount - 1) : (sizeEachTask * (i + 1) - 1);
+        }
+
+        synchronized (mergeLock) {
+            mergedTasks = new boolean[taskCount];
+            submittedTasks = new boolean[taskCount];
+            taskStartLines = startLines;
+            taskEndLines = endLines;
+        }
+
+        var visibleTask = 0;
+        var visibleLine = getVisibleLine();
+        for (int i = 0; i < taskCount; i++) {
+            if (visibleLine >= startLines[i] && visibleLine <= endLines[i]) {
+                visibleTask = i;
+                break;
+            }
+        }
+        final var visibleTaskIndex = visibleTask;
+
+        // Order subtasks by proximity to the visible one: visible, then outward (next/prev alternating)
+        var order = new int[taskCount];
+        order[0] = visibleTask;
+        int head = 1, lower = visibleTask - 1, upper = visibleTask + 1;
+        while (head < taskCount) {
+            if (upper < taskCount) {
+                order[head++] = upper++;
+            }
+            if (head < taskCount && lower >= 0) {
+                order[head++] = lower--;
+            }
+        }
+
+        final var monitor = new TaskMonitor(taskCount, (results, cancelledCount) -> { /* no-op: incremental handled below */ },
+                (result, taskIndex, allFinished, cancelledCount) -> {
+                    final var editor = this.editor;
+                    if (editor == null || !(result instanceof WordwrapResult)) {
                         return;
                     }
-                    if (rowTable != null) {
-                        rowTable.clear();
-                    } else {
-                        rowTable = new ArrayList<>();
-                    }
-                    for (WordwrapResult wordwrapResult : r2) {
-                        rowTable.addAll(wordwrapResult.regions);
-                    }
-                    editor.setLayoutBusy(false);
-                    editor.getEventHandler().scrollBy(0, 0);
+                    var wr = (WordwrapResult) result;
+                    editor.postInLifecycle(() -> {
+                        if (WordwrapLayout.this.editor != editor) {
+                            // This layout could have been abandoned when waiting for Runnable execution
+                            // See #307
+                            return;
+                        }
+                        mergeTaskResult(wr);
+                        // Release the busy state as soon as the visible fragment (or the whole layout)
+                        // has been merged, so the user can interact immediately.
+                        if (wr.index == visibleTaskIndex || allFinished) {
+                            editor.setLayoutBusy(false);
+                        }
+                        // Follow the viewport: if the user has scrolled to a region that is not yet
+                        // processed, submit it immediately (deduplicated).
+                        submitTaskForLine(getVisibleLine(), false);
+                        editor.getEventHandler().scrollBy(0, 0);
+                        editor.invalidate();
+                    });
                 });
-            }
-        });
+        taskMonitor = monitor;
         editor.setLayoutBusy(true);
         for (int i = 0; i < taskCount; i++) {
-            var start = sizeEachTask * i;
-            var end = i + 1 == taskCount ? (text.getLineCount() - 1) : (sizeEachTask * (i + 1) - 1);
-            submitTask(new WordwrapAnalyzeTask(monitor, i, start, end));
+            var idx = order[i];
+            submitTaskForIndex(idx, monitor);
         }
+    }
+
+    /**
+     * Submit the subtask with the given id if it has not been submitted yet. Safe to call from any thread.
+     */
+    private void submitTaskForIndex(int index, @Nullable TaskMonitor monitor) {
+        if (index < 0) {
+            return;
+        }
+        synchronized (mergeLock) {
+            if (submittedTasks == null || index >= submittedTasks.length || submittedTasks[index] || mergedTasks[index]) {
+                return;
+            }
+            submittedTasks[index] = true;
+        }
+        submitTask(new WordwrapAnalyzeTask(monitor, index, taskStartLines[index], taskEndLines[index]));
+    }
+
+    /**
+     * Submit the subtask that contains the given logical line (viewport following).
+     */
+    private void submitTaskForLine(int line, boolean force) {
+        int index = -1;
+        synchronized (mergeLock) {
+            if (taskStartLines == null || mergedTasks == null) {
+                return;
+            }
+            for (int i = 0; i < taskStartLines.length; i++) {
+                if (line >= taskStartLines[i] && line <= taskEndLines[i]) {
+                    index = i;
+                    break;
+                }
+            }
+            if (index == -1 || mergedTasks[index]) {
+                return;
+            }
+            if (!force && submittedTasks[index]) {
+                return;
+            }
+        }
+        submitTaskForIndex(index, taskMonitor);
+    }
+
+    /**
+     * Merge a finished subtask result into {@link #rowTable} while keeping the table ordered by
+     * logical line. Must be called on the UI thread.
+     */
+    private void mergeTaskResult(@NonNull WordwrapResult result) {
+        synchronized (mergeLock) {
+            if (mergedTasks == null || result.index < 0 || result.index >= mergedTasks.length || mergedTasks[result.index]) {
+                return;
+            }
+            mergedTasks[result.index] = true;
+        }
+        var regions = result.regions;
+        if (regions == null || regions.isEmpty()) {
+            return;
+        }
+        if (rowTable == null) {
+            rowTable = new ArrayList<>();
+        }
+        var insertLine = regions.get(0).line;
+        // Binary search the first row whose line is >= insertLine
+        int left = 0, right = rowTable.size();
+        while (left < right) {
+            var mid = (left + right) >>> 1;
+            if (rowTable.get(mid).line < insertLine) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+        // Replace any stale regions that belong to the same line range (e.g. from a previous layout)
+        var endLine = regions.get(regions.size() - 1).line;
+        while (left < rowTable.size() && rowTable.get(left).line <= endLine) {
+            rowTable.remove(left);
+        }
+        rowTable.addAll(left, regions);
     }
 
     private int findRow(int line) {
@@ -263,6 +420,13 @@ public class WordwrapLayout extends AbstractLayout {
     public void destroyLayout() {
         super.destroyLayout();
         rowTable = null;
+        taskMonitor = null;
+        synchronized (mergeLock) {
+            mergedTasks = null;
+            submittedTasks = null;
+            taskStartLines = null;
+            taskEndLines = null;
+        }
     }
 
     @NonNull

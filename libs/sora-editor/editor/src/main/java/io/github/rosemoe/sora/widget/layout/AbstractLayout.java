@@ -24,6 +24,7 @@
 package io.github.rosemoe.sora.widget.layout;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.collection.ObjectFloatMap;
 
 import java.util.Collections;
@@ -47,12 +48,16 @@ import io.github.rosemoe.sora.widget.CodeEditor;
 public abstract class AbstractLayout implements Layout {
 
     protected static final int SUBTASK_COUNT = 8;
+    /** Maximum number of subtasks used for very large documents (adaptive). */
+    protected static final int SUBTASK_COUNT_MAX = 16;
+    /** Preferred number of lines per subtask when adapting the subtask count. */
+    protected static final int LINES_PER_SUBTASK = 2000;
     protected static final int MIN_LINE_COUNT_FOR_SUBTASK = 3000;
     private static final ThreadPoolExecutor executor;
 
     static {
-        int maximumPoolSize = Math.max(2, Runtime.getRuntime().availableProcessors()); // available processor count changes during runtime
-        final int corePoolSize = 2;
+        final int corePoolSize = 4;
+        int maximumPoolSize = Math.max(corePoolSize, Runtime.getRuntime().availableProcessors()); // available processor count changes during runtime
         executor = new ThreadPoolExecutor(corePoolSize, maximumPoolSize, 1, TimeUnit.MINUTES, new LinkedBlockingQueue<>(128));
     }
 
@@ -103,17 +108,27 @@ public abstract class AbstractLayout implements Layout {
         private final int taskCount;
         private final Object[] results;
         private final Callback callback;
+        private final IncrementalCallback incrementalCallback;
         private int completedCount = 0;
         private int cancelledCount = 0;
 
         public TaskMonitor(int totalTask, @NonNull Callback callback) {
+            this(totalTask, callback, null);
+        }
+
+        public TaskMonitor(int totalTask, @NonNull Callback callback, @Nullable IncrementalCallback incrementalCallback) {
             taskCount = totalTask;
             results = new Object[totalTask];
             this.callback = callback;
+            this.incrementalCallback = incrementalCallback;
         }
 
         public synchronized void reportCompleted(Object result) {
+            var index = completedCount;
             results[completedCount++] = result;
+            if (incrementalCallback != null && result != null) {
+                incrementalCallback.onTaskCompleted(result, index, completedCount == taskCount, cancelledCount);
+            }
             if (completedCount == taskCount) {
                 callback.onCompleted(results, cancelledCount);
             }
@@ -126,6 +141,20 @@ public abstract class AbstractLayout implements Layout {
 
         public interface Callback {
             void onCompleted(@NonNull Object[] results, int cancelledCount);
+        }
+
+        /**
+         * Incremental callback invoked as soon as a single task finishes, so that callers can
+         * integrate results progressively instead of waiting for all tasks.
+         */
+        public interface IncrementalCallback {
+            /**
+             * @param result        the non-null result of the finished task
+             * @param taskIndex     zero-based completion order index
+             * @param allFinished   whether every task has now finished
+             * @param cancelledCount number of tasks cancelled so far
+             */
+            void onTaskCompleted(@NonNull Object result, int taskIndex, boolean allFinished, int cancelledCount);
         }
 
     }

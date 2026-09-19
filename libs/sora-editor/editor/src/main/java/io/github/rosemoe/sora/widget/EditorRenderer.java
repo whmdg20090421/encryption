@@ -478,7 +478,9 @@ public class EditorRenderer {
                 editor.postInLifecycle(editor::requestLayoutIfNeeded);
                 editor.createLayout(false);
             } else if (forcedRecreateLayout) {
-                editor.createLayout();
+                // Keep the previous row table so that incremental, viewport-prioritized
+                // relayout can replace line ranges in place without breaking row indexing.
+                editor.createLayout(false);
                 editor.postInLifecycle(editor::requestLayoutIfNeeded);
             }
         } else {
