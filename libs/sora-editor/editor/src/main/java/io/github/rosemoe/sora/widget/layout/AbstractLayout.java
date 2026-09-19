@@ -24,7 +24,6 @@
 package io.github.rosemoe.sora.widget.layout;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.collection.ObjectFloatMap;
 
 import java.util.Collections;
@@ -108,27 +107,17 @@ public abstract class AbstractLayout implements Layout {
         private final int taskCount;
         private final Object[] results;
         private final Callback callback;
-        private final IncrementalCallback incrementalCallback;
         private int completedCount = 0;
         private int cancelledCount = 0;
 
         public TaskMonitor(int totalTask, @NonNull Callback callback) {
-            this(totalTask, callback, null);
-        }
-
-        public TaskMonitor(int totalTask, @NonNull Callback callback, @Nullable IncrementalCallback incrementalCallback) {
             taskCount = totalTask;
             results = new Object[totalTask];
             this.callback = callback;
-            this.incrementalCallback = incrementalCallback;
         }
 
         public synchronized void reportCompleted(Object result) {
-            var index = completedCount;
             results[completedCount++] = result;
-            if (incrementalCallback != null && result != null) {
-                incrementalCallback.onTaskCompleted(result, index, completedCount == taskCount, cancelledCount);
-            }
             if (completedCount == taskCount) {
                 callback.onCompleted(results, cancelledCount);
             }
@@ -141,20 +130,6 @@ public abstract class AbstractLayout implements Layout {
 
         public interface Callback {
             void onCompleted(@NonNull Object[] results, int cancelledCount);
-        }
-
-        /**
-         * Incremental callback invoked as soon as a single task finishes, so that callers can
-         * integrate results progressively instead of waiting for all tasks.
-         */
-        public interface IncrementalCallback {
-            /**
-             * @param result        the non-null result of the finished task
-             * @param taskIndex     zero-based completion order index
-             * @param allFinished   whether every task has now finished
-             * @param cancelledCount number of tasks cancelled so far
-             */
-            void onTaskCompleted(@NonNull Object result, int taskIndex, boolean allFinished, int cancelledCount);
         }
 
     }
