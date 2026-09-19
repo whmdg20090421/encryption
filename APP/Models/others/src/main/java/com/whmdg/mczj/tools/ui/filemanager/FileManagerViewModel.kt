@@ -125,16 +125,6 @@ class FilePaneController(
     private val sortOrder: () -> SortOrder,
     private val folderSizeDb: () -> FolderSizeDb
 ) {
-    private companion object {
-        /** 保险箱系统配置文件名（明文存储，需在列表与打开路由中过滤） */
-        val VAULT_CONFIG_FILE_NAMES = setOf(
-            "vault_config.json",
-            "vault_config.backup.json",
-            "name_mappings.json",
-            "folder_sizes.json"
-        )
-    }
-
     // ── Vault 会话（每个 Controller 独立持有，由 Coordinator 注入） ──
     var vaultSession by mutableStateOf<VaultSession?>(null)
         internal set
@@ -2477,6 +2467,14 @@ class FilePaneController(
             "/sdcard/Android/obb/"
         )
         private const val OWN_PACKAGE_NAME = "com.whmdg.mczj.tools"
+
+        /** 保险箱系统配置文件名（明文存储，需在列表与打开路由中过滤） */
+        private val VAULT_CONFIG_FILE_NAMES = setOf(
+            "vault_config.json",
+            "vault_config.backup.json",
+            "name_mappings.json",
+            "folder_sizes.json"
+        )
 
         fun formatPermission(mode: Int): String {
             val type = when (mode and 0xF000) {
