@@ -278,6 +278,10 @@ fun FileManagerScreen(
             withContext(Dispatchers.IO) {
                 vaultService?.refreshFolderSize(vaultSession.vaultDir, "")
             }
+        } else if (!cloudMode) {
+            // 非加密入口：确保双面板均处于非加密状态，并各自回到主目录。
+            // 防止上一次会话残留的保险箱视图或空列表被带入本次。
+            vm.ensureCleanEntry()
         }
     }
 
@@ -794,7 +798,7 @@ fun FileManagerScreen(
         onDispose {}
     }
 
-    // 返回手势：栈顶弹窗 → 关闭，云盘 → 回上一级或退出，压缩包 → 回上一级或退出，回收站 → 回上一级或退出，子目录 → 回上一级，根目录 → 退出
+    // 返回手势：栈顶弹窗 → 关闭，云盘 → 回上一级或退出，压缩包 → 回上一级或退出，回收站 → 回上一级或退出，保险箱内 → 逐级返回，根目录时提示密钥销毁，普通子目录 → 回上一级，主目录 → 退出
     BackHandler {
         if (overlayStack.isNotEmpty()) {
             val top = overlayStack.last()
@@ -819,11 +823,12 @@ fun FileManagerScreen(
             return@BackHandler
         }
         if (!saveScrollAndGoUp()) {
-            // 在根目录按返回：回收站退出模式，其余退出文件管理器
+            // 在根目录按返回：回收站退出模式；保险箱内一律提示密钥销毁；其余退出文件管理器
             if (vm.recycleBinPanel == vm.focusedPanel) {
                 vm.exitRecycleBin()
+            } else if (vm.isVaultMode) {
+                showVaultExitDialog = true
             } else {
-                if (vm.isVaultMode) vm.exitVaultMode()
                 onBack()
             }
         }
@@ -873,8 +878,10 @@ fun FileManagerScreen(
                         } == true
                         if (isCloudUploading) {
                             showCloudExitConfirm = true
+                        } else if (vm.isVaultMode) {
+                            // 保险箱内返回首页：一律提示密钥销毁警告
+                            showVaultExitDialog = true
                         } else {
-                            if (vm.isVaultMode) vm.exitVaultMode()
                             onBack()
                         }
                     }) {
@@ -3678,11 +3685,9 @@ fun FileManagerScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showVaultExitDialog = false
-                    val parentPath = vm.goUp()
+                    // 销毁所有保险箱面板的密钥，并将面板重置到各自主目录
                     vm.exitVaultMode()
-                    if (parentPath != null) {
-                        vm.navigateTo(parentPath.fileSystemPath)
-                    }
+                    onBack()
                 }) { Text("确认") }
             },
             dismissButton = {

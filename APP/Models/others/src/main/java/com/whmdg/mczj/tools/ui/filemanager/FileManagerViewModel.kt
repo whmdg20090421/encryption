@@ -130,8 +130,32 @@ class FilePaneController(
         internal set
     val isVaultMode: Boolean get() = vaultSession != null
 
+    /**
+     * 该面板的主目录。默认为用户存储空间，后期可由设置修改。
+     * 退出保险箱、或从非加密入口进入文件管理器时，面板回到此目录。
+     */
+    var homePath: String = safeDefault
+
     // ── 面板状态（沙箱数据，不含任何身份标识） ──
     val state = VmPanelState("/storage/emulated/0")
+
+    /**
+     * 退出保险箱：销毁密钥、清空会话，并把面板重置到主目录并重新加载。
+     * 仅应在 [isVaultMode] 为 true 时调用。
+     */
+    fun exitVaultAndReset() {
+        vaultSession?.dispose()
+        vaultSession = null
+        resetToHome()
+    }
+
+    /** 将面板重置到主目录并以全新的导航历史重新加载。 */
+    fun resetToHome() {
+        val panelPath = PanelPath.FileSystem(homePath, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
+        state.archiveSession = null
+        state.navState = PanelNavState(paths = listOf(panelPath), index = 0)
+        loadDirectory(homePath, panel = state, panelPath = panelPath)
+    }
 
     // ── 回调（由 Coordinator 注入，用于处理需要身份信息的副作用） ──
     /** 进入压缩包模式时触发（Coordinator 用于保存会话缓存） */
@@ -2685,11 +2709,11 @@ class PanelCoordinator(
         refreshBoth()
     }
 
-    /** 退出 vault 模式：清除所有 Controller 的会话 */
+    /** 退出 vault 模式：清除所有处于 vault 模式的 Controller 的会话，并各自回到主目录重新加载。 */
     fun exitVaultMode() {
         for (ctrl in both()) {
-            ctrl.vaultSession?.dispose()
-            ctrl.vaultSession = null
+            if (!ctrl.isVaultMode) continue
+            ctrl.exitVaultAndReset()
         }
     }
 
@@ -3098,6 +3122,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         // 加载文件夹大小数据库
         folderSizeDb = FolderSizeDb.load(AppDataPaths.fileManager(context))
 
+        // 记录各面板主目录（退出保险箱 / 从非加密入口进入时回到这里）
+        controllerLeft.homePath = lHome
+        controllerRight.homePath = rHome
+
         // 检查是否有预加载的缓存
         val preloadCache = FileManagerPreloader.consume()
 
@@ -3363,12 +3391,32 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun exitVaultMode() {
-        val ctrl = focusedController
-        ctrl.vaultSession?.dispose()
-        ctrl.vaultSession = null
-        val panel = ctrl.state
-        panel.path = PanelPath.FileSystem(safeDefault, effectiveRoot = if (isRootEngine) "/" else safeDefault)
-        panel.entries = listOf()
+        // 退出保险箱：清除所有处于 vault 模式的面板会话，并各自回到主目录重新加载。
+        // 逐个处理而非只处理聚焦面板，避免聚焦在普通面板时漏掉真正持有密钥的面板。
+        panels.exitVaultMode()
+        cleanupVaultTempFiles()
+    }
+
+    /**
+     * 从非加密入口进入文件管理器时调用：
+     * 1. 确保双面板均处于非加密状态（清空任何残留的保险箱会话与密钥）；
+     * 2. 某面板若仍在浏览压缩包，则保留其压缩包会话；
+     * 3. 其余面板回到各自的主目录。
+     */
+    fun ensureCleanEntry() {
+        for (ctrl in panels.both()) {
+            // 未加密入口不允许携带任何保险箱密钥
+            if (ctrl.isVaultMode) {
+                ctrl.exitVaultAndReset()
+                continue
+            }
+            // 保留压缩包浏览会话
+            if (ctrl.state.path is PanelPath.Archive) continue
+            // 已在主目录且已加载出内容则无需重载（空列表视为异常，需要重载）
+            val current = ctrl.state.path
+            if (current is PanelPath.FileSystem && current.path == ctrl.homePath && ctrl.state.entries.isNotEmpty()) continue
+            ctrl.resetToHome()
+        }
         cleanupVaultTempFiles()
     }
 
