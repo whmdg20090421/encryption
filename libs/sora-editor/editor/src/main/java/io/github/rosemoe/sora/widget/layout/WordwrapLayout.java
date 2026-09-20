@@ -162,9 +162,6 @@ public class WordwrapLayout extends AbstractLayout {
 
         editor.setLayoutBusy(true);
 
-        final int rowHeight = Math.max(1, editor.getRowHeight());
-        final int intraLineOffset = Math.floorMod(editor.getOffsetY(), rowHeight);
-
         // Phase one: synchronously break a bounded window around the viewport so the user sees
         // correct wrapping right away. The window is intentionally small (viewport plus margin) so
         // the main thread stall is bounded, no matter how large the document is.
@@ -172,26 +169,21 @@ public class WordwrapLayout extends AbstractLayout {
         final int windowEnd = Math.min(lineCount - 1, visibleLine + PRIORITY_MARGIN_LINES);
         computePriorityWindow(version, results, segStart, segEnd, lineCount, windowStart, windowEnd);
 
-        // Compute the corrected scroll offset now, while the priority rows for the anchored line are
-        // guaranteed to be in the table. Doing this later (inside the posted runnable) would race
-        // with background segments publishing a newer table, yielding a wrong row for the anchor.
-        int targetScrollY = editor.getOffsetY();
-        try {
-            targetScrollY = findRow(visibleLine) * rowHeight + intraLineOffset;
-        } catch (Throwable ignored) {
-            // keep the current scroll offset
-        }
-        final int scrollDeltaY = targetScrollY - editor.getOffsetY();
-
-        editor.postInLifecycle(() -> {
-            if (WordwrapLayout.this.editor != editor) {
+        // Capture the editor as a snapshot: this layout may be destroyed (editor field cleared)
+        // before the posted runnable executes. Comparing against the live field would then see
+        // `null == null` and wrongly proceed, dereferencing a null editor.
+        final var visibleEditor = editor;
+        visibleEditor.postInLifecycle(() -> {
+            if (WordwrapLayout.this.editor != visibleEditor) {
+                // This layout was abandoned before the runnable ran.
                 return;
             }
-            // Soft-wrap counts changed, so the pixel offset that used to show the anchored line may
-            // now point somewhere else. Re-anchor so the line stays where the user saw it.
-            editor.getEventHandler().scrollBy(0, scrollDeltaY);
-            editor.setLayoutBusy(false);
-            editor.postInvalidate();
+            // Scroll position is not adjusted here. The editor already keeps the viewport anchored
+            // across relayouts: CodeEditor.setLayoutBusy(false) re-applies the position captured by
+            // EditorTouchEventHandler when a pinch gesture starts (positionNotApplied). Adding our
+            // own correction would fight that logic and visibly jump before it snapped back.
+            visibleEditor.setLayoutBusy(false);
+            visibleEditor.postInvalidate();
         });
 
         // Phase two: break the remaining segments in the background, publishing as they complete.
@@ -825,6 +817,15 @@ public class WordwrapLayout extends AbstractLayout {
 
         @Override
         public void run() {
+            // This overrides LayoutTask.run(), so the base shouldRun() guard must be repeated here:
+            // the layout may have been destroyed while the task was queued, which nulls out the
+            // editor that compute() depends on.
+            if (!shouldRun()) {
+                if (monitor != null) {
+                    monitor.reportCancelled();
+                }
+                return;
+            }
             var result = compute();
             // Publish this segment only if no newer pass has started. A stale pass must not
             // overwrite a more recent layout (for example, results of a previous text size).
