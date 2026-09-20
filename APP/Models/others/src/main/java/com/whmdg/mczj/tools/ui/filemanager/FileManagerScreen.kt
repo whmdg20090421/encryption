@@ -6048,7 +6048,10 @@ private fun FileEntryRow(
             val fileContent: @Composable ColumnScope.() -> Unit = {
                 Spacer(modifier = Modifier.weight(0.5f))
                 Column(modifier = Modifier.weight(9f)) {
-                Row(modifier = Modifier.weight(7f).fillMaxHeight()) {
+                Row(
+                    modifier = Modifier.weight(7f).fillMaxHeight(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Box(
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         contentAlignment = Alignment.Center
