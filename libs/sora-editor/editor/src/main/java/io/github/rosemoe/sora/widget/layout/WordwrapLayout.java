@@ -88,6 +88,12 @@ public class WordwrapLayout extends AbstractLayout {
     private static final int PRIORITY_MARGIN_LINES = 200;
 
     /**
+     * How far past the requested viewport the background pass breaks ahead. Keeping a small lead
+     * means scrolling stays smooth without computing the entire document.
+     */
+    private static final int SEGMENT_BREAK_AHEAD_LINES = 400;
+
+    /**
      * Priority window (inclusive line range) and its already-broken rows. Overlaid on top of the
      * per-segment results by {@link #rebuildTable}. Guarded by {@code this}.
      */
@@ -101,6 +107,21 @@ public class WordwrapLayout extends AbstractLayout {
      * results, so a resize that starts while an older pass is still running can not be overwritten.
      */
     private final java.util.concurrent.atomic.AtomicInteger breakVersion = new java.util.concurrent.atomic.AtomicInteger(0);
+
+    // ---- Per-pass break state (guarded by this), used for lazy extension ----
+
+    /** Segment line boundaries of the current pass. */
+    private int[] curSegStart;
+    private int[] curSegEnd;
+    /** Per-segment computed results of the current pass; null until broken. */
+    private WordwrapResult[] curResults;
+    /** Whether a segment has already been submitted to the pool in the current pass. */
+    private boolean[] curScheduled;
+    /**
+     * Lines below this index have real breaks computed or in flight; above are approximate. Volatile
+     * so the draw-time fast path can read it without taking the layout lock.
+     */
+    private volatile int brokenUpToLine;
 
     public WordwrapLayout(@NonNull CodeEditor editor, @NonNull Content text, boolean antiWordBreaking, boolean supportRtlRow, @Nullable WordwrapLayout oldLayout, boolean clearCache) {
         super(editor, text);
@@ -143,6 +164,11 @@ public class WordwrapLayout extends AbstractLayout {
         synchronized (this) {
             priorityStart = priorityEnd = 0;
             priorityRows = null;
+            curSegStart = segStart;
+            curSegEnd = segEnd;
+            curResults = results;
+            curScheduled = new boolean[taskCount];
+            brokenUpToLine = 0;
             rebuildTable(results, segStart, segEnd, lineCount);
         }
 
@@ -162,12 +188,15 @@ public class WordwrapLayout extends AbstractLayout {
 
         editor.setLayoutBusy(true);
 
-        // Phase one: synchronously break a bounded window around the viewport so the user sees
-        // correct wrapping right away. The window is intentionally small (viewport plus margin) so
-        // the main thread stall is bounded, no matter how large the document is.
+        // Synchronously break a bounded window around the viewport so the user sees correct wrapping
+        // right away. The window is intentionally small (viewport plus margin) so the main-thread
+        // stall is bounded, no matter how large the document is.
         final int windowStart = Math.max(0, visibleLine - PRIORITY_MARGIN_LINES);
         final int windowEnd = Math.min(lineCount - 1, visibleLine + PRIORITY_MARGIN_LINES);
         computePriorityWindow(version, results, segStart, segEnd, lineCount, windowStart, windowEnd);
+        synchronized (this) {
+            brokenUpToLine = Math.min(lineCount, windowEnd + 1);
+        }
 
         // Capture the editor as a snapshot: this layout may be destroyed (editor field cleared)
         // before the posted runnable executes. Comparing against the live field would then see
@@ -186,18 +215,77 @@ public class WordwrapLayout extends AbstractLayout {
             visibleEditor.postInvalidate();
         });
 
-        // Phase two: break the remaining segments in the background, publishing as they complete.
-        // The segments overlapping the priority window are still computed; their rows are simply
-        // overridden by the priority rows until then (rebuildTable overlays the window).
-        final var monitor = new TaskMonitor(taskCount, (completed, cancelledCount) -> {
+        // Break everything from the top of the document up to just past the viewport, in the
+        // background. Lines beyond that keep their one-row-per-line approximation and are broken
+        // lazily when the viewport reaches them (see ensureBrokenUpTo). This mirrors MT: computing
+        // the whole document up front pegs every core for no visible benefit, because the rows far
+        // below the viewport are not needed yet.
+        submitSegmentsUpTo(version, windowEnd + SEGMENT_BREAK_AHEAD_LINES);
+    }
+
+    /**
+     * Submit the not-yet-computed segments that cover lines up to {@code targetLine} (exclusive).
+     * Segments already submitted in the current pass are skipped, so repeated calls as the viewport
+     * moves only schedule the newly needed work.
+     */
+    private void submitSegmentsUpTo(int version, int targetLine) {
+        var toSubmit = new ArrayList<Integer>();
+        final int[] segStart;
+        final int[] segEnd;
+        final WordwrapResult[] results;
+        synchronized (this) {
+            if (curResults == null || breakVersion.get() != version) {
+                return;
+            }
+            segStart = curSegStart;
+            segEnd = curSegEnd;
+            results = curResults;
+            for (int i = 0; i < segStart.length; i++) {
+                if (segStart[i] >= targetLine) {
+                    break;
+                }
+                if (!curScheduled[i]) {
+                    curScheduled[i] = true;
+                    toSubmit.add(i);
+                }
+            }
+        }
+        if (toSubmit.isEmpty()) {
+            return;
+        }
+        var monitor = new TaskMonitor(toSubmit.size(), (completed, cancelledCount) -> {
             final var ed = this.editor;
             if (ed != null) {
                 ed.postInvalidate();
             }
         });
-        for (int idx = 0; idx < taskCount; idx++) {
+        int lineCount = text.getLineCount();
+        for (int idx : toSubmit) {
             submitTask(new WordwrapAnalyzeTask(monitor, idx, segStart[idx], segEnd[idx], version, results, segStart, segEnd, lineCount));
         }
+    }
+
+    /**
+     * Ensure all lines up to {@code line} have real soft-wrap breaks. Called by the editor while
+     * drawing or after scrolling so newly revealed lines are broken on demand. Cheap when the
+     * requested line is already covered.
+     */
+    public void ensureBrokenUpTo(int line) {
+        int target = Math.min(text.getLineCount(), Math.max(0, line));
+        // Fast path: everything requested is already covered or in flight. Read volatile state and
+        // return without acquiring the layout lock, so drawing never blocks on a background publish.
+        if (target <= brokenUpToLine) {
+            return;
+        }
+        int version;
+        synchronized (this) {
+            if (curResults == null || target <= brokenUpToLine) {
+                return;
+            }
+            brokenUpToLine = target;
+            version = breakVersion.get();
+        }
+        submitSegmentsUpTo(version, target + SEGMENT_BREAK_AHEAD_LINES);
     }
 
     /**
@@ -390,6 +478,10 @@ public class WordwrapLayout extends AbstractLayout {
         // lines whose segment was not computed still have their placeholder row.
         synchronized (this) {
             breakVersion.incrementAndGet();
+            // Drop the lazy-extension state too: the next ensureBrokenUpTo() must not republish
+            // segments computed against the pre-edit text. The edited lines are patched in place by
+            // breakLines() below; uncomputed lines keep their approximate row until a full relayout.
+            curResults = null;
         }
     }
 

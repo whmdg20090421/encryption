@@ -4706,6 +4706,15 @@ public class CodeEditor extends View implements ContentListener, Formatter.Forma
     protected void onDraw(@NonNull Canvas canvas) {
         super.onDraw(canvas);
 
+        // Lazily break soft-wrap rows for newly revealed lines. WordwrapLayout only computes rows
+        // up to (a little past) the viewport; drawing is the natural place to notice that the
+        // viewport advanced into still-approximate territory.
+        var currentLayout = layout;
+        if (currentLayout instanceof WordwrapLayout && isWordwrap()) {
+            // +2 rows of margin so the row about to be drawn is broken too.
+            ((WordwrapLayout) currentLayout).ensureBrokenUpTo(getLastVisibleLine() + 1);
+        }
+
         renderer.draw(canvas);
 
         // Update magnifier
