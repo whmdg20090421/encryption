@@ -3385,6 +3385,7 @@ fun FileManagerScreen(
     RenameDialog(
         show = showRenameDialog && selectedEntry != null,
         currentName = selectedEntry?.name ?: "",
+        isDirectory = selectedEntry?.isDirectory == true,
         onDismiss = { showRenameDialog = false },
         onConfirm = { newName ->
             val entry = selectedEntry ?: return@RenameDialog

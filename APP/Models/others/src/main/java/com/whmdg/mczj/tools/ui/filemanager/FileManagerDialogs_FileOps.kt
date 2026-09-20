@@ -122,33 +122,68 @@ internal fun NameInputDialog(
 internal fun RenameDialog(
     show: Boolean,
     currentName: String,
+    isDirectory: Boolean = false,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
     if (!show) return
-    var text by remember { mutableStateOf(currentName) }
-    LaunchedEffect(currentName) { text = currentName }
+    // 目录无后缀概念；文件以最后一个点为后缀分界（如 test.txt.bak → test.txt + bak）
+    val dotIndex = if (!isDirectory) currentName.lastIndexOf('.') else -1
+    val hasExt = dotIndex > 0
+    val initBase = if (hasExt) currentName.substring(0, dotIndex) else currentName
+    val initExt = if (hasExt) currentName.substring(dotIndex + 1) else ""
+    var base by remember { mutableStateOf(initBase) }
+    var ext by remember { mutableStateOf(initExt) }
+    LaunchedEffect(currentName, isDirectory) {
+        base = initBase
+        ext = initExt
+    }
+    val composed = if (hasExt) "$base.$ext" else base
     StandardDialog(
-        onDismissRequest = { text = ""; onDismiss() },
+        onDismissRequest = { base = ""; ext = ""; onDismiss() },
         title = { Text("重命名") },
         text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-            )
+            if (isDirectory) {
+                OutlinedTextField(
+                    value = base,
+                    onValueChange = { base = it },
+                    singleLine = true,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                )
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = base,
+                        onValueChange = { base = it },
+                        singleLine = true,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier.weight(7f)
+                    )
+                    Text(".", modifier = Modifier.padding(horizontal = 4.dp))
+                    OutlinedTextField(
+                        value = ext,
+                        onValueChange = { ext = it },
+                        singleLine = true,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier.weight(3f)
+                    )
+                }
+            }
         },
         confirmButton = {
             TextButton(onClick = {
-                val newName = text.trim()
+                val newName = composed.trim()
                 if (newName.isNotBlank() && newName != currentName) onConfirm(newName)
                 else onDismiss()
-                text = ""
+                base = ""; ext = ""
             }) { Text("确认") }
         },
         dismissButton = {
-            TextButton(onClick = { text = ""; onDismiss() }) { Text("取消") }
+            TextButton(onClick = { base = ""; ext = ""; onDismiss() }) { Text("取消") }
         }
     )
 }
