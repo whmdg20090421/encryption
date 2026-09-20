@@ -72,7 +72,35 @@ public class WordwrapLayout extends AbstractLayout {
     private final float miniGraphWidth;
     private final boolean antiWordBreaking;
     private final boolean supportRtlRow;
-    private List<RowRegion> rowTable;
+
+    /**
+     * Row table. Always a complete list covering every line of the document, so readers never need
+     * to guard against a missing region. It is replaced (not mutated) when a background segment is
+     * published, and a reference assignment is atomic, so readers always observe a consistent
+     * table. Marked volatile for safe publication across the layout worker threads.
+     */
+    private volatile List<RowRegion> rowTable;
+
+    /**
+     * How many lines above and below the viewport are broken synchronously before the background
+     * pass runs. Bounds the main-thread stall to a small, constant amount of work.
+     */
+    private static final int PRIORITY_MARGIN_LINES = 200;
+
+    /**
+     * Priority window (inclusive line range) and its already-broken rows. Overlaid on top of the
+     * per-segment results by {@link #rebuildTable}. Guarded by {@code this}.
+     */
+    private int priorityStart;
+    private int priorityEnd;
+    @Nullable
+    private List<RowRegion> priorityRows;
+
+    /**
+     * Monotonic id of the newest break-all pass. Background tasks carrying a stale id drop their
+     * results, so a resize that starts while an older pass is still running can not be overwritten.
+     */
+    private final java.util.concurrent.atomic.AtomicInteger breakVersion = new java.util.concurrent.atomic.AtomicInteger(0);
 
     public WordwrapLayout(@NonNull CodeEditor editor, @NonNull Content text, boolean antiWordBreaking, boolean supportRtlRow, @Nullable WordwrapLayout oldLayout, boolean clearCache) {
         super(editor, text);
@@ -95,40 +123,163 @@ public class WordwrapLayout extends AbstractLayout {
         var adaptive = (int) Math.ceil((float) lineCount / LINES_PER_SUBTASK);
         var taskCount = Math.max(SUBTASK_COUNT, Math.min(SUBTASK_COUNT_MAX, adaptive));
         taskCount = Math.min(taskCount, Math.max(1, lineCount));
+
+        // Segment boundaries: segment i covers lines [segStart[i], segEnd[i]] (inclusive).
+        final var segStart = new int[taskCount];
+        final var segEnd = new int[taskCount];
         var sizeEachTask = lineCount / taskCount;
-        var monitor = new TaskMonitor(taskCount, (results, cancelledCount) -> {
-            final var editor = this.editor;
-            if (editor != null) {
-                List<WordwrapResult> r2 = new ArrayList<>();
-                for (Object result : results) {
-                    r2.add((WordwrapResult) result);
-                }
-                Collections.sort(r2);
-                editor.postInLifecycle(() -> {
-                    if (WordwrapLayout.this.editor != editor) {
-                        // This layout could have been abandoned when waiting for Runnable execution
-                        // See #307
-                        return;
-                    }
-                    if (rowTable != null) {
-                        rowTable.clear();
-                    } else {
-                        rowTable = new ArrayList<>();
-                    }
-                    for (WordwrapResult wordwrapResult : r2) {
-                        rowTable.addAll(wordwrapResult.regions);
-                    }
-                    editor.setLayoutBusy(false);
-                    editor.getEventHandler().scrollBy(0, 0);
-                });
+        for (int i = 0; i < taskCount; i++) {
+            segStart[i] = sizeEachTask * i;
+            segEnd[i] = i + 1 == taskCount ? (lineCount - 1) : (sizeEachTask * (i + 1) - 1);
+        }
+
+        final int version = breakVersion.incrementAndGet();
+
+        // Publish a complete but approximate table at once: one row per line. Every row index the
+        // editor may query is valid right now, so no reader needs special-casing while the real
+        // soft-wrap breaks are computed. This mirrors how MT renders a usable frame immediately and
+        // refines it afterwards.
+        final var results = new WordwrapResult[taskCount];
+        synchronized (this) {
+            priorityStart = priorityEnd = 0;
+            priorityRows = null;
+            rebuildTable(results, segStart, segEnd, lineCount);
+        }
+
+        // Anchor on the line the user is currently viewing. The current editor layout is still the
+        // previous one here (this instance is not assigned to the editor yet). On the very first
+        // layout there is no previous layout, so we simply start from the top.
+        int visibleLine = 0;
+        try {
+            var old = editor.getLayout();
+            if (old != null && old != this) {
+                visibleLine = old.getLineNumberForRow(Math.max(0, editor.getOffsetY() / Math.max(1, editor.getRowHeight())));
+            }
+        } catch (Throwable ignored) {
+            visibleLine = 0;
+        }
+        visibleLine = Math.max(0, Math.min(lineCount - 1, visibleLine));
+
+        editor.setLayoutBusy(true);
+
+        int rowHeight = Math.max(1, editor.getRowHeight());
+        int oldOffsetY = editor.getOffsetY();
+        int intraLineOffset = Math.floorMod(oldOffsetY, rowHeight);
+
+        // Phase one: synchronously break a bounded window around the viewport so the user sees
+        // correct wrapping right away. The window is intentionally small (viewport plus margin) so
+        // the main thread stall is bounded, no matter how large the document is.
+        int windowStart = Math.max(0, visibleLine - PRIORITY_MARGIN_LINES);
+        int windowEnd = Math.min(lineCount - 1, visibleLine + PRIORITY_MARGIN_LINES);
+        computePriorityWindow(version, results, segStart, segEnd, lineCount, windowStart, windowEnd);
+
+        editor.postInLifecycle(() -> {
+            if (WordwrapLayout.this.editor != editor) {
+                return;
+            }
+            // Soft-wrap counts changed, so the pixel offset that used to show the anchored line may
+            // now point somewhere else. Re-anchor on that same line to avoid a visual jump.
+            try {
+                int newRow = findRow(visibleLine);
+                editor.getEventHandler().scrollBy(0, (newRow * rowHeight + intraLineOffset) - editor.getOffsetY());
+            } catch (Throwable ignored) {
+                // fall through: leave the scroll position untouched
+            }
+            editor.setLayoutBusy(false);
+            editor.postInvalidate();
+        });
+
+        // Phase two: break the remaining segments in the background, publishing as they complete.
+        // The segments overlapping the priority window are still computed; their rows are simply
+        // overridden by the priority rows until then (rebuildTable overlays the window).
+        final var monitor = new TaskMonitor(taskCount, (completed, cancelledCount) -> {
+            final var ed = this.editor;
+            if (ed != null) {
+                ed.postInvalidate();
             }
         });
-        editor.setLayoutBusy(true);
-        for (int i = 0; i < taskCount; i++) {
-            var start = sizeEachTask * i;
-            var end = i + 1 == taskCount ? (text.getLineCount() - 1) : (sizeEachTask * (i + 1) - 1);
-            submitTask(new WordwrapAnalyzeTask(monitor, i, start, end));
+        for (int idx = 0; idx < taskCount; idx++) {
+            submitTask(new WordwrapAnalyzeTask(monitor, idx, segStart[idx], segEnd[idx], version, results, segStart, segEnd, lineCount));
         }
+    }
+
+    /**
+     * Synchronously break the priority window and publish it if it is still the newest version.
+     */
+    private void computePriorityWindow(int version, WordwrapResult[] results, int[] segStart, int[] segEnd, int lineCount, int windowStart, int windowEnd) {
+        List<RowRegion> rows;
+        try {
+            rows = breakLineRange(windowStart, windowEnd);
+        } catch (Throwable t) {
+            return;
+        }
+        if (breakVersion.get() != version) {
+            return;
+        }
+        synchronized (this) {
+            priorityStart = windowStart;
+            priorityEnd = windowEnd;
+            priorityRows = rows;
+            rebuildTable(results, segStart, segEnd, lineCount);
+        }
+    }
+
+    /**
+     * Break an inclusive line range on the calling thread.
+     */
+    private List<RowRegion> breakLineRange(int startLine, int endLine) {
+        var list = new ArrayList<RowRegion>();
+        var paint = new Paint(editor.isRenderFunctionCharacters());
+        paint.set(editor.getTextPaint());
+        paint.onAttributeUpdate();
+        var reusableRow = new TextRow();
+        for (int line = startLine; line <= endLine && line < text.getLineCount(); line++) {
+            list.addAll(breakLine(line, text.getLine(line), paint, reusableRow));
+        }
+        return list;
+    }
+
+    /**
+     * Rebuild a complete, ordered row table from the computed segments, overlaying the priority
+     * window. Lines whose data is not available yet fall back to a single row spanning the whole
+     * line, so the table length is always consistent with the document.
+     */
+    private void rebuildTable(WordwrapResult[] results, int[] segStart, int[] segEnd, int lineCount) {
+        var table = new ArrayList<RowRegion>(Math.max(lineCount, 16));
+        int priority = 0;
+        for (int i = 0; i < results.length; i++) {
+            int line = segStart[i];
+            var regions = results[i] != null ? results[i].regions : null;
+            int cursor = 0;
+            while (line <= segEnd[i] && line < lineCount) {
+                if (priorityRows != null && line >= priorityStart && line <= priorityEnd) {
+                    while (priority < priorityRows.size() && priorityRows.get(priority).line < line) {
+                        priority++;
+                    }
+                    while (priority < priorityRows.size() && priorityRows.get(priority).line == line) {
+                        table.add(priorityRows.get(priority++));
+                    }
+                    line++;
+                    continue;
+                }
+                if (regions != null) {
+                    while (cursor < regions.size() && regions.get(cursor).line < line) {
+                        cursor++;
+                    }
+                    if (cursor < regions.size() && regions.get(cursor).line == line) {
+                        while (cursor < regions.size() && regions.get(cursor).line == line) {
+                            table.add(regions.get(cursor++));
+                        }
+                        line++;
+                        continue;
+                    }
+                }
+                // Not computed yet: one placeholder row spanning the whole line.
+                table.add(new RowRegion(line, 0, text.getColumnCount(line), null, 0f, false));
+                line++;
+            }
+        }
+        rowTable = table;
     }
 
     private int findRow(int line) {
@@ -194,12 +345,24 @@ public class WordwrapLayout extends AbstractLayout {
      * Break a single line
      */
     private List<RowRegion> breakLine(int line, ContentLine sequence, Paint paint) {
+        return breakLine(line, sequence, paint, null);
+    }
+
+    /**
+     * Break a single line.
+     * <p>
+     * {@code reusableRow} may be a {@link TextRow} owned by the caller (for example a background
+     * layout task breaking many lines in a row). {@link TextRow#set} re-initializes all state, so
+     * reusing the same instance across lines is safe and avoids allocating one TextRow per line.
+     * When {@code null}, a fresh instance is created as before.
+     */
+    private List<RowRegion> breakLine(int line, ContentLine sequence, Paint paint, TextRow reusableRow) {
         Paint p = paint;
         if (p == null) {
             p = new Paint(editor.isRenderFunctionCharacters());
             p.set(editor.getTextPaint());
         }
-        var tr = new TextRow();
+        var tr = reusableRow != null ? reusableRow : new TextRow();
         var directions = text.getLineDirections(line);
         tr.set(sequence, 0, sequence.length(), sSpansForWordwrap, getInlayHints(line), directions, p, null, editor.getRenderer().createTextRowParams());
 
@@ -224,7 +387,13 @@ public class WordwrapLayout extends AbstractLayout {
 
     @Override
     public void beforeReplace(@NonNull Content content) {
-        // Intentionally empty
+        // An edit invalidates any in-flight background pass: its precomputed segments no longer
+        // match the document. Bumping the version makes those tasks drop their results, and the
+        // in-place line patching below takes over. The table stays complete throughout because
+        // lines whose segment was not computed still have their placeholder row.
+        synchronized (this) {
+            breakVersion.incrementAndGet();
+        }
     }
 
     @Override
@@ -610,27 +779,65 @@ public class WordwrapLayout extends AbstractLayout {
 
         private final int start, end, id;
         private final Paint paint;
+        private final TextRow reusableRow;
+        private final int version;
+        private final WordwrapResult[] results;
+        private final int[] segStart;
+        private final int[] segEnd;
+        private final int lineCount;
 
-        WordwrapAnalyzeTask(TaskMonitor monitor, int id, int start, int end) {
+        WordwrapAnalyzeTask(TaskMonitor monitor, int id, int start, int end, int version,
+                            WordwrapResult[] results, int[] segStart, int[] segEnd, int lineCount) {
             super(monitor);
             this.start = start;
             this.id = id;
             this.end = end;
+            this.version = version;
+            this.results = results;
+            this.segStart = segStart;
+            this.segEnd = segEnd;
+            this.lineCount = lineCount;
             paint = new Paint(editor.isRenderFunctionCharacters());
             paint.set(editor.getTextPaint());
             paint.onAttributeUpdate();
+            // One TextRow is reused for every line in this task. LayoutTask runs on a single
+            // worker thread and TextRow.set() fully re-initializes the row, so this is safe and
+            // avoids allocating a TextRow per line.
+            reusableRow = new TextRow();
         }
 
         @Override
         protected WordwrapResult compute() {
             var list = new ArrayList<RowRegion>();
             text.runReadActionsOnLines(start, end, (int index, ContentLine line, Content.ContentLineConsumer2.AbortFlag abortFlag) -> {
-                list.addAll(breakLine(index, line, paint));
+                list.addAll(breakLine(index, line, paint, reusableRow));
                 if (!shouldRun()) {
                     abortFlag.set = true;
                 }
             });
             return new WordwrapResult(id, list);
+        }
+
+        @Override
+        public void run() {
+            var result = compute();
+            // Publish this segment only if no newer pass has started. A stale pass must not
+            // overwrite a more recent layout (for example, results of a previous text size).
+            if (breakVersion.get() != version) {
+                if (monitor != null) {
+                    monitor.reportCancelled();
+                }
+                return;
+            }
+            results[id] = result;
+            synchronized (WordwrapLayout.this) {
+                if (breakVersion.get() == version && WordwrapLayout.this.editor != null) {
+                    rebuildTable(results, segStart, segEnd, lineCount);
+                }
+            }
+            if (monitor != null) {
+                monitor.reportCompleted(result);
+            }
         }
     }
 

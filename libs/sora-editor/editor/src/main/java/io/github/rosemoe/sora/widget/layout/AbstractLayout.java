@@ -139,7 +139,7 @@ public abstract class AbstractLayout implements Layout {
     }
 
     protected abstract class LayoutTask<T> implements Runnable {
-        private final TaskMonitor monitor;
+        protected final TaskMonitor monitor;
 
         protected LayoutTask(@NonNull TaskMonitor monitor) {
             this.monitor = monitor;
