@@ -3265,6 +3265,14 @@ public class CodeEditor extends View implements ContentListener, Formatter.Forma
                 // Compute new scroll position
                 var row = ((WordwrapLayout) layout).findRow(line, column);
                 var afterScrollY = row * getRowHeight() - touchHandler.focusY;
+                // The focus-anchored position can fall outside the valid scroll range. When the
+                // focus point sits on an early line (typically while the view is at the very top),
+                // row*rowHeight is smaller than focusY, so the raw value is negative. A negative
+                // scroll offset would render blank space above the first line and only disappear
+                // once a scroll event re-clamped it. Clamp here so the top of the document is
+                // reproducible immediately after scaling, matching the clamp already applied while
+                // the pinch is in progress (EditorTouchEventHandler.onScale).
+                afterScrollY = Math.max(0, Math.min(afterScrollY, getScrollMaxY()));
                 var scroller = touchHandler.getScroller();
                 dispatchEvent(new ScrollEvent(this, scroller.getCurrX(),
                         scroller.getCurrY(), 0, (int) afterScrollY, ScrollEvent.CAUSE_SCALE_TEXT));
