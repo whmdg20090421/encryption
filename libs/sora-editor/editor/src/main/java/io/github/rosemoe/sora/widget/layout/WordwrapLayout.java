@@ -149,42 +149,47 @@ public class WordwrapLayout extends AbstractLayout {
         // Anchor on the line the user is currently viewing. The current editor layout is still the
         // previous one here (this instance is not assigned to the editor yet). On the very first
         // layout there is no previous layout, so we simply start from the top.
-        int visibleLine = 0;
+        int anchorLine = 0;
         try {
             var old = editor.getLayout();
             if (old != null && old != this) {
-                visibleLine = old.getLineNumberForRow(Math.max(0, editor.getOffsetY() / Math.max(1, editor.getRowHeight())));
+                anchorLine = old.getLineNumberForRow(Math.max(0, editor.getOffsetY() / Math.max(1, editor.getRowHeight())));
             }
         } catch (Throwable ignored) {
-            visibleLine = 0;
+            anchorLine = 0;
         }
-        visibleLine = Math.max(0, Math.min(lineCount - 1, visibleLine));
+        final int visibleLine = Math.max(0, Math.min(lineCount - 1, anchorLine));
 
         editor.setLayoutBusy(true);
 
-        int rowHeight = Math.max(1, editor.getRowHeight());
-        int oldOffsetY = editor.getOffsetY();
-        int intraLineOffset = Math.floorMod(oldOffsetY, rowHeight);
+        final int rowHeight = Math.max(1, editor.getRowHeight());
+        final int intraLineOffset = Math.floorMod(editor.getOffsetY(), rowHeight);
 
         // Phase one: synchronously break a bounded window around the viewport so the user sees
         // correct wrapping right away. The window is intentionally small (viewport plus margin) so
         // the main thread stall is bounded, no matter how large the document is.
-        int windowStart = Math.max(0, visibleLine - PRIORITY_MARGIN_LINES);
-        int windowEnd = Math.min(lineCount - 1, visibleLine + PRIORITY_MARGIN_LINES);
+        final int windowStart = Math.max(0, visibleLine - PRIORITY_MARGIN_LINES);
+        final int windowEnd = Math.min(lineCount - 1, visibleLine + PRIORITY_MARGIN_LINES);
         computePriorityWindow(version, results, segStart, segEnd, lineCount, windowStart, windowEnd);
+
+        // Compute the corrected scroll offset now, while the priority rows for the anchored line are
+        // guaranteed to be in the table. Doing this later (inside the posted runnable) would race
+        // with background segments publishing a newer table, yielding a wrong row for the anchor.
+        int targetScrollY = editor.getOffsetY();
+        try {
+            targetScrollY = findRow(visibleLine) * rowHeight + intraLineOffset;
+        } catch (Throwable ignored) {
+            // keep the current scroll offset
+        }
+        final int scrollDeltaY = targetScrollY - editor.getOffsetY();
 
         editor.postInLifecycle(() -> {
             if (WordwrapLayout.this.editor != editor) {
                 return;
             }
             // Soft-wrap counts changed, so the pixel offset that used to show the anchored line may
-            // now point somewhere else. Re-anchor on that same line to avoid a visual jump.
-            try {
-                int newRow = findRow(visibleLine);
-                editor.getEventHandler().scrollBy(0, (newRow * rowHeight + intraLineOffset) - editor.getOffsetY());
-            } catch (Throwable ignored) {
-                // fall through: leave the scroll position untouched
-            }
+            // now point somewhere else. Re-anchor so the line stays where the user saw it.
+            editor.getEventHandler().scrollBy(0, scrollDeltaY);
             editor.setLayoutBusy(false);
             editor.postInvalidate();
         });
