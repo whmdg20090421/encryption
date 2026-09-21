@@ -1500,8 +1500,8 @@ fun VaultsListTab(
                 }
             }
 
-            // 从数据库中删除记录
-            vaultService.removeVault(vault.id, false)
+            // 从数据库中删除记录；删除磁盘文件时一并清理私有备份等残留产物
+            vaultService.removeVault(vault.id, deleteFiles)
 
             withContext(Dispatchers.Main) {
                 isDeletingVault = false

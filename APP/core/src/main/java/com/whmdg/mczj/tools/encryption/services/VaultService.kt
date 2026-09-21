@@ -295,6 +295,7 @@ class VaultService(private val context: Context) {
             try {
                 val dir = VaultPaths.resolveVault(context, rec.location, rec.relativePath)
                 SpecialPermissionVerifier.safeDelete(dir)
+                VaultPaths.purgeVaultArtifacts(context, dir, rec.name, rec.id)
             } catch (e: Exception) {}
         }
         _db.removeVault(id)

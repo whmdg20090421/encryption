@@ -597,6 +597,126 @@ fun CloudSyncScreen(
                 var deletePhase by remember { mutableStateOf("") }
                 var deleteComplete by remember { mutableStateOf(false) }
                 var activeDeletingScope by remember { mutableStateOf<String?>(null) }
+                // 删除前密码验证：待确认的 (保险箱项, 删除范围)
+                var pendingDeleteConfirm by remember { mutableStateOf<Pair<CloudSyncItem, String>?>(null) }
+                var deletePasswordInput by remember { mutableStateOf("") }
+                var deletePasswordVisible by remember { mutableStateOf(false) }
+                var deletePasswordError by remember { mutableStateOf<String?>(null) }
+                var deletePasswordVerifying by remember { mutableStateOf(false) }
+
+                /**
+                 * 执行删除操作（在密码验证通过后调用）。
+                 * 根据 scope 删除本地、云端或两者。
+                 */
+                fun performDelete(itemToDelete: CloudSyncItem, selectedScope: String) {
+                    // 显示删除进度弹窗
+                    showDeleteProgress = true
+                    activeDeletingScope = selectedScope
+                    deleteLocalProgress = 0f
+                    deleteCloudProgress = 0f
+                    deleteComplete = false
+
+                    scope.launch {
+                        try {
+                            when (selectedScope) {
+                                "local" -> {
+                                    // 仅删除本地（删除文件和 Local DB，保留 Cloud DB）
+                                    deletePhase = "正在删除本地数据"
+                                    if (itemToDelete.type == "保险箱") {
+                                        withContext(Dispatchers.IO) {
+                                            deleteLocalProgress = 0.2f
+                                            // 删除保险箱文件
+                                            vaultService.removeVault(itemToDelete.vaultId, deleteFiles = true)
+                                            deleteLocalProgress = 0.6f
+                                            // 清理 Local DB（保留 Cloud DB）
+                                            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, itemToDelete.vaultName)
+                                            syncDb.writableDatabase.delete("local_entries", null, null)
+                                            deleteLocalProgress = 1f
+                                        }
+                                    }
+                                    syncItems.removeIf { it.id == itemToDelete.id }
+                                    processedVaultIds.remove(itemToDelete.vaultId)
+                                    CloudSyncStore.save(context, syncItems.toList())
+                                    deleteComplete = true
+                                    deletePhase = "本地数据删除完成"
+                                }
+                                "cloud" -> {
+                                    // 仅删除云端（清理 Cloud DB，保留 Local DB）
+                                    deletePhase = "正在删除云端数据"
+                                    val config = accountState.config
+                                    if (config != null && itemToDelete.type == "保险箱") {
+                                        withContext(Dispatchers.IO) {
+                                            val client = WebDavFileClient(config)
+                                            val vaultCloudPath = "${config.relativePath}/${itemToDelete.vaultName}"
+                                            deleteCloudProgress = 0.2f
+                                            client.delete(vaultCloudPath)
+                                            deleteCloudProgress = 0.5f
+                                            // 从云端清单中移除
+                                            publishCloudCatalog(config)
+                                            deleteCloudProgress = 0.8f
+                                            // 清理 Cloud DB（保留 Local DB）
+                                            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, itemToDelete.vaultName)
+                                            syncDb.writableDatabase.delete("cloud_entries", null, null)
+                                            deleteCloudProgress = 1f
+                                        }
+                                    }
+                                    deleteComplete = true
+                                    deletePhase = "云端数据删除完成"
+                                }
+                                "both" -> {
+                                    // 本地和云端一起删除（删除所有，包括整个同步数据库）
+                                    if (itemToDelete.type == "保险箱") {
+                                        // 删除本地
+                                        deletePhase = "正在删除本地数据"
+                                        withContext(Dispatchers.IO) {
+                                            deleteLocalProgress = 0.3f
+                                            vaultService.removeVault(itemToDelete.vaultId, deleteFiles = true)
+                                            deleteLocalProgress = 1f
+                                        }
+
+                                        // 删除云端
+                                        deletePhase = "正在删除云端数据"
+                                        val config = accountState.config
+                                        if (config != null) {
+                                            withContext(Dispatchers.IO) {
+                                                val client = WebDavFileClient(config)
+                                                val vaultCloudPath = "${config.relativePath}/${itemToDelete.vaultName}"
+                                                deleteCloudProgress = 0.3f
+                                                client.delete(vaultCloudPath)
+                                                deleteCloudProgress = 0.6f
+                                                // 更新云端清单
+                                                publishCloudCatalog(config)
+                                                deleteCloudProgress = 1f
+                                            }
+                                        }
+
+                                        // 清理整个同步数据库目录
+                                        deletePhase = "正在清理同步数据"
+                                        withContext(Dispatchers.IO) {
+                                            // 先释放 SQLite 文件句柄，否则打开的 DB 文件无法删除，目录会残留
+                                            com.whmdg.mczj.tools.encryption.data.SyncDatabase.closeInstance(context, itemToDelete.vaultName)
+                                            val syncDir = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/${itemToDelete.vaultName}")
+                                            if (syncDir.exists()) {
+                                                syncDir.deleteRecursively()
+                                            }
+                                        }
+                                    }
+                                    syncItems.removeIf { it.id == itemToDelete.id }
+                                    processedVaultIds.remove(itemToDelete.vaultId)
+                                    CloudSyncStore.save(context, syncItems.toList())
+                                    deleteComplete = true
+                                    deletePhase = "本地和云端数据删除完成"
+                                }
+                            }
+                        } catch (e: Exception) {
+                            deleteComplete = true
+                            deletePhase = "删除失败：${e.message}"
+                            com.whmdg.mczj.tools.util.DiagnosticLog.exportCrashReport(
+                                context, e, "云盘删除操作失败"
+                            )
+                        }
+                    }
+                }
                 val currentConcurrency = remember {
                     context.getSharedPreferences("cloud_sync_settings", Context.MODE_PRIVATE)
                         .getInt("max_concurrency", 3)
@@ -766,113 +886,11 @@ fun CloudSyncScreen(
                                     val itemToDelete = item
                                     showDeleteOptions = null
                                     deleteScope = null
-
-                                    // 显示删除进度弹窗
-                                    showDeleteProgress = true
-                                    activeDeletingScope = selectedScope
-                                    deleteLocalProgress = 0f
-                                    deleteCloudProgress = 0f
-                                    deleteComplete = false
-
-                                    // 执行删除操作
-                                    scope.launch {
-                                        try {
-                                            when (selectedScope) {
-                                                "local" -> {
-                                                    // 仅删除本地（保留保险箱记录，删除文件和 Local DB）
-                                                    deletePhase = "正在删除本地数据"
-                                                    if (itemToDelete.type == "保险箱") {
-                                                        withContext(Dispatchers.IO) {
-                                                            deleteLocalProgress = 0.2f
-                                                            // 删除保险箱文件
-                                                            vaultService.removeVault(itemToDelete.vaultId, deleteFiles = true)
-                                                            deleteLocalProgress = 0.6f
-                                                            // 清理 Local DB（保留 Cloud DB）
-                                                            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, itemToDelete.vaultName)
-                                                            syncDb.writableDatabase.delete("local_entries", null, null)
-                                                            deleteLocalProgress = 1f
-                                                        }
-                                                    }
-                                                    syncItems.removeIf { it.id == itemToDelete.id }
-                                                    processedVaultIds.remove(itemToDelete.vaultId)
-                                                    CloudSyncStore.save(context, syncItems.toList())
-                                                    deleteComplete = true
-                                                    deletePhase = "本地数据删除完成"
-                                                }
-                                                "cloud" -> {
-                                                    // 仅删除云端（清理 Cloud DB，保留 Local DB）
-                                                    deletePhase = "正在删除云端数据"
-                                                    val config = accountState.config
-                                                    if (config != null && itemToDelete.type == "保险箱") {
-                                                        withContext(Dispatchers.IO) {
-                                                            val client = WebDavFileClient(config)
-                                                            val vaultCloudPath = "${config.relativePath}/${itemToDelete.vaultName}"
-                                                            deleteCloudProgress = 0.2f
-                                                            client.delete(vaultCloudPath)
-                                                            deleteCloudProgress = 0.5f
-                                                            // 从云端清单中移除
-                                                            publishCloudCatalog(config)
-                                                            deleteCloudProgress = 0.8f
-                                                            // 清理 Cloud DB（保留 Local DB）
-                                                            val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, itemToDelete.vaultName)
-                                                            syncDb.writableDatabase.delete("cloud_entries", null, null)
-                                                            deleteCloudProgress = 1f
-                                                        }
-                                                    }
-                                                    deleteComplete = true
-                                                    deletePhase = "云端数据删除完成"
-                                                }
-                                                "both" -> {
-                                                    // 本地和云端一起删除（删除所有，包括整个同步数据库）
-                                                    if (itemToDelete.type == "保险箱") {
-                                                        // 删除本地
-                                                        deletePhase = "正在删除本地数据"
-                                                        withContext(Dispatchers.IO) {
-                                                            deleteLocalProgress = 0.3f
-                                                            vaultService.removeVault(itemToDelete.vaultId, deleteFiles = true)
-                                                            deleteLocalProgress = 1f
-                                                        }
-
-                                                        // 删除云端
-                                                        deletePhase = "正在删除云端数据"
-                                                        val config = accountState.config
-                                                        if (config != null) {
-                                                            withContext(Dispatchers.IO) {
-                                                                val client = WebDavFileClient(config)
-                                                                val vaultCloudPath = "${config.relativePath}/${itemToDelete.vaultName}"
-                                                                deleteCloudProgress = 0.3f
-                                                                client.delete(vaultCloudPath)
-                                                                deleteCloudProgress = 0.6f
-                                                                // 更新云端清单
-                                                                publishCloudCatalog(config)
-                                                                deleteCloudProgress = 1f
-                                                            }
-                                                        }
-
-                                                        // 清理整个同步数据库目录
-                                                        deletePhase = "正在清理同步数据"
-                                                        withContext(Dispatchers.IO) {
-                                                            val syncDir = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/${itemToDelete.vaultName}")
-                                                            if (syncDir.exists()) {
-                                                                syncDir.deleteRecursively()
-                                                            }
-                                                        }
-                                                    }
-                                                    syncItems.removeIf { it.id == itemToDelete.id }
-                                                    processedVaultIds.remove(itemToDelete.vaultId)
-                                                    CloudSyncStore.save(context, syncItems.toList())
-                                                    deleteComplete = true
-                                                    deletePhase = "本地和云端数据删除完成"
-                                                }
-                                            }
-                                        } catch (e: Exception) {
-                                            deleteComplete = true
-                                            deletePhase = "删除失败：${e.message}"
-                                            com.whmdg.mczj.tools.util.DiagnosticLog.exportCrashReport(
-                                                context, e, "云盘删除操作失败"
-                                            )
-                                        }
-                                    }
+                                    // 删除前必须验证保险箱密码
+                                    deletePasswordInput = ""
+                                    deletePasswordError = null
+                                    deletePasswordVisible = false
+                                    pendingDeleteConfirm = itemToDelete to selectedScope
                                 }
                             ) { Text("确认") }
                         },
@@ -881,6 +899,114 @@ fun CloudSyncScreen(
                                 showDeleteOptions = null
                                 deleteScope = null
                             }) { Text("取消") }
+                        }
+                    )
+                }
+
+                // 删除密码验证弹窗
+                pendingDeleteConfirm?.let { (item, selectedScope) ->
+                    val scopeLabel = when (selectedScope) {
+                        "local" -> "仅删除本地"
+                        "cloud" -> "仅删除云端"
+                        else -> "本地和云端一起删除"
+                    }
+                    AlertDialog(
+                        onDismissRequest = {
+                            if (!deletePasswordVerifying) {
+                                pendingDeleteConfirm = null
+                                deletePasswordInput = ""
+                                deletePasswordError = null
+                            }
+                        },
+                        title = { Text("验证密码以删除「${item.vaultName}」") },
+                        text = {
+                            Column {
+                                Text("操作范围：$scopeLabel")
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("请输入保险箱密码以确认删除操作。")
+                                Spacer(modifier = Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = deletePasswordInput,
+                                    onValueChange = { deletePasswordInput = it; deletePasswordError = null },
+                                    label = { Text("密码") },
+                                    visualTransformation = if (deletePasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                                    trailingIcon = {
+                                        IconButton(onClick = { deletePasswordVisible = !deletePasswordVisible }) {
+                                            Icon(
+                                                imageVector = if (deletePasswordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                                                contentDescription = "切换显示"
+                                            )
+                                        }
+                                    },
+                                    isError = deletePasswordError != null,
+                                    enabled = !deletePasswordVerifying,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                if (deletePasswordError != null) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = deletePasswordError!!,
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                enabled = deletePasswordInput.isNotEmpty() && !deletePasswordVerifying,
+                                onClick = {
+                                    val pwd = deletePasswordInput
+                                    deletePasswordVerifying = true
+                                    deletePasswordError = null
+                                    scope.launch {
+                                        var session: com.whmdg.mczj.tools.encryption.services.VaultSession? = null
+                                        try {
+                                            // 本地无该保险箱记录时无法校验密码（正常流程不会出现）
+                                            if (vaultService.getVault(item.vaultId) == null) {
+                                                withContext(Dispatchers.Main) {
+                                                    deletePasswordVerifying = false
+                                                    deletePasswordError = "本地无「${item.vaultName}」记录，无法验证密码"
+                                                }
+                                                return@launch
+                                            }
+                                            session = withContext(Dispatchers.IO) {
+                                                vaultService.open(item.vaultId, pwd)
+                                            }
+                                            session.dispose()
+                                            session = null
+                                            withContext(Dispatchers.Main) {
+                                                deletePasswordVerifying = false
+                                                pendingDeleteConfirm = null
+                                                deletePasswordInput = ""
+                                                performDelete(item, selectedScope)
+                                            }
+                                        } catch (e: Exception) {
+                                            session?.dispose()
+                                            withContext(Dispatchers.Main) {
+                                                deletePasswordVerifying = false
+                                                deletePasswordError = "密码错误，请重试"
+                                            }
+                                        }
+                                    }
+                                }
+                            ) {
+                                if (deletePasswordVerifying) {
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Text("确认删除")
+                                }
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                enabled = !deletePasswordVerifying,
+                                onClick = {
+                                    pendingDeleteConfirm = null
+                                    deletePasswordInput = ""
+                                    deletePasswordError = null
+                                }
+                            ) { Text("取消") }
                         }
                     )
                 }

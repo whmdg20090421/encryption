@@ -54,6 +54,18 @@ class SyncDatabase private constructor(
         private const val TABLE_LOCAL = "local_entries"
         private const val TABLE_CLOUD = "cloud_entries"
         private const val TABLE_STATS = "sync_stats"
+
+        /**
+         * 关闭并移除指定同步目录的缓存实例，释放文件句柄。
+         * 删除同步目录前必须调用，否则残留的打开句柄会阻止文件被真正删除。
+         */
+        fun closeInstance(context: Context, syncName: String) {
+            val dbFile = File(File(AppDataPaths.encryption(context), "云盘同步/$syncName"), "vault_sync.db")
+            synchronized(this) {
+                val cached = instances.remove(dbFile.absolutePath)
+                cached?.close()
+            }
+        }
     }
 
     override fun onCreate(db: SQLiteDatabase) {
