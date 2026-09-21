@@ -148,7 +148,6 @@ internal fun RenameDialog(
                     value = base,
                     onValueChange = { base = it },
                     singleLine = true,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 )
             } else {
@@ -160,7 +159,6 @@ internal fun RenameDialog(
                         value = base,
                         onValueChange = { base = it },
                         singleLine = true,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                         modifier = Modifier.weight(7f)
                     )
                     Text(".", modifier = Modifier.padding(horizontal = 4.dp))
@@ -168,7 +166,6 @@ internal fun RenameDialog(
                         value = ext,
                         onValueChange = { ext = it },
                         singleLine = true,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                         modifier = Modifier.weight(3f)
                     )
                 }
