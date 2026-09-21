@@ -2581,6 +2581,21 @@ class PanelCoordinator(
 
     // ── 跨面板操作 ──
 
+    /**
+     * 同步是否会销毁目标面板的保险箱密钥。
+     *
+     * 目标面板原本处于保险箱模式，但同步后其路径不再属于同一个保险箱会话时，
+     * 密钥会被销毁。包括：
+     * - 源为普通目录 → 目标保险箱被覆盖为普通目录；
+     * - 源为 B 保险箱 → 目标 A 保险箱被 B 会话替换。
+     * 同一保险箱内同步（源与目标为同一会话）不触发。
+     */
+    fun syncWouldDestroyVault(): Boolean {
+        val srcCtrl = focused
+        val dstCtrl = other
+        return dstCtrl.isVaultMode && srcCtrl.vaultSession !== dstCtrl.vaultSession
+    }
+
     /** 将聚焦面板的路径同步到非聚焦面板 */
     fun syncPaths() {
         val srcCtrl = focused
@@ -3227,6 +3242,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun openWithExternalApp(file: File, displayName: String) = focusedController.openWithExternalApp(file, displayName)
     fun refreshCurrent() = focusedController.refreshCurrent()
     fun syncPaths() = panels.syncPaths()
+    fun syncWouldDestroyVault() = panels.syncWouldDestroyVault()
     fun refreshBoth() = panels.refreshBoth()
 
     /** 局部更新 FolderSizeDb 中受影响路径的大小，然后刷新两个面板 */

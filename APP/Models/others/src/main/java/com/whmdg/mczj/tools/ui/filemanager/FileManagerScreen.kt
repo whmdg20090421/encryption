@@ -557,6 +557,7 @@ fun FileManagerScreen(
     }
     var showAddQaDialog by remember { mutableStateOf(false) }
     var showVaultExitDialog by remember { mutableStateOf(false) }
+    var showVaultSyncDialog by remember { mutableStateOf(false) }
 
     // ── WebDAV 快捷访问 ──
     var showQaTypeSelector by remember { mutableStateOf(false) }
@@ -745,6 +746,11 @@ fun FileManagerScreen(
     DisposableEffect(showVaultExitDialog) {
         if (showVaultExitDialog) registerOverlay("vaultExit") { showVaultExitDialog = false }
         else unregisterOverlay("vaultExit")
+        onDispose {}
+    }
+    DisposableEffect(showVaultSyncDialog) {
+        if (showVaultSyncDialog) registerOverlay("vaultSync") { showVaultSyncDialog = false }
+        else unregisterOverlay("vaultSync")
         onDispose {}
     }
     DisposableEffect(showRenameDialog) {
@@ -1096,7 +1102,13 @@ fun FileManagerScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             IconButton(
-                                onClick = { vm.syncPaths() },
+                                onClick = {
+                                    if (vm.syncWouldDestroyVault()) {
+                                        showVaultSyncDialog = true
+                                    } else {
+                                        vm.syncPaths()
+                                    }
+                                },
                                 enabled = !vm.isInArchiveMode
                             ) {
                                 Icon(Icons.Default.SwapHoriz, contentDescription = "同步路径")
@@ -2212,121 +2224,113 @@ fun FileManagerScreen(
                         shadowElevation = 8.dp
                     ) {
                         Column(modifier = Modifier.fillMaxSize()) {
-                            // 标题栏
-                            Surface(
-                                modifier = Modifier.fillMaxWidth(),
-                                shadowElevation = 4.dp,
-                                color = MaterialTheme.colorScheme.surface
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        "功能菜单",
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
-                                    IconButton(onClick = { showDrawer = false }) {
-                                        Icon(Icons.Default.Close, contentDescription = "关闭")
-                                    }
-                                }
-                            }
                             // 菜单内容
                             Column(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .verticalScroll(rememberScrollState())
                             ) {
-                                // ── 本地存储 + 快捷访问 ──
-                                val barColor = if (isSystemInDarkTheme()) Color(0xFF00838F) else Color(0xFF00BCD4)
-                                Card(
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 3.dp),
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                                ) {
-                                    Column(modifier = Modifier.padding(vertical = 4.dp)) {
-                                        // 内部储存
-                                        val internalStat = try { StatFs(Environment.getDataDirectory().path) } catch (_: Exception) { null }
-                                        if (internalStat != null) {
-                                            val total = internalStat.totalBytes
-                                            val available = internalStat.availableBytes
-                                            val used = total - available
-                                            val progress = if (total > 0) used.toFloat() / total.toFloat() else 0f
-                                            Column(
-                                                modifier = Modifier.fillMaxWidth().clickable { vm.navigateToWithScroll("/storage/emulated/0/"); showDrawer = false }.padding(horizontal = 12.dp, vertical = 8.dp)
-                                            ) {
-                                                Text("内部储存", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                                Spacer(Modifier.height(4.dp))
-                                                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp)), color = barColor, trackColor = barColor.copy(alpha = 0.2f))
-                                                Spacer(Modifier.height(2.dp))
-                                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                                    Text("${compactSize(used)} / ${compactSize(total)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                    Text("%.1f%%".format(progress * 100), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                }
-                                            }
-                                        }
-                                        // 根目录
-                                        val rootStat = try { StatFs("/") } catch (_: Exception) { null }
-                                        if (rootStat != null) {
-                                            HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
-                                            val total = rootStat.totalBytes
-                                            val available = rootStat.availableBytes
-                                            val used = total - available
-                                            val progress = if (total > 0) used.toFloat() / total.toFloat() else 0f
-                                            Column(
-                                                modifier = Modifier.fillMaxWidth().clickable { vm.navigateToWithScroll("/"); showDrawer = false }.padding(horizontal = 12.dp, vertical = 8.dp)
-                                            ) {
-                                                Text("根目录", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                                Spacer(Modifier.height(4.dp))
-                                                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp)), color = barColor, trackColor = barColor.copy(alpha = 0.2f))
-                                                Spacer(Modifier.height(2.dp))
-                                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                                    Text("${compactSize(used)} / ${compactSize(total)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                    Text("%.1f%%".format(progress * 100), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                }
-                                            }
-                                        }
-                                        // 自定义快捷访问
-                                        quickAccessList.forEach { entry ->
-                                            HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
-                                            SwipeToDeleteShortcut(
-                                                onDelete = {
-                                                    quickAccessList = quickAccessList.filter { it != entry }
-                                                    saveQuickAccess()
-                                                },
-                                                onClick = { vm.navigateToWithScroll(entry.path); showDrawer = false }
-                                            ) {
-                                                Icon(Icons.Default.SubdirectoryArrowRight, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                Spacer(Modifier.width(8.dp))
-                                                Text(entry.name, style = MaterialTheme.typography.bodyMedium)
-                                            }
-                                        }
-                                        // WebDAV 快捷访问
-                                        webDavServers.forEach { server ->
-                                            HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
-                                            SwipeToDeleteShortcut(
-                                                onDelete = {
-                                                    WebDavServerStore.remove(context, server.id)
-                                                    webDavServers = webDavServers.filter { it.id != server.id }
-                                                },
-                                                onClick = { vm.navigateToWebDav(server); showDrawer = false }
-                                            ) {
-                                                Icon(Icons.Default.Cloud, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                                                Spacer(Modifier.width(8.dp))
-                                                Text(server.name.ifEmpty { server.getDefaultName() }, style = MaterialTheme.typography.bodyMedium)
-                                            }
-                                        }
-                                        // 添加快捷访问
-                                        HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth().clickable { showQaTypeSelector = true }.padding(horizontal = 12.dp, vertical = 8.dp),
-                                            verticalAlignment = Alignment.CenterVertically
+                                // ── 功能菜单 ──
+                                DrawerSectionHeader(
+                                    title = "功能菜单",
+                                    expandable = true,
+                                    expanded = localExpanded,
+                                    onClick = {
+                                        localExpanded = !localExpanded
+                                        drawerPrefs.edit().putBoolean("drawer_local_expanded", localExpanded).apply()
+                                    }
+                                )
+                                AnimatedVisibility(visible = localExpanded) {
+                                    Column {
+                                        // ── 本地存储 + 快捷访问 ──
+                                        val barColor = if (isSystemInDarkTheme()) Color(0xFF00838F) else Color(0xFF00BCD4)
+                                        Card(
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 3.dp),
+                                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                                         ) {
-                                            Icon(Icons.Default.Add, contentDescription = "添加快捷访问", modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                                            Spacer(Modifier.width(8.dp))
-                                            Text("添加快捷访问", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                                            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                                // 内部储存
+                                                val internalStat = try { StatFs(Environment.getDataDirectory().path) } catch (_: Exception) { null }
+                                                if (internalStat != null) {
+                                                    val total = internalStat.totalBytes
+                                                    val available = internalStat.availableBytes
+                                                    val used = total - available
+                                                    val progress = if (total > 0) used.toFloat() / total.toFloat() else 0f
+                                                    Column(
+                                                        modifier = Modifier.fillMaxWidth().clickable { vm.navigateToWithScroll("/storage/emulated/0/"); showDrawer = false }.padding(horizontal = 12.dp, vertical = 8.dp)
+                                                    ) {
+                                                        Text("内部储存", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                                        Spacer(Modifier.height(4.dp))
+                                                        LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp)), color = barColor, trackColor = barColor.copy(alpha = 0.2f))
+                                                        Spacer(Modifier.height(2.dp))
+                                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                            Text("${compactSize(used)} / ${compactSize(total)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                            Text("%.1f%%".format(progress * 100), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                        }
+                                                    }
+                                                }
+                                                // 根目录
+                                                val rootStat = try { StatFs("/") } catch (_: Exception) { null }
+                                                if (rootStat != null) {
+                                                    HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                                                    val total = rootStat.totalBytes
+                                                    val available = rootStat.availableBytes
+                                                    val used = total - available
+                                                    val progress = if (total > 0) used.toFloat() / total.toFloat() else 0f
+                                                    Column(
+                                                        modifier = Modifier.fillMaxWidth().clickable { vm.navigateToWithScroll("/"); showDrawer = false }.padding(horizontal = 12.dp, vertical = 8.dp)
+                                                    ) {
+                                                        Text("根目录", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                                        Spacer(Modifier.height(4.dp))
+                                                        LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(3.dp)), color = barColor, trackColor = barColor.copy(alpha = 0.2f))
+                                                        Spacer(Modifier.height(2.dp))
+                                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                            Text("${compactSize(used)} / ${compactSize(total)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                            Text("%.1f%%".format(progress * 100), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                        }
+                                                    }
+                                                }
+                                                // 自定义快捷访问
+                                                quickAccessList.forEach { entry ->
+                                                    HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                                                    SwipeToDeleteShortcut(
+                                                        onDelete = {
+                                                            quickAccessList = quickAccessList.filter { it != entry }
+                                                            saveQuickAccess()
+                                                        },
+                                                        onClick = { vm.navigateToWithScroll(entry.path); showDrawer = false }
+                                                    ) {
+                                                        Icon(Icons.Default.SubdirectoryArrowRight, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                        Spacer(Modifier.width(8.dp))
+                                                        Text(entry.name, style = MaterialTheme.typography.bodyMedium)
+                                                    }
+                                                }
+                                                // WebDAV 快捷访问
+                                                webDavServers.forEach { server ->
+                                                    HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                                                    SwipeToDeleteShortcut(
+                                                        onDelete = {
+                                                            WebDavServerStore.remove(context, server.id)
+                                                            webDavServers = webDavServers.filter { it.id != server.id }
+                                                        },
+                                                        onClick = { vm.navigateToWebDav(server); showDrawer = false }
+                                                    ) {
+                                                        Icon(Icons.Default.Cloud, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                                                        Spacer(Modifier.width(8.dp))
+                                                        Text(server.name.ifEmpty { server.getDefaultName() }, style = MaterialTheme.typography.bodyMedium)
+                                                    }
+                                                }
+                                                // 添加快捷访问
+                                                HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth().clickable { showQaTypeSelector = true }.padding(horizontal = 12.dp, vertical = 8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(Icons.Default.Add, contentDescription = "添加快捷访问", modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                                                    Spacer(Modifier.width(8.dp))
+                                                    Text("添加快捷访问", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -3701,6 +3705,24 @@ fun FileManagerScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showVaultExitDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // ── 同步覆盖保险箱警告对话框 ──
+    if (showVaultSyncDialog) {
+        StandardDialog(
+            onDismissRequest = { showVaultSyncDialog = false },
+            title = { Text("同步将离开加密保险箱") },
+            text = { Text("同步会用当前面板覆盖目标面板。若目标面板正在浏览加密保险箱，其密钥将会被销毁，重新进入需要重新从加密入口进入。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showVaultSyncDialog = false
+                    vm.syncPaths()
+                }) { Text("确认") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showVaultSyncDialog = false }) { Text("取消") }
             }
         )
     }
