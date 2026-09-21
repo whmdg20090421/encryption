@@ -14,8 +14,10 @@ import java.io.File
  * 两张表：local_entries（本地文件状态）、cloud_entries（云端文件状态）。
  * 按 path 字典序存储，查询时 ORDER BY path 即可得到树形结构。
  */
-class SyncDatabase private constructor(context: Context, dbPath: String) :
-    SQLiteOpenHelper(context, dbPath, null, DB_VERSION) {
+class SyncDatabase private constructor(
+    context: Context,
+    private val dbFile: File
+) : SQLiteOpenHelper(context, dbFile.absolutePath, null, DB_VERSION) {
 
     companion object {
         private const val DB_VERSION = 4
@@ -27,16 +29,25 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
          * 获取同步数据库实例。
          * @param syncName 同步任务名称（保险箱名或用户输入的名称）
          * DB 路径：<AppDataPaths.encryption>/云盘同步/<syncName>/vault_sync.db
+         *
+         * 每次取用都会校验缓存实例指向的 DB 文件是否仍然存在：文件已被删除或替换时，
+         * 旧实例指向的是失效的文件描述符（再次写入会抛 SQLITE_READONLY_DBMOVED），
+         * 因此先关闭并移除旧实例，再按该路径重新指向——存在同名文件则打开它，
+         * 不存在则由 SQLiteOpenHelper 重新建库。
          */
         fun getInstance(context: Context, syncName: String): SyncDatabase {
             val syncDir = File(AppDataPaths.encryption(context), "云盘同步/$syncName")
             if (!syncDir.exists()) syncDir.mkdirs()
             val dbFile = File(syncDir, "vault_sync.db")
             val path = dbFile.absolutePath
-            return instances[path] ?: synchronized(this) {
-                instances[path] ?: SyncDatabase(context.applicationContext, path).also {
-                    instances[path] = it
+            synchronized(this) {
+                val cached = instances[path]
+                if (cached != null && cached.dbFile.exists()) return cached
+                if (cached != null) {
+                    cached.close()
+                    instances.remove(path)
                 }
+                return SyncDatabase(context.applicationContext, dbFile).also { instances[path] = it }
             }
         }
 

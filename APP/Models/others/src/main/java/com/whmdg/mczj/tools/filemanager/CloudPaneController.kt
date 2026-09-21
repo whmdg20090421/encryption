@@ -44,8 +44,9 @@ class CloudPaneController(
     private val webdavClient = WebDavFileClient(webdavConfig)
     private var syncJob: Job? = null
     private var downloadJob: Job? = null
-    // 构造时即打开本地同步库，支持 init 前的云端索引恢复。
-    private val syncDb: SyncDatabase = SyncDatabase.getInstance(context, vaultName)
+    // 每次访问都经 getInstance 校验底层文件是否仍存在：文件被删除/替换后
+    // 旧实例的文件描述符已失效，需重建（支持 init 前的云端索引恢复）。
+    private val syncDb: SyncDatabase get() = SyncDatabase.getInstance(context, vaultName)
 
     /** 云盘面板状态（完全独立，使用 mutableStateOf 驱动 Compose recomposition） */
     class CloudPanelState {
