@@ -219,6 +219,26 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
     }
 
     /**
+     * 仅写入本地条目的明文 MD5（加密导入时调用）。
+     *
+     * 行不存在则插入（status=PENDING），已存在则只更新 md5，不动其他字段，
+     * 避免与扫描写行产生竞态把已有状态覆盖。
+     */
+    fun upsertLocalMd5(path: String, md5: String, size: Long, lastModified: String) {
+        val db = writableDatabase
+        val values = ContentValues().apply {
+            put("path", path)
+            put("size", size)
+            put("uploaded_size", 0L)
+            put("last_modified", lastModified)
+            put("md5", md5)
+            put("status", SyncStatus.PENDING.name)
+        }
+        db.insertWithOnConflict("local_entries", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+        db.update("local_entries", ContentValues().apply { put("md5", md5) }, "path = ?", arrayOf(path))
+    }
+
+    /**
      * 从解压出的云端 SQLite 文件全量替换 cloud_entries，保留本地 local_entries。
      *
      * 云端数据库是权威全量快照：导入前先清空本地 cloud_entries，再写入云端条目。
@@ -330,12 +350,6 @@ class SyncDatabase private constructor(context: Context, dbPath: String) :
         } finally {
             db.endTransaction()
         }
-    }
-
-    fun updateMd5(table: String, path: String, md5: String) {
-        val db = writableDatabase
-        val values = ContentValues().apply { put("md5", md5) }
-        db.update(table, values, "path = ?", arrayOf(path))
     }
 
     fun updateCloudHash(table: String, path: String, cloudHash: String) {
@@ -570,7 +584,7 @@ data class SyncEntryRow(
     val size: Long,
     val uploadedSize: Long = 0,  // 已上传字节数（仅 local_entries 使用）
     val lastModified: String,    // ISO8601
-    val md5: String?,            // 本地表：上传过程中异步计算，初始为 NULL；云端表：必填
+    val md5: String?,            // 明文 MD5；本地表在加密导入时写入，云端表在上传成功后从本地复制
     val cloudHash: String?,      // 云端返回的内部编码（唯一性）
     val status: SyncStatus,
     val lastSyncTime: String?,   // ISO8601

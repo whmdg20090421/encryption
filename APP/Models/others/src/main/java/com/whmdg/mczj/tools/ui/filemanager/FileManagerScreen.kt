@@ -5962,7 +5962,6 @@ private fun FileEntryRow(
     vaultContext: VaultContext? = null,
     fileNameFontSize: Float = 12f,
     cloudExtra: (@Composable () -> Unit)? = null,
-    sizeIsConflict: Boolean = false,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -6208,7 +6207,6 @@ private fun FileEntryRow(
                             text = rightLabel,
                             fontSize = 11.sp,
                             color = if (rightLabel == "✕") MaterialTheme.colorScheme.error
-                                    else if (sizeIsConflict) Color(0xFFEF4444)
                                     else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -6641,12 +6639,10 @@ private fun CloudPanelContent(
                                     uploadedSize = cloudEntry.uploadedSize,
                                     redSize = cloudEntry.redSize,
                                     cloudOnlySize = cloudEntry.cloudOnlySize,
-                                    isCloudOnly = cloudEntry.isCloudOnly,
-                                    isVerifying = cloudEntry.isVerifying
+                                    isCloudOnly = cloudEntry.isCloudOnly
                                 )
                             }
-                        } else null,
-                        sizeIsConflict = cloudEntry.conflictBySize
+                        } else null
                     )
                 }
             }
@@ -7200,29 +7196,14 @@ private fun SyncStatusBar(
     uploadedSize: Long,
     redSize: Long,
     cloudOnlySize: Long,
-    isCloudOnly: Boolean = false,
-    isVerifying: Boolean = false
+    isCloudOnly: Boolean = false
 ) {
     val skyBlue = Color(0xFF03A9F4)
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (isVerifying) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(12.dp),
-                strokeWidth = 1.5.dp,
-                color = Color(0xFF3B82F6)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(
-                text = "校验中...",
-                fontSize = 10.sp,
-                color = Color(0xFF94A3B8),
-                maxLines = 1
-            )
-        } else {
-            val uploadingSize = (totalSize - uploadedSize - redSize - cloudOnlySize).coerceAtLeast(0L)
+        val uploadingSize = (totalSize - uploadedSize - redSize - cloudOnlySize).coerceAtLeast(0L)
             Row(
                 modifier = Modifier
                     .weight(1f)
@@ -7253,7 +7234,6 @@ private fun SyncStatusBar(
                 color = if (isCloudOnly) skyBlue else Color(0xFF94A3B8),
                 maxLines = 1
             )
-        }
     }
 }
 

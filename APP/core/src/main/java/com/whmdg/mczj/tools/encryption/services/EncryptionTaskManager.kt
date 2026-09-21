@@ -95,6 +95,7 @@ object EncryptionTaskManager {
         // 保存任务参数
         val taskArgs = TaskArgs(
             vaultDir = session.vaultDir.absolutePath,
+            vaultName = session.record.name,
             dek = session.dek.clone(),
             subDir = subDir,
             encryptFilename = session.record.encryptFilename,
@@ -229,7 +230,7 @@ object EncryptionTaskManager {
                         config = config,
                         record = VaultRecord(
                             id = 0,
-                            name = "",
+                            name = taskArgs.vaultName,
                             location = StorageLocation.INTERNAL,
                             relativePath = taskArgs.vaultDir,
                             encryptFilename = taskArgs.encryptFilename,
@@ -638,6 +639,7 @@ object EncryptionTaskManager {
      */
     data class TaskArgs(
         val vaultDir: String,
+        val vaultName: String,
         val dek: ByteArray,
         val subDir: String,
         val encryptFilename: Boolean,

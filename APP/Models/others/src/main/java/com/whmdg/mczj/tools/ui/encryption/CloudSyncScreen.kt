@@ -2062,11 +2062,6 @@ private fun DiffScanDialog(
                             )
                         }
                         updatedState.incrementAndGet()
-                    } else if (existingEntry.md5 == null) {
-                        // 时间戳和大小都没变，但 MD5 缺失：计算 MD5
-                        val md5 = calculateMd5(file)
-                        syncDb.updateMd5("local_entries", relPath, md5)
-                        updatedState.incrementAndGet()
                     }
 
                     progressState.incrementAndGet()
@@ -2518,20 +2513,6 @@ private suspend fun createVaultFromPending(
     } finally {
         pending.configFile.delete()
     }
-}
-
-// ── MD5 计算辅助函数 ──
-
-private fun calculateMd5(file: java.io.File): String {
-    val md = java.security.MessageDigest.getInstance("MD5")
-    file.inputStream().use { input ->
-        val buffer = ByteArray(8192)
-        var read: Int
-        while (input.read(buffer).also { read = it } != -1) {
-            md.update(buffer, 0, read)
-        }
-    }
-    return md.digest().joinToString("") { "%02x".format(it) }
 }
 
 // ── WebDAV 设置弹窗 ──

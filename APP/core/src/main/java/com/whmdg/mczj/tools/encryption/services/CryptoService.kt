@@ -5,6 +5,7 @@ import com.whmdg.mczj.tools.encryption.core.FileCodec
 import com.whmdg.mczj.tools.encryption.core.FileConstants
 import com.whmdg.mczj.tools.encryption.core.EncryptionTraceLog
 import com.whmdg.mczj.tools.encryption.core.FilenameCodec
+import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -34,6 +35,7 @@ object CryptoService {
                     session.nameMapping.set(mappingKey, mappingValue)
                     session.saveNameMapping(context)
                 }
+                recordPlainMd5(context, session, output, sink.plainMd5())
                 return output
             } catch (e: Exception) {
                 pending.delete()
@@ -128,9 +130,28 @@ object CryptoService {
             onProgress = onProgress,
             cancelFlag = cancelFlag,
             context = context
-        )
+        ).let { recordPlainMd5(context, session, it.file, it.plainMd5) }
         if (trace) EncryptionTraceLog.log("CryptoService.encryptIntoVault done: out=${outFile.name}")
         return outFile
+    }
+
+    /**
+     * 加密导入时把明文 MD5 写入本地同步库（行不存在则建），供云同步的差异判定复用。
+     * 明文 MD5 只在加密这一刻的明文流上顺带算出，之后不再重算。
+     */
+    private fun recordPlainMd5(
+        context: Context,
+        session: VaultSession,
+        encryptedFile: File,
+        plainMd5: String
+    ) {
+        val relPath = "/" + encryptedFile.relativeTo(session.vaultDir).path.replace('\\', '/')
+        SyncDatabase.getInstance(context, session.record.name).upsertLocalMd5(
+            path = relPath,
+            md5 = plainMd5,
+            size = encryptedFile.length(),
+            lastModified = java.time.Instant.ofEpochMilli(encryptedFile.lastModified()).toString()
+        )
     }
 
     /**

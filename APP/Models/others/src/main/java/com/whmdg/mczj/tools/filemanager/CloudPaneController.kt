@@ -5,8 +5,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
-import com.whmdg.mczj.tools.security.ShellExecutor
-import com.whmdg.mczj.tools.security.Permission
 import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
 import com.whmdg.mczj.tools.encryption.data.SyncStatus
@@ -41,9 +39,6 @@ class CloudPaneController(
     private val folderSizeDb: () -> FolderSizeDb,
     private val vaultSession: com.whmdg.mczj.tools.encryption.services.VaultSession? = null
 ) {
-    /** MD5 同步计算阈值：小于此值的文件在渲染时同步计算 MD5，大于此值则异步计算 */
-    private val MD5_SYNC_THRESHOLD = 10 * 1024 * 1024L  // 10MB
-
     val state = CloudPanelState()
 
     private val webdavClient = WebDavFileClient(webdavConfig)
@@ -171,11 +166,7 @@ class CloudPaneController(
         /** 文件的单个同步状态（文件夹为 null，用聚合字段代替） */
         val syncStatus: SyncStatus? = null,
         /** 仅存在于云端，本地无对应文件（纯内存标识，不持久化） */
-        val isCloudOnly: Boolean = false,
-        /** 正在校验 MD5（冲突文件合并检测中） */
-        val isVerifying: Boolean = false,
-        /** 冲突由"大小不同"判定（而非 MD5 判定），用于列表大小文字标红 */
-        val conflictBySize: Boolean = false
+        val isCloudOnly: Boolean = false
     )
 
     /** 排除的系统文件 */
@@ -241,11 +232,6 @@ class CloudPaneController(
                     "CloudPane",
                     "目录加载完成 path='$path' entries=${entries.size} 耗时=${System.currentTimeMillis() - startMs}ms"
                 )
-
-                // 后台异步检测文件变更（不阻塞 UI）
-                launch(Dispatchers.IO) {
-                    detectFileChanges(path)
-                }
             } catch (e: Exception) {
                 if (generation != navigationGeneration) return@launch
                 state.loadError = e
@@ -527,43 +513,16 @@ class CloudPaneController(
                     .filter { it.path.startsWith(prefix) || it.path == folderRelativePath }
             }
 
-            // ④ 前置校验：本地与 DB 已上传文件的一致性检查（size → time → MD5）
+            // ④ 已上传（COMPLETED）且本地仍存在的文件视为无需重传（密文不变）
             val localFileMap = localFiles.associateBy {
                 "/" + it.relativeTo(File(vaultDir)).path.replace('\\', '/')
             }
             val validCompletedPaths = mutableSetOf<String>()
-            withContext(Dispatchers.IO) {
-                for (dbEntry in completedDbEntries) {
-                    val localFile = localFileMap[dbEntry.path]
-                    if (localFile != null) {
-                        val currentSize = localFile.length()
-                        val currentLastModified = Instant.ofEpochMilli(localFile.lastModified()).toString()
-                        if (dbEntry.size != currentSize) {
-                            // size 不同 → 直接判定改变
-                            syncDb.updateStatus("local_entries", dbEntry.path, SyncStatus.PENDING)
-                        } else if (dbEntry.lastModified != currentLastModified) {
-                            // size 相同 + time 不同 → 计算 MD5 对比
-                            val localMd5 = calculateMd5(localFile)
-                            if (localMd5 == dbEntry.md5) {
-                                // MD5 相同 → 没改变，仅刷新时间戳
-                                syncDb.updateEntry("local_entries", dbEntry.path) { it.copy(lastModified = currentLastModified) }
-                                validCompletedPaths.add(dbEntry.path)
-                            } else {
-                                // MD5 不同 → 改变了
-                                syncDb.updateEntry("local_entries", dbEntry.path) { it.copy(
-                                    lastModified = currentLastModified,
-                                    md5 = localMd5,
-                                    status = SyncStatus.PENDING,
-                                    uploadedSize = 0
-                                ) }
-                            }
-                        } else {
-                            // size 和 time 都相同 → 没改变
-                            validCompletedPaths.add(dbEntry.path)
-                        }
-                    }
-                    // 本地不存在的不在这里处理，后面删除检测会处理
+            for (dbEntry in completedDbEntries) {
+                if (localFileMap.containsKey(dbEntry.path)) {
+                    validCompletedPaths.add(dbEntry.path)
                 }
+                // 本地不存在的不在这里处理，后面删除检测会处理
             }
 
             // ⑤ 对比：双方都有=跳过，本地有DB无=需上传，DB有本地无=已删除
@@ -586,87 +545,35 @@ class CloudPaneController(
                 }
             }
 
-            // ⑥ 检测上传冲突：local.status=PENDING 且 cloud.db 中存在且内容不同
-            // 优先级判定：哈希相同（绝对权威）→ 大小不同（次要）→ 时间不同（最弱参考）
+            // ⑥ 检测上传冲突：local.status=PENDING 且 cloud.db 中存在，且明文 MD5 不同
             val conflicts = mutableListOf<ConflictFileInfo>()
-            val skippedByHash = mutableSetOf<String>()  // 哈希相同自动跳过的文件
+            val skippedByHash = mutableSetOf<String>()  // 明文 MD5 相同自动跳过的文件
             withContext(Dispatchers.IO) {
-                for ((file, relPath) in toUpload) {
+                for ((_, relPath) in toUpload) {
                     val localEntry = syncDb.getEntry("local_entries", relPath)
                     val cloudEntry = syncDb.getEntry("cloud_entries", relPath)
 
                     if (localEntry != null && localEntry.status == SyncStatus.PENDING && cloudEntry != null) {
-                        val localSize = file.length()
-                        val cloudSize = cloudEntry.size
-
-                        // 1. 优先检查大小：大小不同 → 文件必定不同，真冲突
-                        if (localSize != cloudSize) {
+                        val localMd5 = localEntry.md5
+                        val cloudMd5 = cloudEntry.md5
+                        if (localMd5 != null && localMd5 == cloudMd5) {
+                            // 明文 MD5 相同 → 同一文件，标记为已同步
+                            syncDb.updateEntry("local_entries", relPath) { entry ->
+                                entry.copy(
+                                    status = SyncStatus.COMPLETED,
+                                    lastSyncTime = Instant.now().toString()
+                                )
+                            }
+                            skippedByHash.add(relPath)
+                        } else {
                             conflicts.add(ConflictFileInfo(
                                 path = relPath,
-                                localSize = localSize,
-                                localModified = Instant.ofEpochMilli(file.lastModified()).toString(),
-                                cloudSize = cloudSize,
+                                localSize = localEntry.size,
+                                localModified = localEntry.lastModified,
+                                cloudSize = cloudEntry.size,
                                 cloudModified = cloudEntry.lastModified,
-                                reasons = listOf("大小不同")
+                                reasons = listOf("MD5 不同")
                             ))
-                            continue
-                        }
-
-                        // 2. 大小相同，检查哈希（绝对权威）
-                        val cloudMd5 = cloudEntry.md5
-                        if (cloudMd5 != null) {
-                            val localMd5 = calculateMd5(file)
-                            if (localMd5 == cloudMd5) {
-                                // 哈希相同 → 文件100%相同
-                                // 检查大小或时间是否不同，若不同则更新数据库
-                                val currentLastModified = Instant.ofEpochMilli(file.lastModified()).toString()
-                                if (localSize != cloudEntry.size || currentLastModified != cloudEntry.lastModified) {
-                                    // 更新数据库：刷新大小和时间戳
-                                    syncDb.updateEntry("local_entries", relPath) { entry ->
-                                        entry.copy(
-                                            status = SyncStatus.COMPLETED,
-                                            size = localSize,
-                                            lastModified = currentLastModified,
-                                            md5 = localMd5,
-                                            lastSyncTime = Instant.now().toString()
-                                        )
-                                    }
-                                } else {
-                                    // 大小、时间、哈希都相同，仅确保状态为 COMPLETED
-                                    syncDb.updateEntry("local_entries", relPath) { entry ->
-                                        entry.copy(
-                                            status = SyncStatus.COMPLETED,
-                                            md5 = localMd5,
-                                            lastSyncTime = Instant.now().toString()
-                                        )
-                                    }
-                                }
-                                skippedByHash.add(relPath)
-                                continue
-                            } else {
-                                // 哈希不同 → 真冲突
-                                conflicts.add(ConflictFileInfo(
-                                    path = relPath,
-                                    localSize = localSize,
-                                    localModified = Instant.ofEpochMilli(file.lastModified()).toString(),
-                                    cloudSize = cloudSize,
-                                    cloudModified = cloudEntry.lastModified,
-                                    reasons = listOf("最后修改时间不同", "MD5 不同")
-                                ))
-                            }
-                        } else {
-                            // 云端无哈希记录，退回时间戳判断
-                            val localModified = Instant.ofEpochMilli(file.lastModified()).toString()
-                            if (localModified != cloudEntry.lastModified) {
-                                conflicts.add(ConflictFileInfo(
-                                    path = relPath,
-                                    localSize = localSize,
-                                    localModified = localModified,
-                                    cloudSize = cloudSize,
-                                    cloudModified = cloudEntry.lastModified,
-                                    reasons = listOf("最后修改时间不同")
-                                ))
-                            }
                         }
                     }
                 }
@@ -1259,11 +1166,8 @@ class CloudPaneController(
                     val hasConflict = localEntry != null && localEntry.status != SyncStatus.COMPLETED
 
                     if (hasConflict && localEntry != null) {
-                        // 实时重判冲突原因（与列表渲染时的三回合判定一致）
-                        val localFile = File(vaultDir, relPath.trimStart('/'))
-                        val reasons = withContext(Dispatchers.IO) {
-                            computeConflictReasons(localFile, localEntry, cloudEntry)
-                        }
+                        // 冲突原因：明文 MD5 不同
+                        val reasons = listOf("MD5 不同")
                         val overwrite = suspendCancellableCoroutine<Boolean> { cont ->
                             state.downloadConflictDialog = DownloadConflictState(
                                 path = relPath,
@@ -2164,67 +2068,6 @@ class CloudPaneController(
                 // 文件：从 DB 查同步状态，优先用内存实时进度，回退到 DB 持久化进度
                 val dbEntry = syncDb.getEntry("local_entries", childRelativePath)
                 var status = dbEntry?.status ?: SyncStatus.PENDING
-                // 记录本次渲染时冲突是由"大小不同"判定的（用于大小文字标红）
-                var conflictBySize = false
-
-                // 渲染时冲突检测：COMPLETED 文件检查本地是否已修改
-                if (status == SyncStatus.COMPLETED) {
-                    val cloudEntry = syncDb.getEntry("cloud_entries", childRelativePath)
-                    if (cloudEntry != null) {
-                        // 一次 stat 获取 size 和 time
-                        val statResult = try {
-                            ShellExecutor.execute(Permission.MIN, "stat -c '%s %Y' '${file.absolutePath}'").trim()
-                        } catch (_: Exception) { null }
-                        if (statResult != null) {
-                            val parts = statResult.split(' ')
-                            if (parts.size == 2) {
-                                val localSize = parts[0].toLongOrNull() ?: file.length()
-                                val localTime = parts[1].toLongOrNull() ?: 0L
-                                val cloudSize = cloudEntry.size
-                                val cloudTime = try {
-                                    java.time.Instant.parse(cloudEntry.lastModified).epochSecond
-                                } catch (_: Exception) { 0L }
-
-                                val sizeChanged = localSize != cloudSize
-                                val isChanged = if (sizeChanged) {
-                                    true  // size 不同，直接判定改变
-                                } else if (localTime != cloudTime) {
-                                    // size 相同但 time 不同，计算 MD5 对比
-                                    // 就地更新进度，保持提示块常驻，避免 null/非 null 切换导致闪烁
-                                    state.loadProgress = state.loadProgress?.copy(
-                                        reason = "正在计算 MD5",
-                                        current = index + 1,
-                                        total = children.size,
-                                        currentFile = file.name
-                                    ) ?: LoadProgress(
-                                        reason = "正在计算 MD5",
-                                        current = index + 1,
-                                        total = children.size,
-                                        currentFile = file.name
-                                    )
-                                    val localMd5 = calculateMd5(file)
-                                    localMd5 != cloudEntry.md5
-                                } else {
-                                    false  // size 和 time 都相同
-                                }
-
-                                if (isChanged) {
-                                    conflictBySize = sizeChanged
-                                    // 刷新 local_entries，重置为 PENDING
-                                    syncDb.updateEntry("local_entries", childRelativePath) { row ->
-                                        row.copy(
-                                            size = localSize,
-                                            lastModified = java.time.Instant.ofEpochMilli(file.lastModified()).toString(),
-                                            status = SyncStatus.PENDING,
-                                            uploadedSize = 0
-                                        )
-                                    }
-                                    status = SyncStatus.PENDING
-                                }
-                            }
-                        }
-                    }
-                }
 
                 // 优先使用 DB 中的原始文件大小，避免读取加密文件的膨胀大小
                 val fileSize = dbEntry?.size ?: file.length()
@@ -2264,8 +2107,7 @@ class CloudPaneController(
                     uploadingSize = 0,
                     redSize = redSize,
                     lastModified = file.lastModified(),
-                    syncStatus = status,
-                    conflictBySize = conflictBySize
+                    syncStatus = status
                 ))
             }
         }
@@ -2368,69 +2210,20 @@ class CloudPaneController(
             val isConflict = localEntry != null &&
                              localEntry.status == SyncStatus.PENDING &&
                              name in localNames
-            // 本地实时文件大小（用于"大小不同"判定，与列表渲染检测一致）
-            val localFileForEntry = File(vaultDir, childRelativePath.trimStart('/'))
-            val localRealSize = if (localFileForEntry.exists()) localFileForEntry.length() else (localEntry?.size ?: 0L)
-            val conflictBySize = localRealSize != cloudEntry.size
 
-            if (isConflict) {
-                // 冲突文件：检查 MD5 是否相同（智能合并）
-                val localFile = localFileForEntry
-                // 同步标记本地条目（listLocalFiles 中已添加，显示在前）
-                if (conflictBySize) {
-                    val localIdx = entries.indexOfFirst { it.relativePath == childRelativePath && !it.isCloudOnly }
-                    if (localIdx >= 0) {
-                        entries[localIdx] = entries[localIdx].copy(conflictBySize = true)
-                    }
-                }
-
+            if (isConflict && localEntry != null) {
+                // 冲突文件：明文 MD5 相同 → 同一文件，直接合并为 COMPLETED
+                val localMd5 = localEntry.md5
                 val cloudMd5 = cloudEntry.md5
-                if (localFile.exists() && cloudMd5 != null) {
-                    if (localFile.length() < MD5_SYNC_THRESHOLD) {
-                        // 小文件：同步计算 MD5，现场合并或显示冲突
-                        val localMd5 = calculateMd5(localFile)
-                        if (localMd5 == cloudMd5) {
-                            // MD5 相同，合并：更新 local_entries 为 COMPLETED
-                            syncDb.updateEntry("local_entries", childRelativePath) { row ->
-                                row.copy(
-                                    status = SyncStatus.COMPLETED,
-                                    md5 = localMd5,
-                                    uploadedSize = localFile.length(),
-                                    lastSyncTime = java.time.Instant.now().toString()
-                                )
-                            }
-                            // 不添加云端条目（已合并，只显示本地绿色条目）
-                            continue
-                        }
-                        // MD5 不同，继续下面的逻辑添加两个冲突条目
-                    } else {
-                        // 大文件：添加"校验中"状态的两个条目，后台异步计算 MD5
-                        val localIdx = entries.indexOfFirst { it.relativePath == childRelativePath && !it.isCloudOnly }
-                        if (localIdx >= 0) {
-                            // 更新本地条目为"校验中"
-                            entries[localIdx] = entries[localIdx].copy(isVerifying = true)
-                        }
-                        // 添加云端条目（也标记为"校验中"）
-                        entries.add(CloudFileEntry(
-                            name = name,
-                            relativePath = childRelativePath,
-                            isDirectory = false,
-                            totalSize = cloudEntry.size,
-                            uploadedSize = 0,
-                            uploadingSize = 0,
-                            cloudOnlySize = cloudEntry.size,
-                            lastModified = parseCloudLastModified(cloudEntry.lastModified),
-                            syncStatus = SyncStatus.COMPLETED,
-                            isCloudOnly = true,
-                            isVerifying = true,
-                            conflictBySize = conflictBySize
-                        ))
-                        // 启动异步校验
-                        scope.launch(Dispatchers.IO) {
-                            verifyAndMergeConflict(relativePath, childRelativePath, localFile, cloudMd5)
-                        }
-                        continue
+                if (localMd5 != null && localMd5 == cloudMd5) {
+                    syncDb.updateEntry("local_entries", childRelativePath) { row ->
+                        row.copy(
+                            status = SyncStatus.COMPLETED,
+                            lastSyncTime = java.time.Instant.now().toString()
+                        )
                     }
+                    // 不添加云端条目（已合并，只显示本地绿色条目）
+                    continue
                 }
             }
 
@@ -2447,8 +2240,7 @@ class CloudPaneController(
                     cloudOnlySize = cloudEntry.size,
                     lastModified = parseCloudLastModified(cloudEntry.lastModified),
                     syncStatus = SyncStatus.COMPLETED,
-                    isCloudOnly = true,
-                    conflictBySize = isConflict && conflictBySize
+                    isCloudOnly = true
                 ))
             }
         }
@@ -2470,50 +2262,6 @@ class CloudPaneController(
                 isCloudOnly = true
             ))
         }
-    }
-
-    /**
-     * 实时重判冲突原因，返回导致冲突的判定层级。
-     * 判定顺序：大小不同 → 直接冲突；大小相同但时间不同 → 进入 MD5；MD5 不同 → 冲突。
-     */
-    private fun computeConflictReasons(
-        localFile: File,
-        localEntry: SyncEntryRow,
-        cloudEntry: SyncEntryRow
-    ): List<String> {
-        val reasons = mutableListOf<String>()
-        val localSize = if (localFile.exists()) localFile.length() else localEntry.size
-        val cloudSize = cloudEntry.size
-
-        if (localSize != cloudSize) {
-            reasons.add("大小不同")
-            return reasons
-        }
-
-        // 大小相同 → 检查最后修改时间
-        val localModified = if (localFile.exists()) {
-            java.time.Instant.ofEpochMilli(localFile.lastModified()).toString()
-        } else {
-            localEntry.lastModified
-        }
-        if (localModified == cloudEntry.lastModified) {
-            // 大小、时间都相同但状态未同步，属于状态层面的冲突
-            reasons.add("状态未同步")
-            return reasons
-        }
-
-        // 时间不同 → 进入 MD5 校验
-        reasons.add("最后修改时间不同")
-        val cloudMd5 = cloudEntry.md5
-        if (localFile.exists() && !cloudMd5.isNullOrEmpty()) {
-            val localMd5 = calculateMd5(localFile)
-            if (localMd5 != cloudMd5) {
-                reasons.add("MD5 不同")
-            }
-        } else {
-            reasons.add("MD5 不同")
-        }
-        return reasons
     }
 
     /** 递归聚合云端文件夹下所有文件的总大小（累加整棵子树，与本地 folderSize 口径一致） */
@@ -2538,40 +2286,6 @@ class CloudPaneController(
             java.time.Instant.parse(lastModified).toEpochMilli()
         } catch (_: Exception) {
             0L
-        }
-    }
-
-    /** 异步校验冲突文件 MD5 并合并（大文件后台校验） */
-    private suspend fun verifyAndMergeConflict(
-        parentPath: String,
-        relativePath: String,
-        localFile: File,
-        cloudMd5: String
-    ) {
-        try {
-            val localMd5 = calculateMd5(localFile)
-
-            if (localMd5 == cloudMd5) {
-                // MD5 相同，合并：更新 local_entries 为 COMPLETED
-                syncDb.updateEntry("local_entries", relativePath) { row ->
-                    row.copy(
-                        status = SyncStatus.COMPLETED,
-                        md5 = localMd5,
-                        uploadedSize = localFile.length(),
-                        lastSyncTime = java.time.Instant.now().toString()
-                    )
-                }
-            }
-            // MD5 不同则不操作，保持 PENDING 状态
-
-            // 仅在用户仍停留在该目录时刷新，避免校验完成后把已切走的用户拉回
-            withContext(Dispatchers.Main) {
-                if (state.currentPath == parentPath) {
-                    navigateTo(parentPath)
-                }
-            }
-        } catch (e: Exception) {
-            // 校验失败，保持原状（不刷新，避免死循环）
         }
     }
 
@@ -2751,108 +2465,4 @@ class CloudPaneController(
         val redSize: Long = 0,
         val cloudOnlySize: Long = 0
     )
-
-    /**
-     * 异步检测文件变更：对当前目录下 status=COMPLETED 的文件，检查是否变化。
-     * 如果本地文件的 size/lastModified/MD5 变化，将 status 改为 PENDING。
-     */
-    private suspend fun detectFileChanges(relativePath: String) {
-        try {
-            val dir = File(vaultDir, relativePath.trimStart('/'))
-            if (!dir.exists() || !dir.isDirectory) return
-
-            val children = dir.listFiles() ?: return
-            var hasChanges = false
-
-            for (file in children) {
-                if (file.name in excludedFiles) continue
-                if (file.isDirectory) continue  // 只检测文件，不检测文件夹
-
-                val childRelativePath = if (relativePath == "/") "/${file.name}" else "$relativePath/${file.name}"
-                val dbEntry = syncDb.getEntry("local_entries", childRelativePath)
-
-                // 只检测 COMPLETED 状态的文件
-                if (dbEntry == null || dbEntry.status != SyncStatus.COMPLETED) continue
-
-                // 1. 检查大小是否变化
-                val currentSize = file.length()
-                if (currentSize != dbEntry.size) {
-                    // 大小变了 → 标记为 PENDING，重置上传进度
-                    syncDb.updateEntry("local_entries", childRelativePath) { row ->
-                        row.copy(
-                            status = SyncStatus.PENDING,
-                            size = currentSize,
-                            uploadedSize = 0,  // 重置已上传大小
-                            lastModified = java.time.Instant.ofEpochMilli(file.lastModified()).toString()
-                            // 保留 last_sync_time，让用户知道之前上传过
-                        )
-                    }
-                    com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync(
-                        "CloudPane",
-                        "检测到文件大小变化: $childRelativePath (${dbEntry.size} → $currentSize)"
-                    )
-                    hasChanges = true
-                    continue
-                }
-
-                // 2. 检查修改时间是否变化
-                val currentModified = file.lastModified()
-                val currentModifiedStr = java.time.Instant.ofEpochMilli(currentModified).toString()
-                val lastSyncTime = dbEntry.lastSyncTime
-
-                if (lastSyncTime != null && currentModifiedStr > lastSyncTime) {
-                    // 修改时间变了 → 计算 MD5 确认
-                    val currentMd5 = calculateMd5(file)
-                    if (currentMd5 != dbEntry.md5) {
-                        // MD5 不匹配 → 标记为 PENDING，重置上传进度
-                        syncDb.updateEntry("local_entries", childRelativePath) { row ->
-                            row.copy(
-                                status = SyncStatus.PENDING,
-                                md5 = currentMd5,
-                                size = currentSize,
-                                uploadedSize = 0,  // 重置已上传大小
-                                lastModified = currentModifiedStr
-                                // 保留 last_sync_time，让用户知道之前上传过
-                            )
-                        }
-                        com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync(
-                            "CloudPane",
-                            "检测到文件内容变化: $childRelativePath (MD5: ${dbEntry.md5} → $currentMd5)"
-                        )
-                        hasChanges = true
-                    } else {
-                        // MD5 相同，只是 touch 了文件 → 更新 lastModified 即可
-                        syncDb.updateEntry("local_entries", childRelativePath) { row ->
-                            row.copy(lastModified = currentModifiedStr)
-                        }
-                    }
-                }
-            }
-
-            // 如果有变化，刷新 UI
-            if (hasChanges) {
-                withContext(Dispatchers.Main) {
-                    silentRefresh()
-                }
-            }
-        } catch (e: Exception) {
-            com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync(
-                "CloudPane",
-                "文件变更检测失败: ${e.message}"
-            )
-        }
-    }
-
-    /** 计算文件的 MD5 哈希 */
-    private fun calculateMd5(file: File): String {
-        val digest = java.security.MessageDigest.getInstance("MD5")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(8192)
-            var read: Int
-            while (input.read(buffer).also { read = it } > 0) {
-                digest.update(buffer, 0, read)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
 }

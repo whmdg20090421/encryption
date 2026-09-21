@@ -10,7 +10,11 @@ import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
+
+/** 把 MD5 摘要格式化为小写 hex。 */
+private fun md5Hex(digest: MessageDigest): String = digest.digest().joinToString("") { "%02x".format(it) }
 
 /**
  * 单个加密文件的二进制编解码器。
@@ -23,6 +27,9 @@ object FileCodec {
 
     /** 并发加密文件数，1 = 串行。预留变量，暂不提供修改接口。 */
     var concurrentFiles = 1
+
+    /** 加密结果：产生的密文文件 + 明文 MD5（用于云同步差异判定）。 */
+    data class EncryptResult(val file: File, val plainMd5: String)
 
     /** 根据文件大小选择 chunk：小文件小块减少内存占用，大文件大块减少初始化次数。 */
     private fun chunkSizeFor(fileSize: Long): Int = when {
@@ -47,9 +54,13 @@ object FileCodec {
         private val buffer = ByteArray(FileConstants.CHUNK_SIZE)
         private val headerBuf = ByteArray(4 + 12) // 复用：chunkLen(4) + IV(12)
         private val out = FileOutputStream(dst)
+        private val md5 = MessageDigest.getInstance("MD5")
         private var buffered = 0
         private var written = 0L
         private var closed = false
+
+        /** 明文 MD5，仅在 [finish] 后有效。 */
+        fun plainMd5(): String = md5Hex(md5)
 
         init {
             if (customEncryption) out.write(FileConstants.magicHeader)
@@ -58,6 +69,7 @@ object FileCodec {
         fun write(data: ByteArray) {
             check(!closed) { "加密写入器已关闭" }
             if (cancelFlag?.get() == true) throw InterruptedIOException("用户取消")
+            md5.update(data)
             var offset = 0
             while (offset < data.size) {
                 val count = minOf(buffer.size - buffered, data.size - offset)
@@ -113,8 +125,9 @@ object FileCodec {
         onProgress: (Long, Long) -> Unit = { _, _ -> },
         cancelFlag: AtomicBoolean? = null,
         context: android.content.Context? = null
-    ) {
+    ): EncryptResult {
         val aad = if (customEncryption) FileConstants.aadCustomObf else null
+        val md5 = MessageDigest.getInstance("MD5")
         val totalSize = src.length()
         val chunkSize = chunkSizeFor(totalSize)
         val trace = context != null && EncryptionTraceLog.enabled(context)
@@ -141,6 +154,7 @@ object FileCodec {
                     val read = inp.read(buffer)
                     if (read <= 0) break
                     val t1 = if (trace) System.nanoTime() else 0L
+                    md5.update(buffer, 0, read)
                     val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
                     val e = AesGcm256.encrypt(dek, chunk, aad)
                     var cipherOut = e.ciphertext
@@ -177,6 +191,7 @@ object FileCodec {
             EncryptionTraceLog.log("FileCodec.encrypt done: totalBytes=$totalSize")
         }
         onProgress(totalSize, totalSize)
+        return EncryptResult(dst, md5Hex(md5))
     }
 
     fun decrypt(
