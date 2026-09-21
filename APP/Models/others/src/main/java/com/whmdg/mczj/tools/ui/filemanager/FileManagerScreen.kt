@@ -1697,6 +1697,14 @@ fun FileManagerScreen(
                         }
                     )
                 }
+                // 补全同步记录的密码输入/计算框
+                val pwdDialog = cloudStateForOverlay.passwordDialog
+                if (pwdDialog != null) {
+                    PasswordPromptDialog(
+                        dialog = pwdDialog,
+                        onDismiss = { cloudStateForOverlay.passwordDialog = null }
+                    )
+                }
                 // 进度异常弹窗
                 val anomalyInfo = cloudStateForOverlay.anomalyDialogInfo
                 if (anomalyInfo != null) {
@@ -7089,6 +7097,88 @@ private fun UploadConflictDialog(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         Text("覆盖云端 (${conflicts.size})", fontSize = 13.sp, color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==================== 补全同步记录的密码输入框 ====================
+
+@Composable
+private fun PasswordPromptDialog(
+    dialog: CloudPaneController.PasswordDialogState,
+    onDismiss: () -> Unit
+) {
+    val isDarkMode = LocalIsDarkMode.current
+    val cardColor = if (isDarkMode) Color(0xFF1E293B) else Color.White
+    val textColor = if (isDarkMode) Color(0xFFE2E8F0) else Color(0xFF1E293B)
+    val subTextColor = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+
+    var password by remember { mutableStateOf("") }
+
+    Dialog(
+        onDismissRequest = { /* 不允许点击外部关闭 */ },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = cardColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text(
+                    text = "输入保险箱密码",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = dialog.message,
+                    fontSize = 12.sp,
+                    color = subTextColor
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("密码") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    enabled = !dialog.busy,
+                    isError = dialog.error != null,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (dialog.error != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(dialog.error, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        onClick = { onDismiss(); dialog.onCancel() },
+                        enabled = !dialog.busy
+                    ) { Text("取消") }
+                    TextButton(
+                        onClick = { if (!dialog.busy && password.isNotEmpty()) dialog.onSubmit(password) },
+                        enabled = !dialog.busy && password.isNotEmpty()
+                    ) {
+                        if (dialog.busy) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = Color(0xFF3B82F6)
+                            )
+                        } else {
+                            Text("确认")
+                        }
                     }
                 }
             }

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.whmdg.mczj.tools.encryption.core.FileCodec
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
@@ -48,6 +49,9 @@ class CloudPaneController(
     // 旧实例的文件描述符已失效，需重建（支持 init 前的云端索引恢复）。
     private val syncDb: SyncDatabase get() = SyncDatabase.getInstance(context, vaultName)
 
+    // 补全同步记录时临时持有的会话（钥匙）。仅在本轮扫描内复用，扫描结束即清零销毁。
+    private var backfillSession: com.whmdg.mczj.tools.encryption.services.VaultSession? = null
+
     /** 云盘面板状态（完全独立，使用 mutableStateOf 驱动 Compose recomposition） */
     class CloudPanelState {
         var currentPath by mutableStateOf("/")
@@ -81,7 +85,18 @@ class CloudPaneController(
         var cloudDbSyncState by mutableStateOf<CloudDbSyncState?>(null)
         /** 下载冲突确认对话框（null=隐藏） */
         var downloadConflictDialog by mutableStateOf<DownloadConflictState?>(null)
+        /** 补全同步记录所需的密码输入框（null=隐藏） */
+        var passwordDialog by mutableStateOf<PasswordDialogState?>(null)
     }
+
+    /** 补充缺失的明文校验值：请求密码 → 校验取钥匙 → 纯内存解密计算。 */
+    data class PasswordDialogState(
+        val message: String,
+        val busy: Boolean = false,
+        val error: String? = null,
+        val onSubmit: (String) -> Unit,
+        val onCancel: () -> Unit
+    )
 
     /** 加载/校验进度：在转圈下方展示当前阶段与进度 */
     data class LoadProgress(
@@ -196,12 +211,20 @@ class CloudPaneController(
         com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.externalWriter = { tag, message ->
             com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.log(context, tag, message)
         }
-        // 仅首次初始化时全量扫描
+        // 仅首次初始化时全量扫描。若需补全记录会阻塞式弹出密码框，
+        // 因此先进入 loading 态（转圈背景），扫描完成后再渲染列表，
+        // 避免"列表已出现却又弹框"造成的误导。
         if (!state.isInitialized) {
-            syncLocalFiles()
             state.isInitialized = true
+            state.isLoading = true
+            state.loadProgress = LoadProgress(reason = "正在校验本地文件")
+            scope.launch {
+                syncLocalFiles()
+                navigateTo("/")
+            }
+        } else {
+            navigateTo("/")
         }
-        navigateTo("/")
     }
 
     /** 导航代次：只接受最新一次导航的结果，丢弃过期导航的写入 */
@@ -1937,8 +1960,10 @@ class CloudPaneController(
     }
 
     fun refresh() {
-        syncLocalFiles()
-        navigateTo(state.currentPath)
+        scope.launch {
+            syncLocalFiles()
+            navigateTo(state.currentPath)
+        }
     }
 
     /** 异常终止后重置 QUEUED/UPLOADING 为 PENDING */
@@ -1955,52 +1980,58 @@ class CloudPaneController(
 
     fun dispose() {
         syncJob?.cancel()
+        backfillSession?.dispose()
+        backfillSession = null
     }
 
     // ── 内部方法 ──
 
     /**
      * 同步本地文件到数据库。
-     * - 本地有、表中无 → 新增（PENDING）
+     * - 本地有、表中无 → 走补全流程（现场解密算明文 MD5），用户取消则不写记录
      * - 本地无、表中有 → 移除
-     * - 本地有、表中有 → 检查 lastModified 变化则重置为 PENDING
+     * - 本地有、表中有 → 仅当大小变化时重置为 PENDING（不再比较最后修改时间）
+     *
+     * 补全所需的密码框在本方法内部阻塞式弹出：输完才开始计算，转圈期间算完所有待补文件，
+     * 之后才返回渲染列表。钥匙在本轮扫描内复用，结束时统一清零。
      */
-    private fun syncLocalFiles() {
+    private suspend fun syncLocalFiles() {
         val dir = File(vaultDir)
         if (!dir.exists()) return
 
         val dbPaths = syncDb.getAllEntries("local_entries").map { it.path }.toSet()
         val localPaths = mutableSetOf<String>()
+        val needBackfill = mutableListOf<Pair<String, File>>()
 
-        dir.walkTopDown().forEach { file ->
-            if (file.name in excludedFiles) return@forEach
+        val scanned = withContext(Dispatchers.IO) {
+            dir.walkTopDown()
+                .filter { it.name !in excludedFiles }
+                .toList()
+        }
+
+        for (file in scanned) {
             val relativePath = "/" + file.relativeTo(dir).path.replace('\\', '/')
             localPaths.add(relativePath)
+            if (!file.isFile) continue
 
-            if (file.isFile) {
-                val existing = syncDb.getEntry("local_entries", relativePath)
-                val currentLastModified = Instant.ofEpochMilli(file.lastModified()).toString()
-                // 使用加密后的实际文件大小
-                val currentSize = file.length()
+            val existing = syncDb.getEntry("local_entries", relativePath)
+            val currentSize = file.length()
 
-                if (existing == null) {
-                    // 新文件 → 录入
-                    syncDb.upsertEntry("local_entries", SyncEntryRow(
-                        path = relativePath,
-                        size = currentSize,
-                        lastModified = currentLastModified,
-                        md5 = null,
-                        cloudHash = null,
-                        status = SyncStatus.PENDING,
-                        lastSyncTime = null,
-                        failReason = null
-                    ))
-                } else if (existing.lastModified != currentLastModified || existing.size != currentSize) {
-                    // 文件被修改 → 重置为 PENDING
+            when {
+                existing == null -> needBackfill.add(relativePath to file)
+                existing.md5.isNullOrEmpty() -> needBackfill.add(relativePath to file)
+                existing.size != currentSize -> {
+                    // 大小变化 → 重置为 PENDING（不再用最后修改时间判定）
+                    val currentLastModified = Instant.ofEpochMilli(file.lastModified()).toString()
                     syncDb.updateSize("local_entries", relativePath, currentSize, currentLastModified)
                     syncDb.updateStatus("local_entries", relativePath, SyncStatus.PENDING)
                 }
             }
+        }
+
+        // 现场补齐缺失的明文 MD5：阻塞式弹密码框 → 转圈计算全部 → 关闭
+        if (needBackfill.isNotEmpty()) {
+            backfillMissing(needBackfill)
         }
 
         // 移除本地已不存在的条目
@@ -2010,6 +2041,76 @@ class CloudPaneController(
             }
         }
     }
+
+    /**
+     * 补全缺失的明文 MD5：请求密码 → 校验并取得临时会话 → 纯内存流式解密逐个计算。
+     * 用户取消或密码始终错误时不写任何记录（保持"表中有记录"的原有语义）。
+     *
+     * 会话（钥匙）跟随面板生命周期存活：本轮扫描不销毁，便于后续扫描直接复用；
+     * 面板销毁（dispose）时统一清零。用户直接杀后台则随进程内存一并消失。
+     */
+    private suspend fun backfillMissing(targets: List<Pair<String, File>>) {
+        val session = requestBackfillSession(targets.size) ?: return
+        for ((relativePath, file) in targets) {
+            try {
+                val md5 = withContext(Dispatchers.IO) {
+                    FileCodec.md5OfPlaintext(file, session.dek, session.record.customEncryption)
+                }
+                syncDb.upsertLocalMd5(
+                    path = relativePath,
+                    md5 = md5,
+                    size = file.length(),
+                    lastModified = Instant.ofEpochMilli(file.lastModified()).toString()
+                )
+            } catch (_: Exception) {
+                // 单个文件失败不影响其余文件，也不写记录
+            }
+        }
+    }
+
+    /**
+     * 阻塞式请求保险箱密码并换取临时会话。
+     * 先去重缓存的会话；无则弹密码框，校验成功返回会话（缓存复用），失败允许重试，取消返回 null。
+     */
+    private suspend fun requestBackfillSession(missingCount: Int): com.whmdg.mczj.tools.encryption.services.VaultSession? {
+        backfillSession?.let { return it }
+
+        val resumed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val session = suspendCancellableCoroutine<com.whmdg.mczj.tools.encryption.services.VaultSession?> { cont ->
+            val message = "检测到 $missingCount 个本地文件缺少同步记录，需要密码来计算明文校验值。密码仅本次使用，不会保存。"
+            state.passwordDialog = PasswordDialogState(
+                message = message,
+                onSubmit = { password ->
+                    if (resumed.compareAndSet(false, true)) {
+                        state.passwordDialog = state.passwordDialog?.copy(busy = true, error = null)
+                        scope.launch(Dispatchers.IO) {
+                            try {
+                                val vaultService = com.whmdg.mczj.tools.encryption.services.VaultService(context)
+                                vaultService.load()
+                                val opened = vaultService.open(vaultId, password)
+                                withContext(Dispatchers.Main) { cont.resume(opened) {} }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    resumed.set(false)
+                                    state.passwordDialog = state.passwordDialog?.copy(
+                                        busy = false,
+                                        error = e.message ?: "密码错误"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                onCancel = {
+                    if (resumed.compareAndSet(false, true)) cont.resume(null) {}
+                }
+            )
+        }
+        state.passwordDialog = null
+        if (session != null) backfillSession = session
+        return session
+    }
+
 
     /**
      * 列出本地保险箱目录，合并云端-only 条目。
@@ -2163,7 +2264,16 @@ class CloudPaneController(
                         uploadedSize += done
                         // 剩余部分归入 yellow（uploading），不计入 red
                     }
-                    else -> redSize += fileSize
+                    else -> {
+                        // 状态非已完成时，再核对明文 MD5：与云端一致则视为已同步（只判断，不写库）
+                        val cloudEntry = syncDb.getEntry("cloud_entries", childPath)
+                        val md5 = dbEntry?.md5
+                        if (!md5.isNullOrEmpty() && md5 == cloudEntry?.md5) {
+                            uploadedSize += fileSize
+                        } else {
+                            redSize += fileSize
+                        }
+                    }
                 }
             }
         }
@@ -2221,6 +2331,16 @@ class CloudPaneController(
                         row.copy(
                             status = SyncStatus.COMPLETED,
                             lastSyncTime = java.time.Instant.now().toString()
+                        )
+                    }
+                    // 同步更新屏上已入列的本地条目，使本轮即显绿色（而非等下次刷新）
+                    val idx = entries.indexOfFirst { it.relativePath == childRelativePath && !it.isCloudOnly }
+                    if (idx >= 0) {
+                        val old = entries[idx]
+                        entries[idx] = old.copy(
+                            uploadedSize = old.totalSize,
+                            redSize = 0L,
+                            syncStatus = SyncStatus.COMPLETED
                         )
                     }
                     // 不添加云端条目（已合并，只显示本地绿色条目）

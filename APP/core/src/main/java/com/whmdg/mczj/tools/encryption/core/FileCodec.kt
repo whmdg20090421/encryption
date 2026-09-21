@@ -296,6 +296,54 @@ object FileCodec {
     }
 
     /**
+     * 纯内存流式解密 [src] 并计算其明文的 MD5，全程不落盘。
+     *
+     * 用于补全本地同步记录：当本地缺少某文件的明文 MD5 时，解密其密文并按块喂入摘要器，
+     * 不产生任何解密文件。分块与校验逻辑与 [decryptToStream] 保持一致。
+     */
+    fun md5OfPlaintext(src: File, dek: ByteArray, customEncryption: Boolean): String {
+        val aad = if (customEncryption) FileConstants.aadCustomObf else null
+        val digest = MessageDigest.getInstance("MD5")
+        val totalSize = src.length()
+
+        FileInputStream(src).use { `in` ->
+            if (customEncryption) {
+                val magic = ByteArray(FileConstants.magicHeader.size)
+                `in`.read(magic)
+                if (!magic.contentEquals(FileConstants.magicHeader)) {
+                    throw IllegalArgumentException("文件头损坏或未启用对应加密配置")
+                }
+            }
+
+            val dataEnd = totalSize
+            var currentPos = if (customEncryption) FileConstants.magicHeader.size.toLong() else 0L
+
+            while (currentPos < dataEnd) {
+                val clBuf = ByteArray(4)
+                val readLen = `in`.read(clBuf)
+                if (readLen < 4) break
+                currentPos += 4
+                val chunkLen = ByteBuffer.wrap(clBuf).order(ByteOrder.BIG_ENDIAN).int
+                if (chunkLen < 12 || chunkLen > FileConstants.MAX_CHUNK_SIZE) {
+                    throw IllegalArgumentException("块长度异常: $chunkLen，文件可能被篡改")
+                }
+                val iv = ByteArray(12)
+                `in`.read(iv)
+                var cipher = ByteArray(chunkLen - 12)
+                `in`.read(cipher)
+                currentPos += chunkLen
+
+                if (customEncryption && cipher.size >= 1040) {
+                    cipher = NailObfuscation.extract(cipher, iv, dek)
+                }
+                val plain = AesGcm256.decrypt(dek, iv, cipher, aad)
+                digest.update(plain)
+            }
+        }
+        return md5Hex(digest)
+    }
+
+    /**
      * 部分解密：仅解密前 [maxBytes] 字节的明文，用于视频缩略图等只需文件头部的场景。
      * 解密量 = min(maxBytes, 文件实际明文大小)。
      */

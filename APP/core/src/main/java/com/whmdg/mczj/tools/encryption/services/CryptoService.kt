@@ -138,6 +138,9 @@ object CryptoService {
     /**
      * 加密导入时把明文 MD5 写入本地同步库（行不存在则建），供云同步的差异判定复用。
      * 明文 MD5 只在加密这一刻的明文流上顺带算出，之后不再重算。
+     *
+     * 写入后若发现云端已有同路径记录，则直接比对两者的明文 MD5（均取自数据库，不重新计算）：
+     * 一致说明内容与云端相同，直接把本地状态置为 COMPLETED（绿色），无需再走上传。
      */
     private fun recordPlainMd5(
         context: Context,
@@ -146,12 +149,25 @@ object CryptoService {
         plainMd5: String
     ) {
         val relPath = "/" + encryptedFile.relativeTo(session.vaultDir).path.replace('\\', '/')
-        SyncDatabase.getInstance(context, session.record.name).upsertLocalMd5(
+        val syncDb = SyncDatabase.getInstance(context, session.record.name)
+        syncDb.upsertLocalMd5(
             path = relPath,
             md5 = plainMd5,
             size = encryptedFile.length(),
             lastModified = java.time.Instant.ofEpochMilli(encryptedFile.lastModified()).toString()
         )
+
+        // 云端已有同路径记录时，仅比对明文 MD5：一致则视为已同步
+        val cloudEntry = syncDb.getEntry("cloud_entries", relPath) ?: return
+        if (!cloudEntry.md5.isNullOrEmpty() && cloudEntry.md5 == plainMd5) {
+            syncDb.updateEntry("local_entries", relPath) { row ->
+                row.copy(
+                    status = com.whmdg.mczj.tools.encryption.data.SyncStatus.COMPLETED,
+                    uploadedSize = row.size,
+                    lastSyncTime = java.time.Instant.now().toString()
+                )
+            }
+        }
     }
 
     /**
