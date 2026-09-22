@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## 文档版本
 
-**基准哈希**：`cdb70a15`（以实际 HEAD 为准）
+**基准哈希**：`0c925ead`（以实际 HEAD 为准）
 **更新日期**：2026-08-06
 
 > 更新 AGENTS.md 前，先执行 `git diff <基准哈希>..HEAD -- '*.kt' '*.kts' '*.py' '*.sh' '*.yml'` 查看自上次记录以来的所有代码变更，确保文档与代码同步。更新后替换基准哈希为新的 HEAD。
