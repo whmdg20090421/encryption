@@ -1643,13 +1643,16 @@ fun FileManagerScreen(
                     SyncProgressDialog(
                         task = overlayTask,
                         onClose = { cloudStateForOverlay.onCancelUpload?.invoke() },
-                        onHide = { cloudStateForOverlay.syncDialogVisible = false }
+                        onHide = { vm.panels.cloud?.hideProgressDialog() }
                     )
                 }
-                if (!cloudStateForOverlay.syncDialogVisible && overlayIsActive) {
+                // 使用系统级悬浮球时不再渲染应用内悬浮球，避免两球重叠
+                if (!cloudStateForOverlay.syncDialogVisible && overlayIsActive &&
+                    !cloudStateForOverlay.overlayBubbleActive
+                ) {
                     SyncFloatingBubble(
                         task = overlayTask,
-                        onClick = { cloudStateForOverlay.syncDialogVisible = true }
+                        onClick = { vm.panels.cloud?.showProgressDialog() }
                     )
                 }
                 val overlayConfirm = cloudStateForOverlay.uploadConfirmDialog
@@ -6766,7 +6769,7 @@ private fun SyncProgressDialog(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "${String.format("%.1f", task.overallProgress * 100)}%",
+                            text = "${String.format("%.2f", task.overallProgress * 100)}%",
                             fontSize = 10.sp,
                             color = subTextColor
                         )
@@ -6805,7 +6808,7 @@ private fun SyncFloatingBubble(
         Box(
             modifier = Modifier
                 .padding(end = 20.dp, bottom = 24.dp)
-                .size(56.dp)
+                .size(50.dp)
                 .clip(CircleShape)
                 .background(if (isDarkMode) Color(0xFF1E293B) else Color.White)
                 .border(2.dp, Color(0xFF3B82F6), CircleShape)
@@ -6820,8 +6823,8 @@ private fun SyncFloatingBubble(
                             SyncPhase.SCANNING -> append("${task.totalFiles}")
                             else -> {
                                 if (task.totalBytes > 0) {
-                                    append("${(task.transferredBytes * 100 / task.totalBytes).toInt()}%")
-                                } else append("0%")
+                                    append("${String.format("%.2f", task.transferredBytes * 100.0 / task.totalBytes)}%")
+                                } else append("0.00%")
                                 // 箭头：上传 ↑ / 下载 ↓
                                 when (task.mode) {
                                     SyncMode.LOCAL_TO_CLOUD -> append("↑")

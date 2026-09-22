@@ -32,11 +32,18 @@ class CloudSyncForegroundService : Service() {
         /** 唤醒锁单次持有上限，超时自动释放防止泄漏。 */
         private const val WAKE_LOCK_TIMEOUT_MS = 30 * 60 * 1000L
 
+        /** 通知刷新最小间隔：避免每个 128KB 分块都刷一次通知。 */
+        private const val UPDATE_THROTTLE_MS = 100L
+
         @Volatile
         private var instance: CloudSyncForegroundService? = null
 
+        @Volatile
+        private var lastUpdateMs = 0L
+
         /** 启动/切换到前台并持有唤醒锁。可重复调用（幂等）。 */
         fun start(context: Context, title: String) {
+            lastUpdateMs = 0L
             val intent = Intent(context, CloudSyncForegroundService::class.java)
             intent.putExtra(EXTRA_TITLE, title)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -46,13 +53,46 @@ class CloudSyncForegroundService : Service() {
             }
         }
 
-        /** 刷新通知进度。非主线程安全：内部切主线程。 */
-        fun update(percent: Float, uploaded: Long, total: Long, elapsedMs: Long, avgSpeed: Long) {
+        /**
+         * 刷新通知进度。非主线程安全：内部切主线程。
+         *
+         * 节流：距上次刷新不足 [UPDATE_THROTTLE_MS] 的调用直接丢弃。
+         * [force] 为 true 时无视节流（用于完成/取消/失败等终态，保证不停在中间值）。
+         */
+        fun update(
+            percent: Float,
+            uploaded: Long,
+            total: Long,
+            elapsedMs: Long,
+            avgSpeed: Long,
+            force: Boolean = false
+        ) {
             val inst = instance ?: return
+            val now = System.currentTimeMillis()
+            if (!force && now - lastUpdateMs < UPDATE_THROTTLE_MS) return
+            lastUpdateMs = now
             val payload = ProgressPayload(percent, uploaded, total, elapsedMs, avgSpeed)
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 inst.lastPayload = payload
                 inst.updateNotification()
+            }
+        }
+
+        /**
+         * 结束并清空通知：
+         * - [success] 为 true 时取消通知后再停前台（任务完成，提示无意义）；
+         * - 其余情况（取消/失败）保留最终态。
+         * 随后释放唤醒锁、停止前台。
+         */
+        fun finish(context: Context, success: Boolean) {
+            // 先停前台（系统随之移除通知），再显式 cancel 兜底，避免残留
+            stop(context)
+            if (success) {
+                try {
+                    val nm = context.getSystemService(NotificationManager::class.java)
+                    nm?.cancel(NOTIFICATION_ID)
+                } catch (_: Exception) {
+                }
             }
         }
 
@@ -125,7 +165,7 @@ class CloudSyncForegroundService : Service() {
             val elapsed = formatDuration(p.elapsedMs)
             val speed = FormatUtils.formatBytes(p.avgSpeed) + "/s"
             // 第一行：百分比 · 已传/总量；第二行：已用时间 · 平均速度
-            contentText = "${"%.1f".format(pct)}%  ·  $uploaded / $total"
+            contentText = "${"%.2f".format(pct)}%  ·  $uploaded / $total"
             subText = "已用 $elapsed  ·  平均 $speed"
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)

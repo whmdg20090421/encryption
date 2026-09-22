@@ -13,6 +13,7 @@ import com.whmdg.mczj.tools.encryption.data.UploadStatus
 import com.whmdg.mczj.tools.encryption.data.VaultSyncIndex
 import com.whmdg.mczj.tools.fileop.sync.SyncEngine
 import com.whmdg.mczj.tools.fileop.sync.CloudSyncForegroundService
+import com.whmdg.mczj.tools.fileop.sync.SyncOverlayBubble
 import com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
 import com.whmdg.mczj.tools.fileop.sync.SyncMode
 import com.whmdg.mczj.tools.fileop.sync.SyncPhase
@@ -66,6 +67,8 @@ class CloudPaneController(
         var vaultFolderName by mutableStateOf("")
         /** 同步弹窗是否可见（false=隐藏为悬浮窗或关闭） */
         var syncDialogVisible by mutableStateOf(false)
+        /** 是否已使用系统级悬浮球（有 OVERLAY 权限时）。为 true 时不再渲染应用内悬浮球 */
+        var overlayBubbleActive by mutableStateOf(false)
         /** 上传确认对话框（跳过已完成 / 全部重新上传） */
         var uploadConfirmDialog by mutableStateOf<UploadConfirmState?>(null)
         /** 取消上传回调（由弹窗 ✕ 按钮调用） */
@@ -482,6 +485,8 @@ class CloudPaneController(
         syncJob = null
 
         syncJob = scope.launch(Dispatchers.Default) {
+          // 标记是否正常跑完（完成 → 清通知；取消/异常 → 保留终态）
+          var completedNormally = false
           try {
             // 等待旧协程真正终止
             if (oldJob != null && oldJob.isActive) {
@@ -895,6 +900,7 @@ class CloudPaneController(
                                     val percent = (transferred.toDouble() / uploadTotalBytes).toFloat()
                                     val avgSpeed = if (elapsedMs > 0) transferred * 1000 / elapsedMs else 0L
                                     CloudSyncForegroundService.update(percent, transferred, uploadTotalBytes, elapsedMs, avgSpeed)
+                                    SyncOverlayBubble.update(formatSyncPercent(state.syncTask))
                                 }
                                 // 只更新文件自身进度条（文件夹聚合在 Complete 时更新）
                                 updateFileProgressOnly(event.path)
@@ -1111,6 +1117,20 @@ class CloudPaneController(
             uploadJobs.forEach { it.join() }
             eventChannel.close()
             updaterJob.join()
+            // 终态强制刷新一次通知，避免停在两次节流之间的中间值
+            if (uploadTotalBytes > 0) {
+                val elapsedMs = System.currentTimeMillis() - uploadStartMs
+                val avgSpeed = if (elapsedMs > 0) state.syncTask.transferredBytes * 1000 / elapsedMs else 0L
+                CloudSyncForegroundService.update(
+                    state.syncTask.overallProgress,
+                    state.syncTask.transferredBytes,
+                    uploadTotalBytes,
+                    elapsedMs,
+                    avgSpeed,
+                    force = true
+                )
+            }
+            completedNormally = true
 
             // ⑰ Toast 提示
             val msg = "文件夹上传完成: 成功${successCount}个" + if (failCount > 0) "，失败${failCount}个" else ""
@@ -1136,8 +1156,10 @@ class CloudPaneController(
             // 无论成功失败都删除锁文件
             com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
           } finally {
-            // 正常完成 / 用户取消 / 异常退出都必须撤销前台与唤醒锁
-            CloudSyncForegroundService.stop(context)
+            // 正常完成 → 清通知；取消/异常 → 保留最终进度，均撤销前台/唤醒锁/悬浮球
+            SyncOverlayBubble.dismiss()
+            state.overlayBubbleActive = false
+            CloudSyncForegroundService.finish(context, success = completedNormally)
           }
         }
     }
@@ -1203,6 +1225,7 @@ class CloudPaneController(
             var skippedFiles = 0
             var transferredBytes = 0L
 
+            var completedNormally = false
             try {
                 for (cloudEntry in cloudFiles) {
                     currentCoroutineContext().ensureActive()
@@ -1314,6 +1337,7 @@ class CloudPaneController(
                         val percent = (transferredBytes.toDouble() / downloadTotalBytes).toFloat()
                         val avgSpeed = if (elapsedMs > 0) transferredBytes * 1000 / elapsedMs else 0L
                         CloudSyncForegroundService.update(percent, transferredBytes, downloadTotalBytes, elapsedMs, avgSpeed)
+                        SyncOverlayBubble.update(formatSyncPercent(state.syncTask))
                     }
                 }
 
@@ -1331,6 +1355,7 @@ class CloudPaneController(
                 com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
                 state.syncTask = SyncTaskState()
                 state.onCancelUpload = null
+                completedNormally = true
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1341,7 +1366,9 @@ class CloudPaneController(
                     android.widget.Toast.makeText(context, "下载失败: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
                 }
             } finally {
-                CloudSyncForegroundService.stop(context)
+                SyncOverlayBubble.dismiss()
+                state.overlayBubbleActive = false
+                CloudSyncForegroundService.finish(context, success = completedNormally)
             }
         }
     }
@@ -1586,16 +1613,51 @@ class CloudPaneController(
     fun closeProgressDialog() {
         state.syncDialogVisible = false
         state.syncTask = state.syncTask.copy(phase = SyncPhase.COMPLETED)
+        dismissOverlayBubble()
     }
 
-    /** 隐藏进度弹窗（弹窗消失，保留悬浮窗，phase 不变） */
+    /** 隐藏进度弹窗。有 OVERLAY 权限时升级为系统级悬浮球，否则退回应用内悬浮球。 */
     fun hideProgressDialog() {
         state.syncDialogVisible = false
+        if (SyncOverlayBubble.canShow(context)) {
+            SyncOverlayBubble.show(context) { bringAppToFrontAndExpand() }
+            SyncOverlayBubble.update(formatSyncPercent(state.syncTask))
+            state.overlayBubbleActive = true
+        }
     }
+
+    /** 同步任务的动态进度文本，保留两位小数；扫描阶段显示文件数（与应用内悬浮球一致）。 */
+    private fun formatSyncPercent(task: SyncTaskState): String =
+        if (task.phase == SyncPhase.SCANNING) "${task.totalFiles}"
+        else String.format("%.2f%%", task.overallProgress * 100)
 
     /** 显示进度弹窗（从悬浮窗恢复为弹窗，phase 不变） */
     fun showProgressDialog() {
         state.syncDialogVisible = true
+        dismissOverlayBubble()
+    }
+
+    /** 收起系统级悬浮球并复位标志。 */
+    private fun dismissOverlayBubble() {
+        SyncOverlayBubble.dismiss()
+        state.overlayBubbleActive = false
+    }
+
+    /** 点击系统级悬浮球：拉回本应用并展开进度弹窗（相当于退出最小化）。 */
+    private fun bringAppToFrontAndExpand() {
+        try {
+            val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            if (launch != null) {
+                launch.addFlags(
+                    android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                        android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+                )
+                context.startActivity(launch)
+            }
+        } catch (_: Exception) {
+        }
+        showProgressDialog()
     }
 
     /** 取消上传：停止任务，上传 cloud.db，清理锁，已上传的不动，未上传的重置为 PENDING */
