@@ -520,8 +520,10 @@ class CopyJob(
                 dek = session.dek,
                 aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null
             )
-            if (enc.mappingKey != null && enc.mappingValue != null) {
-                session.nameMapping.set(enc.mappingKey, enc.mappingValue)
+            val key = enc.mappingKey
+            val value = enc.mappingValue
+            if (key != null && value != null) {
+                session.nameMapping.set(key, value)
                 session.saveNameMapping(context)
             }
             enc.encoded
