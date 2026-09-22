@@ -14,9 +14,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object CryptoService {
 
-    /** 串行化同步库的"读取-判断-写入"序列，避免多通道加密时明文 MD5 记录竞态。 */
-    private val syncDbLock = Any()
-
     /** 已打开的保险箱流式写入事务。成功时原子发布密文，失败时删除未完成文件。 */
     class VaultStreamWrite internal constructor(
         private val context: Context,
@@ -159,8 +156,8 @@ object CryptoService {
      * 加密导入时把明文 MD5 写入本地同步库（行不存在则建），供云同步的差异判定复用。
      * 明文 MD5 只在加密这一刻的明文流上顺带算出，之后不再重算。
      *
-     * 写入后若发现云端已有同路径记录，则直接比对两者的明文 MD5（均取自数据库，不重新计算）：
-     * 一致说明内容与云端相同，直接把本地状态置为 COMPLETED（绿色），无需再走上传。
+     * 此处只把记录放入进程内批次缓冲（密文已 renameTo 成功才会走到这里），由
+     * [SyncDatabase.enqueueMd5] 按阈值或任务收尾时批量提交，避免逐文件 fsync。
      */
     private fun recordPlainMd5(
         context: Context,
@@ -168,28 +165,17 @@ object CryptoService {
         encryptedFile: File,
         plainMd5: String
     ) {
-        synchronized(syncDbLock) {
-            val relPath = "/" + encryptedFile.relativeTo(session.vaultDir).path.replace('\\', '/')
-            val syncDb = SyncDatabase.getInstance(context, session.record.name)
-            syncDb.upsertLocalMd5(
+        val relPath = "/" + encryptedFile.relativeTo(session.vaultDir).path.replace('\\', '/')
+        SyncDatabase.enqueueMd5(
+            context = context,
+            syncName = session.record.name,
+            record = SyncDatabase.LocalMd5Record(
                 path = relPath,
                 md5 = plainMd5,
                 size = encryptedFile.length(),
                 lastModified = java.time.Instant.ofEpochMilli(encryptedFile.lastModified()).toString()
             )
-
-            // 云端已有同路径记录时，仅比对明文 MD5：一致则视为已同步
-            val cloudEntry = syncDb.getEntry("cloud_entries", relPath) ?: return
-            if (!cloudEntry.md5.isNullOrEmpty() && cloudEntry.md5 == plainMd5) {
-                syncDb.updateEntry("local_entries", relPath) { row ->
-                    row.copy(
-                        status = com.whmdg.mczj.tools.encryption.data.SyncStatus.COMPLETED,
-                        uploadedSize = row.size,
-                        lastSyncTime = java.time.Instant.now().toString()
-                    )
-                }
-            }
-        }
+        )
     }
 
     /**

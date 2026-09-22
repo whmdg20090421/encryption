@@ -190,6 +190,13 @@ object EncryptionTaskManager {
                 Log.e(TAG, "Encryption failed", e)
                 markNodeError(node, e.message ?: "Unknown error")
             } finally {
+                // 明文 MD5 批次缓冲收尾：完成、出错、取消都必须提交，避免已落盘密文的 MD5 丢失
+                try {
+                    appContext?.let {
+                        com.whmdg.mczj.tools.encryption.data.SyncDatabase.flushMd5Batch(it, taskArgs.vaultName)
+                    }
+                } catch (_: Exception) {
+                }
                 activeJobs.remove(node.id)
                 checkAndArchiveCompleted()
             }

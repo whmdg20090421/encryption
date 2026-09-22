@@ -66,6 +66,62 @@ class SyncDatabase private constructor(
                 cached?.close()
             }
         }
+
+        /**
+         * 明文 MD5 落库的进程内批次缓冲。
+         *
+         * 逐文件写库会产生大量独立 fsync，是小文件加密场景的主要瓶颈。本缓冲把记录攒够
+         * [MD5_FLUSH_THRESHOLD] 条或显式 [flushMd5Batch] 时，用一笔事务批量提交。
+         *
+         * 边界纪律（与调用方契约定死）：
+         * - 只有密文 `renameTo` 成功后才允许 [enqueueMd5]，因此缓冲里永远不含
+         *   "加密到一半被清理"的残留记录；
+         * - 用户取消 / 任务结束 / 进程退出前，调用方必须在 `finally` 中 [flushMd5Batch]，
+         *   保证已落盘密文的 MD5 不丢；
+         * - 进程被杀时未 flush 的批次随加密线程一起消亡，与逐条写入的崩溃窗口等价，
+         *   缺口由下次扫描重建，密文始终是权威数据。
+         */
+        private const val MD5_FLUSH_THRESHOLD = 64
+
+        private val md5BatchLock = Any()
+        private val md5Pending = HashMap<String, ArrayList<LocalMd5Record>>()
+
+        /** 记录一个"已成功落盘"密文的明文 MD5；达到阈值时自动提交该保险箱的一批。 */
+        fun enqueueMd5(context: Context, syncName: String, record: LocalMd5Record) {
+            val toFlush: List<LocalMd5Record>?
+            synchronized(md5BatchLock) {
+                val list = md5Pending.getOrPut(syncName) { ArrayList(MD5_FLUSH_THRESHOLD) }
+                list.add(record)
+                toFlush = if (list.size >= MD5_FLUSH_THRESHOLD) {
+                    val snapshot = ArrayList(list)
+                    list.clear()
+                    snapshot
+                } else null
+            }
+            if (toFlush != null) submitMd5Batch(context, syncName, toFlush)
+        }
+
+        /** 强制提交某保险箱的当前缓冲。取消、任务结束前必须调用。 */
+        fun flushMd5Batch(context: Context, syncName: String) {
+            val snapshot: List<LocalMd5Record>?
+            synchronized(md5BatchLock) {
+                val list = md5Pending[syncName]
+                snapshot = if (list.isNullOrEmpty()) null else ArrayList(list).also { list.clear() }
+            }
+            if (snapshot != null) submitMd5Batch(context, syncName, snapshot)
+        }
+
+        private fun submitMd5Batch(context: Context, syncName: String, records: List<LocalMd5Record>) {
+            if (records.isEmpty()) return
+            try {
+                getInstance(context, syncName).upsertLocalMd5Batch(records)
+            } catch (e: Exception) {
+                // 密文已落盘，元数据写失败不应回滚业务；缺口由下次扫描重建
+                com.whmdg.mczj.tools.util.DiagnosticLog.log(
+                    TAG, "批量写入 ${records.size} 条明文 MD5 失败，本批次丢弃: ${e.message}"
+                )
+            }
+        }
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -112,6 +168,12 @@ class SyncDatabase private constructor(
             )
         """.trimIndent())
         db.execSQL("INSERT INTO sync_stats (id) VALUES (1)")
+    }
+
+    override fun onConfigure(db: SQLiteDatabase) {
+        super.onConfigure(db)
+        // WAL：读写不互斥，加密多通道的元数据写入不再与其他通道互相阻塞
+        db.enableWriteAheadLogging()
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -260,6 +322,60 @@ class SyncDatabase private constructor(
         db.insertWithOnConflict("local_entries", null, values, SQLiteDatabase.CONFLICT_IGNORE)
         db.update("local_entries", ContentValues().apply { put("md5", md5) }, "path = ?", arrayOf(path))
     }
+
+    /**
+     * 批量写入明文 MD5：整个批次放在一笔事务里提交，把逐文件的 fsync 摊销到一次。
+     *
+     * 语义与逐条 [upsertLocalMd5] 完全一致，仅改变提交粒度。调用方须保证传入的每条记录
+     * 都对应一个"已成功落盘"的密文文件（密文 renameTo 成功后才产生记录）。
+     *
+     * 云端已有同路径记录且明文 MD5 一致时，直接置为 COMPLETED（与逐条写入时的后置比对等价）。
+     */
+    fun upsertLocalMd5Batch(records: List<LocalMd5Record>) {
+        if (records.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (r in records) {
+                val values = ContentValues().apply {
+                    put("path", r.path)
+                    put("size", r.size)
+                    put("uploaded_size", 0L)
+                    put("last_modified", r.lastModified)
+                    put("md5", r.md5)
+                    put("status", SyncStatus.PENDING.name)
+                }
+                db.insertWithOnConflict("local_entries", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+                db.update("local_entries", ContentValues().apply { put("md5", r.md5) }, "path = ?", arrayOf(r.path))
+
+                val cloud = queryCloudMd5Locked(db, r.path)
+                if (!cloud.isNullOrEmpty() && cloud == r.md5) {
+                    db.execSQL(
+                        "UPDATE local_entries SET status = ?, uploaded_size = size, last_sync_time = ? WHERE path = ?",
+                        arrayOf(SyncStatus.COMPLETED.name, java.time.Instant.now().toString(), r.path)
+                    )
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** 事务内查询云端条目的明文 MD5（复用同一连接，避免嵌套获取只读连接）。 */
+    private fun queryCloudMd5Locked(db: SQLiteDatabase, path: String): String? {
+        db.query("cloud_entries", arrayOf("md5"), "path = ?", arrayOf(path), null, null, null).use { cursor ->
+            return if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+    }
+
+    /** 待写入的一批本地明文 MD5 记录。 */
+    data class LocalMd5Record(
+        val path: String,
+        val md5: String,
+        val size: Long,
+        val lastModified: String
+    )
 
     /**
      * 从解压出的云端 SQLite 文件全量替换 cloud_entries，保留本地 local_entries。
