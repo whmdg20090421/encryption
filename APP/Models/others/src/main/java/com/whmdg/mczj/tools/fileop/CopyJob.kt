@@ -289,6 +289,37 @@ class CopyJob(
     private fun totalProcessedBytesLocked(): Long =
         channelBytes.sumOf { it.committedBytes + it.inFlightBytes }
 
+    /**
+     * 保险箱进度统一发布入口（加密引入 / 解密导出 / 跨箱转码共用）。
+     *
+     * 唯一职责：把"已完成字节 + 总字节 + 文件信息"组帧，并在同一临界区内用
+     * [speedMeter] 采样最近 1 秒速率，保证三条路径的弹窗信息（含速度）完全一致。
+     *
+     * [currentBytes] 由调用方提供：并发通道路径传通道求和值，跨箱串行路径传本地累加值；
+     * 这样统一的是"发布与速率口径"，而非并发模型。
+     *
+     * 调用方须已持有 [channelLock]（本方法不再加锁，避免与调用方的状态快照割裂）。
+     */
+    private fun publishVaultProgressLocked(
+        phase: String,
+        currentBytes: Long,
+        totalSize: Long,
+        doneFiles: Int,
+        currentFileName: String = "",
+        activeFileNames: List<String> = emptyList()
+    ) {
+        manager.updateProgress(FileOpProgress(
+            phase = phase,
+            currentBytes = currentBytes,
+            totalBytes = totalSize,
+            currentFileName = currentFileName,
+            fileIndex = doneFiles,
+            fileCount = sources.size,
+            activeFileNames = activeFileNames,
+            bytesPerSecond = speedMeter.sample(currentBytes)
+        ))
+    }
+
     /** 报告保险箱存储用量及文件数量变更 */
     private fun reportVaultSizeChange() {
         val added = vaultBytesAdded.get()
@@ -613,8 +644,8 @@ class CopyJob(
     }
 
     /**
-     * 执行加密并对"文件级错误"自动重试一次；第二次仍失败时弹出错误弹窗（暂停其他通道
-     * 等待用户选择）。用户选择重试则再试，选择跳过则抛 [SkippedException] 放弃该文件。
+     * 加密单个文件（含重试与错误处理），复用 [runVaultFileWithRetry] 骨架。
+     * 通过 [onProgress] 上报本次已读明文字节以驱动在途进度。
      */
     private fun encryptWithRetry(
         session: VaultSession,
@@ -624,24 +655,54 @@ class CopyJob(
         totalSize: Long,
         processedFiles: AtomicInteger,
         channelId: Int
-    ): File {
-        var attempt = 0
-        // 同一文件重试时从头重新读取，onProgress 会从 0 重新上报；以 retryBase 记录
-        // "此前已为该文件读明的最大字节数"，在途值取 base + 本次上报，避免重试导致进度回退。
+    ): File = runVaultFileWithRetry(
+        srcFile = srcFile,
+        errorLabel = "加密失败",
+        processedFiles = processedFiles,
+        channelId = channelId,
+        publishProgress = { publishEncryptProgress(totalSize, processedFiles.get()) }
+    ) { onProgress ->
+        CryptoService.encryptIntoVaultWithName(
+            context, session, srcFile, subDir, outName,
+            overwrite = true,
+            onProgress = { encryptedBytes, _ ->
+                onProgress(encryptedBytes)
+                publishEncryptProgress(totalSize, processedFiles.get())
+            },
+            cancelFlag = cancelFlag
+        )
+    }
+
+    /**
+     * 保险箱单文件处理的统一重试骨架（加密 / 解密复用）。
+     *
+     * 语义完全一致，只有两步是逆操作：
+     * - [errorLabel]：错误弹窗文案（"加密失败" / "解密失败"）；
+     * - [publishProgress]：按当前阶段发布进度（跳过后推进进度条）；
+     * - [attempt]：执行一次逆操作，通过回调上报本次已读字节（用于在途进度），并返回结果。
+     *
+     * 行为：文件级错误静默自动重试一次；仍失败时弹窗（暂停其他通道）等待用户选择；
+     * 用户重试则再试，跳过则提交该文件字节并抛 [SkippedException]。
+     */
+    private fun <T> runVaultFileWithRetry(
+        srcFile: File,
+        errorLabel: String,
+        processedFiles: AtomicInteger,
+        channelId: Int,
+        publishProgress: () -> Unit,
+        attempt: (onProgress: (Long) -> Unit) -> T
+    ): T {
+        var attemptCount = 0
+        // 重试时逆操作从头重读，回调会从 0 重新上报；以 retryBase 记录"此前已读明的最大
+        // 字节数"，在途值取 base + 本次上报，避免重试导致进度回退。
         var retryBase = 0L
         while (true) {
             throwIfCancelled()
-            attempt++
+            attemptCount++
             try {
-                return CryptoService.encryptIntoVaultWithName(
-                    context, session, srcFile, subDir, outName,
-                    overwrite = true,
-                    onProgress = { encryptedBytes, _ ->
-                        setChannelInFlight(channelId, retryBase, encryptedBytes)
-                        publishEncryptProgress(totalSize, processedFiles.get())
-                    },
-                    cancelFlag = cancelFlag
-                )
+                return attempt { reported ->
+                    setChannelInFlight(channelId, retryBase, reported)
+                }
             } catch (e: InterruptedException) {
                 throw e
             } catch (e: InterruptedIOException) {
@@ -652,33 +713,33 @@ class CopyJob(
                 if (skipAllErrors) {
                     processedFiles.incrementAndGet()
                     commitChannelFile(channelId, srcFile.length())
-                    publishEncryptProgress(totalSize, processedFiles.get())
+                    publishProgress()
                     throw SkippedException()
                 }
-                if (attempt > 1) {
+                if (attemptCount > 1) {
                     // 已重试过仍失败：弹窗等待用户选择（暂停其他通道）
                     val action = synchronized(dialogMutex) {
                         runBlocking {
                             manager.resolveError(ErrorRequest(
                                 fileName = srcFile.name,
-                                errorMessage = e.message ?: "加密失败",
+                                errorMessage = e.message ?: errorLabel,
                                 detailMessage = "${e.javaClass.simpleName}: ${e.message}"
                             ))
                         }
                     }
                     when (action.action) {
-                        ErrorAction.RETRY -> { attempt = 1 }
+                        ErrorAction.RETRY -> { attemptCount = 1 }
                         ErrorAction.SKIP -> {
                             processedFiles.incrementAndGet()
                             commitChannelFile(channelId, srcFile.length())
-                            publishEncryptProgress(totalSize, processedFiles.get())
+                            publishProgress()
                             throw SkippedException()
                         }
                         ErrorAction.SKIP_ALL -> {
                             skipAllErrors = true
                             processedFiles.incrementAndGet()
                             commitChannelFile(channelId, srcFile.length())
-                            publishEncryptProgress(totalSize, processedFiles.get())
+                            publishProgress()
                             throw SkippedException()
                         }
                         ErrorAction.CANCEL -> {
@@ -701,16 +762,13 @@ class CopyJob(
     /** 发布加密总进度：currentBytes 为所有通道 (已提交 + 在途) 之和。 */
     private fun publishEncryptProgress(totalSize: Long, doneFiles: Int) {
         synchronized(channelLock) {
-            val processed = totalProcessedBytesLocked()
-            manager.updateProgress(FileOpProgress(
+            publishVaultProgressLocked(
                 phase = "正在加密",
-                currentBytes = processed,
-                totalBytes = totalSize,
-                fileIndex = doneFiles,
-                fileCount = sources.size,
-                activeFileNames = activeChannelNames(),
-                bytesPerSecond = speedMeter.sample(processed)
-            ))
+                currentBytes = totalProcessedBytesLocked(),
+                totalSize = totalSize,
+                doneFiles = doneFiles,
+                activeFileNames = activeChannelNames()
+            )
         }
     }
 
@@ -837,7 +895,10 @@ class CopyJob(
         return true
     }
 
-    /** 解密并对"文件级错误"自动重试一次；仍失败时弹窗（暂停其他通道）等待用户选择。 */
+    /**
+     * 解密单个文件（含重试与错误处理），复用 [runVaultFileWithRetry] 骨架。
+     * 解密为加密的逆操作，故与 [encryptWithRetry] 共用同一套重试/跳过/取消逻辑。
+     */
     private fun decryptWithRetry(
         session: VaultSession,
         srcFile: File,
@@ -845,74 +906,26 @@ class CopyJob(
         totalSize: Long,
         processedFiles: AtomicInteger,
         channelId: Int
-    ) {
-        var attempt = 0
-        while (true) {
-            throwIfCancelled()
-            attempt++
-            try {
-                CryptoService.decryptOutOfVault(session, srcFile, outputDir)
-                return
-            } catch (e: InterruptedException) {
-                throw e
-            } catch (e: InterruptedIOException) {
-                throw e
-            } catch (e: Exception) {
-                if (skipAllErrors) {
-                    processedFiles.incrementAndGet()
-                    commitChannelFile(channelId, srcFile.length())
-                    publishDecryptProgress(totalSize, processedFiles.get())
-                    throw SkippedException()
-                }
-                if (attempt > 1) {
-                    val action = synchronized(dialogMutex) {
-                        runBlocking {
-                            manager.resolveError(ErrorRequest(
-                                fileName = srcFile.name,
-                                errorMessage = e.message ?: "解密失败",
-                                detailMessage = "${e.javaClass.simpleName}: ${e.message}"
-                            ))
-                        }
-                    }
-                    when (action.action) {
-                        ErrorAction.RETRY -> { attempt = 1 }
-                        ErrorAction.SKIP -> {
-                            processedFiles.incrementAndGet()
-                            commitChannelFile(channelId, srcFile.length())
-                            publishDecryptProgress(totalSize, processedFiles.get())
-                            throw SkippedException()
-                        }
-                        ErrorAction.SKIP_ALL -> {
-                            skipAllErrors = true
-                            processedFiles.incrementAndGet()
-                            commitChannelFile(channelId, srcFile.length())
-                            publishDecryptProgress(totalSize, processedFiles.get())
-                            throw SkippedException()
-                        }
-                        ErrorAction.CANCEL -> {
-                            cancelFlag.set(true)
-                            throw InterruptedIOException("用户取消")
-                        }
-                    }
-                }
-                // 首次失败：静默自动重试
-            }
-        }
+    ) = runVaultFileWithRetry(
+        srcFile = srcFile,
+        errorLabel = "解密失败",
+        processedFiles = processedFiles,
+        channelId = channelId,
+        publishProgress = { publishDecryptProgress(totalSize, processedFiles.get()) }
+    ) { _ ->
+        CryptoService.decryptOutOfVault(session, srcFile, outputDir)
     }
 
     /** 发布解密总进度：currentBytes 为所有通道 (已提交 + 在途) 之和。 */
     private fun publishDecryptProgress(totalSize: Long, doneFiles: Int) {
         synchronized(channelLock) {
-            val processed = totalProcessedBytesLocked()
-            manager.updateProgress(FileOpProgress(
+            publishVaultProgressLocked(
                 phase = "正在解密",
-                currentBytes = processed,
-                totalBytes = totalSize,
-                fileIndex = doneFiles,
-                fileCount = sources.size,
-                activeFileNames = activeChannelNames(),
-                bytesPerSecond = speedMeter.sample(processed)
-            ))
+                currentBytes = totalProcessedBytesLocked(),
+                totalSize = totalSize,
+                doneFiles = doneFiles,
+                activeFileNames = activeChannelNames()
+            )
         }
     }
 
@@ -925,14 +938,7 @@ class CopyJob(
         var doneBytes = 0L
         var doneFiles = 0
 
-        manager.updateProgress(FileOpProgress(
-            phase = "正在转码",
-            currentBytes = 0,
-            totalBytes = totalSize,
-            isScanning = false,
-            fileIndex = 0,
-            fileCount = sources.size
-        ))
+        publishCrossVaultProgress(totalSize, 0L, 0, "")
 
         val tempDir = File(context.cacheDir, "vault_transfer_${System.currentTimeMillis()}")
 
@@ -949,14 +955,7 @@ class CopyJob(
                     doneBytes += srcFile.length()
                 }
                 doneFiles++
-                manager.updateProgress(FileOpProgress(
-                    phase = "正在转码",
-                    currentBytes = doneBytes,
-                    totalBytes = totalSize,
-                    currentFileName = srcFile.name,
-                    fileIndex = doneFiles,
-                    fileCount = sources.size
-                ))
+                publishCrossVaultProgress(totalSize, doneBytes, doneFiles, srcFile.name)
                 if (isGracefulCancelled()) break
             }
 
@@ -981,6 +980,24 @@ class CopyJob(
         }
     }
 
+    /** 跨箱转码进度发布：单线程串行，走统一发布入口以复用速率采样。 */
+    private fun publishCrossVaultProgress(
+        totalSize: Long,
+        currentBytes: Long,
+        doneFiles: Int,
+        currentFileName: String
+    ) {
+        synchronized(channelLock) {
+            publishVaultProgressLocked(
+                phase = "正在转码",
+                currentBytes = currentBytes,
+                totalSize = totalSize,
+                doneFiles = doneFiles,
+                currentFileName = currentFileName
+            )
+        }
+    }
+
     private fun copyCrossVaultDir(
         dir: File,
         ctx: VaultOperationContext.CrossVault,
@@ -1000,14 +1017,7 @@ class CopyJob(
             currentStep = "转码: ${file.name}"
             decryptAndReEncrypt(file, ctx.targetSession, subDir, ctx.sourceSession, tempDir)
             doneBytes += file.length()
-            manager.updateProgress(FileOpProgress(
-                phase = "正在转码",
-                currentBytes = baseBytes + doneBytes,
-                totalBytes = totalSize,
-                currentFileName = file.name,
-                fileIndex = baseFiles,
-                fileCount = sources.size
-            ))
+            publishCrossVaultProgress(totalSize, baseBytes + doneBytes, baseFiles, file.name)
         }
     }
 
