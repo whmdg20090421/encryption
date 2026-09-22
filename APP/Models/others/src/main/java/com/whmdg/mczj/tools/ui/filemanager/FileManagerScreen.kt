@@ -2998,6 +2998,15 @@ fun FileManagerScreen(
     }
 
     if (vm.loadError != null) {
+        val loadErrorText = buildString {
+            appendLine("异常: ${vm.loadError!!.javaClass.simpleName}")
+            appendLine("原因: ${vm.loadError!!.message ?: "(无)"}")
+            vm.loadError!!.cause?.let { appendLine("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
+        }
+        // 复制时去除空行（保留换行），避免粘贴时连续空行被当作分隔直接发送
+        val loadErrorClipText = loadErrorText.lines()
+            .filter { it.isNotBlank() }
+            .joinToString("\n")
         StandardDialog(
             onDismissRequest = {
                 DiagnosticLog.log("FileMgr", "关闭错误对话框")
@@ -3006,13 +3015,18 @@ fun FileManagerScreen(
             title = { Text("文件操作失败") },
             text = {
                 Text(
-                    buildString {
-                        appendLine("异常: ${vm.loadError!!.javaClass.simpleName}")
-                        appendLine("原因: ${vm.loadError!!.message ?: "(无)"}")
-                        vm.loadError!!.cause?.let { appendLine("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
-                    },
+                    text = loadErrorText,
                     style = MaterialTheme.typography.bodySmall
                 )
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    try {
+                        val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        cb.setPrimaryClip(android.content.ClipData.newPlainText("错误信息", loadErrorClipText))
+                        Toast.makeText(context, "错误信息已复制", Toast.LENGTH_SHORT).show()
+                    } catch (_: Exception) {}
+                }) { Text("复制") }
             },
             confirmButton = {
                 TextButton(onClick = { vm.loadError = null }) { Text("确定") }

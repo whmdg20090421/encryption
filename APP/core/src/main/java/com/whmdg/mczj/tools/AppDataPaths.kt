@@ -268,11 +268,16 @@ object AppDataPaths {
     /**
      * 视频缓存文件（完整视频或缩略图）的绝对路径。
      *
+     * 保险箱源文件是磁盘上的 `.whm`，其明文缓存须去掉 `.whm` 后缀，
+     * 使解密后的文件扩展名与真实媒体类型一致（否则会被当作未知类型，
+     * 无法路由到内置播放器）。普通视频源无 `.whm`，不受影响。
+     *
      * @param sourcePath 源文件绝对路径（普通视频为原文件；保险箱为磁盘上的 `.whm`）
      * @param thumbnail 是否取缩略图缓存路径（追加 `.thumb`），否则取完整视频缓存路径
      */
     fun videoCacheFile(context: Context, sourcePath: String, thumbnail: Boolean): File {
-        val name = if (thumbnail) "$sourcePath$CACHE_SUFFIX_THUMB" else sourcePath
+        val plainPath = sourcePath.removeSuffix(".whm")
+        val name = if (thumbnail) "$plainPath$CACHE_SUFFIX_THUMB" else plainPath
         return File(videoCacheRoot(context), name.removePrefix("/"))
     }
 
