@@ -12,6 +12,7 @@ import com.whmdg.mczj.tools.encryption.data.SyncStatus
 import com.whmdg.mczj.tools.encryption.data.UploadStatus
 import com.whmdg.mczj.tools.encryption.data.VaultSyncIndex
 import com.whmdg.mczj.tools.fileop.sync.SyncEngine
+import com.whmdg.mczj.tools.fileop.sync.CloudSyncForegroundService
 import com.whmdg.mczj.tools.fileop.sync.SyncFileProgress
 import com.whmdg.mczj.tools.fileop.sync.SyncMode
 import com.whmdg.mczj.tools.fileop.sync.SyncPhase
@@ -481,6 +482,7 @@ class CloudPaneController(
         syncJob = null
 
         syncJob = scope.launch(Dispatchers.Default) {
+          try {
             // 等待旧协程真正终止
             if (oldJob != null && oldJob.isActive) {
                 oldJob.cancel()
@@ -750,6 +752,13 @@ class CloudPaneController(
             )
             openProgressDialog()
 
+            // 前台 Service + 唤醒锁保活（始终启用）；有通知权限时通知栏可见进度，
+            // 无权限时系统自动抑制通知，仅保留保活效果。
+            val uploadTotalBytes = state.syncTask.totalBytes
+            val uploadStartMs = System.currentTimeMillis()
+            CloudSyncForegroundService.start(context, "正在上传 ${finalQueue.size} 个文件")
+            CloudSyncForegroundService.update(0f, 0L, uploadTotalBytes, 0L, 0L)
+
             // ⑯ 并发动态上传（Channel 单写者模式，避免多线程竞态）
             val completedBytes = java.util.concurrent.atomic.AtomicLong(0)
             val activeFileBytes = java.util.concurrent.ConcurrentHashMap<String, Long>()
@@ -880,6 +889,13 @@ class CloudPaneController(
                                     speed = currentSpeed,
                                     concurrency = maxConcurrency
                                 )
+                                // 同步刷新前台通知（百分比 / 已传 / 总量 / 已用时间 / 平均速度）
+                                if (uploadTotalBytes > 0) {
+                                    val elapsedMs = System.currentTimeMillis() - uploadStartMs
+                                    val percent = (transferred.toDouble() / uploadTotalBytes).toFloat()
+                                    val avgSpeed = if (elapsedMs > 0) transferred * 1000 / elapsedMs else 0L
+                                    CloudSyncForegroundService.update(percent, transferred, uploadTotalBytes, elapsedMs, avgSpeed)
+                                }
                                 // 只更新文件自身进度条（文件夹聚合在 Complete 时更新）
                                 updateFileProgressOnly(event.path)
                                 // 进度异常检测：单文件渲染帧增量 > 128KB
@@ -1119,6 +1135,10 @@ class CloudPaneController(
             uploadCloudDbWithUI()
             // 无论成功失败都删除锁文件
             com.whmdg.mczj.tools.AppDataPaths.syncLock(context, vaultId).delete()
+          } finally {
+            // 正常完成 / 用户取消 / 异常退出都必须撤销前台与唤醒锁
+            CloudSyncForegroundService.stop(context)
+          }
         }
     }
 
@@ -1172,6 +1192,12 @@ class CloudPaneController(
                 concurrency = 1
             )
             openProgressDialog()
+
+            // 前台 Service + 唤醒锁保活（与上传一致，始终启用）
+            val downloadTotalBytes = totalBytes
+            val downloadStartMs = System.currentTimeMillis()
+            CloudSyncForegroundService.start(context, "正在下载 ${cloudFiles.size} 个文件")
+            CloudSyncForegroundService.update(0f, 0L, downloadTotalBytes, 0L, 0L)
 
             var completedFiles = 0
             var skippedFiles = 0
@@ -1283,6 +1309,12 @@ class CloudPaneController(
                         transferredBytes = transferredBytes,
                         fileProgress = state.syncTask.fileProgress - relPath
                     )
+                    if (downloadTotalBytes > 0) {
+                        val elapsedMs = System.currentTimeMillis() - downloadStartMs
+                        val percent = (transferredBytes.toDouble() / downloadTotalBytes).toFloat()
+                        val avgSpeed = if (elapsedMs > 0) transferredBytes * 1000 / elapsedMs else 0L
+                        CloudSyncForegroundService.update(percent, transferredBytes, downloadTotalBytes, elapsedMs, avgSpeed)
+                    }
                 }
 
                 // 完成后刷新列表，冲突消除、条目变绿
@@ -1308,6 +1340,8 @@ class CloudPaneController(
                 withContext(Dispatchers.Main) {
                     android.widget.Toast.makeText(context, "下载失败: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
                 }
+            } finally {
+                CloudSyncForegroundService.stop(context)
             }
         }
     }

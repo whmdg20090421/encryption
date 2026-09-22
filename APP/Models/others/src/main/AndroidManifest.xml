@@ -8,5 +8,12 @@
             android:label="文件操作"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- 云盘同步前台服务（上传/下载保活） -->
+        <service
+            android:name="com.whmdg.mczj.tools.fileop.sync.CloudSyncForegroundService"
+            android:label="云盘同步"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

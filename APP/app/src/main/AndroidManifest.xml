@@ -20,6 +20,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
+    <!-- 唤醒锁：云同步上传期间保持 CPU 唤醒，防止后台 socket 停顿 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- 相机/麦克风 -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
