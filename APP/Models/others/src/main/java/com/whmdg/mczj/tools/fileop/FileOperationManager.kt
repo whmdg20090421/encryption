@@ -24,7 +24,11 @@ object FileOperationManager {
     data class OperationSummary(
         val phase: String,
         val fileCount: Int,
-        val totalBytes: Long
+        val totalBytes: Long,
+        /** 本次操作实际新增的大小（仅保险箱加密引入/转码有意义；其他为 0）。 */
+        val bytesAdded: Long = 0L,
+        /** 操作总用时（毫秒）。0 表示未统计。 */
+        val elapsedMs: Long = 0L
     )
     private val _lastSummary = MutableStateFlow<OperationSummary?>(null)
     val lastSummary: StateFlow<OperationSummary?> = _lastSummary
@@ -99,6 +103,27 @@ object FileOperationManager {
             )
         }
         _progress.value = progress
+    }
+
+    /**
+     * 由 Job 在"保险箱加密/解密成功完成"时调用：关闭进度弹窗并写入带实际新增
+     * 大小与用时的摘要，供完成弹窗展示"新增多少 / 用时 / 平均速度"。
+     */
+    fun finishProgress(
+        phase: String,
+        fileCount: Int,
+        totalBytes: Long,
+        bytesAdded: Long,
+        elapsedMs: Long
+    ) {
+        _lastSummary.value = OperationSummary(
+            phase = phase,
+            fileCount = fileCount,
+            totalBytes = totalBytes,
+            bytesAdded = bytesAdded,
+            elapsedMs = elapsedMs
+        )
+        _progress.value = null
     }
 
     // ── 冲突解决（Job 线程 suspend 等待用户选择） ──
@@ -230,7 +255,9 @@ data class FileOpProgress(
     val fileCount: Int = 0,
     val isScanning: Boolean = false,
     /** 并发通道正在处理的文件名（每通道一项，最多 3 个），用于多行显示。 */
-    val activeFileNames: List<String> = emptyList()
+    val activeFileNames: List<String> = emptyList(),
+    /** 最近 1 秒的加密/解密速率（字节/秒）。0 表示暂无有效采样。 */
+    val bytesPerSecond: Long = 0L
 ) {
     val fraction: Float get() =
         if (totalBytes > 0) currentBytes.toFloat() / totalBytes else 0f

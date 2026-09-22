@@ -363,6 +363,17 @@ internal fun CopyMoveProgressDialog(
                     Spacer(Modifier.height(8.dp))
                     Text("文件数：${summary.fileCount}")
                     Text("大小变化：$sign${FormatUtils.formatBytes(summary.totalBytes)}")
+                    if (summary.bytesAdded > 0) {
+                        Text("新增大小：%.1f MB".format(summary.bytesAdded / 1048576.0))
+                    }
+                    if (summary.elapsedMs > 0) {
+                        val seconds = summary.elapsedMs / 1000.0
+                        Text("加密用时：%.1f 秒".format(seconds))
+                        if (summary.bytesAdded > 0 && seconds > 0) {
+                            val avgMbps = summary.bytesAdded / 1048576.0 / seconds
+                            Text("平均速度：%.1f MB/s".format(avgMbps))
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -392,33 +403,34 @@ internal fun CopyMoveProgressDialog(
                     val activeNames = p.activeFileNames.ifEmpty {
                         if (p.currentFileName.isNotEmpty()) listOf(p.currentFileName) else emptyList()
                     }
-                    if (activeNames.isNotEmpty()) {
-                        val rowCount = com.whmdg.mczj.tools.fileop.CopyJob.VAULT_CHANNEL_COUNT
-                        val paddedNames = (0 until rowCount).map { i -> activeNames.getOrNull(i) ?: "" }
-                        paddedNames.forEach { name ->
+                    // 始终按固定通道数渲染文件名行（不足补空），保证弹窗高度恒定：
+                    // 三通道在"完成 → 分配下一任务"的空档会短暂无名字，若此时整块消失
+                    // 再出现，弹窗会随文件轮转高频上下抖动。
+                    val rowCount = com.whmdg.mczj.tools.fileop.CopyJob.VAULT_CHANNEL_COUNT
+                    val paddedNames = (0 until rowCount).map { i -> activeNames.getOrNull(i) ?: "" }
+                    paddedNames.forEach { name ->
+                        Text(
+                            text = name.ifEmpty { " " },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
+                    if (p.phase.contains("加密")) {
+                        val hw = com.whmdg.mczj.tools.encryption.core.AesGcm256.isHardwareAccelerated
+                        if (hw != null) {
+                            val mode = if (hw)
+                                "硬件加速中 (${com.whmdg.mczj.tools.encryption.core.AesGcm256.backendName})"
+                            else
+                                "软件加密中 (${com.whmdg.mczj.tools.encryption.core.AesGcm256.backendName})"
                             Text(
-                                text = name.ifEmpty { " " },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
+                                text = mode,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
-                        if (p.phase.contains("加密")) {
-                            val hw = com.whmdg.mczj.tools.encryption.core.AesGcm256.isHardwareAccelerated
-                            if (hw != null) {
-                                val mode = if (hw)
-                                    "硬件加速中 (${com.whmdg.mczj.tools.encryption.core.AesGcm256.backendName})"
-                                else
-                                    "软件加密中 (${com.whmdg.mczj.tools.encryption.core.AesGcm256.backendName})"
-                                Text(
-                                    text = mode,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(8.dp))
                     }
+                    Spacer(Modifier.height(8.dp))
                     if (p.isScanning) {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     } else if (p.totalBytes > 0) {
@@ -428,16 +440,29 @@ internal fun CopyMoveProgressDialog(
                         )
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = if (p.isScanning) {
-                            if (p.totalBytes > 0) "${FormatUtils.formatBytes(p.totalBytes)} (正在统计)"
-                            else "正在统计..."
-                        } else {
-                            "${FormatUtils.formatBytes(p.currentBytes)} / ${FormatUtils.formatBytes(p.totalBytes)}"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (p.isScanning) {
+                                if (p.totalBytes > 0) "${FormatUtils.formatBytes(p.totalBytes)} (正在统计)"
+                                else "正在统计..."
+                            } else {
+                                "${FormatUtils.formatBytes(p.currentBytes)} / ${FormatUtils.formatBytes(p.totalBytes)}"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (!p.isScanning && p.bytesPerSecond > 0) {
+                            Text(
+                                text = FormatUtils.formatSpeed(p.bytesPerSecond),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 } else {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                 }

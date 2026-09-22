@@ -153,6 +153,13 @@ class CopyJob(
     /** 保护通道名数组、通道字节进度与进度发布。 */
     private val channelLock = Any()
 
+    /** 最近 1 秒滑动窗口速率统计器（加密/解密共用）。 */
+    private val speedMeter = TransferSpeedMeter()
+
+    /** 保险箱加密/解密操作的开始时间（毫秒），用于完成时统计用时与平均速度。 */
+    @Volatile
+    private var vaultOperationStartMs = 0L
+
     /** 保证同一时刻只有一个通道占用冲突/错误弹窗，其余通道在占用前等待。 */
     private val dialogMutex = Any()
 
@@ -465,6 +472,7 @@ class CopyJob(
             EncryptionTraceLog.start(context, "ExternalToVault")
             EncryptionTraceLog.log("copyExternalToVault: sources=${sources.size} totalSize=${duTotalSize(*sources.toTypedArray())} target=${ctx.targetSession.vaultDir.name}")
         }
+        vaultOperationStartMs = System.currentTimeMillis()
         val totalSize = duTotalSize(*sources.toTypedArray())
         // 保险箱目录大小累加器（绝对路径 → 累加大小）
         val acc = mutableMapOf<String, Long>()
@@ -511,6 +519,13 @@ class CopyJob(
                     movedSources?.add(item.file.absolutePath)
                 }
             }
+            manager.finishProgress(
+                phase = "正在加密",
+                fileCount = queue.size,
+                totalBytes = totalSize,
+                bytesAdded = vaultBytesAdded.get(),
+                elapsedMs = System.currentTimeMillis() - vaultOperationStartMs
+            )
         } finally {
             // MOVE：仅删除已成功加密的源文件，以及随之清空的目录
             if (movedSources != null) {
@@ -686,13 +701,15 @@ class CopyJob(
     /** 发布加密总进度：currentBytes 为所有通道 (已提交 + 在途) 之和。 */
     private fun publishEncryptProgress(totalSize: Long, doneFiles: Int) {
         synchronized(channelLock) {
+            val processed = totalProcessedBytesLocked()
             manager.updateProgress(FileOpProgress(
                 phase = "正在加密",
-                currentBytes = totalProcessedBytesLocked(),
+                currentBytes = processed,
                 totalBytes = totalSize,
                 fileIndex = doneFiles,
                 fileCount = sources.size,
-                activeFileNames = activeChannelNames()
+                activeFileNames = activeChannelNames(),
+                bytesPerSecond = speedMeter.sample(processed)
             ))
         }
     }
@@ -886,13 +903,15 @@ class CopyJob(
     /** 发布解密总进度：currentBytes 为所有通道 (已提交 + 在途) 之和。 */
     private fun publishDecryptProgress(totalSize: Long, doneFiles: Int) {
         synchronized(channelLock) {
+            val processed = totalProcessedBytesLocked()
             manager.updateProgress(FileOpProgress(
                 phase = "正在解密",
-                currentBytes = totalProcessedBytesLocked(),
+                currentBytes = processed,
                 totalBytes = totalSize,
                 fileIndex = doneFiles,
                 fileCount = sources.size,
-                activeFileNames = activeChannelNames()
+                activeFileNames = activeChannelNames(),
+                bytesPerSecond = speedMeter.sample(processed)
             ))
         }
     }
