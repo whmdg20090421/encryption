@@ -4,8 +4,8 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## 文档版本
 
-**基准哈希**：`16444226`（以实际 HEAD 为准）
-**更新日期**：2026-08-06
+**基准哈希**：`39d8b82e`（以实际 HEAD 为准）
+**更新日期**：2026-09-22
 
 > 更新 AGENTS.md 前，先执行 `git diff <基准哈希>..HEAD -- '*.kt' '*.kts' '*.py' '*.sh' '*.yml'` 查看自上次记录以来的所有代码变更，确保文档与代码同步。更新后替换基准哈希为新的 HEAD。
 
@@ -68,8 +68,13 @@ KEYSTORE_PASSWORD=xxx KEY_ALIAS=xxx KEY_PASSWORD=xxx ./gradlew assembleRelease
 src/main/java/com/whmdg/mczj/tools/
 ├── MainActivity.kt                    # 入口，启用 Edge-to-Edge
 ├── ToolsApp.kt                        # Application 类（初始化 + ANR 看门狗 + 全局崩溃处理）
+├── AnrWatchdog.kt                     # ANR 看门狗（守护线程 ping 主线程，超时采集栈）
 ├── CrashActivity.kt                   # Native 崩溃显示界面（从 pipe 接收崩溃信息）
 ├── ErrorReportActivity.kt             # 错误报告界面
+├── ProcessMonitorService.kt           # 进程监控前台 Service
+├── ProcessMonitorLifecycleObserver.kt # 进程监控生命周期观察者
+├── security/
+│   └── CrashMonitor.java              # 崩溃监控 Java 层
 └── ui/
     └── HomeScreen.kt                  # 导航容器，路由到各功能模块的 ModuleScreen
 ```
@@ -92,14 +97,17 @@ src/main/java/com/whmdg/mczj/tools/
 │   │   ├── AesGcm.kt / Argon2id.kt / Pbkdf2.kt / KeyDerivation.kt
 │   │   ├── FileCodec.kt / FileConstants.kt / FilenameCodec.kt
 │   │   ├── HexCodec.kt / SecureRandom.kt / NailObfuscation.kt
+│   │   └── EncryptionTraceLog.kt      # 加密性能追踪日志
 │   ├── data/                          # 加密数据层
 │   │   ├── VaultConfig.kt / VaultDb.kt / VaultPaths.kt / VaultRecord.kt
 │   │   ├── CanonicalJson.kt / NameMapping.kt / FolderSizeDb.kt / StorageLocation.kt
+│   │   └── SyncDatabase.kt / VaultSyncIndex.kt  # 同步库 / 保险箱同步索引
 │   ├── models/
 │   │   └── EncryptionNode.kt
 │   └── services/
 │       ├── VaultService.kt / VaultSession.kt
 │       ├── CryptoService.kt / EncryptionTaskManager.kt
+│       ├── VaultDecryptCache.kt / VaultKeyHolder.kt
 │       └── VaultFileClassifier.kt     # 文件路径分类（判断是否在保险箱内 + 批量分类）
 ├── security/
 │   ├── ShellExecutor.kt               # 统一 shell 执行入口（委托给 ShellDaemon）
@@ -108,14 +116,16 @@ src/main/java/com/whmdg/mczj/tools/
 │   ├── TeeManager.kt                  # TEE 生物识别快速解锁
 │   ├── SpecialPermissionVerifier.kt / ShizukuAuthorizer.kt
 │   ├── AndroidPermissionLevel.kt / AccessibilityServiceBridge.kt / MyDeviceAdminReceiver.kt
-│   ├── FdProvider.kt                   # 文件描述符提供（跨进程 fd 传递）
-│   └── UsageStatsReporter.kt          # 使用统计事件上报（通过 JNI bypass hidden API 调用 IUsageStatsManager）
+│   └── FdProvider.kt                   # 文件描述符提供（跨进程 fd 传递）
 ├── util/                              # 基础工具类
-│   ├── DiagnosticLog.kt / FormatUtils.kt
+│   ├── DiagnosticLog.kt / FormatUtils.kt / AuditLog.kt
 │   ├── FileAccessLevel.kt / FileAccessor.kt / FolderSizeCalculator.kt
-│   ├── AppIconHelper.kt
-│   ├── BinaryExtractor.kt / SevenZipCommand.kt / ArchiveBrowser.kt / CompressService.kt
-│   └── XposedDetector.kt
+│   ├── AppIconHelper.kt / XposedDetector.kt
+│   ├── ArchiveBrowser.kt / CompressService.kt / CompressPreviewCache.kt
+│   ├── ArchiveThumbnailExtractor.kt / VaultThumbnailExtractor.kt / VaultThumbnailRequest.kt
+│   ├── JBindingClient.kt / ShellEscape.kt
+│   ├── TextEncodingDetector.kt / ZipEncodingDetector.kt / ZipRawReader.kt
+│   └── (7zip-jbinding-api.txt / SEVENZIP_API_GUIDE.md — 7z 集成参考文档)
 └── ui/
     ├── Screen.kt                      # Screen sealed class（全局导航定义）
     ├── FileEntry.kt / ActivityRef.kt
@@ -133,6 +143,8 @@ src/main/java/com/whmdg/mczj/tools/
 ### APP/Models/others — 主要功能模块
 ```
 src/main/java/com/whmdg/mczj/tools/
+├── filemanager/
+│   └── CloudPaneController.kt         # 云盘面板控制器
 ├── fileop/                            # 文件操作模块（参考 MaterialFiles 架构）
 │   ├── FileOperator.kt                # 抽象接口（copy/move/delete/mkdir）
 │   ├── ShellFileOperator.kt           # Root/Shizuku 文件操作实现
@@ -140,22 +152,29 @@ src/main/java/com/whmdg/mczj/tools/
 │   ├── FileOperationManager.kt        # 全局单例，StateFlow 驱动进度/冲突/错误弹窗
 │   ├── FileOperationService.kt        # 前台 Service
 │   ├── FileOpDiagnostics.kt           # 文件操作诊断
+│   ├── sync/                          # 云同步引擎
+│   │   ├── SyncEngine.kt / SyncTaskState.kt / CloudSyncLogger.kt
 │   └── webdav/                        # WebDAV 客户端
 │       ├── WebDavServerConfig.kt / WebDavServerStore.kt  # 服务器配置持久化
-│       ├── WebDavFileClient.kt / WebDavPath.kt / WebDavAuthenticator.kt
+│       ├── WebDavConnectionState.kt / WebDavFileClient.kt / WebDavPath.kt / WebDavAuthenticator.kt
 │       └── client/                    # 底层 HTTP 客户端
 │           ├── Client.kt / Protocol.kt / Authority.kt
 │           ├── Authentication.kt / Authenticator.kt
 │           ├── DavResourceCompat.kt / DavIOException.kt
 │           ├── MemoryCookieJar.kt / ResponseExtensions.kt
+├── tomato/
+│   └── TomatoDownloader.kt            # 番茄小说下载器
 ├── xposed/
-│   ├── 模块入口.kt                     # Xposed 模块入口（中文类名，继承 XposedModule）
-│   └── hook.net.defensezone3.ultra.kt # DefenseZone3 广告跳过 Hook
+│   └── 模块入口.kt                     # Xposed 模块入口（中文类名，继承 XposedModule）
 ├── util/
-│   └── JxlCoilDecoder.kt             # Coil 图片加载器 JPEG XL 解码器
+│   ├── JxlCoilDecoder.kt             # Coil 图片加载器 JPEG XL 解码器
+│   ├── AudioTagReader.kt / LrcParser.kt  # 音频标签读取 / LRC 歌词解析
+│   ├── ArchiveThumbnailFetcher.kt / VaultThumbnailFetcher.kt
+│   └── UndoStackInspector.kt
 └── ui/
     ├── SizeCalcManager.kt             # 大小统计进度管理
     ├── ErrorDialog.kt                 # 错误对话框组件
+    ├── MessageDialog.kt               # 通用消息对话框
     ├── AboutScreen.kt                 # 关于页面
     ├── ChangelogScreen.kt             # 更新日志
     ├── filemanager/                   # 文件管理器
@@ -163,35 +182,34 @@ src/main/java/com/whmdg/mczj/tools/
     │   ├── FileManagerModuleScreen.kt # Compose 导航容器
     │   ├── FileManagerScreen.kt       # 文件管理器主界面（双面板 UI）
     │   ├── FileManagerViewModel.kt    # 三角色架构：FilePaneController + PanelCoordinator + VM
+    │   ├── PanelPath.kt               # 面板路径模型
     │   ├── FileManagerPreloader.kt    # 后台预加载器，主界面渲染时触发，用户点击时可直接使用缓存
     │   ├── FileManagerDialogs_FileOps.kt  # 文件操作弹窗（StandardDialog 模板 + 冲突/进度/错误）
-    │   ├── ImageViewerScreen.kt       # 图片查看器
-    │   ├── TextEditorScreen.kt        # 代码/文本编辑器
     │   ├── FileOperationDialogs.kt    # 文件操作冲突/错误弹窗
     │   └── WebDavEditDialog.kt        # WebDAV 服务器编辑对话框
     ├── viewer/                        # 独立浏览器 Activity（与 FileManager 导航隔离）
     │   ├── ViewerActivity.kt          # 承载图片查看器 / 文本编辑器
     │   ├── ImageViewerScreen.kt       # 图片查看器
     │   ├── TextEditorScreen.kt        # 代码/文本编辑器
+    │   ├── AudioPlayerActivity.kt     # 音频播放器
     │   └── VideoPlayerActivity.kt     # 视频播放器（直用 Media3 ExoPlayer，输出真实 PlaybackException 原文）
     ├── encryption/                    # 加密 UI
     │   ├── EncryptionRoute.kt / EncryptionModuleScreen.kt
     │   ├── EncryptionHomeScreen.kt     # 保险箱卡片 UI（渐变+光晕）+ 保持打开计时器（JNI HMAC 防篡改）
-    │   ├── VaultCreateScreen.kt / VaultOpenScreen.kt
-    │   ├── VaultChangePasswordScreen.kt / EncryptionSettings.kt
+    │   ├── VaultCreateScreen.kt / VaultChangePasswordScreen.kt / EncryptionSettings.kt
+    │   ├── CloudSyncScreen.kt / CloudSyncStore.kt / CloudVaultCatalogSync.kt  # 云盘同步
+    │   ├── DeleteProgressDialog.kt
     │   └── EncryptionProgressIcon.kt / EncryptionProgressPanel.kt
     ├── diary/                         # 日记模块
     │   ├── DiaryRoute.kt / DiaryModuleScreen.kt
-    │   ├── DiaryScreen.kt / DiaryBookScreen.kt / DiaryModels.kt
+    │   └── DiaryScreen.kt / DiaryBookScreen.kt / DiaryModels.kt
     ├── download/                      # 下载器模块
     │   ├── DownloaderRoute.kt / DownloaderModuleScreen.kt
     │   ├── BatchDownloaderScreen.kt / FADownloaderScreen.kt / FADownloaderViewModel.kt / FALoginScreen.kt
+    │   ├── TomatoNovelScreen.kt / TomatoConfirmDialogs.kt  # 番茄小说下载 UI
     │   └── Deviant/
     │       ├── DeviantDownloaderScreen.kt / DeviantDownloaderViewModel.kt
     │       └── DeviantLoginScreen.kt / DeviantModels.kt
-    ├── rphub/                         # RP Hub 模块
-    │   ├── RpHubRoute.kt / RpHubModuleScreen.kt
-    │   ├── RpHubScreen.kt / RpHubServer.kt / RpHubTrafficPanel.kt / RpHubDownloadPanel.kt / RpHubDebugPanel.kt
     ├── wifi/                          # WiFi 传输模块
     │   ├── WifiModuleScreen.kt        # Compose 导航容器
     │   └── WifiScreen.kt             # WiFi 扫描与分析主界面
@@ -200,8 +218,13 @@ src/main/java/com/whmdg/mczj/tools/
         ├── HookModuleScreen.kt       # Compose 导航容器
         ├── HookScreen.kt             # Hook 目标列表（已安装应用 + 作用域状态）
         ├── HookDetailScreen.kt       # 单个应用的 Hook 详情（开关 + 作用域管理），含 SystemServer 专用页面
-        ├── UsageStatsScreen.kt       # 使用统计页面（应用使用时长列表 + 测试事件上报）
-        └── HookConfig.kt             # Hook 目标注册表 + LSPosed 作用域查询
+        ├── UsageTimeScreen.kt        # 使用统计页面（应用使用时长列表 + 测试事件上报）
+        ├── HookConfig.kt             # Hook 目标注册表 + LSPosed 作用域查询
+        ├── usage/                    # 使用统计辅助
+        │   ├── UsageTimeViewModel.kt / UsageStatsHelper.kt / AppUsageInfo.kt
+        │   ├── HourlyUsageTable.kt / HourlyUsageXlsxGenerator.kt / ExcludedTimeRange.kt
+        └── 内存管理/                  # 内存使用分析
+            ├── MemoryUsageScreen.kt / MemoryUsageViewModel.kt
 ```
 
 ### APP/Models/accounting — 记账本模块
@@ -235,6 +258,8 @@ src/main/java/com/whmdg/mczj/tools/ui/accounting/
 gen_password_hashes.py                 # 预生成 Argon2id 密码哈希 → hashes.inc + obf_key.h
 wait_and_download.sh                   # CI 产物下载辅助脚本
 diagnose.sh                            # 白屏诊断脚本（在设备上 su -c sh 执行）
+proxy_server.py                        # 代理服务器脚本
+123yunpan_api_reference.txt            # 123 云盘 API 参考
 ```
 
 **Native 代码** (`APP/core/src/main/cpp/`)：
@@ -242,6 +267,7 @@ diagnose.sh                            # 白屏诊断脚本（在设备上 su -c
 CMakeLists.txt                         # 构建 authcore 共享库
 auth_jni.cpp                           # JNI 入口（verifyPassword / keyIdOf）
 obf.c / obf.h / obf_key.h             # 密码混淆层
+deadline_hmac_key.h                    # 保持打开计时器的 HMAC 密钥
 crash_handler.c / crash_handler.h      # Native 信号崩溃处理（pipe → CrashActivity）
 crash_monitor_jni.c                    # 崩溃监控 JNI 接口
 hashes.inc                             # 预计算哈希表

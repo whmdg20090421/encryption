@@ -515,11 +515,16 @@ class CopyJob(
         }
 
         val outName = if (session.record.encryptFilename) {
-            FilenameCodec.encrypt(
+            val enc = FilenameCodec.encrypt(
                 filename = srcFile.name,
                 dek = session.dek,
                 aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null
-            ).encoded
+            )
+            if (enc.mappingKey != null && enc.mappingValue != null) {
+                session.nameMapping.set(enc.mappingKey, enc.mappingValue)
+                session.saveNameMapping(context)
+            }
+            enc.encoded
         } else {
             "${srcFile.name}.whm"
         }
@@ -530,7 +535,7 @@ class CopyJob(
         setChannelName(channelId, srcFile.name)
         publishEncryptProgress(totalSize, processedFiles.get())
 
-        val encrypted = encryptWithRetry(session, srcFile, item.subDir, totalSize, processedFiles)
+        val encrypted = encryptWithRetry(session, srcFile, item.subDir, outName, totalSize, processedFiles)
 
         synchronized(pendingVaultTargets) { pendingVaultTargets.remove(pendingOut) }
         vaultBytesAdded.addAndGet(encrypted.length())
@@ -550,6 +555,7 @@ class CopyJob(
         session: VaultSession,
         srcFile: File,
         subDir: String,
+        outName: String,
         totalSize: Long,
         processedFiles: AtomicInteger
     ): File {
@@ -558,8 +564,8 @@ class CopyJob(
             throwIfCancelled()
             attempt++
             try {
-                return CryptoService.encryptIntoVault(
-                    context, session, srcFile, subDir,
+                return CryptoService.encryptIntoVaultWithName(
+                    context, session, srcFile, subDir, outName,
                     overwrite = true,
                     onProgress = { encryptedBytes, _ ->
                         publishEncryptProgress(totalSize, processedFiles.get(), encryptedBytes)

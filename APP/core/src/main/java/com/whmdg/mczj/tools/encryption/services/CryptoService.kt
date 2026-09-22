@@ -96,26 +96,43 @@ object CryptoService {
         onProgress: (Long, Long) -> Unit = { _, _ -> },
         cancelFlag: AtomicBoolean? = null
     ): File {
-        val trace = EncryptionTraceLog.enabled(context)
-        if (trace) EncryptionTraceLog.log("CryptoService.encryptIntoVault: src=${srcFile.name} size=${srcFile.length()} subDir=$subDir custom=${session.record.customEncryption}")
-
-        val origName = srcFile.name
-        val outName: String
-
-        if (session.record.encryptFilename) {
+        val outName = if (session.record.encryptFilename) {
             val enc = FilenameCodec.encrypt(
-                filename = origName,
+                filename = srcFile.name,
                 dek = session.dek,
                 aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null
             )
-            outName = enc.encoded
             if (enc.mappingKey != null && enc.mappingValue != null) {
                 session.nameMapping.set(enc.mappingKey, enc.mappingValue)
                 session.saveNameMapping(context)
             }
+            enc.encoded
         } else {
-            outName = "$origName.whm"
+            "${srcFile.name}.whm"
         }
+        return encryptIntoVaultWithName(
+            context, session, srcFile, subDir, outName, overwrite, onProgress, cancelFlag
+        )
+    }
+
+    /**
+     * 与 [encryptIntoVault] 相同，但复用调用方已计算好的输出文件名，避免重复的
+     * [FilenameCodec.encrypt] 计算与 mapping 写入。
+     *
+     * 调用方负责在传入前完成 mapping 注册。
+     */
+    fun encryptIntoVaultWithName(
+        context: Context,
+        session: VaultSession,
+        srcFile: File,
+        subDir: String,
+        outName: String,
+        overwrite: Boolean = false,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+        cancelFlag: AtomicBoolean? = null
+    ): File {
+        val trace = EncryptionTraceLog.enabled(context)
+        if (trace) EncryptionTraceLog.log("CryptoService.encryptIntoVault: src=${srcFile.name} size=${srcFile.length()} subDir=$subDir name=$outName custom=${session.record.customEncryption}")
 
         val targetDir = if (subDir.isEmpty()) session.vaultDir else File(session.vaultDir, subDir)
         val outFile = File(targetDir, outName)

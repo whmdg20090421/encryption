@@ -393,9 +393,11 @@ internal fun CopyMoveProgressDialog(
                         if (p.currentFileName.isNotEmpty()) listOf(p.currentFileName) else emptyList()
                     }
                     if (activeNames.isNotEmpty()) {
-                        activeNames.forEach { name ->
+                        val rowCount = com.whmdg.mczj.tools.fileop.CopyJob.VAULT_CHANNEL_COUNT
+                        val paddedNames = (0 until rowCount).map { i -> activeNames.getOrNull(i) ?: "" }
+                        paddedNames.forEach { name ->
                             Text(
-                                text = name,
+                                text = name.ifEmpty { " " },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1
