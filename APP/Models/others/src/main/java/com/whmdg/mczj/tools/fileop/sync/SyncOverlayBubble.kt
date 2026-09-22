@@ -21,6 +21,7 @@ import com.petterp.floatingx.core.layout.FxHalfHide
 import com.petterp.floatingx.core.update
 import com.petterp.floatingx.system.SystemHost
 import com.petterp.floatingx.system.permission.FxPermissionStrategy
+import com.petterp.floatingx.system.systemHost
 import com.whmdg.mczj.tools.others.R
 
 /**
@@ -102,7 +103,7 @@ object SyncOverlayBubble {
                     drag = FxDrag.IMMEDIATE
                     longPressTimeout = 0L
                 }
-                storage(null)
+                persist(null)
                 systemHost(appContext) {
                     // 调用方已在 canShow 校验权限，这里跳过申请（避免后台弹页失败）
                     permission(FxPermissionStrategy.Skip)
