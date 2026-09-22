@@ -60,6 +60,9 @@ class FolderSizeDb() {
 
     val folders: MutableMap<String, FolderSizeInfo> = mutableMapOf()
 
+    /** 保护 [folders] 的并发读写（多通道加密/解密时会被并行访问）。 */
+    private val lock = Any()
+
     /** 版本计数器：每次写操作递增，Compose 读取此字段可触发 recomposition */
     var version by mutableStateOf(0)
         private set
@@ -70,38 +73,39 @@ class FolderSizeDb() {
     }
 
     fun save(dir: File) {
+        val snapshot = synchronized(lock) { folders.toMap() }
         val file = File(dir, FILE_NAME)
         val sb = StringBuilder()
         sb.appendLine(CURRENT_VERSION)
-        for ((path, info) in folders) {
+        for ((path, info) in snapshot) {
             sb.appendLine("$path\t${info.size}\t${info.lastModified}")
         }
         file.writeText(sb.toString())
     }
 
-    fun get(path: String): FolderSizeInfo? = folders[path]
+    fun get(path: String): FolderSizeInfo? = synchronized(lock) { folders[path] }
 
     /** 规范化查找：去除尾部 / 后再匹配，避免目录路径格式不一致导致查不到 */
-    fun getNormalized(path: String): FolderSizeInfo? = folders[path.trimEnd('/')]
+    fun getNormalized(path: String): FolderSizeInfo? = synchronized(lock) { folders[path.trimEnd('/')] }
 
     fun put(path: String, info: FolderSizeInfo) {
-        folders[path] = info
+        synchronized(lock) { folders[path] = info }
         bumpVersion()
     }
 
     fun bulkPut(updates: Map<String, FolderSizeInfo>) {
-        folders.putAll(updates)
+        synchronized(lock) { folders.putAll(updates) }
         bumpVersion()
     }
 
     fun remove(path: String) {
-        folders.remove(path)
+        synchronized(lock) { folders.remove(path) }
         bumpVersion()
     }
 
     fun removeDescendants(path: String) {
         val prefix = if (path.isEmpty()) "" else "$path/"
-        folders.keys.removeAll { it == path || it.startsWith(prefix) }
+        synchronized(lock) { folders.keys.removeAll { it == path || it.startsWith(prefix) } }
         bumpVersion()
     }
 
@@ -109,9 +113,11 @@ class FolderSizeDb() {
     fun getDescendants(rootPath: String): Map<String, FolderSizeInfo> {
         val prefix = if (rootPath.isEmpty()) "" else "$rootPath/"
         val result = HashMap<String, FolderSizeInfo>()
-        for ((path, info) in folders) {
-            if (path == rootPath || path.startsWith(prefix)) {
-                result[path] = info
+        synchronized(lock) {
+            for ((path, info) in folders) {
+                if (path == rootPath || path.startsWith(prefix)) {
+                    result[path] = info
+                }
             }
         }
         return result

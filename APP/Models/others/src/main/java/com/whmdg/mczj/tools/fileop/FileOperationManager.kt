@@ -228,7 +228,9 @@ data class FileOpProgress(
     val isRunning: Boolean = true,
     val fileIndex: Int = 0,
     val fileCount: Int = 0,
-    val isScanning: Boolean = false
+    val isScanning: Boolean = false,
+    /** 并发通道正在处理的文件名（每通道一项，最多 3 个），用于多行显示。 */
+    val activeFileNames: List<String> = emptyList()
 ) {
     val fraction: Float get() =
         if (totalBytes > 0) currentBytes.toFloat() / totalBytes else 0f

@@ -409,6 +409,13 @@ Shell 命令不用 `cd`（Shizuku 的 `cd` 对特殊字符路径失败），目�
 
 **保险箱感知**：`CopyJob` 支持 `VaultOperationContext`，根据源/目标路径自动判断：外部→保险箱（加密引入）、保险箱→外部（解密导出）、跨保险箱（解密→重加密）。前置校验由 `VaultFileClassifier` 在 UI 层完成，混合批次报错拦截。
 
+**多通道并发（加密引入 / 解密导出）**：`CopyJob.runWithChannels()` 用固定 3 个通道（`VAULT_CHANNEL_COUNT`）并发消费文件队列，文件数 ≤3 时通道自然空闲等价串行；跨箱转码保持串行。要点：
+- 进度按所有通道字节数原子累加（`progressBytes`），UI 显示总计进度条 + 最多 3 行文件名（`FileOpProgress.activeFileNames`）。
+- 冲突/错误弹窗通过 `dialogMutex` 串行化：同一时刻仅一个弹窗，其余通道阻塞等待（"弹窗即暂停全部通道"）。
+- 文件级错误静默自动重试一次；仍失败才弹窗（重试/跳过/跳过全部/取消）。选择"跳过全部"后后续错误直接跳过。
+- 取消：`cancelFlag` 使各通道退出，未完成的 `.part` 残留由 `run()` 统一清理；MOVE 仅删除已成功加密的源文件。
+- 共享状态已加锁：`NameMapping`、`FolderSizeDb`、`SyncDatabase`（`CryptoService.syncDbLock`）。
+
 **WebDAV 客户端**：基于 OkHttp + dav4jvm，配置持久化在 `AppDataPaths`。
 
 ### 日记模块

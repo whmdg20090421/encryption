@@ -14,6 +14,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object CryptoService {
 
+    /** 串行化同步库的"读取-判断-写入"序列，避免多通道加密时明文 MD5 记录竞态。 */
+    private val syncDbLock = Any()
+
     /** 已打开的保险箱流式写入事务。成功时原子发布密文，失败时删除未完成文件。 */
     class VaultStreamWrite internal constructor(
         private val context: Context,
@@ -148,24 +151,26 @@ object CryptoService {
         encryptedFile: File,
         plainMd5: String
     ) {
-        val relPath = "/" + encryptedFile.relativeTo(session.vaultDir).path.replace('\\', '/')
-        val syncDb = SyncDatabase.getInstance(context, session.record.name)
-        syncDb.upsertLocalMd5(
-            path = relPath,
-            md5 = plainMd5,
-            size = encryptedFile.length(),
-            lastModified = java.time.Instant.ofEpochMilli(encryptedFile.lastModified()).toString()
-        )
+        synchronized(syncDbLock) {
+            val relPath = "/" + encryptedFile.relativeTo(session.vaultDir).path.replace('\\', '/')
+            val syncDb = SyncDatabase.getInstance(context, session.record.name)
+            syncDb.upsertLocalMd5(
+                path = relPath,
+                md5 = plainMd5,
+                size = encryptedFile.length(),
+                lastModified = java.time.Instant.ofEpochMilli(encryptedFile.lastModified()).toString()
+            )
 
-        // 云端已有同路径记录时，仅比对明文 MD5：一致则视为已同步
-        val cloudEntry = syncDb.getEntry("cloud_entries", relPath) ?: return
-        if (!cloudEntry.md5.isNullOrEmpty() && cloudEntry.md5 == plainMd5) {
-            syncDb.updateEntry("local_entries", relPath) { row ->
-                row.copy(
-                    status = com.whmdg.mczj.tools.encryption.data.SyncStatus.COMPLETED,
-                    uploadedSize = row.size,
-                    lastSyncTime = java.time.Instant.now().toString()
-                )
+            // 云端已有同路径记录时，仅比对明文 MD5：一致则视为已同步
+            val cloudEntry = syncDb.getEntry("cloud_entries", relPath) ?: return
+            if (!cloudEntry.md5.isNullOrEmpty() && cloudEntry.md5 == plainMd5) {
+                syncDb.updateEntry("local_entries", relPath) { row ->
+                    row.copy(
+                        status = com.whmdg.mczj.tools.encryption.data.SyncStatus.COMPLETED,
+                        uploadedSize = row.size,
+                        lastSyncTime = java.time.Instant.now().toString()
+                    )
+                }
             }
         }
     }

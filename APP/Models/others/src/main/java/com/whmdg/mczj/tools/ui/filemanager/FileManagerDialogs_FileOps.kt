@@ -389,13 +389,18 @@ internal fun CopyMoveProgressDialog(
                     )
                 } else if (progress != null) {
                     val p = progress!!
-                    if (p.currentFileName.isNotEmpty()) {
-                        Text(
-                            text = p.currentFileName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1
-                        )
+                    val activeNames = p.activeFileNames.ifEmpty {
+                        if (p.currentFileName.isNotEmpty()) listOf(p.currentFileName) else emptyList()
+                    }
+                    if (activeNames.isNotEmpty()) {
+                        activeNames.forEach { name ->
+                            Text(
+                                text = name,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
                         if (p.phase.contains("加密")) {
                             val hw = com.whmdg.mczj.tools.encryption.core.AesGcm256.isHardwareAccelerated
                             if (hw != null) {

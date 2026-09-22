@@ -45,12 +45,15 @@ class NameMapping(val entries: MutableMap<String, String> = mutableMapOf()) {
         }
     }
 
+    private val lock = Any()
+
     fun save(context: Context, vaultDir: File) {
+        val snapshot = synchronized(lock) { entries.toMap() }
         val inVault = File(vaultDir, "name_mappings.json")
         try {
             inVault.parentFile?.mkdirs()
             FileOutputStream(inVault).use {
-                json.encodeToStream(entries, it)
+                json.encodeToStream(snapshot, it)
             }
         } catch (e: Exception) {}
 
@@ -59,14 +62,14 @@ class NameMapping(val entries: MutableMap<String, String> = mutableMapOf()) {
         val privFile = File(priv, "namemap_$h.json")
         try {
             FileOutputStream(privFile).use {
-                json.encodeToStream(entries, it)
+                json.encodeToStream(snapshot, it)
             }
         } catch (e: Exception) {}
     }
 
     fun set(hash: String, value: String) {
-        entries[hash] = value
+        synchronized(lock) { entries[hash] = value }
     }
 
-    fun get(hash: String): String? = entries[hash]
+    fun get(hash: String): String? = synchronized(lock) { entries[hash] }
 }

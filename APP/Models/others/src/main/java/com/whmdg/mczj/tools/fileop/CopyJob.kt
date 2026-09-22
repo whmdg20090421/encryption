@@ -14,6 +14,9 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicInteger
@@ -96,6 +99,11 @@ class CopyJob(
     @Volatile
     private var pendingCleanupTarget: String? = null
 
+    companion object {
+        /** 多文件加密/解密的固定并发通道数。 */
+        const val VAULT_CHANNEL_COUNT = 3
+    }
+
     /** "自动应用此设置"：用户首次确认时记录选择，后续冲突自动应用 */
     @Volatile
     private var conflictAutoAction: ConflictAction? = null
@@ -116,6 +124,115 @@ class CopyJob(
     /** 根据目的获取阶段文字 */
     private val phaseName: String
         get() = if (purpose == CopyPurpose.MOVE) "正在移动" else "正在复制"
+
+    // ═══════════════════════════════════════════════════════
+    //  多通道并发加密/解密引擎
+    // ═══════════════════════════════════════════════════════
+
+    /** 每个通道当前正在处理的文件名（索引 = 通道号），用于 UI 多行显示。 */
+    private val channelCurrentNames = arrayOfNulls<String>(VAULT_CHANNEL_COUNT)
+
+    /** 保护通道名数组与进度字节累加。 */
+    private val channelLock = Any()
+
+    /** 全局已处理字节（所有通道累加），并发下用原子量避免进度回退。 */
+    private val progressBytes = AtomicLong(0)
+
+    /** 保证同一时刻只有一个通道占用冲突/错误弹窗，其余通道在占用前等待。 */
+    private val dialogMutex = Any()
+
+    /** 用户在错误弹窗选择"跳过全部"后置位：后续文件出错直接跳过，不再逐次弹窗。 */
+    @Volatile
+    private var skipAllErrors = false
+
+    /**
+     * 以固定 [VAULT_CHANNEL_COUNT] 个通道并发消费 [items]，每个通道按队列顺序取任务执行。
+     *
+     * - 任务数 ≤ 通道数时，多余通道空闲，等价于串行。
+     * - [onItem] 内部如弹出冲突/错误弹窗，通过 [dialogMutex] 串行化：同一时刻只有一个
+     *   弹窗，其余通道阻塞等待，符合"弹窗时暂停全部通道"的语义。
+     * - 取消时 [shouldStop] 返回 true，各通道在下一次取任务时退出；当前进行中的任务由
+     *   [onItem] 内部通过 cancelFlag 感知并抛出 InterruptedIOException。
+     * - [onItem] 抛出 [SkippedException] 表示该文件被用户跳过，不影响其他任务；
+     *   抛出其他异常视为致命错误，向上传播并终止整个任务。
+     */
+    private fun <T> runWithChannels(
+        items: List<T>,
+        shouldStop: () -> Boolean,
+        onItem: (T, Int) -> Unit
+    ) {
+        if (items.isEmpty()) return
+        val workers = minOf(VAULT_CHANNEL_COUNT, items.size)
+        val queue = ConcurrentLinkedQueue(items)
+        val pool = Executors.newFixedThreadPool(workers) { r ->
+            Thread(r, "vault-channel-${channelSeq.getAndIncrement()}")
+        }
+        try {
+            val tasks = (0 until workers).map { channelId ->
+                pool.submit {
+                    while (!shouldStop()) {
+                        val item = queue.poll() ?: break
+                        if (shouldStop()) break
+                        try {
+                            onItem(item, channelId)
+                        } catch (_: SkippedException) {
+                            // 用户跳过该文件，继续处理下一个
+                        } finally {
+                            setChannelName(channelId, null)
+                        }
+                    }
+                }
+            }
+            // 传播首个致命错误（若有），并等待所有通道结束
+            var fatal: Exception? = null
+            for (task in tasks) {
+                try {
+                    task.get()
+                } catch (e: java.util.concurrent.ExecutionException) {
+                    val cause = e.cause
+                    if (cause is Exception && fatal == null) fatal = cause
+                } catch (_: InterruptedException) {
+                    // 强制取消（cancelHard）中断等待线程：立即停止等待，由取消流程统一清理
+                    break
+                }
+            }
+            if (fatal != null) throw fatal
+        } finally {
+            // 无论正常结束还是被中断，都必须等待所有通道线程真正退出，
+            // 否则后续的残留文件清理会与通道内正在进行的 .part 写入发生竞态。
+            pool.shutdownNow()
+            try {
+                if (!pool.awaitTermination(30, TimeUnit.SECONDS)) {
+                    // 通道未能及时退出（如 native I/O 卡死）：放弃等待，由上层清理兜底
+                    pool.shutdownNow()
+                }
+            } catch (_: InterruptedException) {
+                // 复用中断状态：再次等待一小段时间让通道响应中断后退出
+                try {
+                    pool.awaitTermination(5, TimeUnit.SECONDS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
+        }
+    }
+
+    private val channelSeq = AtomicInteger(0)
+
+    /** 设置某通道当前文件名并刷新进度；[name] 为 null 表示该通道空闲。 */
+    private fun setChannelName(channelId: Int, name: String?) {
+        synchronized(channelLock) {
+            if (channelId in channelCurrentNames.indices) channelCurrentNames[channelId] = name
+        }
+    }
+
+    /** 当前所有通道正在处理的文件名快照（过滤空闲通道）。 */
+    private fun activeChannelNames(): List<String> = synchronized(channelLock) {
+        channelCurrentNames.filterNotNull()
+    }
+
+    /** 累加已处理字节并返回新值。 */
+    private fun addProgressBytes(delta: Long): Long = progressBytes.addAndGet(delta)
 
     /** 报告保险箱存储用量及文件数量变更 */
     private fun reportVaultSizeChange() {
@@ -301,18 +418,10 @@ class CopyJob(
             EncryptionTraceLog.log("copyExternalToVault: sources=${sources.size} totalSize=${duTotalSize(*sources.toTypedArray())} target=${ctx.targetSession.vaultDir.name}")
         }
         val totalSize = duTotalSize(*sources.toTypedArray())
-        var doneBytes = 0L
-        var doneFiles = 0
         // 保险箱目录大小累加器（绝对路径 → 累加大小）
         val acc = mutableMapOf<String, Long>()
         folderSizeAccumulator = acc
         vaultDirForSave = ctx.targetSession.vaultDir
-        // 预计算每个源的文件大小总和，避免后续重复 walkTopDown
-        val sourceSizes = sources.map { src ->
-            val f = File(src)
-            if (f.isFile) f.length()
-            else f.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-        }
 
         manager.updateProgress(FileOpProgress(
             phase = "正在加密",
@@ -323,142 +432,204 @@ class CopyJob(
             fileCount = sources.size
         ))
 
-        for ((i, src) in sources.withIndex()) {
-            throwIfCancelled()
-            val srcFile = File(src)
-            val subDir = if (ctx.targetSubDir.isEmpty()) "" else ctx.targetSubDir
-            if (srcFile.isDirectory) {
-                val dirSubDir = if (subDir.isEmpty()) srcFile.name else "$subDir/${srcFile.name}"
-                encryptDirToVault(srcFile, dirSubDir, ctx.targetSession, totalSize, doneBytes, doneFiles, acc)
-                doneBytes += sourceSizes[i]
-                // MOVE：整个目录加密完成后立即删除源目录
-                if (purpose == CopyPurpose.MOVE) {
-                    srcFile.deleteRecursively()
-                }
-            } else {
-                currentStep = "加密: ${srcFile.name}"
-                val overwrite = resolveVaultConflict(ctx.targetSession, srcFile, subDir)
-                if (!overwrite) {
-                    doneFiles++
-                    continue
-                }
-                // 预计算加密输出路径，cancel 时清理残留
-                val outName = if (ctx.targetSession.record.encryptFilename) {
-                    FilenameCodec.encrypt(
-                        filename = srcFile.name,
-                        dek = ctx.targetSession.dek,
-                        aad = if (ctx.targetSession.record.customEncryption) FileConstants.aadCustomObf else null
-                    ).encoded
+        // 展开所有源为"待加密文件队列"（目录递归展开），并发通道按队列顺序消费。
+        val queue = buildList {
+            for (src in sources) {
+                val srcFile = File(src)
+                val subDir = if (ctx.targetSubDir.isEmpty()) "" else ctx.targetSubDir
+                if (srcFile.isDirectory) {
+                    val dirSubDir = if (subDir.isEmpty()) srcFile.name else "$subDir/${srcFile.name}"
+                    srcFile.walkTopDown().filter { it.isFile }.forEach { file ->
+                        val relPath = file.relativeTo(srcFile).parent?.replace('\\', '/') ?: ""
+                        val fileSubDir = if (relPath.isEmpty()) dirSubDir else "$dirSubDir/$relPath"
+                        add(EncryptItem(file, fileSubDir))
+                    }
                 } else {
-                    "${srcFile.name}.whm"
+                    add(EncryptItem(srcFile, subDir))
                 }
-                val outDir = if (subDir.isEmpty()) ctx.targetSession.vaultDir else File(ctx.targetSession.vaultDir, subDir)
-                val pendingOut = File(outDir, outName).absolutePath
-                synchronized(pendingVaultTargets) { pendingVaultTargets.add(pendingOut) }
-                val fileDoneBytes = doneBytes
-                val encrypted = CryptoService.encryptIntoVault(
-                    context, ctx.targetSession, srcFile, subDir,
+            }
+        }
+
+        val processedFiles = AtomicInteger(0)
+        // MOVE 目的下记录成功加密的源文件，仅在完成加密后删除，避免取消/失败时误删
+        val movedSources = if (purpose == CopyPurpose.MOVE) java.util.concurrent.ConcurrentHashMap.newKeySet<String>() else null
+
+        try {
+            runWithChannels(
+                items = queue,
+                shouldStop = { isGracefulCancelled() }
+            ) { item, channelId ->
+                if (encryptOneFile(item, ctx.targetSession, totalSize, processedFiles, acc, channelId)) {
+                    movedSources?.add(item.file.absolutePath)
+                }
+            }
+        } finally {
+            // MOVE：仅删除已成功加密的源文件，以及随之清空的目录
+            if (movedSources != null) {
+                for (path in movedSources) {
+                    try { File(path).delete() } catch (_: Exception) {}
+                }
+                for (src in sources) {
+                    val f = File(src)
+                    if (f.isDirectory) {
+                        // 仅当目录下不再有源文件残留时才删除空目录
+                        val hasLeftover = f.walkTopDown().any { it.isFile }
+                        if (!hasLeftover) try { f.deleteRecursively() } catch (_: Exception) {}
+                    }
+                }
+            }
+            // 写入 FolderSizeDb
+            saveFolderSizes(ctx.targetSession.vaultDir, acc)
+            if (trace) EncryptionTraceLog.finish()
+        }
+    }
+
+    /** 待加密文件及其在保险箱内的目标子目录。 */
+    private class EncryptItem(val file: File, val subDir: String)
+
+    /**
+     * 加密单个文件：冲突检查、加密、进度与目录大小累加。
+     *
+     * 文件级错误自动重试一次；仍失败时弹出错误弹窗（暂停其他通道）等待用户选择。
+     * @return 该文件是否实际完成加密（冲突跳过或用户跳过返回 false）
+     */
+    private fun encryptOneFile(
+        item: EncryptItem,
+        session: VaultSession,
+        totalSize: Long,
+        processedFiles: AtomicInteger,
+        acc: MutableMap<String, Long>,
+        channelId: Int
+    ): Boolean {
+        throwIfCancelled()
+        val srcFile = item.file
+        // 冲突弹窗串行化：同一时刻仅一个弹窗，其余通道在此阻塞等待
+        val overwrite = synchronized(dialogMutex) {
+            resolveVaultConflict(session, srcFile, item.subDir)
+        }
+        if (!overwrite) {
+            processedFiles.incrementAndGet()
+            addProgressBytes(srcFile.length())
+            publishEncryptProgress(totalSize, processedFiles.get())
+            return false
+        }
+
+        val outName = if (session.record.encryptFilename) {
+            FilenameCodec.encrypt(
+                filename = srcFile.name,
+                dek = session.dek,
+                aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null
+            ).encoded
+        } else {
+            "${srcFile.name}.whm"
+        }
+        val outDir = if (item.subDir.isEmpty()) session.vaultDir else File(session.vaultDir, item.subDir)
+        val pendingOut = File(outDir, outName).absolutePath
+        synchronized(pendingVaultTargets) { pendingVaultTargets.add(pendingOut) }
+
+        setChannelName(channelId, srcFile.name)
+        publishEncryptProgress(totalSize, processedFiles.get())
+
+        val encrypted = encryptWithRetry(session, srcFile, item.subDir, totalSize, processedFiles)
+
+        synchronized(pendingVaultTargets) { pendingVaultTargets.remove(pendingOut) }
+        vaultBytesAdded.addAndGet(encrypted.length())
+        vaultFilesAdded.incrementAndGet()
+        processedFiles.incrementAndGet()
+        addProgressBytes(srcFile.length())
+        synchronized(acc) { accumulateFolderSize(acc, encrypted, session.vaultDir, encrypted.length()) }
+        publishEncryptProgress(totalSize, processedFiles.get())
+        return true
+    }
+
+    /**
+     * 执行加密并对"文件级错误"自动重试一次；第二次仍失败时弹出错误弹窗（暂停其他通道
+     * 等待用户选择）。用户选择重试则再试，选择跳过则抛 [SkippedException] 放弃该文件。
+     */
+    private fun encryptWithRetry(
+        session: VaultSession,
+        srcFile: File,
+        subDir: String,
+        totalSize: Long,
+        processedFiles: AtomicInteger
+    ): File {
+        var attempt = 0
+        while (true) {
+            throwIfCancelled()
+            attempt++
+            try {
+                return CryptoService.encryptIntoVault(
+                    context, session, srcFile, subDir,
                     overwrite = true,
                     onProgress = { encryptedBytes, _ ->
-                        manager.updateProgress(FileOpProgress(
-                            phase = "正在加密",
-                            currentBytes = fileDoneBytes + encryptedBytes,
-                            totalBytes = totalSize,
-                            currentFileName = srcFile.name,
-                            fileIndex = doneFiles,
-                            fileCount = sources.size
-                        ))
+                        publishEncryptProgress(totalSize, processedFiles.get(), encryptedBytes)
                     },
                     cancelFlag = cancelFlag
                 )
-                synchronized(pendingVaultTargets) { pendingVaultTargets.remove(pendingOut) }
-                vaultBytesAdded.addAndGet(encrypted.length())
-                vaultFilesAdded.incrementAndGet()
-                doneBytes += srcFile.length()
-                // 累加保险箱目录大小（必须用加密后文件大小，不是源文件大小）
-                accumulateFolderSize(acc, encrypted, ctx.targetSession.vaultDir, encrypted.length())
-                // MOVE：单文件加密完成后立即删除源文件
-                if (purpose == CopyPurpose.MOVE) {
-                    srcFile.delete()
+            } catch (e: InterruptedException) {
+                throw e
+            } catch (e: InterruptedIOException) {
+                throw e
+            } catch (e: Exception) {
+                if (skipAllErrors) {
+                    processedFiles.incrementAndGet()
+                    addProgressBytes(srcFile.length())
+                    publishEncryptProgress(totalSize, processedFiles.get())
+                    throw SkippedException()
                 }
+                if (attempt > 1) {
+                    // 已重试过仍失败：弹窗等待用户选择（暂停其他通道）
+                    val action = synchronized(dialogMutex) {
+                        runBlocking {
+                            manager.resolveError(ErrorRequest(
+                                fileName = srcFile.name,
+                                errorMessage = e.message ?: "加密失败",
+                                detailMessage = "${e.javaClass.simpleName}: ${e.message}"
+                            ))
+                        }
+                    }
+                    when (action.action) {
+                        ErrorAction.RETRY -> { attempt = 1 }
+                        ErrorAction.SKIP -> {
+                            processedFiles.incrementAndGet()
+                            addProgressBytes(srcFile.length())
+                            publishEncryptProgress(totalSize, processedFiles.get())
+                            throw SkippedException()
+                        }
+                        ErrorAction.SKIP_ALL -> {
+                            skipAllErrors = true
+                            processedFiles.incrementAndGet()
+                            addProgressBytes(srcFile.length())
+                            publishEncryptProgress(totalSize, processedFiles.get())
+                            throw SkippedException()
+                        }
+                        ErrorAction.CANCEL -> {
+                            cancelFlag.set(true)
+                            throw InterruptedIOException("用户取消")
+                        }
+                    }
+                }
+                // 首次失败：静默自动重试，不打扰其他通道
             }
-            doneFiles++
+        }
+    }
+
+    /** 发布加密总进度：currentBytes 为所有通道累加值。 */
+    private fun publishEncryptProgress(totalSize: Long, doneFiles: Int, currentFileBytes: Long = 0L) {
+        synchronized(channelLock) {
             manager.updateProgress(FileOpProgress(
                 phase = "正在加密",
-                currentBytes = doneBytes,
+                currentBytes = progressBytes.get() + currentFileBytes,
                 totalBytes = totalSize,
-                currentFileName = srcFile.name,
                 fileIndex = doneFiles,
-                fileCount = sources.size
+                fileCount = sources.size,
+                activeFileNames = activeChannelNames()
             ))
-            if (isGracefulCancelled()) break
-        }
-
-        // 写入 FolderSizeDb
-        saveFolderSizes(ctx.targetSession.vaultDir, acc)
-        if (trace) EncryptionTraceLog.finish()
-    }
-
-    private fun encryptDirToVault(
-        dir: File,
-        parentSubDir: String,
-        session: VaultSession,
-        totalSize: Long,
-        baseBytes: Long,
-        baseFiles: Int,
-        folderSizeAccumulator: MutableMap<String, Long>
-    ) {
-        val files = dir.walkTopDown().filter { it.isFile }.toList()
-        var doneBytes = 0L
-        for (file in files) {
-            throwIfCancelled()
-            val relPath = file.relativeTo(dir).parent?.replace('\\', '/') ?: ""
-            val fileSubDir = if (parentSubDir.isEmpty()) relPath else {
-                if (relPath.isEmpty()) parentSubDir else "$parentSubDir/$relPath"
-            }
-            currentStep = "加密: ${file.name}"
-            val overwrite = resolveVaultConflict(session, file, fileSubDir)
-            if (!overwrite) {
-                doneBytes += file.length()
-                continue
-            }
-            // 预计算加密输出路径，cancel 时清理残留
-            val outName = if (session.record.encryptFilename) {
-                FilenameCodec.encrypt(
-                    filename = file.name,
-                    dek = session.dek,
-                    aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null
-                ).encoded
-            } else {
-                "${file.name}.whm"
-            }
-            val outDir = if (fileSubDir.isEmpty()) session.vaultDir else File(session.vaultDir, fileSubDir)
-            val pendingOut = File(outDir, outName).absolutePath
-            synchronized(pendingVaultTargets) { pendingVaultTargets.add(pendingOut) }
-            val fileDoneBytes = doneBytes
-            val encrypted = CryptoService.encryptIntoVault(
-                context, session, file, fileSubDir,
-                overwrite = true,
-                onProgress = { encryptedBytes, _ ->
-                    manager.updateProgress(FileOpProgress(
-                        phase = "正在加密",
-                        currentBytes = baseBytes + fileDoneBytes + encryptedBytes,
-                        totalBytes = totalSize,
-                        currentFileName = file.name,
-                        fileIndex = baseFiles,
-                        fileCount = sources.size
-                    ))
-                },
-                cancelFlag = cancelFlag
-            )
-            synchronized(pendingVaultTargets) { pendingVaultTargets.remove(pendingOut) }
-            vaultBytesAdded.addAndGet(encrypted.length())
-            vaultFilesAdded.incrementAndGet()
-            doneBytes += file.length()
-            // 累加保险箱目录大小（必须用加密后文件大小，不是源文件大小）
-            accumulateFolderSize(folderSizeAccumulator, encrypted, session.vaultDir, encrypted.length())
         }
     }
+
+    /** 文件被用户选择"跳过"时使用的内部信号。 */
+    private class SkippedException : RuntimeException("用户跳过")
 
     /**
      * 累加加密文件的大小到保险箱目录及其所有祖先目录。
@@ -510,8 +681,6 @@ class CopyJob(
 
     private fun copyVaultToExternal(ctx: VaultOperationContext.VaultToExternal) {
         val totalSize = sources.sumOf { File(it).walkTopDown().filter { f -> f.isFile }.sumOf { f -> f.length() } }
-        var doneBytes = 0L
-        var doneFiles = 0
 
         manager.updateProgress(FileOpProgress(
             phase = "正在解密",
@@ -522,74 +691,138 @@ class CopyJob(
             fileCount = sources.size
         ))
 
-        for (src in sources) {
-            throwIfCancelled()
-            val srcFile = File(src)
-            if (srcFile.isDirectory) {
-                decryptDirFromVault(srcFile, targetDir, ctx.sourceSession, totalSize, doneBytes, doneFiles)
-                doneBytes += srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-            } else {
-                currentStep = "解密: ${srcFile.name}"
-                CryptoService.decryptOutOfVault(ctx.sourceSession, srcFile, File(targetDir))
-                doneBytes += srcFile.length()
+        // 展开所有源为"待解密文件队列"（目录递归展开），并发通道按队列顺序消费。
+        val queue = buildList {
+            for (src in sources) {
+                val srcFile = File(src)
+                if (srcFile.isDirectory) {
+                    srcFile.walkTopDown().filter { it.isFile }.forEach { file ->
+                        val relParent = file.parentFile?.relativeTo(srcFile)?.path?.replace('\\', '/') ?: ""
+                        val outputDir = if (relParent.isEmpty()) File(targetDir) else File(targetDir, relParent)
+                        add(DecryptItem(file, outputDir))
+                    }
+                } else {
+                    add(DecryptItem(srcFile, File(targetDir)))
+                }
             }
-            doneFiles++
-            manager.updateProgress(FileOpProgress(
-                phase = "正在解密",
-                currentBytes = doneBytes,
-                totalBytes = totalSize,
-                currentFileName = srcFile.name,
-                fileIndex = doneFiles,
-                fileCount = sources.size
-            ))
-            if (isGracefulCancelled()) break
         }
 
-        if (purpose == CopyPurpose.MOVE) {
-            for (src in sources) {
-                throwIfCancelled()
-                val srcFile = File(src)
-                vaultBytesRemoved.addAndGet(
-                    if (srcFile.isDirectory) srcFile.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-                    else srcFile.length()
-                )
-                vaultFilesRemoved.addAndGet(
-                    if (srcFile.isDirectory) srcFile.walkTopDown().filter { it.isFile }.count()
-                    else 1
-                )
-                srcFile.deleteRecursively()
+        val processedFiles = AtomicInteger(0)
+        // MOVE 目的下记录成功解密的源文件，仅在完成后删除，避免取消/跳过时误删
+        val movedSources = if (purpose == CopyPurpose.MOVE) java.util.concurrent.ConcurrentHashMap.newKeySet<String>() else null
+        runWithChannels(
+            items = queue,
+            shouldStop = { isGracefulCancelled() }
+        ) { item, channelId ->
+            if (decryptOneFile(item, ctx.sourceSession, totalSize, processedFiles, channelId)) {
+                movedSources?.add(item.file.absolutePath)
+            }
+        }
+
+        if (movedSources != null) {
+            for (path in movedSources) {
+                val srcFile = File(path)
+                vaultBytesRemoved.addAndGet(srcFile.length())
+                vaultFilesRemoved.incrementAndGet()
+                try { srcFile.delete() } catch (_: Exception) {}
             }
         }
     }
 
-    private fun decryptDirFromVault(
-        dir: File,
-        outputBase: String,
+    /** 待解密文件及其输出目录。 */
+    private class DecryptItem(val file: File, val outputDir: File)
+
+    private fun decryptOneFile(
+        item: DecryptItem,
         session: VaultSession,
         totalSize: Long,
-        baseBytes: Long,
-        baseFiles: Int
+        processedFiles: AtomicInteger,
+        channelId: Int
+    ): Boolean {
+        throwIfCancelled()
+        setChannelName(channelId, item.file.name)
+        publishDecryptProgress(totalSize, processedFiles.get())
+
+        decryptWithRetry(session, item.file, item.outputDir, totalSize, processedFiles)
+
+        processedFiles.incrementAndGet()
+        addProgressBytes(item.file.length())
+        publishDecryptProgress(totalSize, processedFiles.get())
+        return true
+    }
+
+    /** 解密并对"文件级错误"自动重试一次；仍失败时弹窗（暂停其他通道）等待用户选择。 */
+    private fun decryptWithRetry(
+        session: VaultSession,
+        srcFile: File,
+        outputDir: File,
+        totalSize: Long,
+        processedFiles: AtomicInteger
     ) {
-        val files = dir.walkTopDown().filter { it.isFile }.toList()
-        var doneBytes = 0L
-        for (file in files) {
+        var attempt = 0
+        while (true) {
             throwIfCancelled()
-            val relParent = file.parentFile?.relativeTo(dir)?.path?.replace('\\', '/') ?: ""
-            val outputDir = if (relParent.isEmpty()) {
-                File(outputBase)
-            } else {
-                File(outputBase, relParent)
+            attempt++
+            try {
+                CryptoService.decryptOutOfVault(session, srcFile, outputDir)
+                return
+            } catch (e: InterruptedException) {
+                throw e
+            } catch (e: InterruptedIOException) {
+                throw e
+            } catch (e: Exception) {
+                if (skipAllErrors) {
+                    processedFiles.incrementAndGet()
+                    addProgressBytes(srcFile.length())
+                    publishDecryptProgress(totalSize, processedFiles.get())
+                    throw SkippedException()
+                }
+                if (attempt > 1) {
+                    val action = synchronized(dialogMutex) {
+                        runBlocking {
+                            manager.resolveError(ErrorRequest(
+                                fileName = srcFile.name,
+                                errorMessage = e.message ?: "解密失败",
+                                detailMessage = "${e.javaClass.simpleName}: ${e.message}"
+                            ))
+                        }
+                    }
+                    when (action.action) {
+                        ErrorAction.RETRY -> { attempt = 1 }
+                        ErrorAction.SKIP -> {
+                            processedFiles.incrementAndGet()
+                            addProgressBytes(srcFile.length())
+                            publishDecryptProgress(totalSize, processedFiles.get())
+                            throw SkippedException()
+                        }
+                        ErrorAction.SKIP_ALL -> {
+                            skipAllErrors = true
+                            processedFiles.incrementAndGet()
+                            addProgressBytes(srcFile.length())
+                            publishDecryptProgress(totalSize, processedFiles.get())
+                            throw SkippedException()
+                        }
+                        ErrorAction.CANCEL -> {
+                            cancelFlag.set(true)
+                            throw InterruptedIOException("用户取消")
+                        }
+                    }
+                }
+                // 首次失败：静默自动重试
             }
-            currentStep = "解密: ${file.name}"
-            CryptoService.decryptOutOfVault(session, file, outputDir)
-            doneBytes += file.length()
+        }
+    }
+
+    /** 发布解密总进度。 */
+    private fun publishDecryptProgress(totalSize: Long, doneFiles: Int) {
+        synchronized(channelLock) {
             manager.updateProgress(FileOpProgress(
                 phase = "正在解密",
-                currentBytes = baseBytes + doneBytes,
+                currentBytes = progressBytes.get(),
                 totalBytes = totalSize,
-                currentFileName = file.name,
-                fileIndex = baseFiles,
-                fileCount = sources.size
+                fileIndex = doneFiles,
+                fileCount = sources.size,
+                activeFileNames = activeChannelNames()
             ))
         }
     }
