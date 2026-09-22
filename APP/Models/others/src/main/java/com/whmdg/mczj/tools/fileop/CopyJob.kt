@@ -129,14 +129,29 @@ class CopyJob(
     //  多通道并发加密/解密引擎
     // ═══════════════════════════════════════════════════════
 
+    /**
+     * 每个通道的字节进度（索引 = 通道号）。
+     *
+     * 进度被拆成两部分：
+     * - [committedBytes]：本通道已完成（成功/跳过）的文件字节之和，只增不减；
+     * - [inFlightBytes]：本通道当前文件已读明的字节数，随文件进度增长，文件结束时清零。
+     *
+     * 全局已处理字节 = 所有通道 (committed + inFlight) 之和。求和与发布全部在
+     * [channelLock] 内完成，避免"共享原子 + 私有在途值"两次读取的时间差导致进度抖动。
+     */
+    private class ChannelBytes {
+        var committedBytes = 0L
+        var inFlightBytes = 0L
+    }
+
     /** 每个通道当前正在处理的文件名（索引 = 通道号），用于 UI 多行显示。 */
     private val channelCurrentNames = arrayOfNulls<String>(VAULT_CHANNEL_COUNT)
 
-    /** 保护通道名数组与进度字节累加。 */
-    private val channelLock = Any()
+    /** 每个通道的字节进度（索引 = 通道号）。 */
+    private val channelBytes = Array(VAULT_CHANNEL_COUNT) { ChannelBytes() }
 
-    /** 全局已处理字节（所有通道累加），并发下用原子量避免进度回退。 */
-    private val progressBytes = AtomicLong(0)
+    /** 保护通道名数组、通道字节进度与进度发布。 */
+    private val channelLock = Any()
 
     /** 保证同一时刻只有一个通道占用冲突/错误弹窗，其余通道在占用前等待。 */
     private val dialogMutex = Any()
@@ -178,7 +193,9 @@ class CopyJob(
                         } catch (_: SkippedException) {
                             // 用户跳过该文件，继续处理下一个
                         } finally {
-                            setChannelName(channelId, null)
+                            // 通道即将处理下一个文件：清空通道状态，避免残留的在途字节
+                            // 被下一个文件重复计入，或残留文件名误显示。
+                            clearChannel(channelId)
                         }
                     }
                 }
@@ -221,8 +238,18 @@ class CopyJob(
 
     /** 设置某通道当前文件名并刷新进度；[name] 为 null 表示该通道空闲。 */
     private fun setChannelName(channelId: Int, name: String?) {
+        if (channelId !in channelCurrentNames.indices) return
         synchronized(channelLock) {
-            if (channelId in channelCurrentNames.indices) channelCurrentNames[channelId] = name
+            channelCurrentNames[channelId] = name
+        }
+    }
+
+    /** 通道结束一个任务时清空其文件名与在途字节，等待下一个任务。 */
+    private fun clearChannel(channelId: Int) {
+        if (channelId !in channelBytes.indices) return
+        synchronized(channelLock) {
+            channelCurrentNames[channelId] = null
+            channelBytes[channelId].inFlightBytes = 0L
         }
     }
 
@@ -231,8 +258,29 @@ class CopyJob(
         channelCurrentNames.filterNotNull()
     }
 
-    /** 累加已处理字节并返回新值。 */
-    private fun addProgressBytes(delta: Long): Long = progressBytes.addAndGet(delta)
+    /**
+     * 将某通道当前文件的上报字节写入在途值；[baseBytes] 为同一文件因重试已完成的
+     * 字节数（重试从头读时用它作为基准，使在途值不因重试而回退）。
+     */
+    private fun setChannelInFlight(channelId: Int, baseBytes: Long, reportedBytes: Long) {
+        if (channelId !in channelBytes.indices) return
+        synchronized(channelLock) {
+            channelBytes[channelId].inFlightBytes = baseBytes + reportedBytes
+        }
+    }
+
+    /** 某通道完成一个文件：提交其完整字节数并清空在途值。 */
+    private fun commitChannelFile(channelId: Int, byteCount: Long) {
+        if (channelId !in channelBytes.indices) return
+        synchronized(channelLock) {
+            channelBytes[channelId].committedBytes += byteCount
+            channelBytes[channelId].inFlightBytes = 0L
+        }
+    }
+
+    /** 在 [channelLock] 内对全部通道 (已提交 + 在途) 求和，作为全局已处理字节。 */
+    private fun totalProcessedBytesLocked(): Long =
+        channelBytes.sumOf { it.committedBytes + it.inFlightBytes }
 
     /** 报告保险箱存储用量及文件数量变更 */
     private fun reportVaultSizeChange() {
@@ -509,7 +557,7 @@ class CopyJob(
         }
         if (!overwrite) {
             processedFiles.incrementAndGet()
-            addProgressBytes(srcFile.length())
+            commitChannelFile(channelId, srcFile.length())
             publishEncryptProgress(totalSize, processedFiles.get())
             return false
         }
@@ -537,13 +585,13 @@ class CopyJob(
         setChannelName(channelId, srcFile.name)
         publishEncryptProgress(totalSize, processedFiles.get())
 
-        val encrypted = encryptWithRetry(session, srcFile, item.subDir, outName, totalSize, processedFiles)
+        val encrypted = encryptWithRetry(session, srcFile, item.subDir, outName, totalSize, processedFiles, channelId)
 
         synchronized(pendingVaultTargets) { pendingVaultTargets.remove(pendingOut) }
         vaultBytesAdded.addAndGet(encrypted.length())
         vaultFilesAdded.incrementAndGet()
         processedFiles.incrementAndGet()
-        addProgressBytes(srcFile.length())
+        commitChannelFile(channelId, srcFile.length())
         synchronized(acc) { accumulateFolderSize(acc, encrypted, session.vaultDir, encrypted.length()) }
         publishEncryptProgress(totalSize, processedFiles.get())
         return true
@@ -559,9 +607,13 @@ class CopyJob(
         subDir: String,
         outName: String,
         totalSize: Long,
-        processedFiles: AtomicInteger
+        processedFiles: AtomicInteger,
+        channelId: Int
     ): File {
         var attempt = 0
+        // 同一文件重试时从头重新读取，onProgress 会从 0 重新上报；以 retryBase 记录
+        // "此前已为该文件读明的最大字节数"，在途值取 base + 本次上报，避免重试导致进度回退。
+        var retryBase = 0L
         while (true) {
             throwIfCancelled()
             attempt++
@@ -570,7 +622,8 @@ class CopyJob(
                     context, session, srcFile, subDir, outName,
                     overwrite = true,
                     onProgress = { encryptedBytes, _ ->
-                        publishEncryptProgress(totalSize, processedFiles.get(), encryptedBytes)
+                        setChannelInFlight(channelId, retryBase, encryptedBytes)
+                        publishEncryptProgress(totalSize, processedFiles.get())
                     },
                     cancelFlag = cancelFlag
                 )
@@ -579,9 +632,11 @@ class CopyJob(
             } catch (e: InterruptedIOException) {
                 throw e
             } catch (e: Exception) {
+                // 保留本次已读明的字节作为重试基准
+                retryBase = maxOf(retryBase, channelInFlightSnapshot(channelId))
                 if (skipAllErrors) {
                     processedFiles.incrementAndGet()
-                    addProgressBytes(srcFile.length())
+                    commitChannelFile(channelId, srcFile.length())
                     publishEncryptProgress(totalSize, processedFiles.get())
                     throw SkippedException()
                 }
@@ -600,14 +655,14 @@ class CopyJob(
                         ErrorAction.RETRY -> { attempt = 1 }
                         ErrorAction.SKIP -> {
                             processedFiles.incrementAndGet()
-                            addProgressBytes(srcFile.length())
+                            commitChannelFile(channelId, srcFile.length())
                             publishEncryptProgress(totalSize, processedFiles.get())
                             throw SkippedException()
                         }
                         ErrorAction.SKIP_ALL -> {
                             skipAllErrors = true
                             processedFiles.incrementAndGet()
-                            addProgressBytes(srcFile.length())
+                            commitChannelFile(channelId, srcFile.length())
                             publishEncryptProgress(totalSize, processedFiles.get())
                             throw SkippedException()
                         }
@@ -622,12 +677,18 @@ class CopyJob(
         }
     }
 
-    /** 发布加密总进度：currentBytes 为所有通道累加值。 */
-    private fun publishEncryptProgress(totalSize: Long, doneFiles: Int, currentFileBytes: Long = 0L) {
+    /** 读取某通道当前在途字节快照（越界或空闲返回 0）。 */
+    private fun channelInFlightSnapshot(channelId: Int): Long {
+        if (channelId !in channelBytes.indices) return 0L
+        synchronized(channelLock) { return channelBytes[channelId].inFlightBytes }
+    }
+
+    /** 发布加密总进度：currentBytes 为所有通道 (已提交 + 在途) 之和。 */
+    private fun publishEncryptProgress(totalSize: Long, doneFiles: Int) {
         synchronized(channelLock) {
             manager.updateProgress(FileOpProgress(
                 phase = "正在加密",
-                currentBytes = progressBytes.get() + currentFileBytes,
+                currentBytes = totalProcessedBytesLocked(),
                 totalBytes = totalSize,
                 fileIndex = doneFiles,
                 fileCount = sources.size,
@@ -751,10 +812,10 @@ class CopyJob(
         setChannelName(channelId, item.file.name)
         publishDecryptProgress(totalSize, processedFiles.get())
 
-        decryptWithRetry(session, item.file, item.outputDir, totalSize, processedFiles)
+        decryptWithRetry(session, item.file, item.outputDir, totalSize, processedFiles, channelId)
 
         processedFiles.incrementAndGet()
-        addProgressBytes(item.file.length())
+        commitChannelFile(channelId, item.file.length())
         publishDecryptProgress(totalSize, processedFiles.get())
         return true
     }
@@ -765,7 +826,8 @@ class CopyJob(
         srcFile: File,
         outputDir: File,
         totalSize: Long,
-        processedFiles: AtomicInteger
+        processedFiles: AtomicInteger,
+        channelId: Int
     ) {
         var attempt = 0
         while (true) {
@@ -781,7 +843,7 @@ class CopyJob(
             } catch (e: Exception) {
                 if (skipAllErrors) {
                     processedFiles.incrementAndGet()
-                    addProgressBytes(srcFile.length())
+                    commitChannelFile(channelId, srcFile.length())
                     publishDecryptProgress(totalSize, processedFiles.get())
                     throw SkippedException()
                 }
@@ -799,14 +861,14 @@ class CopyJob(
                         ErrorAction.RETRY -> { attempt = 1 }
                         ErrorAction.SKIP -> {
                             processedFiles.incrementAndGet()
-                            addProgressBytes(srcFile.length())
+                            commitChannelFile(channelId, srcFile.length())
                             publishDecryptProgress(totalSize, processedFiles.get())
                             throw SkippedException()
                         }
                         ErrorAction.SKIP_ALL -> {
                             skipAllErrors = true
                             processedFiles.incrementAndGet()
-                            addProgressBytes(srcFile.length())
+                            commitChannelFile(channelId, srcFile.length())
                             publishDecryptProgress(totalSize, processedFiles.get())
                             throw SkippedException()
                         }
@@ -821,12 +883,12 @@ class CopyJob(
         }
     }
 
-    /** 发布解密总进度。 */
+    /** 发布解密总进度：currentBytes 为所有通道 (已提交 + 在途) 之和。 */
     private fun publishDecryptProgress(totalSize: Long, doneFiles: Int) {
         synchronized(channelLock) {
             manager.updateProgress(FileOpProgress(
                 phase = "正在解密",
-                currentBytes = progressBytes.get(),
+                currentBytes = totalProcessedBytesLocked(),
                 totalBytes = totalSize,
                 fileIndex = doneFiles,
                 fileCount = sources.size,
