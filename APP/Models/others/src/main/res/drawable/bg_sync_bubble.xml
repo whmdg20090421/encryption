@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 云同步系统悬浮球的圆形描边背景：白底 + 蓝边，对应 SyncOverlayBubble 的视觉。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@android:color/white" />
+    <stroke
+        android:width="2dp"
+        android:color="#3B82F6" />
+</shape>

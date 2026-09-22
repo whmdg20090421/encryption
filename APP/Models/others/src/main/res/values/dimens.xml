@@ -32,4 +32,7 @@
 
     <!-- 播放/暂停按钮：放大到 40dp（约为其他按钮的 1.5 倍） -->
     <dimen name="exo_play_pause_icon_size">40dp</dimen>
+
+    <!-- 云同步系统悬浮球尺寸（固定圆形，见 fx_sync_bubble.xml） -->
+    <dimen name="sync_bubble_size">50dp</dimen>
 </resources>

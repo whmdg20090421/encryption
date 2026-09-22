@@ -23,6 +23,7 @@ libsu = "6.0.0"
 coil = "3.2.0"
 jxlCoder = "2.6.1"
 zoomimage = "1.4.0"
+floatingX = "3.0.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -60,6 +61,7 @@ coil-svg = { group = "io.coil-kt.coil3", name = "coil-svg", version.ref = "coil"
 coil-video = { group = "io.coil-kt.coil3", name = "coil-video", version.ref = "coil" }
 jxl-coder = { group = "io.github.awxkee", name = "jxl-coder", version.ref = "jxlCoder" }
 zoomimage-compose-coil3 = { group = "io.github.panpf.zoomimage", name = "zoomimage-compose-coil3", version.ref = "zoomimage" }
+floatingx-system = { group = "io.github.petterpx", name = "floatingx-system", version.ref = "floatingX" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

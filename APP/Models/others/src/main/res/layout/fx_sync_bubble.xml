@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    云同步系统悬浮球的内容布局（由 FloatingX SystemHost 承载）。
+
+    层级：圆形描边容器 → 居中的进度文字 + 右下角小锁。
+    文字对齐由代码按贴边方向动态调整（贴左→靠右，贴右→靠左），使文字落在半隐后露出的半边。
+    尺寸由 @dimen/sync_bubble_size 固定为圆形。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/fx_bubble_root"
+    android:layout_width="@dimen/sync_bubble_size"
+    android:layout_height="@dimen/sync_bubble_size"
+    android:background="@drawable/bg_sync_bubble">
+
+    <TextView
+        android:id="@+id/fx_bubble_label"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:ellipsize="none"
+        android:gravity="center"
+        android:includeFontPadding="false"
+        android:maxLines="8"
+        android:paddingHorizontal="4dp"
+        android:text="@string/sync_bubble_placeholder"
+        android:textColor="#3B82F6"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/fx_bubble_lock"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:includeFontPadding="false"
+        android:text="🔒"
+        android:textSize="10sp"
+        android:visibility="gone" />
+
+</FrameLayout>

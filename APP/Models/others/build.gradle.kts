@@ -53,6 +53,8 @@ dependencies {
     implementation(libs.coil.video)
     implementation(libs.zoomimage.compose.coil3)
     implementation(libs.jxl.coder)
+    // 系统级悬浮窗（吸附 / 半隐 / 拖动 / 长按手势）
+    implementation(libs.floatingx.system)
     // XLSX 生成（使用时长数据导出，fastexcel 仅 131KB）
     implementation("org.dhatim:fastexcel:0.20.2")
     implementation(project(":libs:sora-editor:editor"))
