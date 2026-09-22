@@ -3976,7 +3976,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         val fileExt = extractExtension(panelEntry.name)
 
                         if (fileExt in com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS || fileExt == "thumb") {
-                            val cachePath = VaultDecryptCache.cachePathFor(
+                            val cachePath = VaultDecryptCache.typedPathFor(
                                 context = context,
                                 vaultDir = ctx.vaultDir,
                                 encryptedPath = panelEntry.path,
@@ -4028,7 +4028,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         if (panelEntry.isDirectory) continue
                         val fileExt = extractExtension(panelEntry.name)
                         if (fileExt in com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS) {
-                            val cachePath = VaultDecryptCache.cachePathFor(
+                            val cachePath = VaultDecryptCache.typedPathFor(
                                 context = context,
                                 vaultDir = ctx.vaultDir,
                                 encryptedPath = panelEntry.path,

@@ -4,61 +4,64 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.encryption.core.FileCodec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * 保险箱解密缓存的统一类型。
+ * 统一缓存的类型（二级子目录名）。
  *
- * 每类对应 `cacheDir/vault_cache/` 下的一个中文子目录，
- * 便于用户与调试时直接辨认缓存内容。
+ * 视频缓存路径由源文件绝对路径唯一决定（见 [VaultDecryptCache.videoPathFor]），
+ * 图片 / 音频 / 文本 / 其他按 `{保险箱名}/{相对路径}` 存放。
  */
 enum class VaultCacheType(val dirName: String) {
-    IMAGE("图片"),
-    VIDEO("视频"),
-    AUDIO("音频"),
-    TEXT("文本"),
-    OTHER("其他")
+    VIDEO(AppDataPaths.CACHE_DIR_VIDEO),
+    IMAGE(AppDataPaths.CACHE_DIR_IMAGE),
+    AUDIO(AppDataPaths.CACHE_DIR_AUDIO),
+    TEXT(AppDataPaths.CACHE_DIR_TEXT),
+    OTHER(AppDataPaths.CACHE_DIR_OTHER)
 }
 
 /**
- * 保险箱解密缓存索引条目。
+ * 统一缓存索引条目。
  *
- * 键为加密源文件（`.whm`）的绝对路径，值为缓存文件位置与解密时源文件的
- * 大小 / 最后修改时间，用于判断缓存是否失效。
+ * [cachePath] 为缓存文件绝对路径（唯一，可能带 `.thumb` 后缀）；[encryptedPath]
+ * 为源文件绝对路径（可重复，同一源可对应完整视频缓存与缩略图缓存等多条记录），
+ * 用于在源文件变化时批量失效该源的全部缓存。
  */
 data class VaultCacheEntry(
-    val encryptedPath: String,
     val cachePath: String,
+    val encryptedPath: String,
     val srcSize: Long,
     val srcMtime: Long
 )
 
 /**
- * `vault_cache/index.db` 的 SQLite 封装。
+ * `{统一缓存}/index.db` 的 SQLite 封装。
  *
- * 选用 SQLite 而非 JSON：缓存条目可达上千（尤其图片），需要按单条查询 / 更新，
+ * 选用 SQLite 而非 JSON：缓存条目可达上千，需要按单条查询 / 更新，
  * 且需并发安全与抗损坏能力。
  */
 private class VaultCacheIndexDb(context: Context) : SQLiteOpenHelper(
     context,
-    File(context.cacheDir, "vault_cache/index.db").absolutePath,
+    AppDataPaths.cacheIndexDb(context).absolutePath,
     null,
-    1
+    2
 ) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
             CREATE TABLE vault_cache (
-                encrypted_path TEXT PRIMARY KEY,
-                cache_path     TEXT NOT NULL,
+                cache_path     TEXT PRIMARY KEY,
+                encrypted_path TEXT NOT NULL,
                 src_size       INTEGER NOT NULL,
                 src_mtime      INTEGER NOT NULL
             )
             """.trimIndent()
         )
+        db.execSQL("CREATE INDEX idx_vault_cache_encrypted ON vault_cache(encrypted_path)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -66,28 +69,51 @@ private class VaultCacheIndexDb(context: Context) : SQLiteOpenHelper(
         onCreate(db)
     }
 
-    fun query(encryptedPath: String): VaultCacheEntry? {
+    fun query(cachePath: String): VaultCacheEntry? {
         readableDatabase.query(
             "vault_cache",
-            arrayOf("encrypted_path", "cache_path", "src_size", "src_mtime"),
-            "encrypted_path = ?",
-            arrayOf(encryptedPath),
+            arrayOf("cache_path", "encrypted_path", "src_size", "src_mtime"),
+            "cache_path = ?",
+            arrayOf(cachePath),
             null, null, null
         ).use { c ->
             if (!c.moveToFirst()) return null
             return VaultCacheEntry(
-                encryptedPath = c.getString(0),
-                cachePath = c.getString(1),
+                cachePath = c.getString(0),
+                encryptedPath = c.getString(1),
                 srcSize = c.getLong(2),
                 srcMtime = c.getLong(3)
             )
         }
     }
 
+    fun entriesOf(encryptedPath: String): List<VaultCacheEntry> {
+        val list = mutableListOf<VaultCacheEntry>()
+        readableDatabase.query(
+            "vault_cache",
+            arrayOf("cache_path", "encrypted_path", "src_size", "src_mtime"),
+            "encrypted_path = ?",
+            arrayOf(encryptedPath),
+            null, null, null
+        ).use { c ->
+            while (c.moveToNext()) {
+                list.add(
+                    VaultCacheEntry(
+                        cachePath = c.getString(0),
+                        encryptedPath = c.getString(1),
+                        srcSize = c.getLong(2),
+                        srcMtime = c.getLong(3)
+                    )
+                )
+            }
+        }
+        return list
+    }
+
     fun upsert(entry: VaultCacheEntry) {
         val values = ContentValues().apply {
-            put("encrypted_path", entry.encryptedPath)
             put("cache_path", entry.cachePath)
+            put("encrypted_path", entry.encryptedPath)
             put("src_size", entry.srcSize)
             put("src_mtime", entry.srcMtime)
         }
@@ -96,21 +122,25 @@ private class VaultCacheIndexDb(context: Context) : SQLiteOpenHelper(
         )
     }
 
-    fun delete(encryptedPath: String) {
+    fun delete(cachePath: String) {
+        writableDatabase.delete("vault_cache", "cache_path = ?", arrayOf(cachePath))
+    }
+
+    fun deleteByEncryptedPath(encryptedPath: String) {
         writableDatabase.delete("vault_cache", "encrypted_path = ?", arrayOf(encryptedPath))
     }
 
-    /** 清理缓存文件已不存在的脏记录（系统单独清缓存文件时可能留下）。 */
-    fun pruneMissing(cacheRoot: File) {
+    /** 清理缓存文件已不存在的脏记录。 */
+    fun pruneMissing() {
         val stale = mutableListOf<String>()
         readableDatabase.query(
-            "vault_cache", arrayOf("encrypted_path", "cache_path"),
+            "vault_cache", arrayOf("cache_path"),
             null, null, null, null, null
         ).use { c ->
             while (c.moveToNext()) {
-                val cachePath = c.getString(1)
-                if (!File(cacheRoot, cachePath).exists()) {
-                    stale.add(c.getString(0))
+                val cachePath = c.getString(0)
+                if (!File(cachePath).exists()) {
+                    stale.add(cachePath)
                 }
             }
         }
@@ -118,7 +148,7 @@ private class VaultCacheIndexDb(context: Context) : SQLiteOpenHelper(
         writableDatabase.beginTransaction()
         try {
             stale.forEach { path ->
-                writableDatabase.delete("vault_cache", "encrypted_path = ?", arrayOf(path))
+                writableDatabase.delete("vault_cache", "cache_path = ?", arrayOf(path))
             }
             writableDatabase.setTransactionSuccessful()
         } finally {
@@ -128,28 +158,25 @@ private class VaultCacheIndexDb(context: Context) : SQLiteOpenHelper(
 }
 
 /**
- * 保险箱文件解密的统一入口。
+ * 文件解密的统一入口。
  *
- * 所有「保险箱加密文件 → 外部缓存目录明文」的需求都必须经过 [decryptToCache]，
- * 由本对象统一负责路径规则、缓存命中判断与失效重建。
+ * 所有「加密文件 → 明文缓存」的需求都必须经过本对象，由本对象统一负责
+ * 路径规则、缓存命中判断与失效重建。普通文件与保险箱文件共用同一套规则：
  *
- * 缓存路径规则：
- * ```
- * cacheDir/vault_cache/{类型中文名}/{保险箱名}/{保险箱内相对路径}
- * ```
- * 例如 `cacheDir/vault_cache/音频/我的保险箱/music/song.mp3`。
+ * 缓存路径 = `{外部数据目录}/cache/{类型}/{源文件绝对路径去首斜杠}{后缀}`
+ *
+ * 其中保险箱源文件为磁盘上的 `.whm`，普通源文件为原始文件自身；源文件绝对路径
+ * 全局唯一，故缓存路径天然不冲突。完整视频缓存无额外后缀，缩略图缓存追加 `.thumb`。
  *
  * 缓存有效性由 `index.db` 记录的源文件大小 / 最后修改时间判定，源文件一旦变化
- * 即失效并重新解密，不使用时间过期策略。
+ * 即失效并重新生成，不使用时间过期策略。
  */
 object VaultDecryptCache {
-
-    private const val CACHE_ROOT_NAME = "vault_cache"
 
     /** 进程内只做一次脏记录清理，避免每次命中都全表扫描。 */
     private val pruned = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    /** 按加密源路径加锁，避免同一文件并发解密互相覆盖。 */
+    /** 按源文件路径加锁，避免同一文件并发解密互相覆盖。 */
     private val locks = java.util.concurrent.ConcurrentHashMap<String, Any>()
 
     /** 进程级单例 DB 连接，避免每次解密都开关数据库。 */
@@ -161,16 +188,43 @@ object VaultDecryptCache {
             indexDb ?: VaultCacheIndexDb(context.applicationContext).also { indexDb = it }
         }
 
-    private fun cacheRoot(context: Context): File = File(context.cacheDir, CACHE_ROOT_NAME)
+    // ── 路径计算 ──
+
+    /** 视频完整缓存的绝对路径：`{统一缓存}/视频/{源绝对路径去首斜杠}`。 */
+    fun videoPathFor(context: Context, encryptedPath: String): String =
+        AppDataPaths.videoCacheFile(context, encryptedPath, thumbnail = false).absolutePath
+
+    /** 视频缩略图缓存的绝对路径：完整缓存路径 + `.thumb`。 */
+    fun thumbPathFor(context: Context, encryptedPath: String): String =
+        AppDataPaths.videoCacheFile(context, encryptedPath, thumbnail = true).absolutePath
 
     /**
-     * 将保险箱加密文件解密到缓存目录。
+     * 按类型计算非视频明文的缓存路径（图片 / 音频 / 文本等）。
+     *
+     * 规则：`{统一缓存}/{类型}/{保险箱名}/{保险箱内相对路径}`
+     */
+    fun typedPathFor(
+        context: Context,
+        vaultDir: String,
+        encryptedPath: String,
+        type: VaultCacheType
+    ): String {
+        val vaultName = File(vaultDir).name
+        val relativePath = encryptedPath
+            .removePrefix(vaultDir)
+            .removePrefix("/")
+            .removeSuffix(".whm")
+        return File(AppDataPaths.cacheDir(context, type.dirName), "$vaultName/$relativePath").absolutePath
+    }
+
+    /**
+     * 将加密文件解密到缓存目录。
      *
      * @param vaultDir 保险箱根目录绝对路径（用于推导保险箱名与相对路径）
      * @param encryptedPath 加密源文件（`.whm`）绝对路径
      * @param dek 保险箱数据密钥
      * @param customEncryption 是否启用自定义加密（魔数头 + Nail 混淆）
-     * @param type 缓存类型，决定缓存子目录；未传入（null）时兜底为 [VaultCacheType.OTHER]
+     * @param type 缓存类型，决定缓存子目录
      * @return 成功时返回解密后文件的绝对路径；失败时返回带原因的 [Result.failure]
      */
     suspend fun decryptToCache(
@@ -179,86 +233,88 @@ object VaultDecryptCache {
         encryptedPath: String,
         dek: ByteArray,
         customEncryption: Boolean,
-        type: VaultCacheType? = null
+        type: VaultCacheType
     ): Result<String> = withContext(Dispatchers.IO) {
-        val cacheType = type ?: VaultCacheType.OTHER
-        val lock = locks.getOrPut(encryptedPath) { Any() }
-        synchronized(lock) {
+        // 视频按源绝对路径组织；其余类型按 {类型}/{保险箱名}/{相对路径}
+        val destPath = if (type == VaultCacheType.VIDEO) {
+            videoPathFor(context, encryptedPath)
+        } else {
+            typedPathFor(context, vaultDir, encryptedPath, type)
+        }
+        synchronized(lockOf(encryptedPath)) {
             try {
                 val src = File(encryptedPath)
                 if (!src.exists()) {
                     return@synchronized Result.failure(IllegalArgumentException("加密文件不存在: $encryptedPath"))
                 }
 
-                val vaultName = File(vaultDir).name
-                val relativePath = encryptedPath
-                    .removePrefix(vaultDir)
-                    .removePrefix("/")
-                    .removeSuffix(".whm")
-                val relativeCachePath = "${cacheType.dirName}/$vaultName/$relativePath"
-
-                val root = cacheRoot(context)
-                val destFile = File(root, relativeCachePath)
-                val db = db(context)
-                if (pruned.compareAndSet(false, true)) {
-                    db.pruneMissing(root)
+                val destFile = File(destPath)
+                if (isHit(context, destPath, src)) {
+                    return@synchronized Result.success(destPath)
                 }
 
-                val cached = db.query(encryptedPath)
-                if (cached != null &&
-                    cached.cachePath == relativeCachePath &&
-                    cached.srcSize == src.length() &&
-                    cached.srcMtime == src.lastModified() &&
-                    destFile.exists()
-                ) {
-                    return@synchronized Result.success(destFile.absolutePath)
-                }
+                // 缓存失效：清理该源的全部缓存（完整视频 / 缩略图等）后重新解密
+                invalidate(context, src)
 
-                // 缓存不存在或已失效：清理旧缓存后重新解密
-                if (destFile.exists()) destFile.delete()
                 destFile.parentFile?.mkdirs()
-
                 FileCodec.decrypt(
                     src = src,
                     dst = destFile,
                     dek = dek,
                     customEncryption = customEncryption
                 )
-
-                db.upsert(
+                db(context).upsert(
                     VaultCacheEntry(
-                        encryptedPath = encryptedPath,
-                        cachePath = relativeCachePath,
+                        cachePath = destPath,
+                        encryptedPath = src.absolutePath,
                         srcSize = src.length(),
                         srcMtime = src.lastModified()
                     )
                 )
-                Result.success(destFile.absolutePath)
+                Result.success(destPath)
             } catch (e: Exception) {
                 Result.failure(e)
             }
         }
     }
 
-    /**
-     * 由加密源路径计算缓存文件路径（不执行解密）。
-     *
-     * 供需要预知缓存位置（如构建播放列表、缩略图映射）的场景使用。
-     *
-     * @param type 缓存类型；未传入（null）时兜底为 [VaultCacheType.OTHER]
-     */
-    fun cachePathFor(
-        context: Context,
-        vaultDir: String,
-        encryptedPath: String,
-        type: VaultCacheType? = null
-    ): String {
-        val cacheType = type ?: VaultCacheType.OTHER
-        val vaultName = File(vaultDir).name
-        val relativePath = encryptedPath
-            .removePrefix(vaultDir)
-            .removePrefix("/")
-            .removeSuffix(".whm")
-        return File(cacheRoot(context), "${cacheType.dirName}/$vaultName/$relativePath").absolutePath
+    // ── 命中判断 / 失效 ──
+
+    /** 判断缓存文件是否命中：记录存在、源未变化、文件存在。 */
+    fun isHit(context: Context, cachePath: String, src: File): Boolean {
+        val db = db(context)
+        if (pruned.compareAndSet(false, true)) {
+            db.pruneMissing()
+        }
+        val cached = db.query(cachePath) ?: return false
+        return cached.encryptedPath == src.absolutePath &&
+            cached.srcSize == src.length() &&
+            cached.srcMtime == src.lastModified() &&
+            File(cachePath).exists()
     }
+
+    /** 登记一条缓存记录。 */
+    fun register(context: Context, cachePath: String, src: File) {
+        db(context).upsert(
+            VaultCacheEntry(
+                cachePath = cachePath,
+                encryptedPath = src.absolutePath,
+                srcSize = src.length(),
+                srcMtime = src.lastModified()
+            )
+        )
+    }
+
+    /** 清除某源文件的全部缓存记录与磁盘文件（源变化或重建前调用）。 */
+    fun invalidate(context: Context, src: File) {
+        val sourcePath = src.absolutePath
+        val db = db(context)
+        db.entriesOf(sourcePath).forEach { entry ->
+            File(entry.cachePath).delete()
+        }
+        db.deleteByEncryptedPath(sourcePath)
+    }
+
+    private fun lockOf(encryptedPath: String): Any =
+        locks.getOrPut(encryptedPath) { Any() }
 }

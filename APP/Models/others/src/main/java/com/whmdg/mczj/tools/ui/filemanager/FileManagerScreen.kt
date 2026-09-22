@@ -5698,11 +5698,10 @@ private fun computeParentPath(
 }
 
 /**
- * 视频缩略图加载：先查磁盘缓存，未命中则用 Coil 提取首帧并写入缓存。
+ * 视频缩略图加载：先查统一缓存索引，未命中则用 Coil 提取首帧并写入缓存。
  *
- * 缓存路径与保险箱视频统一：视频缓存根 + 源文件绝对路径（去首斜杠）+ .thumb
- * 并在缓存根下的 cache_meta.txt 中按「源文件绝对路径」记录 (lastModified, length)。
- * 仅当 meta 存在且与当前源文件一致时才命中缓存。
+ * 缓存路径与保险箱视频统一（[com.whmdg.mczj.tools.encryption.services.VaultDecryptCache]）：
+ * 统一缓存根 + 源文件绝对路径（去首斜杠）+ .thumb，有效性按源文件的 size/mtime 判定。
  */
 private suspend fun loadVideoThumbnail(
     context: Context,
@@ -5712,23 +5711,18 @@ private suspend fun loadVideoThumbnail(
         val file = java.io.File(videoPath)
         if (!file.exists()) return@withContext null
 
-        // 缓存根：与保险箱共用的「视频缓存」目录
-        val videoCacheRoot = java.io.File(
-            context.getExternalFilesDir(null) ?: context.filesDir, "视频缓存"
-        )
-        val thumbFile = java.io.File(videoCacheRoot, "${videoPath.removePrefix("/")}.thumb")
-        val metaFile = java.io.File(videoCacheRoot, "cache_meta.txt")
+        val thumbPath = com.whmdg.mczj.tools.encryption.services.VaultDecryptCache
+            .thumbPathFor(context, videoPath)
+        val thumbFile = java.io.File(thumbPath)
 
-        // 校验：meta 存在 + 缩略图存在 + 源文件 lastModified/length 未变化
+        // 命中：索引记录有效且缩略图存在
         if (thumbFile.exists() &&
-            readVideoThumbMeta(metaFile, videoPath)?.let { it == (file.lastModified() to file.length()) } == true
+            com.whmdg.mczj.tools.encryption.services.VaultDecryptCache
+                .isHit(context, thumbPath, file)
         ) {
-            val cached = android.graphics.BitmapFactory.decodeFile(thumbFile.absolutePath)
+            val cached = android.graphics.BitmapFactory.decodeFile(thumbPath)
             if (cached != null) return@withContext cached
         }
-
-        // 失效或无元数据 → 删除旧缩略图
-        if (thumbFile.exists()) thumbFile.delete()
 
         // Coil 提取首帧
         val loader = SingletonImageLoader.get(context)
@@ -5740,55 +5734,17 @@ private suspend fun loadVideoThumbnail(
         val image = result.image ?: return@withContext null
         val bitmap = (image as? BitmapImage)?.bitmap ?: return@withContext null
 
-        // 写入缩略图 + 元数据
+        // 写入缩略图 + 登记索引
         thumbFile.parentFile?.mkdirs()
         thumbFile.outputStream().use { out ->
             bitmap.compress(android.graphics.Bitmap.CompressFormat.WEBP_LOSSY, 80, out)
         }
-        writeVideoThumbMeta(metaFile, videoPath, file.lastModified() to file.length())
+        com.whmdg.mczj.tools.encryption.services.VaultDecryptCache
+            .register(context, thumbPath, file)
         bitmap
     } catch (_: Exception) {
         null
     }
-}
-
-/** 按源文件绝对路径读取目录级元数据（cache_meta.txt），缺失或格式异常返回 null。 */
-private fun readVideoThumbMeta(metaFile: File, sourcePath: String): Pair<Long, Long>? {
-    if (!metaFile.exists()) return null
-    return try {
-        metaFile.readLines().forEach { line ->
-            val parts = line.split("|")
-            if (parts.size == 3 && parts[0] == sourcePath) {
-                val ts = parts[1].toLongOrNull() ?: return null
-                val sz = parts[2].toLongOrNull() ?: return null
-                return ts to sz
-            }
-        }
-        null
-    } catch (_: Exception) {
-        null
-    }
-}
-
-/** 更新目录级元数据中该源文件绝对路径的 (lastModified, length) 记录。 */
-private fun writeVideoThumbMeta(metaFile: File, sourcePath: String, info: Pair<Long, Long>) {
-    val entries = linkedMapOf<String, Pair<Long, Long>>()
-    if (metaFile.exists()) {
-        try {
-            metaFile.readLines().forEach { line ->
-                val parts = line.split("|")
-                if (parts.size == 3) {
-                    val ts = parts[1].toLongOrNull() ?: return@forEach
-                    val sz = parts[2].toLongOrNull() ?: return@forEach
-                    entries[parts[0]] = ts to sz
-                }
-            }
-        } catch (_: Exception) {
-        }
-    }
-    entries[sourcePath] = info
-    metaFile.parentFile?.mkdirs()
-    metaFile.writeText(entries.entries.joinToString("\n") { (path, pair) -> "$path|${pair.first}|${pair.second}" })
 }
 
 @Composable

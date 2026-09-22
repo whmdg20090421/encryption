@@ -202,6 +202,81 @@ object AppDataPaths {
     }
 
     /**
+     * 统一缓存根目录。
+     *
+     * 所有「源文件 → 明文/衍生缓存」都收拢在此目录下，按类型建二级子目录：
+     * ```
+     * {外部数据目录}/cache/
+     * ├── index.db          ← 统一缓存索引
+     * ├── 视频/             ← 视频完整缓存 + 缩略图
+     * ├── 图片/
+     * ├── 音频/
+     * ├── 文本/
+     * └── 其他/
+     * ```
+     * 视频缓存路径 = `视频/{源文件绝对路径去首斜杠}`，缩略图追加 `.thumb`；
+     * 源文件绝对路径全局唯一，故缓存路径天然不冲突。
+     */
+    fun cacheRoot(context: Context): File {
+        val base = context.getExternalFilesDir(null) ?: context.filesDir
+        val dir = File(base, "cache")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 统一缓存下的类型子目录（视频 / 图片 / 音频 / 文本 / 其他）。 */
+    fun cacheDir(context: Context, typeName: String): File {
+        val dir = File(cacheRoot(context), typeName)
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /** 统一缓存索引文件（index.db）。 */
+    fun cacheIndexDb(context: Context): File {
+        return File(cacheRoot(context), "index.db")
+    }
+
+    // ── 统一缓存子目录名前缀（改路径只需改这里） ──
+
+    /** 视频缓存子目录名：完整视频与缩略图都存于此，按源文件绝对路径组织。 */
+    const val CACHE_DIR_VIDEO = "视频"
+
+    /** 图片缓存子目录名。 */
+    const val CACHE_DIR_IMAGE = "图片"
+
+    /** 音频缓存子目录名。 */
+    const val CACHE_DIR_AUDIO = "音频"
+
+    /** 文本缓存子目录名。 */
+    const val CACHE_DIR_TEXT = "文本"
+
+    /** 其他缓存子目录名。 */
+    const val CACHE_DIR_OTHER = "其他"
+
+    /**
+     * 视频缓存根目录：`{统一缓存}/视频/`。
+     *
+     * 完整视频缓存 = 本目录 + 源文件绝对路径（去首斜杠）；
+     * 缩略图缓存 = 完整视频缓存路径 + [CACHE_SUFFIX_THUMB]。
+     * 源文件绝对路径全局唯一，故缓存路径天然不冲突。
+     */
+    fun videoCacheRoot(context: Context): File = cacheDir(context, CACHE_DIR_VIDEO)
+
+    /** 缩略图缓存文件后缀。 */
+    const val CACHE_SUFFIX_THUMB = ".thumb"
+
+    /**
+     * 视频缓存文件（完整视频或缩略图）的绝对路径。
+     *
+     * @param sourcePath 源文件绝对路径（普通视频为原文件；保险箱为磁盘上的 `.whm`）
+     * @param thumbnail 是否取缩略图缓存路径（追加 `.thumb`），否则取完整视频缓存路径
+     */
+    fun videoCacheFile(context: Context, sourcePath: String, thumbnail: Boolean): File {
+        val name = if (thumbnail) "$sourcePath$CACHE_SUFFIX_THUMB" else sourcePath
+        return File(videoCacheRoot(context), name.removePrefix("/"))
+    }
+
+    /**
      * WebView 数据目录（由 setDataDirectorySuffix("app") 决定）。
      * 包含：FA 登录 Cookie 等。
      */
