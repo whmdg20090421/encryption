@@ -397,13 +397,18 @@ internal fun CopyMoveProgressDialog(
                             maxLines = 1
                         )
                         if (p.phase.contains("加密")) {
-                            val mode = if (com.whmdg.mczj.tools.encryption.core.AesGcm256.useNative)
-                                "硬件加速中 (EVP)" else "软件加密中 (JCA)"
-                            Text(
-                                text = mode,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            val hw = com.whmdg.mczj.tools.encryption.core.AesGcm256.isHardwareAccelerated
+                            if (hw != null) {
+                                val mode = if (hw)
+                                    "硬件加速中 (${com.whmdg.mczj.tools.encryption.core.AesGcm256.backendName})"
+                                else
+                                    "软件加密中 (${com.whmdg.mczj.tools.encryption.core.AesGcm256.backendName})"
+                                Text(
+                                    text = mode,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                         Spacer(Modifier.height(8.dp))
                     }

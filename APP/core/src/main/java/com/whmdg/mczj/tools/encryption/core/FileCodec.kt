@@ -136,7 +136,7 @@ object FileCodec {
 
         if (trace) {
             EncryptionTraceLog.log("FileCodec.encrypt: src=${src.name} size=$totalSize chunkSize=$chunkSize chunks=${(totalSize + chunkSize - 1) / chunkSize}")
-            EncryptionTraceLog.log("JCA provider: ${javax.crypto.Cipher.getInstance("AES/GCM/NoPadding").provider.name}")
+            EncryptionTraceLog.log("JCA provider: ${AesGcm256.backendName}")
         }
 
         FileOutputStream(dst).use { out ->
