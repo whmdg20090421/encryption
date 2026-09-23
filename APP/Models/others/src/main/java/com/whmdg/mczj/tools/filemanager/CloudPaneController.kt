@@ -259,6 +259,17 @@ class CloudPaneController(
         val generation = ++navigationGeneration
         state.currentPath = path
         DiagnosticLog.log("CloudPane", "打开目录 path='$path' generation=$generation")
+
+        // 会话内缓存命中：目录已计算过且期间无变更，直接渲染，无需重新加载/转圈。
+        val cached = entryCache[normalizeDirPath(path)]
+        if (cached != null) {
+            state.isLoading = false
+            state.loadError = null
+            state.loadProgress = null
+            state.entries = cached
+            return
+        }
+
         scope.launch {
             state.isLoading = true
             state.loadError = null
@@ -281,6 +292,7 @@ class CloudPaneController(
                     return@launch
                 }
                 state.entries = entries
+                entryCache[normalizeDirPath(path)] = entries
                 DiagnosticLog.log(
                     "CloudPane",
                     "目录加载完成 path='$path' entries=${entries.size} 耗时=${System.currentTimeMillis() - startMs}ms"
@@ -308,8 +320,17 @@ class CloudPaneController(
                 listLocalFiles(state.currentPath)
             }
             state.entries = entries
+            entryCache[normalizeDirPath(state.currentPath)] = entries
         } catch (_: Exception) {}
     }
+
+    /** 使会话内目录缓存失效：任何会改变文件/同步状态的操作用前调用。 */
+    private fun invalidateEntryCache() {
+        entryCache.clear()
+    }
+
+    /** 会话内已渲染目录的条目缓存（仅当前打开会话有效，退出即失效）。 */
+    private val entryCache = mutableMapOf<String, List<CloudFileEntry>>()
 
     /** 返回上级目录 */
     fun goUp(): String? {
@@ -323,6 +344,7 @@ class CloudPaneController(
     /** 上传单个文件或文件夹 */
     fun uploadFile(relativePath: String) {
         DiagnosticLog.log("CloudPane", "请求上传 path='$relativePath'")
+        invalidateEntryCache()
         // 后台校验期间禁止上传，避免与目录级校验并发写 DB
         if (state.isValidating) {
             android.widget.Toast.makeText(context, "正在校验本地文件，请稍候", android.widget.Toast.LENGTH_SHORT).show()
@@ -1204,6 +1226,7 @@ class CloudPaneController(
      */
     fun downloadEntry(relativePath: String, isDirectory: Boolean) {
         DiagnosticLog.log("CloudPane", "请求下载 path='$relativePath' isDir=$isDirectory")
+        invalidateEntryCache()
         // 后台校验期间禁止下载，避免与目录级校验并发写 DB
         if (state.isValidating) {
             android.widget.Toast.makeText(context, "正在校验本地文件，请稍候", android.widget.Toast.LENGTH_SHORT).show()
@@ -1428,6 +1451,7 @@ class CloudPaneController(
     /** 删除本地文件 + 从本地表移除 */
     fun deleteLocal(relativePath: String, onComplete: (() -> Unit)? = null) {
         DiagnosticLog.log("CloudPane", "请求删除本地 path='$relativePath'")
+        invalidateEntryCache()
         scope.launch {
             withContext(Dispatchers.IO) {
                 // 统计删除前的数量和大小
@@ -1463,6 +1487,7 @@ class CloudPaneController(
     /** 删除云端文件 + 从云端表移除 */
     fun deleteCloud(relativePath: String, onComplete: (() -> Unit)? = null) {
         DiagnosticLog.log("CloudPane", "请求删除云端 path='$relativePath'")
+        invalidateEntryCache()
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -1527,6 +1552,7 @@ class CloudPaneController(
     /** 同时删除本地和云端 */
     fun deleteBoth(relativePath: String, onComplete: (() -> Unit)? = null) {
         DiagnosticLog.log("CloudPane", "请求同时删除本地+云端 path='$relativePath'")
+        invalidateEntryCache()
         scope.launch {
             try {
                 withContext(Dispatchers.IO) {
@@ -2095,6 +2121,7 @@ class CloudPaneController(
             // 用户主动刷新：作废已完成标记，从根目录重新走一轮队列校验。
             // 根目录压入队尾保证全量覆盖，当前目录插队首优先就绪；
             // 仅阻塞等待当前目录，其余目录后台推进。
+            invalidateEntryCache()
             resetValidationSession()
             synchronized(queueLock) { folderQueue.addLast("/") }
             awaitFolderValidated(state.currentPath)
@@ -2119,6 +2146,7 @@ class CloudPaneController(
         scanJob?.cancel()
         synchronized(queueLock) {
             scanJob = null
+            validatingDir = null
             folderQueue.clear()
             validatedDirs.clear()
             dirCompletion.values.forEach { it.complete(Unit) }
@@ -2126,7 +2154,7 @@ class CloudPaneController(
         }
         state.isValidating = false
         backfillDeclined = false
-        hasNotifiedValidationDone = false
+        validatedToastShown = false
     }
 
     fun dispose() {
@@ -2137,6 +2165,7 @@ class CloudPaneController(
             dirCompletion.clear()
             folderQueue.clear()
         }
+        invalidateEntryCache()
         backfillSession?.dispose()
         backfillSession = null
     }
@@ -2144,15 +2173,20 @@ class CloudPaneController(
     // ── 内部方法 ──
 
     /**
-     * 确保目标目录已校验；未校验则插到队首并等待其完成。
-     * 若后台队列未启动则同时启动消费协程。
+     * 确保目标目录已校验。
+     * - 已校验：直接返回，调用方据此直接渲染，不再重算。
+     * - 未校验：把它从队列任意位置提到队首优先处理，等待完成后返回。
      */
     private suspend fun awaitFolderValidated(path: String) {
         val normalized = normalizeDirPath(path)
         val signal = synchronized(queueLock) {
             if (normalized in validatedDirs) null
             else {
-                if (folderQueue.none { it == normalized }) folderQueue.addFirst(normalized)
+                // 正在校验中的目录无需重复入队，直接等待其完成信号。
+                if (normalized != validatingDir) {
+                    folderQueue.remove(normalized)
+                    folderQueue.addFirst(normalized)
+                }
                 dirCompletion.getOrPut(normalized) { CompletableDeferred() }
             }
         } ?: return
@@ -2169,6 +2203,7 @@ class CloudPaneController(
                 while (true) {
                     val next = synchronized(queueLock) { folderQueue.removeFirstOrNull() }
                         ?: break
+                    synchronized(queueLock) { validatingDir = next }
                     try {
                         validateFolder(next)
                         // 仅在校验正常完成时标记；取消或异常不标记，后续访问可重新校验。
@@ -2179,6 +2214,7 @@ class CloudPaneController(
                         DiagnosticLog.log("CloudPane", "目录校验失败 path='$next' ${e.javaClass.simpleName}: ${e.message}")
                     } finally {
                         synchronized(queueLock) {
+                            validatingDir = null
                             dirCompletion.remove(next)?.complete(Unit)
                         }
                     }
@@ -2186,31 +2222,32 @@ class CloudPaneController(
                 // 队列排空的收尾必须与 enqueue 互斥：若退出瞬间又有目录入队，
                 // 则继续消费，避免该目录无人处理导致等待方永久挂起。
                 // 两种情况都先置空 scanJob，使后续 enqueue 能重新启动消费。
-                val hasMore = synchronized(queueLock) {
+                val drained = synchronized(queueLock) {
                     scanJob = null
                     if (folderQueue.isEmpty()) {
                         state.isValidating = false
                         dirCompletion.values.forEach { it.complete(Unit) }
                         dirCompletion.clear()
-                        false
-                    } else true
+                        true
+                    } else false
                 }
-                if (hasMore) startScannerIfNeeded() else if (!disposed) onScanQueueDrained()
+                if (drained) {
+                    // 整个队列全部校验完毕：本轮只提示一次（抑制退出后的副作用）。
+                    if (!disposed && !validatedToastShown) {
+                        validatedToastShown = true
+                        android.widget.Toast.makeText(context, "云盘校验完成", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } else startScannerIfNeeded()
             }
         }
     }
 
-    /** 队列清空后的收尾：弹出校验完成提示。 */
-    private fun onScanQueueDrained() {
-        if (!hasNotifiedValidationDone) {
-            hasNotifiedValidationDone = true
-            android.widget.Toast.makeText(context, "本地文件校验完成", android.widget.Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private var hasNotifiedValidationDone = false
     /** 面板已销毁：抑制退出后的 Toast 等副作用。 */
     private var disposed = false
+    /** 本轮校验会话是否已弹出过"校验完成"提示。 */
+    private var validatedToastShown = false
+    /** 正在校验中的目录（相对路径），避免被重复入队。 */
+    private var validatingDir: String? = null
 
     /** 校验单个目录的直接子项，并把其子目录加入队尾等待后续校验。 */
     private suspend fun validateFolder(dirRel: String) {
@@ -2270,11 +2307,14 @@ class CloudPaneController(
             backfillMissing(needBackfill)
         }
 
-        // ⑤ 子目录追加到队尾，等待后台顺序校验
+        // ⑤ 子目录追加到队尾，等待后台顺序校验（已校验/正在校验/已在队列中的跳过）
         if (childDirs.isNotEmpty()) {
             synchronized(queueLock) {
                 for (childDir in childDirs) {
-                    if (childDir !in validatedDirs && folderQueue.none { it == childDir }) {
+                    if (childDir !in validatedDirs &&
+                        childDir != validatingDir &&
+                        folderQueue.none { it == childDir }
+                    ) {
                         folderQueue.addLast(childDir)
                     }
                 }
