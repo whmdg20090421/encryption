@@ -102,7 +102,7 @@ object SyncOverlayBubble {
             val appContext = context.applicationContext
             val c = FloatingX.install(TAG) {
                 content(FxContent.layout(R.layout.fx_sync_bubble))
-                anchor(FxGravity.TOP_END, dx = 0f, dy = 0f)
+                anchor(FxGravity.BOTTOM_END, dx = 0f, dy = 0f)
                 safeArea = true
                 // 关闭 FloatingX 的即时吸附：贴边时机完全由本对象控制
                 adsorb(FxAdsorb.None)
