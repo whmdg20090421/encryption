@@ -223,6 +223,11 @@ object SyncOverlayBubble {
         updateLockBadge()
     }
 
+    /** 同步锁图标可见性。 */
+    private fun updateLockBadge() {
+        lockView?.visibility = if (locked) View.VISIBLE else View.GONE
+    }
+
     // ── 贴边 ──
 
     /** 启动 5 秒贴边倒计时。 */
