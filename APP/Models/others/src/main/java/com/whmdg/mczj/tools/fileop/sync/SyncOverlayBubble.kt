@@ -18,7 +18,6 @@ import com.petterp.floatingx.core.layout.FxAnchor
 import com.petterp.floatingx.core.layout.FxEdge
 import com.petterp.floatingx.core.layout.FxGravity
 import com.petterp.floatingx.core.update
-import com.petterp.floatingx.system.SystemHost
 import com.petterp.floatingx.system.permission.FxPermissionStrategy
 import com.petterp.floatingx.system.systemHost
 import com.whmdg.mczj.tools.others.R
@@ -59,8 +58,6 @@ object SyncOverlayBubble {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var control: FxControl? = null
-    private var labelView: TextView? = null
-    private var lockView: TextView? = null
 
     private var onBubbleClick: (() -> Unit)? = null
 
@@ -97,7 +94,6 @@ object SyncOverlayBubble {
             val existing = control ?: FloatingX.controlOrNull(TAG)
             if (existing != null && existing.state != FxState.CANCELLED) {
                 control = existing
-                bindContent(existing)
                 renderLabel()
                 if (!existing.isShowing) existing.show()
                 return@post
@@ -125,13 +121,12 @@ object SyncOverlayBubble {
                 }
             }
             c.addListener(listener)
-            bindContent(c)
             locked = false
             snapEdge = null
             longPressConsumed = false
             control = c
-            renderLabel()
             c.show()
+            renderLabel()
         }
     }
 
@@ -150,23 +145,12 @@ object SyncOverlayBubble {
         mainHandler.post {
             mainHandler.removeCallbacks(snapRunnable)
             control = null
-            labelView = null
-            lockView = null
             onBubbleClick = null
             locked = false
             snapEdge = null
             longPressConsumed = false
             FloatingX.uninstall(TAG)
         }
-    }
-
-    /** 绑定内容里的 TextView 引用。 */
-    private fun bindContent(c: FxControl) {
-        c.updateContent { holder ->
-            labelView = holder.getViewOrNull(R.id.fx_bubble_label)
-            lockView = holder.getViewOrNull(R.id.fx_bubble_lock)
-        }
-        updateLockBadge()
     }
 
     // ── FloatingX 事件 ──
@@ -225,8 +209,17 @@ object SyncOverlayBubble {
 
     /** 同步锁图标可见性。 */
     private fun updateLockBadge() {
-        lockView?.visibility = if (locked) View.VISIBLE else View.GONE
+        labelViewById(R.id.fx_bubble_lock)?.visibility = if (locked) View.VISIBLE else View.GONE
     }
+
+    /**
+     * 实时从当前 control 的内容视图查找子 view。
+     *
+     * 不能缓存 view 引用：FloatingX 在窗口（重）建时会替换 content view，
+     * 旧引用会 detached 失效，导致后续 setText 不生效（表现为进度卡死）。
+     */
+    private fun labelViewById(id: Int): TextView? =
+        control?.contentView?.findViewById(id)
 
     // ── 贴边 ──
 
@@ -315,7 +308,7 @@ object SyncOverlayBubble {
      * 整数部分 / 小数点 / 小数部分，例如 `63.73%` → `63` · `·` · `73`。
      */
     private fun renderLabel() {
-        val label = labelView ?: return
+        val label = labelViewById(R.id.fx_bubble_label) ?: return
         when (snapEdge) {
             FxEdge.START -> {
                 label.gravity = Gravity.CENTER_VERTICAL or Gravity.END
