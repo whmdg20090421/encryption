@@ -216,6 +216,35 @@ class VaultService(private val context: Context) {
     fun getVault(id: Int): VaultRecord? = _db.vaults.find { it.id == id }
 
     /**
+     * 后台统计保险箱目录下所有普通文件数（递归，不含目录与元数据文件），
+     * 写回 [VaultRecord.fileCount] 并持久化。仅在解锁成功后由 UI 层异步调用，
+     * 读取方（卡片信息行）只读缓存值，不触发本方法。
+     */
+    fun refreshFileCount(id: Int) {
+        val rec = _db.vaults.find { it.id == id } ?: return
+        val dir = VaultPaths.resolveVault(context, rec.location, rec.relativePath)
+        if (!dir.exists()) return
+        val count = dir.walkTopDown()
+            .filter { it.isFile && it.name !in VAULT_METADATA_FILES }
+            .count()
+            .toLong()
+        if (rec.fileCount == count) return
+        _db.replaceVault(rec.copy(fileCount = count))
+        _db.save(context)
+        syncVaults()
+    }
+
+    companion object {
+        /** 保险箱目录内属于元数据、不计入文件数的文件。 */
+        private val VAULT_METADATA_FILES = setOf(
+            "vault_config.json",
+            "vault_config.backup.json",
+            "name_mappings.json",
+            "name_mappings.json.bak"
+        )
+    }
+
+    /**
      * 恢复云端保险箱元数据，保留云端稳定 ID。
      * 返回现有记录表示本地已存在且被复用；ID 冲突时抛出异常交由 UI 处理。
      */

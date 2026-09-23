@@ -645,6 +645,12 @@ fun VaultsListTab(
                     migrationTotal = total
                 }
             }
+            // 密码确认正确后，后台异步统计文件数并写回本地；仅计算不刷新，下次进入界面读旧值
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    vaultService.refreshFileCount(vault.id)
+                } catch (_: Exception) {}
+            }
             if (settings.enableTeeQuickUnlock) {
                 com.whmdg.mczj.tools.security.TeeManager.encryptPassword(context, vault.id, pwd)
             }
@@ -1017,13 +1023,13 @@ fun VaultsListTab(
                                 // 大小占位
                                 val vaultDirPath = VaultPaths.resolveVault(context, vault.location, vault.relativePath).path.trimEnd('/')
                                 val vaultSize = folderSizeDb.get(vaultDirPath)?.size ?: 0L
-                                val vaultDir = java.io.File(vaultDirPath)
-                                val vaultFileCount = if (vaultDir.exists()) {
-                                    vaultDir.walkTopDown().filter { it.isFile }.count()
-                                } else 0
+                                // 文件数只读本地缓存（解锁成功时后台统计写回），此处不做任何目录遍历
+                                val vaultFileCount = vault.fileCount
                                 VaultInfoRow("存储用量", buildString {
                                     append(if (vaultSize > 0) com.whmdg.mczj.tools.util.FormatUtils.formatBytes(vaultSize) else "未统计")
-                                    append(" ($vaultFileCount 个文件)")
+                                    append(" (")
+                                    append(vaultFileCount?.let { "$it 个文件" } ?: "文件数未统计")
+                                    append(")")
                                 })
                                 Spacer(modifier = Modifier.height(10.dp))
                                 // 最后更改时间

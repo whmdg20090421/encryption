@@ -17,5 +17,7 @@ data class VaultRecord(
     val algorithm: String = "AES-256-GCM",
     val createdAt: String, // 存 ISO8601 字符串
     @SerialName("last_opened_at") val lastOpenedAt: String? = null,
-    @SerialName("last_modified_at") val lastModifiedAt: String? = null
+    @SerialName("last_modified_at") val lastModifiedAt: String? = null,
+    /** 保险箱目录下所有普通文件数（不含目录与元数据文件），null 表示从未统计过。仅解锁成功后异步刷新。 */
+    @SerialName("file_count") val fileCount: Long? = null
 )
