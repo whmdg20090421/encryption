@@ -54,6 +54,21 @@ class CloudPaneController(
     // 补全同步记录时临时持有的会话（钥匙）。仅在本轮扫描内复用，扫描结束即清零销毁。
     private var backfillSession: com.whmdg.mczj.tools.encryption.services.VaultSession? = null
 
+    // ── 目录级校验队列 ──
+    // 以"文件夹"为单位做本地校验：每次只校验一个目录的直接子项，
+    // 用户点开的目录会被插到队首优先处理，其余目录在后台按顺序推进。
+    // 这样避免打开卡片时全量 walkTopDown 阻塞首帧，同时保留全量语义。
+    private val folderQueue = ArrayDeque<String>()
+    private val queueLock = Any()
+    /** 本次会话内已完成校验的目录（相对路径，"/" 为根）。 */
+    private val validatedDirs = mutableSetOf<String>()
+    /** 等待某目录校验完成的信号（navigateTo 需要阻塞到目标目录就绪）。 */
+    private val dirCompletion = mutableMapOf<String, CompletableDeferred<Unit>>()
+    /** 后台扫描消费协程，全局仅一个。 */
+    private var scanJob: Job? = null
+    /** 用户取消过 MD5 补全时置位，本轮不再重复弹框（对齐旧的"只弹一次"语义）。 */
+    private var backfillDeclined = false
+
     /** 云盘面板状态（完全独立，使用 mutableStateOf 驱动 Compose recomposition） */
     class CloudPanelState {
         var currentPath by mutableStateOf("/")
@@ -91,6 +106,8 @@ class CloudPaneController(
         var downloadConflictDialog by mutableStateOf<DownloadConflictState?>(null)
         /** 补全同步记录所需的密码输入框（null=隐藏） */
         var passwordDialog by mutableStateOf<PasswordDialogState?>(null)
+        /** 是否正在后台校验本地文件（校验期间禁止上传/下载） */
+        var isValidating by mutableStateOf(false)
     }
 
     /** 补充缺失的明文校验值：请求密码 → 校验取钥匙 → 纯内存解密计算。 */
@@ -215,15 +232,16 @@ class CloudPaneController(
         com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.externalWriter = { tag, message ->
             com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.log(context, tag, message)
         }
-        // 仅首次初始化时全量扫描。若需补全记录会阻塞式弹出密码框，
-        // 因此先进入 loading 态（转圈背景），扫描完成后再渲染列表，
+        // 仅首次初始化时进行校验。若需补全记录会阻塞式弹出密码框，
+        // 因此先进入 loading 态（转圈背景），根目录校验完成后再渲染列表，
         // 避免"列表已出现却又弹框"造成的误导。
+        // 根目录校验完成后，剩余目录交给后台队列异步推进，不阻塞 UI。
         if (!state.isInitialized) {
             state.isInitialized = true
             state.isLoading = true
             state.loadProgress = LoadProgress(reason = "正在校验本地文件")
             scope.launch {
-                syncLocalFiles()
+                awaitFolderValidated("/")
                 navigateTo("/")
             }
         } else {
@@ -244,6 +262,13 @@ class CloudPaneController(
         scope.launch {
             state.isLoading = true
             state.loadError = null
+            // 目标目录尚未校验时，插到队首优先校验，阻塞到完成再渲染；
+            // 已校验则立即返回，不显示校验进度。
+            if (normalizeDirPath(path) !in validatedDirs) {
+                state.loadProgress = LoadProgress(reason = "正在校验本地文件")
+                awaitFolderValidated(path)
+                if (generation != navigationGeneration) return@launch
+            }
             state.loadProgress = LoadProgress(reason = "正在加载目录")
             val startMs = System.currentTimeMillis()
             try {
@@ -298,6 +323,11 @@ class CloudPaneController(
     /** 上传单个文件或文件夹 */
     fun uploadFile(relativePath: String) {
         DiagnosticLog.log("CloudPane", "请求上传 path='$relativePath'")
+        // 后台校验期间禁止上传，避免与目录级校验并发写 DB
+        if (state.isValidating) {
+            android.widget.Toast.makeText(context, "正在校验本地文件，请稍候", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
         // 并发保护：检查是否有文件正在上传
         val uploading = syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING)
         if (uploading.isNotEmpty()) {
@@ -1174,6 +1204,11 @@ class CloudPaneController(
      */
     fun downloadEntry(relativePath: String, isDirectory: Boolean) {
         DiagnosticLog.log("CloudPane", "请求下载 path='$relativePath' isDir=$isDirectory")
+        // 后台校验期间禁止下载，避免与目录级校验并发写 DB
+        if (state.isValidating) {
+            android.widget.Toast.makeText(context, "正在校验本地文件，请稍候", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
         // 并发保护：上传/下载进行中不允许再次触发
         val busy = syncDb.getEntriesByStatus("local_entries", SyncStatus.UPLOADING).isNotEmpty()
         if (busy) {
@@ -2057,7 +2092,12 @@ class CloudPaneController(
 
     fun refresh() {
         scope.launch {
-            syncLocalFiles()
+            // 用户主动刷新：作废已完成标记，从根目录重新走一轮队列校验。
+            // 根目录压入队尾保证全量覆盖，当前目录插队首优先就绪；
+            // 仅阻塞等待当前目录，其余目录后台推进。
+            resetValidationSession()
+            synchronized(queueLock) { folderQueue.addLast("/") }
+            awaitFolderValidated(state.currentPath)
             navigateTo(state.currentPath)
         }
     }
@@ -2074,8 +2114,29 @@ class CloudPaneController(
         }
     }
 
+    /** 重置校验会话：取消在跑的扫描，清空队列/已完成标记，允许下一轮重新全量校验。 */
+    private fun resetValidationSession() {
+        scanJob?.cancel()
+        synchronized(queueLock) {
+            scanJob = null
+            folderQueue.clear()
+            validatedDirs.clear()
+            dirCompletion.values.forEach { it.complete(Unit) }
+            dirCompletion.clear()
+        }
+        state.isValidating = false
+        backfillDeclined = false
+        hasNotifiedValidationDone = false
+    }
+
     fun dispose() {
+        disposed = true
         syncJob?.cancel()
+        synchronized(queueLock) {
+            dirCompletion.values.forEach { it.complete(Unit) }
+            dirCompletion.clear()
+            folderQueue.clear()
+        }
         backfillSession?.dispose()
         backfillSession = null
     }
@@ -2083,59 +2144,161 @@ class CloudPaneController(
     // ── 内部方法 ──
 
     /**
-     * 同步本地文件到数据库。
-     * - 本地有、表中无 → 走补全流程（现场解密算明文 MD5），用户取消则不写记录
-     * - 本地无、表中有 → 移除
-     * - 本地有、表中有 → 仅当大小变化时重置为 PENDING（不再比较最后修改时间）
-     *
-     * 补全所需的密码框在本方法内部阻塞式弹出：输完才开始计算，转圈期间算完所有待补文件，
-     * 之后才返回渲染列表。钥匙在本轮扫描内复用，结束时统一清零。
+     * 确保目标目录已校验；未校验则插到队首并等待其完成。
+     * 若后台队列未启动则同时启动消费协程。
      */
-    private suspend fun syncLocalFiles() {
-        val dir = File(vaultDir)
-        if (!dir.exists()) return
+    private suspend fun awaitFolderValidated(path: String) {
+        val normalized = normalizeDirPath(path)
+        val signal = synchronized(queueLock) {
+            if (normalized in validatedDirs) null
+            else {
+                if (folderQueue.none { it == normalized }) folderQueue.addFirst(normalized)
+                dirCompletion.getOrPut(normalized) { CompletableDeferred() }
+            }
+        } ?: return
+        startScannerIfNeeded()
+        signal.await()
+    }
 
-        val dbPaths = syncDb.getAllEntries("local_entries").map { it.path }.toSet()
-        val localPaths = mutableSetOf<String>()
+    /** 启动后台队列消费协程（全局唯一）。 */
+    private fun startScannerIfNeeded() {
+        synchronized(queueLock) {
+            if (scanJob?.isActive == true) return
+            state.isValidating = true
+            scanJob = scope.launch {
+                while (true) {
+                    val next = synchronized(queueLock) { folderQueue.removeFirstOrNull() }
+                        ?: break
+                    try {
+                        validateFolder(next)
+                        // 仅在校验正常完成时标记；取消或异常不标记，后续访问可重新校验。
+                        synchronized(queueLock) { validatedDirs.add(next) }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        DiagnosticLog.log("CloudPane", "目录校验失败 path='$next' ${e.javaClass.simpleName}: ${e.message}")
+                    } finally {
+                        synchronized(queueLock) {
+                            dirCompletion.remove(next)?.complete(Unit)
+                        }
+                    }
+                }
+                // 队列排空的收尾必须与 enqueue 互斥：若退出瞬间又有目录入队，
+                // 则继续消费，避免该目录无人处理导致等待方永久挂起。
+                // 两种情况都先置空 scanJob，使后续 enqueue 能重新启动消费。
+                val hasMore = synchronized(queueLock) {
+                    scanJob = null
+                    if (folderQueue.isEmpty()) {
+                        state.isValidating = false
+                        dirCompletion.values.forEach { it.complete(Unit) }
+                        dirCompletion.clear()
+                        false
+                    } else true
+                }
+                if (hasMore) startScannerIfNeeded() else if (!disposed) onScanQueueDrained()
+            }
+        }
+    }
+
+    /** 队列清空后的收尾：弹出校验完成提示。 */
+    private fun onScanQueueDrained() {
+        if (!hasNotifiedValidationDone) {
+            hasNotifiedValidationDone = true
+            android.widget.Toast.makeText(context, "本地文件校验完成", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private var hasNotifiedValidationDone = false
+    /** 面板已销毁：抑制退出后的 Toast 等副作用。 */
+    private var disposed = false
+
+    /** 校验单个目录的直接子项，并把其子目录加入队尾等待后续校验。 */
+    private suspend fun validateFolder(dirRel: String) {
+        val dir = if (dirRel == "/") File(vaultDir) else File(vaultDir, dirRel.trimStart('/'))
+        if (!dir.exists() || !dir.isDirectory) return
+
+        val dirPrefix = if (dirRel == "/") "/" else "$dirRel/"
+
+        // ① 读取磁盘上的直接子项
+        val children = withContext(Dispatchers.IO) {
+            dir.listFiles()?.filter { it.name !in excludedFiles }
+        } ?: emptyList()
+
+        val localChildPaths = mutableSetOf<String>()
+        val childDirs = mutableListOf<String>()
         val needBackfill = mutableListOf<Pair<String, File>>()
 
-        val scanned = withContext(Dispatchers.IO) {
-            dir.walkTopDown()
-                .filter { it.name !in excludedFiles }
-                .toList()
-        }
-
-        for (file in scanned) {
-            val relativePath = "/" + file.relativeTo(dir).path.replace('\\', '/')
-            localPaths.add(relativePath)
-            if (!file.isFile) continue
-
-            val existing = syncDb.getEntry("local_entries", relativePath)
-            val currentSize = file.length()
-
-            when {
-                existing == null -> needBackfill.add(relativePath to file)
-                existing.md5.isNullOrEmpty() -> needBackfill.add(relativePath to file)
-                existing.size != currentSize -> {
-                    // 大小变化 → 重置为 PENDING（不再用最后修改时间判定）
-                    val currentLastModified = Instant.ofEpochMilli(file.lastModified()).toString()
-                    syncDb.updateSize("local_entries", relativePath, currentSize, currentLastModified)
-                    syncDb.updateStatus("local_entries", relativePath, SyncStatus.PENDING)
+        // ②③④ 磁盘比对 + DB 删除检测，全部在一次 IO 上下文内完成，
+        //       避免逐文件 context switch（上万文件时是主要开销）。
+        withContext(Dispatchers.IO) {
+            for (child in children) {
+                val childRel = "$dirPrefix${child.name}"
+                localChildPaths.add(childRel)
+                if (child.isDirectory) {
+                    childDirs.add(childRel)
+                    continue
                 }
+                val existing = syncDb.getEntry("local_entries", childRel)
+                val currentSize = child.length()
+                when {
+                    existing == null -> needBackfill.add(childRel to child)
+                    existing.md5.isNullOrEmpty() -> needBackfill.add(childRel to child)
+                    existing.size != currentSize -> {
+                        val currentLastModified = Instant.ofEpochMilli(child.lastModified()).toString()
+                        syncDb.updateSize("local_entries", childRel, currentSize, currentLastModified)
+                        syncDb.updateStatus("local_entries", childRel, SyncStatus.PENDING)
+                    }
+                }
+            }
+
+            // ④ 删除检测：以本目录为单位。DB 子树中凡所属"直接子项段"已不在磁盘上的，
+            //    连同其整棵子树一并清理。按精确路径删除而非前缀匹配，
+            //    避免相邻同名前缀（/a 与 /ab）被误删。
+            val toDelete = syncDb.getEntriesByParent("local_entries", dirPrefix)
+                .filter { entry ->
+                    val seg = directChildSegmentOf(entry.path, dirPrefix)
+                    seg != null && seg !in localChildPaths
+                }
+                .map { it.path }
+            if (toDelete.isNotEmpty()) {
+                syncDb.deleteEntries("local_entries", toDelete)
             }
         }
 
-        // 现场补齐缺失的明文 MD5：阻塞式弹密码框 → 转圈计算全部 → 关闭
-        if (needBackfill.isNotEmpty()) {
+        // 现场补齐缺失的明文 MD5（沿用旧的阻塞式弹框，会话随后复用）
+        if (needBackfill.isNotEmpty() && !backfillDeclined) {
             backfillMissing(needBackfill)
         }
 
-        // 移除本地已不存在的条目
-        for (dbPath in dbPaths) {
-            if (dbPath !in localPaths) {
-                syncDb.deleteEntry("local_entries", dbPath)
+        // ⑤ 子目录追加到队尾，等待后台顺序校验
+        if (childDirs.isNotEmpty()) {
+            synchronized(queueLock) {
+                for (childDir in childDirs) {
+                    if (childDir !in validatedDirs && folderQueue.none { it == childDir }) {
+                        folderQueue.addLast(childDir)
+                    }
+                }
             }
         }
+    }
+
+    /** 规范化目录相对路径：统一以 "/" 开头且不以 "/" 结尾（根除外）。 */
+    private fun normalizeDirPath(path: String): String {
+        val trimmed = path.trimEnd('/')
+        return if (trimmed.isEmpty()) "/" else trimmed
+    }
+
+    /**
+     * 取 DB 条目相对父目录的直接子项路径。
+     * 例：prefix="/"、path="/a/b.txt" → "/a"；prefix="/a/"、path="/a/b/c" → "/a/b"。
+     * 返回值是磁盘上的完整相对路径（目录条目同样去掉末尾 "/"）。
+     */
+    private fun directChildSegmentOf(entryPath: String, dirPrefix: String): String? {
+        if (!entryPath.startsWith(dirPrefix)) return null
+        val rest = entryPath.removePrefix(dirPrefix).trimEnd('/')
+        if (rest.isEmpty()) return null
+        val seg = rest.substringBefore('/')
+        return "$dirPrefix$seg"
     }
 
     /**
@@ -2146,7 +2309,12 @@ class CloudPaneController(
      * 面板销毁（dispose）时统一清零。用户直接杀后台则随进程内存一并消失。
      */
     private suspend fun backfillMissing(targets: List<Pair<String, File>>) {
-        val session = requestBackfillSession(targets.size) ?: return
+        val session = requestBackfillSession(targets.size)
+        if (session == null) {
+            // 用户取消：本轮不再重复弹框，保持"只弹一次"的交互语义
+            backfillDeclined = true
+            return
+        }
         for ((relativePath, file) in targets) {
             try {
                 val md5 = withContext(Dispatchers.IO) {

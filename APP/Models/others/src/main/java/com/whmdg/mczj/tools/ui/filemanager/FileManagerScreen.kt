@@ -2504,7 +2504,10 @@ fun FileManagerScreen(
                             } else if (vm.panels.isCloudMode) {
                                 // ── 云盘模式：上传 / 删除 ──
                                 val cloudEntry = selectedCloudEntry
-                                val uploadDisabled = cloudStateForOverlay?.uploadDisabled == true
+                                // 校验进行中禁用上传/下载，避免与目录级校验并发写 DB
+                                val validating = cloudStateForOverlay?.isValidating == true
+                                val uploadDisabled = cloudStateForOverlay?.uploadDisabled == true || validating
+                                val downloadDisabled = validating
                                 if (cloudEntry != null) {
                                     // 第一行：上传 / 删除
                                     Row(
@@ -2540,10 +2543,10 @@ fun FileManagerScreen(
                                         Box(
                                             modifier = Modifier
                                                 .weight(1f)
-                                                .clickable {
+                                                .then(if (!downloadDisabled) Modifier.clickable {
                                                     vm.panels.cloud?.downloadEntry(cloudEntry.relativePath, cloudEntry.isDirectory)
                                                     selectedCloudEntry = null
-                                                }
+                                                } else Modifier)
                                                 .padding(vertical = 16.dp),
                                             contentAlignment = Alignment.Center
                                         ) {
@@ -2551,12 +2554,14 @@ fun FileManagerScreen(
                                                 Icon(
                                                     Icons.Default.CloudDownload,
                                                     contentDescription = null,
-                                                    modifier = Modifier.size(16.dp)
+                                                    modifier = Modifier.size(16.dp),
+                                                    tint = if (downloadDisabled) Color.Gray else MaterialTheme.colorScheme.onSurface
                                                 )
                                                 Spacer(Modifier.width(4.dp))
                                                 Text(
                                                     "下载",
-                                                    style = MaterialTheme.typography.bodyLarge
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    color = if (downloadDisabled) Color.Gray else MaterialTheme.colorScheme.onSurface
                                                 )
                                             }
                                         }

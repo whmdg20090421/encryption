@@ -356,45 +356,62 @@ fun CloudSyncScreen(
 
     // 从持久化存储加载同步项 + 刷新保险箱大小 + 检测 WebDAV 连接状态
     LaunchedEffect(Unit) {
+        // ── 第一阶段：立即用持久化快照渲染卡片 ──
+        // CloudSyncStore.load 只是读一份 JSON，开销极小，先让列表出现，
+        // 卡片展示存档中的旧数值；真正昂贵的本地大小统计放到后台增量刷新。
         val saved = CloudSyncStore.load(context)
         if (saved.isNotEmpty()) {
-            // 刷新保险箱类型的本地大小（从 FolderSizeDb 读取）和云端数据
-            val folderSizeDb = com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(
-                com.whmdg.mczj.tools.AppDataPaths.fileManager(context)
-            )
-            val refreshed = saved.map { item ->
-                if (item.type == "保险箱" && item.vaultId > 0) {
-                    val vault = vaultService.getVault(item.vaultId)
-                    if (vault != null) {
-                        val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, item.vaultName)
-                        val stats = syncDb.getStats()
-                        val vaultDirPath = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
-                            context, vault.location, vault.relativePath
-                        ).absolutePath
-                        val localSize = folderSizeDb.getNormalized(vaultDirPath)?.size ?: 0L
-                        val localFileCount = try {
-                            val dir = java.io.File(vaultDirPath)
-                            if (dir.exists()) dir.walkTopDown().filter { it.isFile }.count() else 0
-                        } catch (_: Exception) { 0 }
-                        item.copy(
-                            vaultSize = localSize,
-                            cloudSize = stats.cloudSize,
-                            diffFileCount = stats.diffCount,
-                            lastSyncTime = stats.lastUpdate ?: item.lastSyncTime,
-                            localFileCount = localFileCount,
-                            cloudFileCount = stats.cloudFileCount
-                        )
-                    } else item
-                } else item
-            }
-            syncItems.clear()
-            syncItems.addAll(refreshed)
-            processedVaultIds.addAll(refreshed.filter { it.id.startsWith("vault_") }
+            syncItems.addAll(saved)
+            processedVaultIds.addAll(saved.filter { it.id.startsWith("vault_") }
                 .map { it.id.removePrefix("vault_").toIntOrNull() ?: 0 })
+        }
+
+        // ── 第二阶段：后台刷新每张卡片的统计数据 ──
+        // 逐箱打开 SyncDatabase 查询、walkTopDown 遍历磁盘都是阻塞 I/O，
+        // 绝不能占用主线程，否则首帧被拖住，列表长时间空白。
+        if (saved.isNotEmpty()) {
+            val folderSizeDbRef = async(Dispatchers.IO) {
+                com.whmdg.mczj.tools.encryption.data.FolderSizeDb.load(
+                    com.whmdg.mczj.tools.AppDataPaths.fileManager(context)
+                )
+            }
+            val refreshed = saved.map { item ->
+                async(Dispatchers.IO) {
+                    if (item.type != "保险箱" || item.vaultId <= 0) return@async item
+                    val vault = vaultService.getVault(item.vaultId) ?: return@async item
+                    val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, item.vaultName)
+                    val stats = syncDb.getStats()
+                    val vaultDirPath = com.whmdg.mczj.tools.encryption.data.VaultPaths.resolveVault(
+                        context, vault.location, vault.relativePath
+                    ).absolutePath
+                    val localSize = folderSizeDbRef.await().getNormalized(vaultDirPath)?.size ?: 0L
+                    val localFileCount = try {
+                        val dir = java.io.File(vaultDirPath)
+                        if (dir.exists()) dir.walkTopDown().filter { it.isFile }.count() else 0
+                    } catch (_: Exception) { 0 }
+                    item.copy(
+                        vaultSize = localSize,
+                        cloudSize = stats.cloudSize,
+                        diffFileCount = stats.diffCount,
+                        lastSyncTime = stats.lastUpdate ?: item.lastSyncTime,
+                        localFileCount = localFileCount,
+                        cloudFileCount = stats.cloudFileCount
+                    )
+                }
+            }.awaitAll()
+
+            // 逐项落回 UI 状态：按 id 定位替换，避免期间新增卡片导致的索引错位。
+            val refreshedById = refreshed.associateBy { it.id }
+            for (i in syncItems.indices) {
+                val old = syncItems[i]
+                val updated = refreshedById[old.id] ?: continue
+                if (updated != old) syncItems[i] = updated
+            }
             // 有变化则持久化
             if (refreshed != saved) CloudSyncStore.save(context, refreshed)
         }
-        // 检测 WebDAV 连接状态
+
+        // ── 第三阶段：检测 WebDAV 连接状态（与列表解耦） ──
         val configs = WebDavServerStore.getAll(context)
         val config = configs.firstOrNull()
         if (config == null) {
