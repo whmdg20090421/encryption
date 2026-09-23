@@ -425,7 +425,6 @@ class CloudPaneController(
                 onFileComplete = { _, _ -> },
                 logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
-            val localFileProgress = java.util.concurrent.ConcurrentHashMap<String, SyncFileProgress>()
             // 进度异常检测器
             val anomalyThreshold = 128 * 1024L  // 128KB
             var anomalyCount = 0
@@ -438,25 +437,22 @@ class CloudPaneController(
                 syncDb = syncDb,
                 onProgress = { uploadedBytes, totalBytes ->
                     if (anomalyTerminated.get()) return@uploadSingleFile
-                    val now = System.currentTimeMillis()
                     val uiDelta = uploadedBytes - lastUiTransferredBytes
-                    // 始终记录到本地 map（供 updateSingleEntry 读取）
-                    localFileProgress[relativePath] = SyncFileProgress(
+                    // 每次回调直接更新 state，由 Compose 渲染机制自行节流
+                    val currentProgress = state.syncTask.fileProgress.toMutableMap()
+                    currentProgress[relativePath] = SyncFileProgress(
                         relativePath = relativePath,
                         totalBytes = totalBytes,
                         uploadedBytes = uploadedBytes,
                         status = UploadStatus.UPLOADING
                     )
-                    // 每次回调直接更新 state，由 Compose 渲染机制自行节流
-                    val currentProgress = state.syncTask.fileProgress.toMutableMap()
-                    currentProgress[relativePath] = localFileProgress[relativePath]!!
                     state.syncTask = state.syncTask.copy(
                         fileProgress = currentProgress,
                         transferredBytes = uploadedBytes
                     )
                     updateFileProgressOnly(relativePath)
-                    // 异步冒泡父文件夹三色进度条（不阻塞进度回调）
-                    scope.launch(Dispatchers.IO) { updateSingleEntry(relativePath) }
+                    // 父文件夹聚合进度不在每个 chunk 刷新（会递归查库），
+                    // 由 onStatusChange / onComplete 在状态变更时统一刷新。
                     // 进度异常检测：单次回调增量 > 128KB
                     if (uiDelta > anomalyThreshold && lastUiTransferredBytes > 0) {
                         anomalyCount++
@@ -2720,33 +2716,27 @@ class CloudPaneController(
             .thenComparator { a, b -> naturalCompare(a.name, b.name) }
     }
 
-    /** 只更新文件自身的进度条（不触发父文件夹聚合，用于 Progress 事件高频调用） */
+    /**
+     * 仅按内存中的实时上传进度刷新文件行（不查 DB，避免每个进度事件同步读库拖慢 UI）。
+     *
+     * 前置条件：调用方已把该文件的实时进度写入 [CloudPanelState.syncTask] 的 `fileProgress`。
+     * 未处于上传中的文件直接返回，交由 [updateSingleEntry] 在状态变更时按 DB 权威值刷新。
+     */
     private fun updateFileProgressOnly(relativePath: String) {
+        val liveProgress = state.syncTask.fileProgress[relativePath] ?: return
+        if (liveProgress.status != UploadStatus.UPLOADING) return
+
         val entries = state.entries
         val idx = entries.indexOfFirst { it.relativePath == relativePath }
         if (idx < 0) return
 
         val old = entries[idx]
-        if (old.isDirectory) return  // 文件夹不处理
+        if (old.isDirectory) return  // 文件夹聚合在 Complete 时统一刷新
 
-        val dbEntry = syncDb.getEntry("local_entries", relativePath)
-        val liveProgress = state.syncTask.fileProgress[relativePath]
-        val fileSize = old.totalSize
-        val greenSize = when {
-            dbEntry?.status == SyncStatus.COMPLETED -> fileSize
-            liveProgress != null -> liveProgress.uploadedBytes
-            (dbEntry?.uploadedSize ?: 0L) > 0 -> dbEntry!!.uploadedSize
-            else -> 0L
-        }
-        val redSize = when {
-            dbEntry?.status == SyncStatus.COMPLETED -> 0L
-            dbEntry?.status == SyncStatus.UPLOADING -> 0L
-            else -> fileSize
-        }
         val newEntry = old.copy(
-            uploadedSize = greenSize,
-            redSize = redSize,
-            syncStatus = dbEntry?.status ?: old.syncStatus
+            uploadedSize = liveProgress.uploadedBytes,
+            redSize = 0L,
+            syncStatus = SyncStatus.UPLOADING
         )
         val newEntries = entries.toMutableList()
         newEntries[idx] = newEntry

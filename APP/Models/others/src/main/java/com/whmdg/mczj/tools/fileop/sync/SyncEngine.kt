@@ -346,13 +346,19 @@ class SyncEngine(
         for (attempt in 1..2) {
             try {
                 var totalWritten = 0L
+                // 上传进度落库器：进度回调即时（每次 chunk 都上抛），
+                // 而 uploaded_size 的 DB 写入按时间合并，避免逐 chunk 独立提交拖慢上传循环。
+                val uploadedSizeStore = ThrottledUploadedSizeStore(
+                    write = { written -> syncDb.updateUploadedSize("local_entries", relativePath, written) }
+                )
                 webdavClient.uploadFile(localFile, remotePath) { delta ->
                     totalWritten += delta
-                    // 实时写入 DB，供文件夹进度条聚合
-                    try { syncDb.updateUploadedSize("local_entries", relativePath, totalWritten) } catch (_: Exception) {}
-                    // 每 128KB 直接回调（UI 节流由 CloudPaneController 处理）
+                    // 即时回调：本次读了多少就报多少，不随落库节流
                     onProgress(totalWritten, fileSize)
+                    uploadedSizeStore.onBytesWritten(totalWritten)
                 }
+                // 上传结束强制落库一次，保证 DB 里的 uploaded_size 为最终值
+                uploadedSizeStore.flush(totalWritten)
                 uploadSuccess = true
                 break
             } catch (e: Exception) {
