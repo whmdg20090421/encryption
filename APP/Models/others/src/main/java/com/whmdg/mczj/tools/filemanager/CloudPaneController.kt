@@ -838,6 +838,13 @@ class CloudPaneController(
             // 事件 Channel + 更新器协程（单线程顺序处理所有状态更新）
             val eventChannel = kotlinx.coroutines.channels.Channel<UploadEvent>(kotlinx.coroutines.channels.Channel.UNLIMITED)
 
+            // 目录聚合刷新节流：Complete/StatusChange 只登记待刷新路径，
+            // 由更新器在空闲时（或距上次聚合超过 MIN_AGGREGATE_INTERVAL_MS 后）
+            // 合并去重后统一执行，避免每个文件事件都触发 O(子树) 的同步查库聚合
+            // 阻塞消费者，导致进度事件积压、UI 冻结后猛跳。
+            val pendingRefreshPaths = linkedSetOf<String>()
+            var lastAggregateMs = 0L
+
             val updaterJob = launch {
                 // 速度计算：每秒采样一次吞吐量
                 var speedLastBytes = 0L
@@ -851,8 +858,35 @@ class CloudPaneController(
                 val lastUiFileBytes = java.util.concurrent.ConcurrentHashMap<String, Long>()
                 val anomalyLogFile = File(com.whmdg.mczj.tools.AppDataPaths.cloudSyncAnomalies(context), "${vaultName}_anomaly_${timestamp}.log")
 
-                for (event in eventChannel) {
+                var channelClosed = false
+                while (true) {
                     if (!isActive) break
+                    // 事件积压时立即取下一个；无事件时最多等待 200ms，
+                    // 以便定期把登记的目录聚合合并刷出去。
+                    val event = try {
+                        kotlinx.coroutines.withTimeoutOrNull(200L) { eventChannel.receive() }
+                    } catch (_: kotlinx.coroutines.channels.ClosedReceiveChannelException) {
+                        // 通道已关闭且缓冲已排空
+                        channelClosed = true
+                        null
+                    }
+                    if (event == null) {
+                        // 通道空闲：合并刷新所有登记路径
+                        if (pendingRefreshPaths.isNotEmpty()) {
+                            val batch = pendingRefreshPaths.toList()
+                            pendingRefreshPaths.clear()
+                            for (p in batch) {
+                                if (!isActive) break
+                                try { updateSingleEntry(p) } catch (e: Exception) {
+                                    com.whmdg.mczj.tools.util.DiagnosticLog.log("SyncUpdater", "聚合刷新异常: ${e.message}")
+                                }
+                            }
+                            lastAggregateMs = System.currentTimeMillis()
+                        }
+                        // 通道已关闭、且所有登记聚合已刷完 → 退出
+                        if (channelClosed) break
+                        continue
+                    }
                     try {
                         when (event) {
                             is UploadEvent.Progress -> {
@@ -964,8 +998,12 @@ class CloudPaneController(
                                 }
                                 // 只更新文件自身进度条（文件夹聚合在 Complete 时更新）
                                 updateFileProgressOnly(event.path)
-                                // 进度异常检测：单文件渲染帧增量 > 128KB
-                                for ((path, uploaded) in activeFileBytes) {
+                                // 进度异常检测：单文件渲染帧增量 > 128KB。
+                                // 本事件只改动了 event.path 的进度，无需遍历全部活跃文件；
+                                // 仅在真正触发异常时才快照全部活跃文件用于诊断日志。
+                                run {
+                                    val path = event.path
+                                    val uploaded = activeFileBytes[path] ?: return@run
                                     val prev = lastUiFileBytes[path]
                                     if (prev != null && uploaded - prev > anomalyThreshold) {
                                         anomalyCount++
@@ -1119,16 +1157,31 @@ class CloudPaneController(
                                 if (!event.success && event.error != null) {
                                     com.whmdg.mczj.tools.fileop.sync.CloudSyncLogger.logSync("CloudPane", "上传失败: ${event.path} - ${event.error}")
                                 }
-                                // 完整更新文件状态（含 DB 读取），内部对父文件夹做全量重算
-                                updateSingleEntry(event.path)
+                                // 完整更新文件状态（含 DB 读取）合并到节流批次，
+                                // 不在此处同步执行 O(子树) 聚合，避免阻塞消费者。
+                                pendingRefreshPaths.add(event.path)
                             }
                             is UploadEvent.StatusChange -> {
-                                // 文件开始上传：完整更新文件状态，内部对父文件夹做全量重算
-                                updateSingleEntry(event.path)
+                                // 文件开始上传：登记待刷新，由节流批次统一处理。
+                                pendingRefreshPaths.add(event.path)
                             }
                         }
                     } catch (e: Exception) {
                         com.whmdg.mczj.tools.util.DiagnosticLog.log("SyncUpdater", "事件处理异常: ${e.message}")
+                    }
+
+                    // 持续有事件时也要保证聚合按时刷新：距上次聚合超过间隔即合并执行一次。
+                    val nowMs = System.currentTimeMillis()
+                    if (pendingRefreshPaths.isNotEmpty() && nowMs - lastAggregateMs >= MIN_AGGREGATE_INTERVAL_MS) {
+                        val batch = pendingRefreshPaths.toList()
+                        pendingRefreshPaths.clear()
+                        for (p in batch) {
+                            if (!isActive) break
+                            try { updateSingleEntry(p) } catch (e: Exception) {
+                                com.whmdg.mczj.tools.util.DiagnosticLog.log("SyncUpdater", "聚合刷新异常: ${e.message}")
+                            }
+                        }
+                        lastAggregateMs = nowMs
                     }
                 }
             }
@@ -2765,17 +2818,7 @@ class CloudPaneController(
         if (idx >= 0) {
             val old = entries[idx]
             val newEntry = if (old.isDirectory) {
-                // folderSize 与 listLocalFiles 保持同一口径：累加整棵子树的所有文件
-                val folderSize = syncDb.getEntriesByParent("local_entries", relativePath)
-                    .filter { entry -> !entry.path.endsWith("/") }
-                    .sumOf { it.size }
-                val syncAgg = aggregateDirectChildren(relativePath)
-                val localPaths = syncDb.getEntriesByParent("local_entries", relativePath)
-                    .map { it.path }.toSet()
-                val cloudOnlyFolderSize = syncDb.getEntriesByParent("cloud_entries", relativePath)
-                    .filter { !it.path.endsWith("/") && it.path !in localPaths }
-                    .sumOf { it.size }
-                old.copy(totalSize = folderSize + cloudOnlyFolderSize, uploadedSize = syncAgg.uploadedSize, redSize = syncAgg.redSize, cloudOnlySize = cloudOnlyFolderSize)
+                applyFolderAggregate(old, relativePath)
             } else {
                 val dbEntry = syncDb.getEntry("local_entries", relativePath)
                 val liveProgress = state.syncTask.fileProgress[relativePath]
@@ -2807,6 +2850,28 @@ class CloudPaneController(
         if (changed) state.entries = entries
     }
 
+    /**
+     * 重算目录条目的聚合字段（与 listLocalFiles 保持同一口径）。
+     * 目录总大小累加整棵子树的 DB 原始大小 + 云端独有部分，同步状态递归统计。
+     */
+    private fun applyFolderAggregate(entry: CloudFileEntry, relativePath: String): CloudFileEntry {
+        val localEntries = syncDb.getEntriesByParent("local_entries", relativePath)
+        val folderSize = localEntries
+            .filter { entry -> !entry.path.endsWith("/") }
+            .sumOf { it.size }
+        val syncAgg = aggregateDirectChildren(relativePath)
+        val localPaths = localEntries.map { it.path }.toSet()
+        val cloudOnlyFolderSize = syncDb.getEntriesByParent("cloud_entries", relativePath)
+            .filter { !it.path.endsWith("/") && it.path !in localPaths }
+            .sumOf { it.size }
+        return entry.copy(
+            totalSize = folderSize + cloudOnlyFolderSize,
+            uploadedSize = syncAgg.uploadedSize,
+            redSize = syncAgg.redSize,
+            cloudOnlySize = cloudOnlyFolderSize
+        )
+    }
+
     /** 刷新父文件夹聚合进度（向上冒泡，更新当前视图中可见的祖先文件夹） */
     private fun refreshParentAggregates(entries: MutableList<CloudFileEntry>, changedPath: String): Boolean {
         var changed = false
@@ -2814,22 +2879,7 @@ class CloudPaneController(
         while (parent.isNotEmpty()) {
             val idx = entries.indexOfFirst { it.relativePath == parent && it.isDirectory }
             if (idx >= 0) {
-                // folderSize 与 listLocalFiles 保持同一口径：累加整棵子树的所有文件
-                val folderSize = syncDb.getEntriesByParent("local_entries", parent)
-                    .filter { entry -> !entry.path.endsWith("/") }
-                    .sumOf { it.size }
-                val syncAgg = aggregateDirectChildren(parent)
-                val localPaths = syncDb.getEntriesByParent("local_entries", parent)
-                    .map { it.path }.toSet()
-                val cloudOnlyFolderSize = syncDb.getEntriesByParent("cloud_entries", parent)
-                    .filter { !it.path.endsWith("/") && it.path !in localPaths }
-                    .sumOf { it.size }
-                entries[idx] = entries[idx].copy(
-                    totalSize = folderSize + cloudOnlyFolderSize,
-                    uploadedSize = syncAgg.uploadedSize,
-                    redSize = syncAgg.redSize,
-                    cloudOnlySize = cloudOnlyFolderSize
-                )
+                entries[idx] = applyFolderAggregate(entries[idx], parent)
                 changed = true
             }
             val next = parent.substringBeforeLast('/', "")
@@ -2892,4 +2942,9 @@ class CloudPaneController(
         val redSize: Long = 0,
         val cloudOnlySize: Long = 0
     )
+
+    private companion object {
+        /** 上传过程中目录聚合的最小刷新间隔（毫秒），用于合并高频文件事件。 */
+        const val MIN_AGGREGATE_INTERVAL_MS = 300L
+    }
 }
