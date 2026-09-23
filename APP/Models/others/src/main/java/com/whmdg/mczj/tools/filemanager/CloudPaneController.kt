@@ -728,7 +728,19 @@ class CloudPaneController(
                 }
                 finalQueue = completedFiles + toUpload.filter { (_, relPath) -> relPath !in skippedByHash }
             } else {
-                // 跳过已完成：重新获取 PENDING 文件（包含刚重置的）
+                // 跳过已完成：本轮视为「重新发起一次上传」。
+                // PAUSED 表示上一轮上传重试后仍失败，仅对上一轮有效；用户再次发起
+                // 上传并要求跳过已完成时，应把它重置为 PENDING 重新尝试。
+                withContext(Dispatchers.IO) {
+                    syncDb.getEntriesByStatus("local_entries", SyncStatus.PAUSED)
+                        .filter { it.path.startsWith(prefix) && !it.path.endsWith("/") }
+                        .forEach { entry ->
+                            // updateStatus(PENDING) 会将 fail_reason 置空
+                            syncDb.updateStatus("local_entries", entry.path, SyncStatus.PENDING)
+                            syncDb.updateUploadedSize("local_entries", entry.path, 0)
+                        }
+                }
+                // 重新获取 PENDING 文件（包含刚重置的 PAUSED）
                 val pendingAfterCheck = withContext(Dispatchers.IO) {
                     syncDb.getEntriesByStatus("local_entries", SyncStatus.PENDING)
                         .filter { it.path.startsWith(prefix) && !it.path.endsWith("/") }
