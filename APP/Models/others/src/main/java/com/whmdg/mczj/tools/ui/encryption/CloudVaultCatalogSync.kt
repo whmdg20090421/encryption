@@ -47,6 +47,34 @@ object CloudVaultCatalogSync {
     }
 
     /**
+     * 删除云端 .sync_meta/ 下指定保险箱的同步数据库（元数据）。
+     *
+     * 云端文件已不存在（HTTP 404）时视为删除成功，不抛出异常。
+     *
+     * @param client WebDAV 客户端
+     * @param configPath WebDAV 配置路径
+     * @param vaultName 保险箱名称
+     */
+    suspend fun deleteVaultDatabaseMetadata(
+        client: WebDavFileClient,
+        configPath: String,
+        vaultName: String
+    ) = withContext(Dispatchers.IO) {
+        val remotePath = vaultDbPath(configPath, vaultName)
+        val exists = try {
+            withTimeout(30_000L) { runInterruptible { client.exists(remotePath) } }
+        } catch (e: Exception) {
+            false
+        }
+        if (!exists) return@withContext
+        try {
+            withTimeout(30_000L) { runInterruptible { client.delete(remotePath) } }
+        } catch (e: Exception) {
+            if (e.message?.contains("404") != true) throw e
+        }
+    }
+
+    /**
      * 上传保险箱同步数据库到云端根目录 .sync_meta/。
      *
      * @param context 上下文
