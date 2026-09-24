@@ -276,7 +276,7 @@ class SyncEngine(
         remoteBasePath: String,
         syncDb: SyncDatabase,
         onProgress: (uploadedBytes: Long, totalBytes: Long) -> Unit,
-        onComplete: (success: Boolean, error: String?) -> Unit,
+        onComplete: (success: Boolean, error: String?, countBytes: Boolean) -> Unit,
         onStatusChange: () -> Unit = {}
     ) = withContext(Dispatchers.IO) {
         val localFile = File(vaultDir, relativePath.trimStart('/'))
@@ -286,7 +286,7 @@ class SyncEngine(
             val reason = if (localFile.isDirectory) "目标是文件夹，不是文件" else "本地文件已删除"
             CloudSyncLogger.logSync("SyncEngine", "跳过: $relativePath - $reason")
             syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
-            onComplete(false, reason)
+            onComplete(false, reason, countBytes = false)
             return@withContext
         }
 
@@ -295,9 +295,6 @@ class SyncEngine(
         val parentPath = remotePath.substringBeforeLast('/')
         val fileName = remotePath.substringAfterLast('/')
         CloudSyncLogger.logSync("SyncEngine", "开始上传: $relativePath -> $remotePath (大小: $fileSize)")
-
-        // ① 预检查：确保远程目录存在
-        ensureRemoteDir(remoteBasePath, relativePath)
 
         // ① 预检查：检查云端文件是否已存在
         val cloudExists = try {
@@ -325,7 +322,7 @@ class SyncEngine(
                     // 明文 MD5 相同 → 同一文件，跳过上传
                     CloudSyncLogger.logSync("SyncEngine", "跳过上传（文件内容相同）: $relativePath")
                     syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
-                    onComplete(true, null)
+                    onComplete(true, null, countBytes = true)
                     return@withContext
                 }
             }
@@ -339,11 +336,17 @@ class SyncEngine(
         // 上传时使用的明文 MD5 取自本地已记录的导入值
         val md5 = syncDb.getEntry("local_entries", relativePath)?.md5
 
-        // ② 上传（网络错误重试1次，等待3秒）
+        // ② 上传
+        // 普通网络错误：重试1次（等待3秒）。
+        // 423 Locked（服务端该路径残留隐式写锁）：优先级最高，命中后立即 DELETE 目标消除锁，
+        // 等3秒后重传一次；该分支若仍失败则直接 PAUSED 跳过，不再回普通重试。
         var uploadSuccess = false
         var lastError: String? = null
 
-        for (attempt in 1..2) {
+        // 普通重试已用次数；423 DELETE 重传已用次数
+        var normalRetryUsed = false
+        var lockedRetryUsed = false
+        while (true) {
             try {
                 var totalWritten = 0L
                 // 上传进度落库器：进度回调即时（每次 chunk 都上抛），
@@ -363,12 +366,27 @@ class SyncEngine(
                 break
             } catch (e: Exception) {
                 lastError = "${e.javaClass.simpleName}: ${e.message}"
-                logError("上传失败(第${attempt}次)", relativePath, remotePath, e)
+                logError("上传失败", relativePath, remotePath, e)
 
-                // 只有网络错误才重试，且只重试1次
-                if (!isRetryable(e) || attempt >= 2) {
+                // 423 专用分支（最高优先级）：任何一次尝试命中 423 都转入此分支
+                if (isLocked(e)) {
+                    if (lockedRetryUsed) {
+                        // 已 DELETE 重传过一次仍 423 → 放弃，标记 PAUSED 并跳过
+                        break
+                    }
+                    lockedRetryUsed = true
+                    // 删除服务端残留文件/锁，等 3 秒后重传
+                    CloudSyncLogger.logSync("SyncEngine", "命中423，DELETE 目标后重试: $relativePath")
+                    try { webdavClient.delete(remotePath) } catch (_: Exception) {}
+                    kotlinx.coroutines.delay(3000L)
+                    continue
+                }
+
+                // 普通路径：仅网络错误可重试，且只重试1次
+                if (!isRetryable(e) || normalRetryUsed) {
                     break
                 }
+                normalRetryUsed = true
                 kotlinx.coroutines.delay(3000L)
             }
         }
@@ -378,52 +396,30 @@ class SyncEngine(
             val reason = lastError ?: "上传失败"
             CloudSyncLogger.logSync("SyncEngine", "上传失败: $relativePath - $reason")
             syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
-            onComplete(false, reason)
+            // 423 跳过：该文件已尝试且放弃，需把其大小计入进度，否则进度条无法到达 100%
+            onComplete(false, reason, countBytes = lastError != null && isLockedMessage(lastError!!))
             return@withContext
         }
 
-        // ③ 验证：获取云端文件信息（大小 + 时间），一次调用复用
-        var cloudSizeAfterUpload: Long = -1
-        var cloudLastModified: String? = null
-        try {
-            val children = webdavClient.listChildren(parentPath)
-            val cloudFile = children?.find { it.name == fileName }
-            if (cloudFile != null) {
-                cloudSizeAfterUpload = cloudFile.size
-                cloudLastModified = java.time.Instant.ofEpochMilli(cloudFile.lastModified).toString()
-            }
-        } catch (e: Exception) {
-            logError("获取云端文件信息失败", relativePath, remotePath, e)
-        }
-
-        // ③ 验证：比较大小
-        if (cloudSizeAfterUpload >= 0 && cloudSizeAfterUpload != fileSize) {
-            val reason = "传输损坏: 本地${fileSize}字节 vs 云端${cloudSizeAfterUpload}字节"
-            CloudSyncLogger.logSync("SyncEngine", "验证失败: $relativePath - $reason")
-            logError("验证失败", relativePath, remotePath, IllegalStateException(reason))
-            try { webdavClient.delete(remotePath) } catch (_: Exception) {}
-            syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
-            onComplete(false, reason)
-            return@withContext
-        }
-
-        // ④ 记录：写入云端表
+        // ③ 记录：写入云端表
+        // PUT 返回 201 即代表服务端已按 Content-Length 完整接收（覆盖式原子写），
+        // 不再额外 PROPFIND 校验大小；大小取本地值，修改时间取上传时刻。
         val now = java.time.Instant.now().toString()
         syncDb.upsertEntry("cloud_entries", SyncEntryRow(
             path = relativePath,
-            size = if (cloudSizeAfterUpload >= 0) cloudSizeAfterUpload else fileSize,
-            lastModified = cloudLastModified ?: now,
+            size = fileSize,
+            lastModified = now,
             md5 = md5 ?: "",
             cloudHash = null,
             status = SyncStatus.COMPLETED,
             lastSyncTime = now,
-            failReason = if (cloudLastModified == null) "云端元数据获取失败" else null
+            failReason = null
         ))
 
         // ④ 更新本地表 → COMPLETED（解锁）
         CloudSyncLogger.logSync("SyncEngine", "上传成功: $relativePath (大小: $fileSize)")
         syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
-        onComplete(true, null)
+        onComplete(true, null, countBytes = true)
     }
 
     /** 判断文件是否需要重新上传（密文不变，仅以大小判定） */
@@ -440,6 +436,15 @@ class SyncEngine(
         if (msg.contains("429")) return true
         if (msg.contains("401") || msg.contains("403") || msg.contains("404")) return false
         return true
+    }
+
+    /** 是否为 423 Locked（服务端残留隐式写锁） */
+    private fun isLocked(e: Exception): Boolean = isLockedMessage(e.message ?: "")
+
+    /** 消息文本是否表示 423 Locked */
+    private fun isLockedMessage(message: String): Boolean {
+        val msg = message.lowercase()
+        return msg.contains("423") || msg.contains("locked")
     }
 
     // ── 内部方法 ──

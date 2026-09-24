@@ -77,6 +77,10 @@ object Client {
 
     private val okHttpClient by lazy {
         OkHttpClient.Builder()
+            // 服务端在并发下响应可能较慢（列目录、写元数据等），默认 10s 读超时过短，
+            // 放宽到 20s 以减少 readResponseHeaders 超时。
+            .readTimeout(20, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
             // 关闭 HTTP/2 多路复用：HTTP/1.1 下每个并行请求独占一条连接，
             // 避免大文件与小文件共享同一连接导致小文件超时。
             .protocols(listOf(okhttp3.Protocol.HTTP_1_1))

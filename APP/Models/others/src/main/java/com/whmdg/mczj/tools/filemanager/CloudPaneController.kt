@@ -496,14 +496,16 @@ class CloudPaneController(
                     }
                     lastUiTransferredBytes = uploadedBytes
                 },
-                onComplete = { success, error ->
+                onComplete = { success, error, countBytes ->
                     scope.launch {
                         // 清理内存进度
                         val currentProgress = state.syncTask.fileProgress.toMutableMap()
                         currentProgress.remove(relativePath)
                         state.syncTask = state.syncTask.copy(
                             fileProgress = currentProgress,
-                            completedFiles = if (success) 1 else 0
+                            completedFiles = if (success) 1 else 0,
+                            // 失败但需计入字节（如 423 跳过）时，进度补足到文件大小，保证进度条闭合
+                            transferredBytes = if (success || countBytes) state.syncTask.totalBytes else state.syncTask.transferredBytes
                         )
                         if (!success && error != null) {
                             android.widget.Toast.makeText(context, "上传失败: $error，请查看日志", android.widget.Toast.LENGTH_LONG).show()
@@ -892,11 +894,15 @@ class CloudPaneController(
                             is UploadEvent.Progress -> {
                                 val oldUploaded = activeFileBytes[event.path] ?: 0L
                                 val delta = event.uploaded - oldUploaded
+                                // 单文件重启（重试）：本次 uploaded 小于该文件上次记录的进度，
+                                // 说明 SyncEngine 对同一路径发起了重试（如 423 DELETE 后重传），
+                                // 进度从 0 重新累计。这是预期行为，不应判定为进度回退。
+                                val isFileRestart = event.uploaded < oldUploaded
                                 activeFileBytes[event.path] = event.uploaded
                                 val activeTotal = activeFileBytes.values.sum()
                                 val transferred = completedBytes.get() + activeTotal
-                                // 进度回退检测
-                                if (transferred < lastTransferredBytes) {
+                                // 进度回退检测（文件重启导致的下降跳过，其余下降仍视为异常）
+                                if (!isFileRestart && transferred < lastTransferredBytes) {
                                     val prevPct = if (state.syncTask.totalBytes > 0) lastTransferredBytes * 100.0 / state.syncTask.totalBytes else 0.0
                                     val currPct = if (state.syncTask.totalBytes > 0) transferred * 100.0 / state.syncTask.totalBytes else 0.0
                                     val diagInfo = buildString {
@@ -1064,6 +1070,7 @@ class CloudPaneController(
                             is UploadEvent.Complete -> {
                                 val oldUploaded = activeFileBytes[event.path] ?: 0L
                                 val remaining = event.fileSize - oldUploaded
+                                // 先移除该文件在途的部分字节（已计入 activeFileBytes 的部分不重复补）
                                 activeFileBytes.remove(event.path)
                                 fileSizes.remove(event.path)  // 清除文件大小记录
                                 completedFilesCount++
@@ -1072,6 +1079,12 @@ class CloudPaneController(
                                     completedBytes.addAndGet(event.fileSize)
                                 } else {
                                     failCount++
+                                    // 423 跳过等场景：文件已尝试且放弃，需按完整大小计入进度，
+                                    // 否则 transferred 永远小于 totalBytes，进度条无法到达 100%。
+                                    // 此处只补 addAndGet(fileSize)：在途部分已随上面的 remove 移除，不会重复累加。
+                                    if (event.countBytes) {
+                                        completedBytes.addAndGet(event.fileSize)
+                                    }
                                 }
                                 val currentProgress = state.syncTask.fileProgress.toMutableMap()
                                 currentProgress.remove(event.path)
@@ -1209,8 +1222,8 @@ class CloudPaneController(
                                 onProgress = { uploadedBytes, totalBytes ->
                                     eventChannel.trySend(UploadEvent.Progress(relPath, uploadedBytes, totalBytes))
                                 },
-                                onComplete = { success, error ->
-                                    eventChannel.trySend(UploadEvent.Complete(relPath, success, fileSize, error))
+                                onComplete = { success, error, countBytes ->
+                                    eventChannel.trySend(UploadEvent.Complete(relPath, success, fileSize, error, countBytes))
                                 },
                                 onStatusChange = {
                                     eventChannel.trySend(UploadEvent.StatusChange(relPath))
@@ -2932,7 +2945,7 @@ class CloudPaneController(
     /** 并发上传事件（通过 Channel 传递给更新器协程，避免多线程竞态） */
     private sealed class UploadEvent {
         data class Progress(val path: String, val uploaded: Long, val total: Long) : UploadEvent()
-        data class Complete(val path: String, val success: Boolean, val fileSize: Long, val error: String?) : UploadEvent()
+        data class Complete(val path: String, val success: Boolean, val fileSize: Long, val error: String?, val countBytes: Boolean) : UploadEvent()
         data class StatusChange(val path: String) : UploadEvent()
     }
 
