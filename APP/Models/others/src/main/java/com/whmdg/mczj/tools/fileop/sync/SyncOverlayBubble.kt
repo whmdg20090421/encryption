@@ -62,6 +62,9 @@ object SyncOverlayBubble {
     /** 贴边态数字字号（sp）：逐位竖排时缩小，避免单个数字溢出半圆可见区。 */
     private const val SNAPPED_TEXT_SIZE = 10f
 
+    /** 未贴边态进度文本字号（sp）。 */
+    private const val UN_SNAPPED_TEXT_SIZE = 13f
+
     /** 上传箭头单次穿越动画的时长（毫秒），循环播放。 */
     private const val ARROW_ANIM_DURATION_MS = 1400L
 
@@ -260,6 +263,7 @@ object SyncOverlayBubble {
      */
     private fun startArrowAnimation() {
         stopArrowAnimation()
+        setArrowVisible(true)
         val animator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
             duration = ARROW_ANIM_DURATION_MS
             repeatCount = android.animation.ValueAnimator.INFINITE
@@ -278,10 +282,21 @@ object SyncOverlayBubble {
         animator.start()
     }
 
-    /** 停止并释放上传箭头动画。 */
+    /** 停止并释放上传箭头动画，并隐藏箭头（贴边态不显示箭头）。 */
     private fun stopArrowAnimation() {
         arrowAnimator?.cancel()
         arrowAnimator = null
+        setArrowVisible(false)
+    }
+
+    /**
+     * 设置箭头可见性。贴边时箭头必须隐藏：`ValueAnimator.cancel()` 会冻结在当前帧，
+     * 若只 cancel 不隐藏，箭头会以半透明残留在半隐后的可见半边（表现为"卡住的半截图标"）。
+     */
+    private fun setArrowVisible(visible: Boolean) {
+        control?.contentView
+            ?.findViewById<android.widget.ImageView>(R.id.fx_bubble_arrow)
+            ?.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
     /**
@@ -376,35 +391,42 @@ object SyncOverlayBubble {
     }
 
     /**
-     * 按当前贴边方向渲染文本：
-     * - 贴左（START 边，整个球被推到屏幕左侧外）：文字靠右对齐，落在露出的右半边；
-     * - 贴右（END 边）：文字靠左对齐，落在露出的左半边；
-     * - 未贴边：横排居中，显示完整进度文本（如 `63.73`）。
+     * 按当前贴边方向渲染文本。
      *
-     * 贴边时可见区域只有半条约 25dp 宽，且要避免整数数字溢出。此时只取进度的整数位，
-     * 逐位数字各占一行、整体靠露出侧边缘对齐，例如 `56` → `5` / `6`；`100` → `1` / `0` / `0`；
-     * 一位数 → 单行数字居中。
+     * 关键点：`label` 是 match_parent（占满整个球），半隐贴边后屏幕只露出靠内的半边。
+     * 若仅用 gravity 靠边对齐，竖排数字会贴到整球的边缘、落到被裁掉的屏外半边。
+     * 因此贴边时统一用 [Gravity.CENTER] 让竖排数字列在每个字符行内居中，再通过
+     * [TextView.setTranslationX] 把整列从"整球中心"平移到"露出半球的中心"：
+     * - 露出右半（贴左 START，球左半移出屏）→ 向右平移 1/4 球宽；
+     * - 露出左半（贴右 END，球右半移出屏）→ 向左平移 1/4 球宽。
+     * 垂直方向始终保持整球居中，使数字列关于圆心上下对称。
+     *
+     * 未贴边时复位平移，横排居中显示完整进度文本（如 `63.73`）。
      */
     private fun renderLabel() {
         val label = labelViewById(R.id.fx_bubble_label) ?: return
+        label.gravity = Gravity.CENTER
         when (snapEdge) {
-            FxEdge.START -> {
-                label.gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            FxEdge.START, FxEdge.END -> {
                 label.textSize = SNAPPED_TEXT_SIZE
                 label.text = verticalLabelText()
-            }
-            FxEdge.END -> {
-                label.gravity = Gravity.CENTER_VERTICAL or Gravity.START
-                label.textSize = SNAPPED_TEXT_SIZE
-                label.text = verticalLabelText()
+                // 整球中心 → 露出半球中心的水平位移 = 半个球宽的一半 = 球宽的 1/4
+                val width = label.width.takeIf { it > 0 }?.toFloat() ?: rootWidth()
+                val quarter = width * 0.25f
+                label.translationX =
+                    if (snapEdge == FxEdge.START) quarter else -quarter
             }
             else -> {
-                label.gravity = Gravity.CENTER
-                label.textSize = 13f
+                label.textSize = UN_SNAPPED_TEXT_SIZE
                 label.text = rawLabelText
+                label.translationX = 0f
             }
         }
     }
+
+    /** 球内容根的宽度（用于 label 尚未测量时估算半宽位移）。 */
+    private fun rootWidth(): Float =
+        control?.contentView?.width?.toFloat() ?: 0f
 
     /**
      * 贴边竖排文本：只取进度整数位，逐位数字各占一行、每行水平居中，形成对齐的数字列。
