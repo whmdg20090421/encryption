@@ -286,7 +286,7 @@ class SyncEngine(
             val reason = if (localFile.isDirectory) "目标是文件夹，不是文件" else "本地文件已删除"
             CloudSyncLogger.logSync("SyncEngine", "跳过: $relativePath - $reason")
             syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
-            onComplete(false, reason, countBytes = false)
+            onComplete(false, reason, false)
             return@withContext
         }
 
@@ -322,7 +322,7 @@ class SyncEngine(
                     // 明文 MD5 相同 → 同一文件，跳过上传
                     CloudSyncLogger.logSync("SyncEngine", "跳过上传（文件内容相同）: $relativePath")
                     syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
-                    onComplete(true, null, countBytes = true)
+                    onComplete(true, null, true)
                     return@withContext
                 }
             }
@@ -397,7 +397,7 @@ class SyncEngine(
             CloudSyncLogger.logSync("SyncEngine", "上传失败: $relativePath - $reason")
             syncDb.updateStatus("local_entries", relativePath, SyncStatus.PAUSED, reason)
             // 423 跳过：该文件已尝试且放弃，需把其大小计入进度，否则进度条无法到达 100%
-            onComplete(false, reason, countBytes = lastError != null && isLockedMessage(lastError!!))
+            onComplete(false, reason, lastError != null && isLockedMessage(lastError!!))
             return@withContext
         }
 
@@ -419,7 +419,7 @@ class SyncEngine(
         // ④ 更新本地表 → COMPLETED（解锁）
         CloudSyncLogger.logSync("SyncEngine", "上传成功: $relativePath (大小: $fileSize)")
         syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
-        onComplete(true, null, countBytes = true)
+        onComplete(true, null, true)
     }
 
     /** 判断文件是否需要重新上传（密文不变，仅以大小判定） */
