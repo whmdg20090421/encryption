@@ -192,6 +192,27 @@ object Client {
             throw e.toDavException()
         }
 
+    /**
+     * 严格探测远端资源是否存在：绕过 collectionMemberCache，直连服务器做 PROPFIND。
+     *
+     * - 存在 → 返回元数据
+     * - 确认不存在（服务端返回 404）→ 返回 null
+     * - 网络错误 / 认证失败 / 服务端异常（结果未知）→ 抛出异常
+     *
+     * 用于"删除前查元数据""云端数据库存在性对账"等必须区分
+     * "确实不存在"与"暂时查不到"的场景，不可用吞异常的 exists() 替代。
+     */
+    @Throws(DavException::class, IOException::class)
+    fun probePropertiesOrNull(path: WebDavClientPath): Response? {
+        try {
+            return findProperties(
+                DavResource(getClient(path.authority), path.url), *FILE_PROPERTIES
+            )
+        } catch (e: NotFoundException) {
+            return null
+        }
+    }
+
     @Throws(DavException::class)
     fun findProperties(path: WebDavClientPath, noFollowLinks: Boolean): Response {
         synchronized(collectionMemberCache) {

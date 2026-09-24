@@ -623,20 +623,27 @@ fun CloudSyncScreen(
                 var deletePasswordVerifying by remember { mutableStateOf(false) }
 
                 /**
-                 * 删除云端路径（若存在）。云端文件不存在（HTTP 404）时视为已删除成功。
+                 * 删除云端保险箱（协议：先查元数据 → 存在才删根目录 → 根目录删完后再删元数据）。
+                 *
+                 * - 元数据（.sync_meta/<name>_vault_sync.db.7z）是云端是否已删除的判据：
+                 *   存在 → 云端未删除，继续执行；不存在（服务端 404）→ 已被删除，直接跳过。
+                 * - 探测使用 probeExists：仅服务端明确 404 才判定不存在，
+                 *   网络错误等结果未知的情况抛出异常，禁止吞掉后当作"已删除"。
+                 * - 根目录删除失败时不会删除元数据，保证元数据始终是最后删除的哨兵。
                  */
-                suspend fun deleteCloudIfExists(client: WebDavFileClient, remotePath: String) {
-                    val exists = try {
-                        client.exists(remotePath)
-                    } catch (e: Exception) {
-                        false
+                suspend fun deleteCloudVault(client: WebDavFileClient, config: WebDavServerConfig, vaultName: String) {
+                    val metaPath = CloudVaultCatalogSync.vaultDbPath(config.relativePath, vaultName)
+                    if (!client.probeExists(metaPath)) return  // 元数据不存在 = 云端已删除
+                    val vaultCloudPath = "${config.relativePath}/$vaultName"
+                    if (client.probeExists(vaultCloudPath)) {
+                        try {
+                            client.delete(vaultCloudPath)
+                        } catch (e: Exception) {
+                            if (e.message?.contains("404") != true) throw e
+                        }
                     }
-                    if (!exists) return
-                    try {
-                        client.delete(remotePath)
-                    } catch (e: Exception) {
-                        if (e.message?.contains("404") != true) throw e
-                    }
+                    // 根目录已删（或本就不存在），最后删除元数据
+                    CloudVaultCatalogSync.deleteVaultDatabaseMetadata(client, config.relativePath, vaultName)
                 }
 
                 /**
@@ -677,25 +684,21 @@ fun CloudSyncScreen(
                                     deletePhase = "本地数据删除完成"
                                 }
                                 "cloud" -> {
-                                    // 仅删除云端（删除云端文件与元数据并清理 Cloud DB，保留 Local DB）
+                                    // 仅删除云端（删除云端文件与元数据，作废本地的已同步状态）
                                     deletePhase = "正在删除云端数据"
                                     val config = accountState.config
                                     if (config != null && itemToDelete.type == "保险箱") {
                                         withContext(Dispatchers.IO) {
                                             val client = WebDavFileClient(config)
-                                            val vaultCloudPath = "${config.relativePath}/${itemToDelete.vaultName}"
                                             deleteCloudProgress = 0.2f
-                                            // 云端文件存在才删除；404 视为已删除成功
-                                            deleteCloudIfExists(client, vaultCloudPath)
-                                            deleteCloudProgress = 0.5f
-                                            // 删除云端元数据，确保云端扫描不再列出该保险箱
-                                            CloudVaultCatalogSync.deleteVaultDatabaseMetadata(
-                                                client, config.relativePath, itemToDelete.vaultName
-                                            )
+                                            // 先查元数据判定云端是否已删除，存在才删根目录，最后删元数据
+                                            deleteCloudVault(client, config, itemToDelete.vaultName)
                                             deleteCloudProgress = 0.8f
-                                            // 清理 Cloud DB（保留 Local DB）
+                                            // 云端快照已删除：清空 cloud_entries 并作废 local_entries 的
+                                            // COMPLETED 标记（"已同步"必须有云端凭据支撑，凭据消失即失效），
+                                            // 否则重新添加保险箱后陈旧状态会让文件显示为绿色已同步
                                             val syncDb = com.whmdg.mczj.tools.encryption.data.SyncDatabase.getInstance(context, itemToDelete.vaultName)
-                                            syncDb.writableDatabase.delete("cloud_entries", null, null)
+                                            syncDb.invalidateCloudState()
                                             deleteCloudProgress = 1f
                                         }
                                     }
@@ -731,15 +734,9 @@ fun CloudSyncScreen(
                                         if (config != null) {
                                             withContext(Dispatchers.IO) {
                                                 val client = WebDavFileClient(config)
-                                                val vaultCloudPath = "${config.relativePath}/${itemToDelete.vaultName}"
                                                 deleteCloudProgress = 0.3f
-                                                // 云端文件存在才删除；404 视为已删除成功
-                                                deleteCloudIfExists(client, vaultCloudPath)
-                                                deleteCloudProgress = 0.6f
-                                                // 删除云端元数据，确保云端扫描不再列出该保险箱
-                                                CloudVaultCatalogSync.deleteVaultDatabaseMetadata(
-                                                    client, config.relativePath, itemToDelete.vaultName
-                                                )
+                                                // 先查元数据判定云端是否已删除，存在才删根目录，最后删元数据
+                                                deleteCloudVault(client, config, itemToDelete.vaultName)
                                                 deleteCloudProgress = 1f
                                             }
                                         }
@@ -2296,12 +2293,17 @@ private fun DiffScanDialog(
 
                     // 手动点击"刷新差异文件"必须强制从云端下载最新数据库并整表替换，
                     // 不做 meta 缓存短路（否则云端已删除的文件会残留在本地）。
+                    // 探测必须用 probeExists：服务端明确 404 → false（云端确实已删除，作废本地状态）；
+                    // 网络错误等结果未知 → 抛异常走 catch（保持本地状态不动，不误判）。
                     val remoteExists = try {
-                        val remoteMeta = webdavClient.getFileMetadata(remotePath)
-                        if (remoteMeta == null) {
-                            withContext(Dispatchers.Main) { step2Text = "云端数据库不存在" }
-                            false
-                        } else true
+                        val exists = webdavClient.probeExists(remotePath)
+                        if (!exists) {
+                            // 云端同步数据库已确认被删除：本地 cloud_entries 镜像作废、
+                            // COMPLETED 重置为 PENDING，否则陈旧绿色状态与云端不一致
+                            syncDb.invalidateCloudState()
+                            withContext(Dispatchers.Main) { step2Text = "云端数据库不存在，已重置本地同步状态" }
+                        }
+                        exists
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) { step2Text = "检查失败: ${e.message}" }
                         AuditLog.error(

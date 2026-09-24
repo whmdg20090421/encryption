@@ -18,8 +18,8 @@ object CloudVaultCatalogSync {
         return "$base/.sync_meta"
     }
 
-    /** 构建云端同步数据库路径 */
-    private fun vaultDbPath(configPath: String, vaultName: String): String =
+    /** 构建云端同步数据库（元数据）路径。公开给删除流程做存在性探测。 */
+    fun vaultDbPath(configPath: String, vaultName: String): String =
         "${metaDirPath(configPath)}/${vaultName}_vault_sync.db.7z"
 
     /**

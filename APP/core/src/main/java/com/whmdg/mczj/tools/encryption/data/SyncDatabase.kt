@@ -507,6 +507,55 @@ class SyncDatabase private constructor(
         db.update(table, values, "path = ?", arrayOf(path))
     }
 
+    /**
+     * 云端已确认被删除时，作废本地所有"已同步"标记（单事务执行，失败回滚）。
+     *
+     * - cloud_entries 整表清空：云端快照已不存在，本地镜像必须作废；
+     * - local_entries 的 COMPLETED 重置为 PENDING 并清零已上传进度：
+     *   "已同步（绿色）"必须有云端凭据支撑，凭据消失后继续显示绿色即为假象；
+     * - sync_stats 的云端统计归零，diff_count 更新为本地文件数（全部成为差异）。
+     *
+     * 幂等：云端状态已作废时重复调用无副作用。
+     */
+    fun invalidateCloudState() {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete(TABLE_CLOUD, null, null)
+
+            val pending = ContentValues().apply {
+                put("status", SyncStatus.PENDING.name)
+                put("uploaded_size", 0)
+                put("fail_reason", null as String?)
+            }
+            db.update(TABLE_LOCAL, pending, "status = ?", arrayOf(SyncStatus.COMPLETED.name))
+
+            val localCount = db.rawQuery(
+                "SELECT COUNT(*) FROM $TABLE_LOCAL WHERE path NOT LIKE '%/'", null
+            ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+            val localSize = db.rawQuery(
+                "SELECT COALESCE(SUM(size), 0) FROM $TABLE_LOCAL WHERE path NOT LIKE '%/'", null
+            ).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+
+            db.execSQL(
+                """
+                UPDATE $TABLE_STATS SET
+                    cloud_file_count = 0,
+                    cloud_size = 0,
+                    local_file_count = ?,
+                    local_size = ?,
+                    diff_count = ?,
+                    last_update = ?
+                WHERE id = 1
+                """.trimIndent(),
+                arrayOf(localCount, localSize, localCount, java.time.Instant.now().toString())
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     /** 通用的条目更新方法，使用 transform 函数更新指定字段 */
     fun updateEntry(table: String, path: String, transform: (SyncEntryRow) -> SyncEntryRow) {
         val db = writableDatabase

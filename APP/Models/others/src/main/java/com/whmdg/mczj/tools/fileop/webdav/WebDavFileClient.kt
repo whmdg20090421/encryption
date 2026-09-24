@@ -136,6 +136,19 @@ class WebDavFileClient(private val config: WebDavServerConfig) {
         }
     }
 
+    /**
+     * 严格探测远端资源是否存在（不吞网络异常）。
+     *
+     * - 存在 → true
+     * - 服务端明确返回 404 → false（可安全认定"已被删除"）
+     * - 网络错误 / 认证失败等结果未知的情况 → 抛出异常，由调用方决定如何处理
+     *
+     * 与 [exists] 的区别：exists 把一切异常都当成"不存在"，
+     * 不能用于"确认已删除后才允许后续操作"的判断；此类场景必须用本方法。
+     */
+    fun probeExists(remotePath: String): Boolean =
+        Client.probePropertiesOrNull(path(remotePath)) != null
+
     /** 获取单个文件的元数据（size + lastModified），不存在返回 null */
     fun getFileMetadata(remotePath: String): WebDavFileInfo? {
         return try {
