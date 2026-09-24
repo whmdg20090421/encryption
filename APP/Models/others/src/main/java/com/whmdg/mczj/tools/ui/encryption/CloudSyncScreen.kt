@@ -716,6 +716,11 @@ fun CloudSyncScreen(
                                             // 本地记录存在才删除；不存在则视为已删除
                                             if (vaultService.getVault(itemToDelete.vaultId) != null) {
                                                 vaultService.removeVault(itemToDelete.vaultId, deleteFiles = true)
+                                            } else {
+                                                // 本地记录已不存在时 removeVault 不会执行，仍需清理同步库目录
+                                                com.whmdg.mczj.tools.encryption.data.SyncDatabase.closeInstance(context, itemToDelete.vaultName)
+                                                val syncDir = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/${itemToDelete.vaultName}")
+                                                if (syncDir.exists()) syncDir.deleteRecursively()
                                             }
                                             deleteLocalProgress = 1f
                                         }
@@ -738,17 +743,7 @@ fun CloudSyncScreen(
                                                 deleteCloudProgress = 1f
                                             }
                                         }
-
-                                        // 清理整个同步数据库目录
-                                        deletePhase = "正在清理同步数据"
-                                        withContext(Dispatchers.IO) {
-                                            // 先释放 SQLite 文件句柄，否则打开的 DB 文件无法删除，目录会残留
-                                            com.whmdg.mczj.tools.encryption.data.SyncDatabase.closeInstance(context, itemToDelete.vaultName)
-                                            val syncDir = File(com.whmdg.mczj.tools.AppDataPaths.encryption(context), "云盘同步/${itemToDelete.vaultName}")
-                                            if (syncDir.exists()) {
-                                                syncDir.deleteRecursively()
-                                            }
-                                        }
+                                        // 同步数据库已在删本地时随 removeVault 一并清理
                                     }
                                     // 云端已删，移除卡片
                                     syncItems.removeIf { it.id == itemToDelete.id }

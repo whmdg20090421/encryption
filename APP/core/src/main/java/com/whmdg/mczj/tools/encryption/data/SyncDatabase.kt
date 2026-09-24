@@ -111,6 +111,16 @@ class SyncDatabase private constructor(
             if (snapshot != null) submitMd5Batch(context, syncName, snapshot)
         }
 
+        /**
+         * 丢弃某保险箱尚未提交的 MD5 缓冲（不写库）。
+         * 删除保险箱时必须调用，避免残留缓冲在下次同名建库时把旧数据写回。
+         */
+        fun discardMd5Batch(syncName: String) {
+            synchronized(md5BatchLock) {
+                md5Pending.remove(syncName)
+            }
+        }
+
         private fun submitMd5Batch(context: Context, syncName: String, records: List<LocalMd5Record>) {
             if (records.isEmpty()) return
             try {

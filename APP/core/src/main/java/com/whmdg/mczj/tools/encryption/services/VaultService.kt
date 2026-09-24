@@ -331,10 +331,27 @@ class VaultService(private val context: Context) {
                 sizeDb.removeDescendants(dir.path.trimEnd('/'))
                 sizeDb.save(saveDir)
             } catch (e: Exception) {}
+            // 清理同步数据库目录，避免同名保险箱重建后读到旧的 cloud_entries。
+            // 独立于上面的 try：前面步骤失败也必须保证同步库被清理。
+            cleanSyncDatabase(rec.name)
         }
         _db.removeVault(id)
         _db.save(context)
         syncVaults()
+    }
+
+    /**
+     * 删除保险箱的本地同步数据库目录（`云盘同步/<vaultName>/`）。
+     *
+     * 先释放 [SyncDatabase] 缓存实例的文件句柄，否则打开的 DB 文件无法真正删除。
+     */
+    private fun cleanSyncDatabase(vaultName: String) {
+        try {
+            SyncDatabase.discardMd5Batch(vaultName)
+            SyncDatabase.closeInstance(context, vaultName)
+            val syncDir = File(AppDataPaths.encryption(context), "云盘同步/$vaultName")
+            if (syncDir.exists()) syncDir.deleteRecursively()
+        } catch (_: Exception) {}
     }
 
     /**
