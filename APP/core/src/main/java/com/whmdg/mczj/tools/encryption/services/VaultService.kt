@@ -325,6 +325,11 @@ class VaultService(private val context: Context) {
                 val dir = VaultPaths.resolveVault(context, rec.location, rec.relativePath)
                 SpecialPermissionVerifier.safeDelete(dir)
                 VaultPaths.purgeVaultArtifacts(context, dir, rec.name, rec.id)
+                // 清理该保险箱目录的大小缓存，避免同名/同路径重建后命中旧用量
+                val saveDir = AppDataPaths.fileManager(context)
+                val sizeDb = FolderSizeDb.load(saveDir)
+                sizeDb.removeDescendants(dir.path.trimEnd('/'))
+                sizeDb.save(saveDir)
             } catch (e: Exception) {}
         }
         _db.removeVault(id)
