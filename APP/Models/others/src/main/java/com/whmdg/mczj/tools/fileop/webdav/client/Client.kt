@@ -32,8 +32,11 @@ import java.util.WeakHashMap
 import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.Request
 import okhttp3.Route
+import java.util.concurrent.TimeUnit
 
 /**
  * WebDAV client path interface.
@@ -62,7 +65,28 @@ object Client {
     private val collectionMemberCache =
         Collections.synchronizedMap(WeakHashMap<WebDavClientPath, Response>())
 
-    private val okHttpClient by lazy { OkHttpClient() }
+    /**
+     * 并发上传支持的最大并行连接数，与 UI 的 `max_concurrency` 上限保持一致。
+     *
+     * HTTP/2 会在同一 host 上复用单条 TCP 连接、多路复用所有请求流；当多个大文件传输占满
+     * 连接级/流级窗口时，同连接上的小文件可能长时间等不到响应头而触发 read timeout。
+     * 改用 HTTP/1.1 后，OkHttp 会为每个并行请求各建一条独立连接，
+     * 使每个上传任务拥有自己的传输通道，互不抢占。
+     */
+    private const val MAX_PARALLEL_REQUESTS = 10
+
+    private val okHttpClient by lazy {
+        OkHttpClient.Builder()
+            // 关闭 HTTP/2 多路复用：HTTP/1.1 下每个并行请求独占一条连接，
+            // 避免大文件与小文件共享同一连接导致小文件超时。
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+            .connectionPool(ConnectionPool(MAX_PARALLEL_REQUESTS, 1, TimeUnit.MINUTES))
+            .dispatcher(Dispatcher().apply {
+                maxRequests = MAX_PARALLEL_REQUESTS
+                maxRequestsPerHost = MAX_PARALLEL_REQUESTS
+            })
+            .build()
+    }
 
     @Throws(IOException::class)
     private fun getClient(authority: Authority): OkHttpClient {

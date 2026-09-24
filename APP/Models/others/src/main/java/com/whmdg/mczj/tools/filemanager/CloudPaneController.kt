@@ -1748,10 +1748,10 @@ class CloudPaneController(
         }
     }
 
-    /** 同步任务的动态进度文本，保留两位小数；扫描阶段显示文件数（与应用内悬浮球一致）。 */
+    /** 同步任务的动态进度文本，保留两位小数（不含百分号）；扫描阶段显示文件数（与应用内悬浮球一致）。 */
     private fun formatSyncPercent(task: SyncTaskState): String =
         if (task.phase == SyncPhase.SCANNING) "${task.totalFiles}"
-        else String.format("%.2f%%", task.overallProgress * 100)
+        else String.format("%.2f", task.overallProgress * 100)
 
     /** 显示进度弹窗（从悬浮窗恢复为弹窗，phase 不变） */
     fun showProgressDialog() {

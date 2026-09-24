@@ -267,7 +267,7 @@ class SyncEngine(
      * 上传单个文件（完整流程）。
      *
      * ① 预检查：确保远程目录存在 → 检查云端文件 → 比较大小 → 比较明文 MD5 → 跳过或上传
-     * ② 上传（带重试，网络错误重试1次，等待1秒）
+     * ② 上传（带重试，网络错误重试1次，等待3秒）
      * ③ 验证：比较本地大小 vs 云端大小
      * ④ 记录：写入云端表（明文 MD5 取自上传前的本地记录）→ 更新本地表为 COMPLETED
      */
@@ -339,7 +339,7 @@ class SyncEngine(
         // 上传时使用的明文 MD5 取自本地已记录的导入值
         val md5 = syncDb.getEntry("local_entries", relativePath)?.md5
 
-        // ② 上传（网络错误重试1次，等待1秒）
+        // ② 上传（网络错误重试1次，等待3秒）
         var uploadSuccess = false
         var lastError: String? = null
 
@@ -369,7 +369,7 @@ class SyncEngine(
                 if (!isRetryable(e) || attempt >= 2) {
                     break
                 }
-                kotlinx.coroutines.delay(1000L)
+                kotlinx.coroutines.delay(3000L)
             }
         }
 

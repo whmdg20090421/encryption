@@ -4,6 +4,10 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.text.Layout
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.AlignmentSpan
 import android.view.Gravity
 import android.view.View
 import android.widget.TextView
@@ -55,17 +59,36 @@ object SyncOverlayBubble {
     /** 贴边半隐比例：隐藏一半，留一半在屏内。 */
     private const val HALF_HIDE = 0.5f
 
+    /** 贴边态数字字号（sp）：逐位竖排时缩小，避免单个数字溢出半圆可见区。 */
+    private const val SNAPPED_TEXT_SIZE = 10f
+
+    /** 上传箭头单次穿越动画的时长（毫秒），循环播放。 */
+    private const val ARROW_ANIM_DURATION_MS = 1400L
+
+    /** 箭头垂直行程相对自身高度的倍数：0.5× 在上方、-0.5× 在下方，使箭头完整穿出球体。 */
+    private const val ARROW_TRAVEL_FACTOR = 3f
+
+    /** 箭头峰值透明度（叠加 view 自身 alpha），保持淡雅不压过进度数字。 */
+    private const val ARROW_MAX_ALPHA = 0.5f
+
+    /** 渐显/渐隐各占动画进度的比例，其余中段保持峰值。 */
+    private const val ARROW_FADE_IN_FRACTION = 0.25f
+    private const val ARROW_FADE_OUT_FRACTION = 0.3f
+
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var control: FxControl? = null
 
     private var onBubbleClick: (() -> Unit)? = null
 
+    /** 球内上传箭头的循环动画；随悬浮球 show/dismiss 启停。 */
+    private var arrowAnimator: android.animation.ValueAnimator? = null
+
     /** 是否处于锁定态（锁定后禁用拖动与贴边，右下角显示锁图标）。 */
     private var locked = false
 
     /** 原始进度文本（未按贴边方向排版）。 */
-    private var rawLabelText: String = "0.00%"
+    private var rawLabelText: String = "0.00"
 
     /** 当前贴边方向：null 表示未贴边。 */
     private var snapEdge: FxEdge? = null
@@ -96,6 +119,7 @@ object SyncOverlayBubble {
                 control = existing
                 renderLabel()
                 if (!existing.isShowing) existing.show()
+                startArrowAnimation()
                 return@post
             }
 
@@ -127,6 +151,7 @@ object SyncOverlayBubble {
             control = c
             c.show()
             renderLabel()
+            startArrowAnimation()
         }
     }
 
@@ -144,6 +169,7 @@ object SyncOverlayBubble {
     fun dismiss() {
         mainHandler.post {
             mainHandler.removeCallbacks(snapRunnable)
+            stopArrowAnimation()
             control = null
             onBubbleClick = null
             locked = false
@@ -159,10 +185,11 @@ object SyncOverlayBubble {
         override fun onDragStart(control: FxControl) {
             cancelSnapCountdown()
             longPressConsumed = false
-            // 从贴边态开始拖动：立即恢复正常横排显示
+            // 从贴边态开始拖动：立即恢复正常横排显示并恢复箭头动画
             if (snapEdge != null) {
                 snapEdge = null
                 renderLabel()
+                startArrowAnimation()
             }
         }
 
@@ -221,6 +248,54 @@ object SyncOverlayBubble {
     private fun labelViewById(id: Int): TextView? =
         control?.contentView?.findViewById(id)
 
+    // ── 上传箭头动画 ──
+
+    /**
+     * 启动球内上传箭头的循环动画：箭头从球体下方进入（渐显），沿垂直轴向上平移穿过球心，
+     * 到球体上方时渐隐，随后回到起点循环。alpha 与位移由同一个 [android.animation.ValueAnimator]
+     * 的 0..1 进度驱动。
+     *
+     * 与标签同样不缓存 view 引用：FloatingX 重建窗口会替换 content view，
+     * 因此动画的每帧回调都从当前 [control] 重新查找箭头 view。
+     */
+    private fun startArrowAnimation() {
+        stopArrowAnimation()
+        val animator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = ARROW_ANIM_DURATION_MS
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            interpolator = android.view.animation.LinearInterpolator()
+            addUpdateListener { anim ->
+                val arrow = control?.contentView?.findViewById<android.widget.ImageView>(R.id.fx_bubble_arrow)
+                    ?: return@addUpdateListener
+                val fraction = anim.animatedValue as Float
+                // 从球心下方 (+0.5×行程) 平移到上方 (-0.5×行程)，穿过球体
+                arrow.translationY = (0.5f - fraction) * ARROW_TRAVEL_FACTOR * arrow.height
+                // 进入/穿出两端渐显渐隐，中段保持峰值，避免生硬闪现
+                arrow.alpha = ARROW_MAX_ALPHA * arrowAlphaFactor(fraction)
+            }
+        }
+        arrowAnimator = animator
+        animator.start()
+    }
+
+    /** 停止并释放上传箭头动画。 */
+    private fun stopArrowAnimation() {
+        arrowAnimator?.cancel()
+        arrowAnimator = null
+    }
+
+    /**
+     * 进度对应的透明度因子（0..1）：前 [ARROW_FADE_IN_FRACTION] 从 0 渐显，
+     * 后 [ARROW_FADE_OUT_FRACTION] 渐隐，中间保持 1。
+     */
+    private fun arrowAlphaFactor(fraction: Float): Float = when {
+        fraction <= 0f -> 0f
+        fraction >= 1f -> 0f
+        fraction < ARROW_FADE_IN_FRACTION -> fraction / ARROW_FADE_IN_FRACTION
+        fraction > 1f - ARROW_FADE_OUT_FRACTION -> (1f - fraction) / ARROW_FADE_OUT_FRACTION
+        else -> 1f
+    }
+
     // ── 贴边 ──
 
     /** 启动 5 秒贴边倒计时。 */
@@ -253,14 +328,16 @@ object SyncOverlayBubble {
             else -> return
         }
         snapEdge = edge
+        stopArrowAnimation()
         renderLabel()
         c.moveTo(x, cur.y, animate = true)
     }
 
-    /** 取消贴边：把球移动回屏内完整可见的位置。 */
+    /** 取消贴边：把球移动回屏内完整可见的位置，并恢复箭头动画。 */
     private fun unsnap(c: FxControl) {
         snapEdge = null
         renderLabel()
+        startArrowAnimation()
         clampIntoBounds(c, animate = true)
     }
 
@@ -302,22 +379,23 @@ object SyncOverlayBubble {
      * 按当前贴边方向渲染文本：
      * - 贴左（START 边，整个球被推到屏幕左侧外）：文字靠右对齐，落在露出的右半边；
      * - 贴右（END 边）：文字靠左对齐，落在露出的左半边；
-     * - 未贴边：横排居中，显示完整进度文本（如 `63.73%`）。
+     * - 未贴边：横排居中，显示完整进度文本（如 `63.73`）。
      *
-     * 贴边时可见区域只有半条约 25dp 宽，横排放不下完整文本；改用竖排三行，以小数点为界分成
-     * 整数部分 / 小数点 / 小数部分，例如 `63.73%` → `63` · `·` · `73`。
+     * 贴边时可见区域只有半条约 25dp 宽，且要避免整数数字溢出。此时只取进度的整数位，
+     * 逐位数字各占一行、整体靠露出侧边缘对齐，例如 `56` → `5` / `6`；`100` → `1` / `0` / `0`；
+     * 一位数 → 单行数字居中。
      */
     private fun renderLabel() {
         val label = labelViewById(R.id.fx_bubble_label) ?: return
         when (snapEdge) {
             FxEdge.START -> {
                 label.gravity = Gravity.CENTER_VERTICAL or Gravity.END
-                label.textSize = 11f
+                label.textSize = SNAPPED_TEXT_SIZE
                 label.text = verticalLabelText()
             }
             FxEdge.END -> {
                 label.gravity = Gravity.CENTER_VERTICAL or Gravity.START
-                label.textSize = 11f
+                label.textSize = SNAPPED_TEXT_SIZE
                 label.text = verticalLabelText()
             }
             else -> {
@@ -329,20 +407,24 @@ object SyncOverlayBubble {
     }
 
     /**
-     * 竖排文本：以小数点为界，整数部分 / 小数点 / 小数部分各占一行。
-     * 纯整数（无小数点，如扫描阶段的文件数）则原样逐字竖排。
-     * 例：`63.73%` → `63`、`·`、`73`；`128` → `1`、`2`、`8`。
+     * 贴边竖排文本：只取进度整数位，逐位数字各占一行、每行水平居中，形成对齐的数字列。
+     * 例：`56.73` → `5` / `6`；`100` → `1` / `0` / `0`；`7` → `7`。
+     * 非数字（扫描阶段文件数本身为整数，同样逐位竖排）。
      */
-    private fun verticalLabelText(): String {
-        val text = rawLabelText
-        val dot = text.indexOf('.')
-        if (dot < 0) return text.toCharArray().joinToString("\n")
-        val intPart = text.substring(0, dot).takeIf { it.isNotEmpty() } ?: "0"
-        val decimalPart = text.substring(dot + 1).takeWhile { it.isDigit() }
-        return if (decimalPart.isEmpty()) {
-            intPart
-        } else {
-            "$intPart\n·\n$decimalPart"
+    private fun verticalLabelText(): CharSequence {
+        val intPart = rawLabelText.substringBefore('.').filter { it.isDigit() }
+            .ifEmpty { "0" }
+        if (intPart.length <= 1) return intPart
+        val spannable = SpannableString(intPart.toCharArray().joinToString("\n"))
+        var start = 0
+        for (ch in intPart) {
+            spannable.setSpan(
+                AlignmentSpan.Standard(Layout.Alignment.ALIGN_CENTER),
+                start, start + 1,
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+            start += 2
         }
+        return spannable
     }
 }

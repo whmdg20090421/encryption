@@ -24,3 +24,4 @@ AUTH_SYSTEM_REVIEW.md
 tmp/
 应用安装包/
 dump.rdb
+**/build/

@@ -12,6 +12,15 @@
     android:layout_height="@dimen/sync_bubble_size"
     android:background="@drawable/bg_sync_bubble">
 
+    <ImageView
+        android:id="@+id/fx_bubble_arrow"
+        android:layout_width="18dp"
+        android:layout_height="18dp"
+        android:layout_gravity="center"
+        android:contentDescription="@null"
+        android:src="@drawable/ic_sync_bubble_upload_arrow"
+        android:alpha="0.25" />
+
     <TextView
         android:id="@+id/fx_bubble_label"
         android:layout_width="match_parent"
