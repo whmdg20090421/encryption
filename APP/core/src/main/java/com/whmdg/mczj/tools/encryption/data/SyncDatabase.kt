@@ -20,7 +20,7 @@ class SyncDatabase private constructor(
 ) : SQLiteOpenHelper(context, dbFile.absolutePath, null, DB_VERSION) {
 
     companion object {
-        private const val DB_VERSION = 4
+        private const val DB_VERSION = 5
         private const val TAG = "SyncDatabase"
 
         private val instances = mutableMapOf<String, SyncDatabase>()
@@ -159,7 +159,8 @@ class SyncDatabase private constructor(
                 cloud_hash    TEXT,
                 status        TEXT NOT NULL DEFAULT 'PENDING',
                 last_sync_time TEXT,
-                fail_reason   TEXT
+                fail_reason   TEXT,
+                dir_created   INTEGER NOT NULL DEFAULT 0
             )
         """.trimIndent())
 
@@ -209,6 +210,11 @@ class SyncDatabase private constructor(
             """.trimIndent())
             db.execSQL("INSERT INTO sync_stats (id) VALUES (1)")
         }
+        if (oldVersion < 5) {
+            // 目录条目：path 以 '/' 结尾，dir_created 标记该目录是否已在云端创建。
+            // 旧数据中不存在目录行，升级后首次遇到目录时按未创建（默认 0）处理即可。
+            db.execSQL("ALTER TABLE cloud_entries ADD COLUMN dir_created INTEGER NOT NULL DEFAULT 0")
+        }
     }
 
     // ── 查询 ──
@@ -219,6 +225,44 @@ class SyncDatabase private constructor(
         return cursor.use {
             if (it.moveToFirst()) cursorToRow(it) else null
         }
+    }
+
+    /**
+     * 查询单个目录条目的「是否已创建」标记。
+     * 目录条目的 path 以 '/' 结尾；不存在或非目录条目时返回 null。
+     */
+    fun getDirCreated(path: String): Boolean? {
+        val db = readableDatabase
+        val dirPath = if (path.endsWith("/")) path else "$path/"
+        val cursor = db.query(
+            "cloud_entries", arrayOf("dir_created"), "path = ?",
+            arrayOf(dirPath), null, null, null
+        )
+        return cursor.use {
+            if (it.moveToFirst()) it.getInt(0) != 0 else null
+        }
+    }
+
+    /** 写入/更新目录条目的「是否已创建」标记（目录条目 path 以 '/' 结尾）。 */
+    fun setDirCreated(path: String, created: Boolean) {
+        val db = writableDatabase
+        val dirPath = if (path.endsWith("/")) path else "$path/"
+        // 行不存在则插入一条目录条目（size=0、md5 为空、status=COMPLETED），存在则只更新 dir_created
+        val insertDir = ContentValues().apply {
+            put("path", dirPath)
+            put("size", 0L)
+            put("uploaded_size", 0L)
+            put("last_modified", java.time.Instant.now().toString())
+            put("md5", "")
+            put("status", SyncStatus.COMPLETED.name)
+            put("dir_created", if (created) 1 else 0)
+        }
+        db.insertWithOnConflict("cloud_entries", null, insertDir, SQLiteDatabase.CONFLICT_IGNORE)
+        db.update(
+            "cloud_entries",
+            ContentValues().apply { put("dir_created", if (created) 1 else 0) },
+            "path = ?", arrayOf(dirPath)
+        )
     }
 
     fun getAllEntries(table: String): List<SyncEntryRow> {
@@ -428,7 +472,8 @@ class SyncDatabase private constructor(
                     cloud_hash    TEXT,
                     status        TEXT NOT NULL DEFAULT 'PENDING',
                     last_sync_time TEXT,
-                    fail_reason   TEXT
+                    fail_reason   TEXT,
+                    dir_created   INTEGER NOT NULL DEFAULT 0
                 )
             """.trimIndent())
             snapshot.execSQL("CREATE INDEX idx_cloud_status ON cloud_entries(status)")
@@ -683,6 +728,7 @@ class SyncDatabase private constructor(
 
     private fun cursorToRow(cursor: android.database.Cursor): SyncEntryRow {
         val sizeIdx = cursor.getColumnIndex("uploaded_size")
+        val dirIdx = cursor.getColumnIndex("dir_created")
         return SyncEntryRow(
             path = cursor.getString(cursor.getColumnIndexOrThrow("path")),
             size = cursor.getLong(cursor.getColumnIndexOrThrow("size")),
@@ -692,7 +738,8 @@ class SyncDatabase private constructor(
             cloudHash = cursor.getString(cursor.getColumnIndexOrThrow("cloud_hash")),
             status = SyncStatus.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("status"))),
             lastSyncTime = cursor.getString(cursor.getColumnIndexOrThrow("last_sync_time")),
-            failReason = cursor.getString(cursor.getColumnIndexOrThrow("fail_reason"))
+            failReason = cursor.getString(cursor.getColumnIndexOrThrow("fail_reason")),
+            dirCreated = if (dirIdx >= 0) cursor.getInt(dirIdx) != 0 else false
         )
     }
 
@@ -707,6 +754,7 @@ class SyncDatabase private constructor(
             put("status", entry.status.name)
             put("last_sync_time", entry.lastSyncTime)
             put("fail_reason", entry.failReason)
+            put("dir_created", if (entry.dirCreated) 1 else 0)
         }
     }
 
@@ -786,5 +834,6 @@ data class SyncEntryRow(
     val cloudHash: String?,      // 云端返回的内部编码（唯一性）
     val status: SyncStatus,
     val lastSyncTime: String?,   // ISO8601
-    val failReason: String?
+    val failReason: String?,
+    val dirCreated: Boolean = false  // 仅 cloud_entries 的目录条目使用：该目录是否已在云端创建
 )

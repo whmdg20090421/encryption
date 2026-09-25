@@ -165,8 +165,8 @@ class SyncEngine(
             val localFile = File(vaultDir, relPath.trimStart('/'))
 
             val success = try {
-                // 确保远程目录存在
-                ensureRemoteDir(buildRemotePath(remoteBasePath, ""), relPath)
+                // 确保远程目录存在（此旧接口无 SyncDatabase，退化为无缓存的逐级创建）
+                ensureRemoteDir(buildRemotePath(remoteBasePath, ""), relPath, null)
                 webdavClient.uploadFile(localFile, remotePath) { bytesWritten ->
                     fileProgress[relPath] = fileProgress[relPath]!!.copy(uploadedBytes = bytesWritten)
                     val nowMs = System.currentTimeMillis()
@@ -336,6 +336,9 @@ class SyncEngine(
         // 上传时使用的明文 MD5 取自本地已记录的导入值
         val md5 = syncDb.getEntry("local_entries", relativePath)?.md5
 
+        // 确保远程父目录存在（惰性查表缓存，只补建缺失段）
+        ensureRemoteDir(remoteBasePath, relativePath, syncDb)
+
         // ② 上传
         // 普通网络错误：重试1次（等待3秒）。
         // 423 Locked（服务端该路径残留隐式写锁）：优先级最高，命中后立即 DELETE 目标消除锁，
@@ -343,9 +346,10 @@ class SyncEngine(
         var uploadSuccess = false
         var lastError: String? = null
 
-        // 普通重试已用次数；423 DELETE 重传已用次数
+        // 普通重试已用次数；423 DELETE 重传已用次数；404 目录重建重传已用次数
         var normalRetryUsed = false
         var lockedRetryUsed = false
+        var missingDirRetryUsed = false
         while (true) {
             try {
                 var totalWritten = 0L
@@ -379,6 +383,17 @@ class SyncEngine(
                     CloudSyncLogger.logSync("SyncEngine", "命中423，DELETE 目标后重试: $relativePath")
                     try { webdavClient.delete(remotePath) } catch (_: Exception) {}
                     kotlinx.coroutines.delay(3000L)
+                    continue
+                }
+
+                // 404：父目录实际不存在（缓存标记失真或外部删除）→ 作废标记并重建后重传一次
+                if (isNotFound(e)) {
+                    if (missingDirRetryUsed) {
+                        break
+                    }
+                    missingDirRetryUsed = true
+                    CloudSyncLogger.logSync("SyncEngine", "命中404，作废并重建远程目录后重试: $relativePath")
+                    recoverMissingDirs(remoteBasePath, relativePath, syncDb)
                     continue
                 }
 
@@ -436,6 +451,12 @@ class SyncEngine(
         if (msg.contains("429")) return true
         if (msg.contains("401") || msg.contains("403") || msg.contains("404")) return false
         return true
+    }
+
+    /** 是否为 404 Not Found（父目录不存在） */
+    private fun isNotFound(e: Exception): Boolean {
+        val msg = e.message?.lowercase() ?: ""
+        return msg.contains("404") || msg.contains("not found")
     }
 
     /** 是否为 423 Locked（服务端残留隐式写锁） */
@@ -506,38 +527,103 @@ class SyncEngine(
         }
     }
 
-    /** 确保远程目录存在，先检查再创建 */
-    private suspend fun ensureRemoteDir(basePath: String, relativePath: String) = withContext(Dispatchers.IO) {
-        // 收集所有需要存在的目录路径（从根到目标的父目录）
-        val allDirs = mutableListOf<String>()
-        // 1. basePath 本身（如 webdav/TF）
-        allDirs.add(basePath.trimEnd('/'))
-        // 2. relativePath 的各级父目录
-        val parts = relativePath.trimStart('/').split('/')
-        if (parts.size > 1) {
-            var current = basePath.trimEnd('/')
-            for (i in 0 until parts.size - 1) {
-                current = "$current/${parts[i]}"
-                allDirs.add(current)
+    /**
+     * 惰性确保远程父目录存在（带 cloud_entries 缓存）。
+     *
+     * 目录条目以 path 以 '/' 结尾存入 cloud_entries，dir_created 标记是否已确认创建。
+     * 从最深父目录向上逐级查缓存，命中「已创建」即停止向上；只补建缺失的那段，
+     * 每创建成功一级即标记 true。同一目录链首次上传付一次成本，后续文件查表即命中。
+     */
+    private suspend fun ensureRemoteDir(baseBasePath: String, relativePath: String, syncDb: SyncDatabase?) =
+        withContext(Dispatchers.IO) {
+            val basePath = baseBasePath.trimEnd('/')
+            // 收集从 basePath 到目标父目录的所有目录（自顶向下）
+            val chain = mutableListOf<String>()
+            chain.add(basePath)
+            val parts = relativePath.trimStart('/').split('/')
+            if (parts.size > 1) {
+                var current = basePath
+                for (i in 0 until parts.size - 1) {
+                    current = "$current/${parts[i]}"
+                    chain.add(current)
+                }
+            }
+
+            // 无 DB 时退化为逐级创建（旧行为）
+            if (syncDb == null) {
+                for (dir in chain) {
+                    try {
+                        webdavClient.mkdir(dir)
+                    } catch (e: Exception) { /* 已存在（405）也会走到这里，忽略 */ }
+                }
+                return@withContext
+            }
+
+            // 缓存预检查：从最深父目录向上，找一个已确认创建的祖先
+            var confirmedUpTo = 0  // chain 中 [0, confirmedUpTo) 均视为已存在
+            for (i in chain.indices.reversed()) {
+                if (syncDb.getDirCreated(chain[i]) == true) {
+                    confirmedUpTo = i + 1
+                    break
+                }
+            }
+
+            // 自顶向下补建缺失段
+            for (i in confirmedUpTo until chain.size) {
+                markDirCreated(syncDb, chain[i])
             }
         }
 
-        // 逐级检查，不存在才创建
-        for (dir in allDirs) {
-            val exists = try {
-                webdavClient.exists(dir)
-            } catch (_: Exception) {
-                false
-            }
-            if (!exists) {
-                try {
-                    webdavClient.mkdir(dir)
-                } catch (e: Exception) {
-                    logError("创建远程目录", dir, dir, e)
-                }
+    /**
+     * 标记目录为已创建：先尝试 MKCOL（已存在返回 405 视为成功），再写入 DB dir_created=true。
+     */
+    private suspend fun markDirCreated(syncDb: SyncDatabase, dir: String) = withContext(Dispatchers.IO) {
+        try {
+            webdavClient.mkdir(dir)
+        } catch (e: Exception) {
+            // 405 Method Not Allowed 表示目录已存在（正常情况，不记日志）；
+            // 其它异常先记录，交由后续上传的 404/失败兜底
+            if (!isAlreadyExists(e)) {
+                logError("创建远程目录", dir, dir, e)
             }
         }
+        syncDb.setDirCreated(dir, true)
     }
+
+    /** 是否为 405 Method Not Allowed（目录已存在） */
+    private fun isAlreadyExists(e: Exception): Boolean {
+        val msg = e.message?.lowercase() ?: ""
+        return msg.contains("405") || msg.contains("method not allowed")
+    }
+
+    /**
+     * 404 兜底：PUT 返回 404 说明云端某级目录实际不存在。
+     *
+     * 自底向上逐级把该链上的目录标记作废为 false（因为不知道缺的是哪一级，
+     * 从最深父目录一路向上作废），再从 basePath 自顶向下重建并标记 true。
+     */
+    private suspend fun recoverMissingDirs(baseBasePath: String, relativePath: String, syncDb: SyncDatabase) =
+        withContext(Dispatchers.IO) {
+            val basePath = baseBasePath.trimEnd('/')
+            val chain = mutableListOf<String>()
+            chain.add(basePath)
+            val parts = relativePath.trimStart('/').split('/')
+            if (parts.size > 1) {
+                var current = basePath
+                for (i in 0 until parts.size - 1) {
+                    current = "$current/${parts[i]}"
+                    chain.add(current)
+                }
+            }
+            // 自底向上作废标记
+            for (i in chain.indices.reversed()) {
+                syncDb.setDirCreated(chain[i], false)
+            }
+            // 自顶向下重建
+            for (dir in chain) {
+                markDirCreated(syncDb, dir)
+            }
+        }
 
     /** 构建远程路径 */
     private fun buildRemotePath(basePath: String, relativePath: String): String {
