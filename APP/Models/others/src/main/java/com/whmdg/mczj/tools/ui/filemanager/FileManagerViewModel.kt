@@ -26,6 +26,7 @@ import com.whmdg.mczj.tools.security.ShellException
 import com.whmdg.mczj.tools.security.ShellExecutor
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.util.ArchiveBrowser
+import com.whmdg.mczj.tools.util.ArchivePasswordBook
 import com.whmdg.mczj.tools.util.JBindingClient
 import com.whmdg.mczj.tools.util.CompressService
 import com.whmdg.mczj.tools.util.CompressPreviewCache
@@ -1897,6 +1898,8 @@ class FilePaneController(
         extractJob = null
     }
 
+    // ── 压缩包密码本 ──
+
     /** 打开压缩包（首次，无密码）。若需要密码则设置 archivePasswordRequest 触发弹窗 */
     fun openArchive(entry: FileEntry) {
         val panel = state
@@ -3020,6 +3023,15 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     /** 浏览模式下点击7z文件等待密码后要打开的文件 */
     var pending7zFileEntry by mutableStateOf<FileEntry?>(null)
 
+    /**
+     * 预览压缩包内文件时因缺少密码而挂起的条目。
+     *
+     * 内容加密压缩包的文件名不加密，可直接浏览目录树；只有真正要打开某个文件时
+     * 才会触发解压并索要密码。此字段保存「等待密码的预览条目」，密码弹窗验证成功后
+     * 据此自动续跑预览解压，无需用户再点一次。
+     */
+    var pendingArchivePreviewEntry by mutableStateOf<FileEntry?>(null)
+
     private val recycleBinJson = kotlinx.serialization.json.Json {
         ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true
     }
@@ -3223,7 +3235,35 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     fun compress(entries: List<FileEntry>, outputPath: String, format: String, level: Int, password: String, useAes: Boolean, encryptNames: Boolean, onProgress: (CompressService.ProgressInfo) -> Unit, onComplete: (Boolean, String?, String?) -> Unit) = focusedController.compress(entries, outputPath, format, level, password, useAes, encryptNames, onProgress, onComplete)
     fun cancelCompress() = focusedController.cancelCompress()
     fun cancelExtract() = focusedController.cancelExtract()
-    fun openArchive(entry: FileEntry) = focusedController.openArchive(entry)
+    /**
+     * 打开压缩包。头部加密（7z）时先遍历密码本，命中则直接打开并 Toast 提示；
+     * 未命中落到控制器的打开流程（弹密码框）。其他情况直接委托控制器。
+     */
+    fun openArchive(entry: FileEntry) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+            val isHeaderEncrypted = entry.name.endsWith(".7z", ignoreCase = true) &&
+                ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
+                    is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted
+            if (!isHeaderEncrypted) {
+                withContext(Dispatchers.Main) { focusedController.openArchive(entry) }
+                return@launch
+            }
+            beginArchivePasswordBook()
+            withContext(Dispatchers.Main) { focusedController.state.archiveLoading = true }
+            val hit = tryPasswordBookForArchive(entry)
+            if (hit != null) {
+                toastPasswordBookHit(hit)
+                withContext(Dispatchers.Main) { focusedController.state.archiveLoading = false }
+                return@launch
+            }
+            // 未命中：保留内存快照等待用户输入，交由控制器弹出密码框
+            withContext(Dispatchers.Main) {
+                focusedController.state.archivePasswordRequest = entry
+                focusedController.state.archiveLoading = false
+            }
+        }
+    }
     fun debugOpenArchive(entry: FileEntry) = focusedController.debugOpenArchive(entry)
     fun confirmOpenArchive() = focusedController.confirmOpenArchive()
     private fun enterArchiveMode(session: ArchiveBrowser.ArchiveSession) = panels.enterArchiveMode(session)
@@ -3869,7 +3909,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             openFile(context, entry.copy(path = destFile.absolutePath),
                 overrideImagePaths = imagePaths, archivePath = session.archivePath,
                 archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
-                archivePassword = password, archiveStartIndex = startIndex,
+                archivePassword = archivePasswordCache[session.archivePath] ?: password,
+                archiveStartIndex = startIndex,
                 archivePermissionLevel = permissionLevel, originPanel = ctrl)
             return
         }
@@ -3880,6 +3921,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             entryPaths = listOf(entry.path),
             target = ArchiveExtractionTarget.Directory(cacheDir.absolutePath),
             onPasswordRequired = {
+                // 记录待预览条目，密码弹窗验证成功后据此自动续跑预览
+                pendingArchivePreviewEntry = entry
                 ctrl.state.archivePasswordRequest = FileEntry(
                     path = session.archivePath,
                     name = session.archiveName,
@@ -3894,7 +3937,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     openFile(context, entry.copy(path = destFile.absolutePath),
                         overrideImagePaths = imagePaths, archivePath = session.archivePath,
                         archiveName = session.archiveName, archiveEntryPaths = imageEntryPaths,
-                        archivePassword = password, archiveStartIndex = startIndex,
+                        archivePassword = archivePasswordCache[session.archivePath] ?: password,
+                        archiveStartIndex = startIndex,
                         archivePermissionLevel = permissionLevel, originPanel = ctrl)
                 } else {
                     ctrl.state.archiveExtractError = RuntimeException("预览解压失败: ${error ?: "未知原因"}")
@@ -4153,7 +4197,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 if (ctrl.extractCancelFlag.get()) break
 
                 // 优先使用调用方传入的密码，其次使用缓存密码
-                val effectivePassword = password.ifEmpty { archivePasswordCache[entry.path] ?: "" }
+                var effectivePassword = password.ifEmpty { archivePasswordCache[entry.path] ?: "" }
 
                 // 若无密码，先探测是否需要密码（提取时任何加密类型都需要密码）
                 if (effectivePassword.isEmpty()) {
@@ -4161,8 +4205,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                     when (passwordCheckResult) {
                         is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted,
                         is ArchiveBrowser.PasswordCheckResult.ContentEncrypted -> {
-                            withContext(Dispatchers.Main) { onPasswordRequired(null) }
-                            return@launch
+                            // 弹窗前先遍历密码本；命中则用该密码继续，不弹窗
+                            // 此路径尚未确定压缩包内的目标条目，验证时退化为取最小文件
+                            beginArchivePasswordBook()
+                            val hit = tryPasswordBookForContent(entry.path, permLevel, entryPath = null)
+                            if (hit != null) {
+                                effectivePassword = hit
+                                archivePasswordCache[entry.path] = hit
+                                toastPasswordBookHit(hit)
+                                ArchivePasswordBook.release()
+                            } else {
+                                withContext(Dispatchers.Main) { onPasswordRequired(null) }
+                                return@launch
+                            }
                         }
                         is ArchiveBrowser.PasswordCheckResult.Error -> {
                             withContext(Dispatchers.Main) {
@@ -4327,7 +4382,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            val password = archivePassword.ifEmpty {
+            var password = archivePassword.ifEmpty {
                 session.password.ifEmpty { archivePasswordCache[archivePath] ?: "" }
             }
             Log.d("FileManagerVM", "extractFromArchive: archive=${File(archivePath).name}, 总条目=${allFiles.size}, archivePassword=${archivePassword.isNotEmpty()}, session.password=${session.password.isNotEmpty()}, cached=${archivePasswordCache[archivePath]?.isNotEmpty()}, 最终password长度=${password.length}")
@@ -4335,8 +4390,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 when (val check = ArchiveBrowser.checkPasswordRequired(context, archivePath, permLevel)) {
                     is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted,
                     is ArchiveBrowser.PasswordCheckResult.ContentEncrypted -> {
-                        withContext(Dispatchers.Main) { onPasswordRequired(null) }
-                        return@launch
+                        // 弹窗前先遍历密码本；用用户实际要提取的第一个条目试密码，命中即继续
+                        beginArchivePasswordBook()
+                        val hit = tryPasswordBookForContent(archivePath, permLevel, allFiles.first())
+                        if (hit != null) {
+                            password = hit
+                            archivePasswordCache[archivePath] = hit
+                            toastPasswordBookHit(hit)
+                            ArchivePasswordBook.release()
+                        } else {
+                            // 未命中：保留内存快照等待用户输入；取消时释放
+                            withContext(Dispatchers.Main) { onPasswordRequired(null) }
+                            return@launch
+                        }
                     }
                     is ArchiveBrowser.PasswordCheckResult.Error -> {
                         withContext(Dispatchers.Main) { onComplete(0, allFiles.size, "无法检测压缩包密码: ${check.errorMessage}") }
@@ -4413,6 +4479,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             if (successCount > 0 && password.isNotEmpty()) {
                 Log.d("FileManagerVM", "解压成功，缓存密码: archive=${File(archivePath).name}")
                 archivePasswordCache[archivePath] = password
+                // 用户手动输入并验证成功的密码写入密码本（密码本命中时回合已结束，此处为 no-op）
+                commitArchivePassword(password)
             }
             Log.d("FileManagerVM", "extractFromArchive 完成: 成功=$successCount/${allFiles.size}, lastError=$lastError")
             flushVaultMd5IfNeeded()
@@ -4524,17 +4592,173 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ── 压缩包密码本 ──
+
+    /**
+     * 开始一个密码尝试回合：把密码本一次性读入内存快照。
+     *
+     * 一个回合从「检测到需要密码」开始，到「密码命中」或「用户取消/放弃」结束：
+     * - 命中：写入内存后 [commitArchivePassword] 一次性写回，再释放；
+     * - 取消：直接 [releaseArchivePasswordBook] 丢弃，不产生写盘。
+     *
+     * 密码弹窗是串行的，故同一时刻至多一个回合。
+     */
+    internal fun beginArchivePasswordBook() {
+        ArchivePasswordBook.begin(context)
+    }
+
+    /** 释放当前密码本回合的内存快照（用户取消/放弃时调用，不写盘）。 */
+    internal fun releaseArchivePasswordBook() {
+        ArchivePasswordBook.release()
+    }
+
+    /**
+     * 用户手动输入并验证成功的密码：追加进内存快照（已存在则跳过），
+     * 一次性写回磁盘，结束回合。密码本命中时回合已结束，此处为 no-op。
+     */
+    internal fun commitArchivePassword(password: String) {
+        ArchivePasswordBook.add(password)
+        ArchivePasswordBook.commit(context)
+        ArchivePasswordBook.release()
+    }
+
+    /**
+     * 头部加密（7z）压缩包：用密码本逐个尝试。
+     *
+     * 复用用户手动输入密码时完全相同的验证函数 [openArchiveWithPassword]：
+     * 命中时该函数已完成「进入浏览模式 + 写入内存缓存 + 清空弹窗状态」。
+     *
+     * @return 命中的密码；全部未命中返回 null（内存快照保留，等待用户输入）
+     */
+    private suspend fun tryPasswordBookForArchive(entry: FileEntry): String? {
+        val candidates = ArchivePasswordBook.candidates()
+        if (candidates.isEmpty()) return null
+        Log.d("FileManagerVM", "密码本尝试(头部加密): ${entry.name}, 候选 ${candidates.size} 条")
+        for (pwd in candidates) {
+            if (openArchiveWithPassword(entry, pwd)) {
+                Log.d("FileManagerVM", "密码本命中(头部加密): ${entry.name}")
+                return pwd
+            }
+        }
+        Log.d("FileManagerVM", "密码本未命中(头部加密): ${entry.name}")
+        return null
+    }
+
+    /**
+     * 内容加密（ZIP/RAR/7z 内容加密）压缩包：用密码本逐个尝试。
+     *
+     * 验证就是「用目标条目真实解压」本身——用户点击了哪个文件，就拿哪个文件试密码：
+     * 密码正确则该条目能成功解出，命中后可继续用同一密码完成后续提取，无需再单独
+     * 挑一个「最小文件」重复验证。
+     *
+     * @param entryPath 用于验证的目标条目（用户点击/待提取的文件）
+     * @return 命中的密码；全部未命中返回 null
+     */
+    private suspend fun tryPasswordBookForContent(
+        archivePath: String,
+        permLevel: String,
+        entryPath: String
+    ): String? {
+        val candidates = ArchivePasswordBook.candidates()
+        if (candidates.isEmpty()) return null
+        val archiveName = File(archivePath).name
+        Log.d("FileManagerVM", "密码本尝试(内容加密): $archiveName, 验证条目=$entryPath, 候选 ${candidates.size} 条")
+        for (pwd in candidates) {
+            if (verifyArchiveContentPassword(archivePath, permLevel, entryPath, pwd)) {
+                Log.d("FileManagerVM", "密码本命中(内容加密): $archiveName")
+                return pwd
+            }
+        }
+        Log.d("FileManagerVM", "密码本未命中(内容加密): $archiveName")
+        return null
+    }
+
+    /**
+     * 验证内容加密压缩包的密码是否正确：用给定条目实际解压一次（只读入内存，不落盘），
+     * 成功即密码正确。
+     *
+     * 内容加密时文件名不加密，任意密码都能打开文件列表，唯一可靠的判据就是真实解压。
+     * 密码本遍历与密码弹窗验证共用本实现。
+     *
+     * @param entryPath 目标条目；为 null 时退化为取压缩包内最小的文件（无明确目标时用）
+     */
+    private suspend fun verifyArchiveContentPassword(
+        archivePath: String,
+        permLevel: String,
+        entryPath: String?,
+        password: String
+    ): Boolean {
+        // 有明确目标条目时直接提取验证，无需先打开压缩包列表
+        val probe = entryPath?.takeIf { it.isNotBlank() } ?: run {
+            val session = ArchiveBrowser.openArchive(
+                context = context,
+                archivePath = archivePath,
+                archiveName = File(archivePath).name,
+                permissionLevel = permLevel,
+                password = password
+            ).getOrNull() ?: return false
+            session.currentEntries.filter { !it.isDirectory }.minByOrNull { it.size }?.path
+        } ?: return false
+        return JBindingClient.extractSingleFileToSink(archivePath, probe, password) { }
+            .isSuccess
+    }
+
+    /** 主线程 Toast 提示密码本命中 */
+    private suspend fun toastPasswordBookHit(password: String) {
+        withContext(Dispatchers.Main) {
+            Toast.makeText(context, "已使用密码本中的密码：$password", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     // ── 压缩包浏览 ──
 
-    /** 密码弹窗验证回调：带密码重试打开压缩包 */
-    /** 带密码重试打开压缩包（挂起函数，供密码弹窗 onVerify 使用）。返回 true=成功 */
+    /**
+     * 压缩包密码弹窗的验证回调。
+     *
+     * 两种加密类型的「密码正确」判据不同，必须分开：
+     * - 头部加密（7z）：能打开压缩包即密码正确（文件名也加密，密码错无法打开）；
+     * - 内容加密（ZIP/RAR/7z内容加密）：任意密码都能打开文件列表，唯一可靠的判据是
+     *   实际提取一个文件能否成功，故复用 [verifyArchiveContentPassword]。
+     *
+     * 验证成功才写入密码本，并清空待处理的预览条目。返回 true 表示弹窗应关闭。
+     */
     suspend fun openArchiveWithPassword(entry: FileEntry, password: String): Boolean {
         val panel = currentPanel
         return try {
             val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
+            val headerEncrypted = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
+                is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted
+
+            if (!headerEncrypted) {
+                // 内容加密：必须实际提取验证，openArchive 无法证明密码正确。
+                // 优先用用户点击的待预览条目验证，无预览条目时退化为取最小文件。
+                val previewEntry = pendingArchivePreviewEntry
+                val ok = verifyArchiveContentPassword(
+                    archivePath = entry.path,
+                    permLevel = permLevel,
+                    entryPath = previewEntry?.path,
+                    password = password
+                )
+                if (!ok) {
+                    Log.w("FileMgr", "压缩包密码错误（内容加密，实际提取验证失败）")
+                    return false
+                }
+                archivePasswordCache[entry.path] = password
+                commitArchivePassword(password)
+                withContext(Dispatchers.Main) {
+                    panel.archivePasswordRequest = null
+                    pending7zFileEntry = null
+                    pendingArchivePreviewEntry = null
+                }
+                // 验证成功后自动续跑被密码中断的预览，无需用户再点一次
+                if (previewEntry != null) {
+                    withContext(Dispatchers.Main) { openArchiveFile(context, previewEntry) }
+                }
+                return true
+            }
+
             val currentPathVal = panel.path.fileSystemPath
             val currentEntriesVal = panel.entries
-
             val result = ArchiveBrowser.openArchive(
                 context = context,
                 archivePath = entry.path,
@@ -4548,6 +4772,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             result.fold(
                 onSuccess = { session ->
                     archivePasswordCache[entry.path] = password
+                    // 头部加密：能打开即密码正确
+                    commitArchivePassword(password)
                     withContext(Dispatchers.Main) {
                         enterArchiveMode(session)
                         panel.archivePasswordRequest = null
@@ -4590,6 +4816,12 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
      */
 
 
+
+    override fun onCleared() {
+        // 密码本回合可能因弹窗未关闭而残留，ViewModel 销毁时兜底释放内存快照
+        ArchivePasswordBook.release()
+        super.onCleared()
+    }
 
     companion object {
         var MAX_HISTORY_SIZE = 100

@@ -3667,6 +3667,8 @@ fun FileManagerScreen(
                 showArchiveExtractionPasswordDialog = false
                 pendingVaultExtractionSession?.dispose()
                 pendingVaultExtractionSession = null
+                // 取消/关闭弹窗：释放密码本内存快照（不写盘）
+                vm.releaseArchivePasswordBook()
             },
             onVerify = { password ->
                 showArchiveExtractionPasswordDialog = false
@@ -5537,6 +5539,7 @@ fun FileManagerScreen(
                                 extractPasswordInput = ""
                                 extractPasswordError = null
                                 vm.cancelExtract()
+                                vm.releaseArchivePasswordBook()
                             }) {
                                 Text("取消", color = MaterialTheme.colorScheme.primary)
                             }
@@ -5754,6 +5757,9 @@ fun FileManagerScreen(
             onDismiss = {
                 vm.currentPanel.archivePasswordRequest = null
                 vm.pending7zFileEntry = null
+                vm.pendingArchivePreviewEntry = null
+                // 取消/关闭弹窗：释放密码本内存快照（不写盘）
+                vm.releaseArchivePasswordBook()
             },
             onVerify = { password ->
                 val ok = vm.openArchiveWithPassword(archivePwdEntry, password)

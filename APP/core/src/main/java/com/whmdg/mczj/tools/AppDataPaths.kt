@@ -47,6 +47,11 @@ object AppDataPaths {
         return dir
     }
 
+    /** 压缩包密码本文件（每行一个密码，UTF-8） */
+    fun archivePasswordBook(context: Context): File {
+        return File(fileManager(context), "压缩包密码本.txt")
+    }
+
     /** 加密模块目录 */
     fun encryption(context: Context): File {
         val dir = File(root(context), "加密模块")
