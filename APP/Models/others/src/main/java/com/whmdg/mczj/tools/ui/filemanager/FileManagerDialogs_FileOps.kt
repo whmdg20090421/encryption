@@ -735,8 +735,8 @@ private fun AppsGrid(
 private data class OpenWithCell(
     val label: String,
     val icon: ImageVector?,
-    val onClick: () -> Unit,
-    val appPackage: String? = null
+    val appPackage: String? = null,
+    val onClick: () -> Unit
 )
 
 /** 通用格子网格：3 列，图标（正方形）+ 文字，整页可纵向滑动 */
