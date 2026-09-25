@@ -1775,6 +1775,69 @@ fun FileManagerScreen(
                         }
                     }
                 }
+                // 操作失败错误弹窗（标题 + 概要 + 可滑动详情 + 关闭）
+                val errorInfo = cloudStateForOverlay.errorDialogInfo
+                if (errorInfo != null) {
+                    Dialog(
+                        onDismissRequest = { cloudStateForOverlay.errorDialogInfo = null },
+                        properties = DialogProperties(usePlatformDefaultWidth = false)
+                    ) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(DialogWidthFraction),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Error,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = errorInfo.title,
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                                Text(
+                                    text = errorInfo.message,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                HorizontalDivider()
+                                Box(modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
+                                    val scrollState = rememberScrollState()
+                                    Column(modifier = Modifier.verticalScroll(scrollState)) {
+                                        Text(
+                                            text = errorInfo.detail,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    TextButton(onClick = {
+                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("error", "${errorInfo.title}\n${errorInfo.message}\n\n${errorInfo.detail}"))
+                                        android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+                                    }) { Text("复制") }
+                                    Spacer(Modifier.width(8.dp))
+                                    TextButton(onClick = { cloudStateForOverlay.errorDialogInfo = null }) { Text("关闭") }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // ── 文件夹大小异常弹窗（>100% 时自动触发） ──

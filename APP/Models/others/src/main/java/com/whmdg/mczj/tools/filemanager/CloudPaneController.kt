@@ -96,6 +96,8 @@ class CloudPaneController(
         var uploadConflictDialog by mutableStateOf<UploadConflictState?>(null)
         /** 进度异常弹窗（为 null 时隐藏） */
         var anomalyDialogInfo by mutableStateOf<AnomalyDialogInfo?>(null)
+        /** 操作失败错误弹窗（为 null 时隐藏） */
+        var errorDialogInfo by mutableStateOf<ErrorDialogInfo?>(null)
         /** 上传功能是否被禁用（用户取消下载覆盖时设置） */
         var uploadDisabled by mutableStateOf(false)
         /** 文件夹大小异常：需要重新计算的路径集合 */
@@ -142,6 +144,13 @@ class CloudPaneController(
 
     data class AnomalyDialogInfo(
         val summary: String,
+        val detail: String
+    )
+
+    /** 操作失败错误弹窗：标题 + 错误概要 + 可滑动的详细信息 */
+    data class ErrorDialogInfo(
+        val title: String,
+        val message: String,
         val detail: String
     )
 
@@ -508,7 +517,16 @@ class CloudPaneController(
                             transferredBytes = if (success || countBytes) state.syncTask.totalBytes else state.syncTask.transferredBytes
                         )
                         if (!success && error != null) {
-                            android.widget.Toast.makeText(context, "上传失败: $error，请查看日志", android.widget.Toast.LENGTH_LONG).show()
+                            state.errorDialogInfo = ErrorDialogInfo(
+                                title = "上传失败",
+                                message = error,
+                                detail = buildString {
+                                    appendLine("操作: 上传单个文件")
+                                    appendLine("文件: $relativePath")
+                                    appendLine("错误: $error")
+                                    appendLine("时间: ${java.time.LocalDateTime.now()}")
+                                }
+                            )
                         }
 
                         // 关闭进度弹窗，上传 cloud.db（自带弹窗）
@@ -1455,7 +1473,17 @@ class CloudPaneController(
                         withContext(Dispatchers.IO) {
                             syncDb.updateStatus("local_entries", relPath, SyncStatus.PAUSED, "下载失败")
                         }
-                        android.widget.Toast.makeText(context, "下载失败: $fileName", android.widget.Toast.LENGTH_SHORT).show()
+                        state.errorDialogInfo = ErrorDialogInfo(
+                            title = "下载失败",
+                            message = "下载文件失败：$fileName",
+                            detail = buildString {
+                                appendLine("操作: 下载单个文件")
+                                appendLine("文件: $fileName")
+                                appendLine("路径: $relPath")
+                                appendLine("原因: 云端文件下载或校验未通过")
+                                appendLine("时间: ${java.time.LocalDateTime.now()}")
+                            }
+                        )
                     }
 
                     // 清理本文件的内存进度
@@ -1495,7 +1523,16 @@ class CloudPaneController(
                 state.syncTask = SyncTaskState()
                 state.onCancelUpload = null
                 withContext(Dispatchers.Main) {
-                    android.widget.Toast.makeText(context, "下载失败: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                    state.errorDialogInfo = ErrorDialogInfo(
+                        title = "下载失败",
+                        message = "下载任务异常：${e.message}",
+                        detail = buildString {
+                            appendLine("操作: 下载任务")
+                            appendLine("异常: ${e.javaClass.name}: ${e.message}")
+                            e.cause?.let { appendLine("原因: ${it.javaClass.simpleName}: ${it.message}") }
+                            appendLine("时间: ${java.time.LocalDateTime.now()}")
+                        }
+                    )
                 }
             } finally {
                 SyncOverlayBubble.dismiss()
@@ -1616,7 +1653,17 @@ class CloudPaneController(
                 onComplete?.invoke()
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    android.widget.Toast.makeText(context, "删除云端失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                    state.errorDialogInfo = ErrorDialogInfo(
+                        title = "删除失败",
+                        message = "删除云端文件失败：${e.message}",
+                        detail = buildString {
+                            appendLine("操作: 删除云端文件")
+                            appendLine("路径: $relativePath")
+                            appendLine("异常: ${e.javaClass.name}: ${e.message}")
+                            e.cause?.let { appendLine("原因: ${it.javaClass.simpleName}: ${it.message}") }
+                            appendLine("时间: ${java.time.LocalDateTime.now()}")
+                        }
+                    )
                 }
                 onComplete?.invoke()
             }
@@ -1691,7 +1738,17 @@ class CloudPaneController(
                 onComplete?.invoke()
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    android.widget.Toast.makeText(context, "删除失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                    state.errorDialogInfo = ErrorDialogInfo(
+                        title = "删除失败",
+                        message = "删除本地与云端文件失败：${e.message}",
+                        detail = buildString {
+                            appendLine("操作: 同时删除本地和云端")
+                            appendLine("路径: $relativePath")
+                            appendLine("异常: ${e.javaClass.name}: ${e.message}")
+                            e.cause?.let { appendLine("原因: ${it.javaClass.simpleName}: ${it.message}") }
+                            appendLine("时间: ${java.time.LocalDateTime.now()}")
+                        }
+                    )
                 }
                 onComplete?.invoke()
             }
