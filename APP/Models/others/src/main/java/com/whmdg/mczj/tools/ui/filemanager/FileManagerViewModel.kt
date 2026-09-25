@@ -3243,8 +3243,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
             val isHeaderEncrypted = entry.name.endsWith(".7z", ignoreCase = true) &&
-                ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
-                    is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted
+                (ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
+                    is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted)
             if (!isHeaderEncrypted) {
                 withContext(Dispatchers.Main) { focusedController.openArchive(entry) }
                 return@launch
@@ -4657,7 +4657,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun tryPasswordBookForContent(
         archivePath: String,
         permLevel: String,
-        entryPath: String
+        entryPath: String?
     ): String? {
         val candidates = ArchivePasswordBook.candidates()
         if (candidates.isEmpty()) return null
@@ -4726,8 +4726,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val panel = currentPanel
         return try {
             val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
-            val headerEncrypted = ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
-                is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted
+            val headerEncrypted = (ArchiveBrowser.checkPasswordRequired(context, entry.path, permLevel)
+                is ArchiveBrowser.PasswordCheckResult.HeaderEncrypted)
 
             if (!headerEncrypted) {
                 // 内容加密：必须实际提取验证，openArchive 无法证明密码正确。
