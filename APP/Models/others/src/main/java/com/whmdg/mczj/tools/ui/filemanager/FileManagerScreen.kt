@@ -542,9 +542,6 @@ fun FileManagerScreen(
     // 文件操作管理器进度（新架构）
     val fileOpManagerProgress by FileOperationManager.progress.collectAsState()
 
-    // ── 外部打开警告 ──
-    var forceOpenError by remember { mutableStateOf<String?>(null) }
-
     // ── 快捷访问 ──
     val quickAccessPrefs = context.getSharedPreferences(AppDataPaths.PREFS_QUICK_ACCESS, Context.MODE_PRIVATE)
     val qaJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
@@ -3181,25 +3178,26 @@ fun FileManagerScreen(
         }
     }
 
-    // ── 外部打开警告对话框 ──
-    vm.pendingExternalEntry?.let { entry ->
-        StandardDialog(
-            onDismissRequest = { vm.pendingExternalEntry = null },
-            title = { Text("无法打开文件") },
-            text = { Text("该文件「${entry.name}」可能无法使用外部应用打开，是否强行打开？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.pendingExternalEntry = null
-                    val error = vm.forceOpenExternalFile(context, entry)
-                    if (error != null) forceOpenError = error
-                }) {
-                    Text("强行打开")
-                }
+    // ── 使用应用打开（3×3 应用内 / 3×4 第三方应用）选择面板 ──
+    vm.pendingOpenWithEntry?.let { entry ->
+        OpenWithDialog(
+            showAppsPage = vm.openWithShowApps,
+            appList = vm.openWithAppList,
+            onDismiss = { vm.pendingOpenWithEntry = null; vm.openWithShowApps = false },
+            onShowApps = {
+                vm.openWithAppList = vm.queryOpenWithApps(context, entry)
+                vm.openWithShowApps = true
             },
-            dismissButton = {
-                TextButton(onClick = { vm.pendingExternalEntry = null }) {
-                    Text("取消")
-                }
+            onBackToBuiltIn = { vm.openWithShowApps = false },
+            onBuiltIn = { method ->
+                vm.pendingOpenWithEntry = null
+                vm.openWithShowApps = false
+                vm.openBuiltIn(context, entry, method)
+            },
+            onLaunchApp = { app ->
+                vm.pendingOpenWithEntry = null
+                vm.openWithShowApps = false
+                vm.launchOpenWithApp(context, entry, app)
             }
         )
     }
@@ -3411,39 +3409,6 @@ fun FileManagerScreen(
         ErrorDialog(
             error = error,
             onDismiss = { vm.currentPanel.archiveExtractError = null }
-        )
-    }
-
-    // ── 强行打开失败详情 ──
-    if (forceOpenError != null) {
-        StandardDialog(
-            onDismissRequest = { forceOpenError = null },
-            title = { Text("打开失败", color = MaterialTheme.colorScheme.error) },
-            text = {
-                val scrollState = rememberScrollState()
-                Box(modifier = Modifier.heightIn(max = 240.dp).verticalScroll(scrollState)) {
-                    Text(
-                        text = forceOpenError!!,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                    )
-                }
-            },
-            confirmButton = {
-                Row {
-                    OutlinedButton(onClick = {
-                        val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                        cb.setPrimaryClip(android.content.ClipData.newPlainText("Error Info", forceOpenError))
-                        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-                    }) {
-                        Text("复制")
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Button(onClick = { forceOpenError = null }) {
-                        Text("关闭")
-                    }
-                }
-            }
         )
     }
 

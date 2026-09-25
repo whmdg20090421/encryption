@@ -3009,8 +3009,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
     var jxlPackZip by mutableStateOf(false)
         private set
-    var pendingExternalEntry by mutableStateOf<FileEntry?>(null)
     var pendingApkEntry by mutableStateOf<FileEntry?>(null)
+
+    /** 「使用应用打开」选择面板的当前文件；非空时由 UI 渲染选择面板（第一页应用内 / 第二页第三方应用） */
+    var pendingOpenWithEntry by mutableStateOf<FileEntry?>(null)
+    /** 选择面板是否处于第二页（第三方应用列表） */
+    var openWithShowApps by mutableStateOf(false)
+    /** 第二页可打开该文件的第三方应用列表 */
+    var openWithAppList by mutableStateOf(listOf<OpenWithApp>())
     /** 保险箱大文件（视频/压缩包/APK 等）打开前的解密确认；非空时由 UI 弹窗询问 */
     var pendingVaultDecryptEntry by mutableStateOf<FileEntry?>(null)
     var sevenZipInfo by mutableStateOf<ArchiveBrowser.SevenZipInfo?>(null)
@@ -4110,34 +4116,101 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             context.startActivity(VideoPlayerActivity.createVideoIntent(context, entry.path))
             return
         }
-        // 外部 Intent
+        // 未知类型：弹出「使用应用打开」选择面板（第一页应用内打开，第二页第三方应用）
+        DiagnosticLog.log("OpenFile", "未知类型，弹出选择面板: ${entry.name}")
+        pendingOpenWithEntry = entry
+        openWithShowApps = false
+        openWithAppList = emptyList()
+    }
+
+    /** 选择面板中「应用内打开」的方式 */
+    enum class BuiltInOpenMethod { DOCUMENT, IMAGE, ARCHIVE }
+
+    /** 选择面板中一个可打开该文件的第三方应用 */
+    data class OpenWithApp(
+        val packageName: String,
+        val activityName: String,
+        val label: String
+    )
+
+    /** 第一页：使用应用内方式打开当前文件（任意文件都可作为文本读取） */
+    fun openBuiltIn(context: Context, entry: FileEntry, method: BuiltInOpenMethod) {
+        DiagnosticLog.log("OpenWith", "应用内打开 method=$method file=${entry.name}")
+        try {
+            when (method) {
+                BuiltInOpenMethod.DOCUMENT ->
+                    context.startActivity(ViewerActivity.createTextIntent(context, entry.path))
+                BuiltInOpenMethod.IMAGE -> {
+                    val imagePaths = currentPanel.entries
+                        .filter {
+                            !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in
+                                com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS
+                        }
+                        .map { it.path }
+                    val startIndex = imagePaths.indexOf(entry.path).coerceAtLeast(0)
+                    context.startActivity(
+                        ViewerActivity.createImageIntent(
+                            context, entry.path, imagePaths, startIndex, totalCount = imagePaths.size
+                        )
+                    )
+                }
+                BuiltInOpenMethod.ARCHIVE -> openArchive(entry)
+            }
+        } catch (e: Exception) {
+            DiagnosticLog.log("OpenWith", "应用内打开失败: ${e.javaClass.simpleName}: ${e.message}")
+            Toast.makeText(context, "无法打开文件: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** 查询能处理当前文件的第三方应用列表（ACTION_VIEW + 该文件 mime 类型） */
+    fun queryOpenWithApps(context: Context, entry: FileEntry): List<OpenWithApp> {
+        val apps = mutableListOf<OpenWithApp>()
         try {
             val uri = androidx.core.content.FileProvider.getUriForFile(
                 context, "${context.packageName}.fileprovider", File(entry.path)
             )
             val extension = entry.name.substringAfterLast('.', "").lowercase()
-            val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
-            DiagnosticLog.log("OpenFile", "uri=$uri ext='$extension' mime=$mimeType")
+            val mimeType = android.webkit.MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(extension) ?: "*/*"
             val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mimeType)
                 addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val flags = android.content.pm.PackageManager.MATCH_DEFAULT_ONLY
+            val resolved = context.packageManager.queryIntentActivities(intent, flags)
+            for (info in resolved) {
+                val pkg = info.activityInfo?.packageName ?: continue
+                val activityName = info.activityInfo?.name ?: continue
+                // 跳过自身，避免递归打开
+                if (pkg == context.packageName) continue
+                val label = info.loadLabel(context.packageManager).toString()
+                apps.add(OpenWithApp(pkg, activityName, label))
+            }
+        } catch (e: Exception) {
+            DiagnosticLog.log("OpenWith", "查询第三方应用失败: ${e.javaClass.simpleName}: ${e.message}")
+        }
+        return apps
+    }
+
+    /** 第二页：使用指定的第三方应用打开当前文件 */
+    fun launchOpenWithApp(context: Context, entry: FileEntry, app: OpenWithApp) {
+        DiagnosticLog.log("OpenWith", "第三方打开 pkg=${app.packageName} file=${entry.name}")
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", File(entry.path)
+            )
+            val extension = entry.name.substringAfterLast('.', "").lowercase()
+            val mimeType = android.webkit.MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(extension) ?: "*/*"
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                setClassName(app.packageName, app.activityName)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            val resolver = intent.resolveActivity(context.packageManager)
-            DiagnosticLog.log("OpenFile", "resolveActivity=${resolver?.flattenToString() ?: "(null)"}")
-            if (resolver == null) {
-                // 没有匹配的应用，设置待处理状态由 UI 弹出警告
-                pendingExternalEntry = entry
-                return
-            }
-            // 使用 createChooser 弹出应用选择器，让用户选择用哪个应用打开
-            val chooser = android.content.Intent.createChooser(intent, "选择应用打开")
-            chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(chooser)
-            DiagnosticLog.log("OpenFile", "startActivity 已调用，匹配: ${resolver.flattenToString()}")
+            context.startActivity(intent)
         } catch (e: Exception) {
-            DiagnosticLog.log("OpenFile", "异常: ${e.javaClass.simpleName}: ${e.message}")
-            DiagnosticLog.exportCrashReport(context, e, "外部Intent打开失败: ${entry.path}")
+            DiagnosticLog.log("OpenWith", "第三方打开失败: ${e.javaClass.simpleName}: ${e.message}")
             Toast.makeText(context, "无法打开文件: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }

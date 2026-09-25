@@ -1,18 +1,34 @@
 package com.whmdg.mczj.tools.ui.filemanager
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.ui.theme.DialogWidthFraction
 import com.whmdg.mczj.tools.fileop.FileOperationManager
+import com.whmdg.mczj.tools.util.AppIconHelper
 import com.whmdg.mczj.tools.util.FormatUtils
 import androidx.compose.foundation.shape.RoundedCornerShape
 
@@ -625,4 +641,172 @@ internal fun AddQuickAccessDialog(
             TextButton(onClick = { nameInput = ""; pathInput = ""; onDismiss() }) { Text("取消") }
         }
     )
+}
+
+// ── 使用应用打开：3×3 / 3×4 格子选择面板 ──
+@Composable
+internal fun OpenWithDialog(
+    showAppsPage: Boolean,
+    appList: List<FileManagerViewModel.OpenWithApp>,
+    onDismiss: () -> Unit,
+    onShowApps: () -> Unit,
+    onBackToBuiltIn: () -> Unit,
+    onBuiltIn: (FileManagerViewModel.BuiltInOpenMethod) -> Unit,
+    onLaunchApp: (FileManagerViewModel.OpenWithApp) -> Unit
+) {
+    StandardDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = if (showAppsPage) "使用其他应用打开" else "使用应用打开",
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        text = {
+            if (showAppsPage) {
+                AppsGrid(
+                    appList = appList,
+                    onBack = onBackToBuiltIn,
+                    onLaunchApp = onLaunchApp
+                )
+            } else {
+                BuiltInGrid(onBuiltIn = onBuiltIn, onShowApps = onShowApps)
+            }
+        }
+    )
+}
+
+/** 第一页：应用内打开方式（3×3 布局） */
+@Composable
+private fun BuiltInGrid(
+    onBuiltIn: (FileManagerViewModel.BuiltInOpenMethod) -> Unit,
+    onShowApps: () -> Unit
+) {
+    val cells: List<OpenWithCell?> = listOf(
+        OpenWithCell("文档编辑", Icons.Default.Description) {
+            onBuiltIn(FileManagerViewModel.BuiltInOpenMethod.DOCUMENT)
+        },
+        OpenWithCell("图片", Icons.Default.Image) {
+            onBuiltIn(FileManagerViewModel.BuiltInOpenMethod.IMAGE)
+        },
+        OpenWithCell("压缩包", Icons.Default.Archive) {
+            onBuiltIn(FileManagerViewModel.BuiltInOpenMethod.ARCHIVE)
+        },
+        null, null, null, null, null,
+        OpenWithCell("其他应用", Icons.Default.MoreHoriz, onClick = onShowApps)
+    )
+    OpenWithGrid(cells = cells)
+}
+
+/** 第二页：第三方应用列表（第一格返回，其余为可打开的应用，3×4 起，超出可滑动） */
+@Composable
+private fun AppsGrid(
+    appList: List<FileManagerViewModel.OpenWithApp>,
+    onBack: () -> Unit,
+    onLaunchApp: (FileManagerViewModel.OpenWithApp) -> Unit
+) {
+    if (appList.isEmpty()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            OpenWithCell("返回", Icons.AutoMirrored.Filled.ArrowBack, onClick = onBack)
+            Text(
+                "没有可用于打开该文件的应用",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        return
+    }
+
+    val cells: List<OpenWithCell?> = buildList {
+        add(OpenWithCell("返回", Icons.AutoMirrored.Filled.ArrowBack, onClick = onBack))
+        for (app in appList) {
+            add(OpenWithCell(app.label, null, onClick = { onLaunchApp(app) }, appPackage = app.packageName))
+        }
+    }
+    OpenWithGrid(cells = cells)
+}
+
+/** 面板中的一个格子；icon 为 null 时使用 appPackage 加载应用图标 */
+private data class OpenWithCell(
+    val label: String,
+    val icon: ImageVector?,
+    val onClick: () -> Unit,
+    val appPackage: String? = null
+)
+
+/** 通用格子网格：3 列，图标（正方形）+ 文字，整页可纵向滑动 */
+@Composable
+private fun OpenWithGrid(cells: List<OpenWithCell?>) {
+    val context = LocalContext.current
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(3),
+        modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(cells) { cell ->
+            if (cell == null) {
+                Spacer(Modifier.aspectRatio(1f))
+            } else {
+                Surface(
+                    onClick = cell.onClick,
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (cell.appPackage != null) {
+                                val bitmap = remember(cell.appPackage) {
+                                    AppIconHelper.getAppIconBitmap(context, cell.appPackage)
+                                }
+                                if (bitmap != null) {
+                                    Image(
+                                        bitmap = bitmap,
+                                        contentDescription = cell.label,
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier.fillMaxSize(0.7f)
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Default.InsertDriveFile,
+                                        contentDescription = cell.label,
+                                        modifier = Modifier.fillMaxSize(0.7f)
+                                    )
+                                }
+                            } else if (cell.icon != null) {
+                                Icon(
+                                    cell.icon,
+                                    contentDescription = cell.label,
+                                    modifier = Modifier.fillMaxSize(0.7f)
+                                )
+                            }
+                        }
+                        Text(
+                            text = cell.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
