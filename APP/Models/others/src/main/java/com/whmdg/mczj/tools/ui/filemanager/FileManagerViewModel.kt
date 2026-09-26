@@ -4576,7 +4576,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                             CryptoService.openStreamIntoVault(context, target.session, entryPath.substringAfterLast('/'), sourceSize = 0L, subDir = subDir, cancelFlag = ctrl.extractCancelFlag)
                         } catch (e: Exception) { lastError = formatArchiveExtractionError(e); break }
                         try {
-                            JBindingClient.extractSingleFileToSink(archivePath, entryPath, password, writer.sink::write).getOrThrow()
+                            JBindingClient.extractSingleFileToSink(archivePath, entryPath, password, onBytes = writer.sink::write).getOrThrow()
                             writer.finish()
                             successCount++
                         } catch (e: Exception) {
@@ -4818,7 +4818,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             ).getOrNull() ?: return false
             session.currentEntries.filter { !it.isDirectory }.minByOrNull { it.size }?.path
         } ?: return false
-        return JBindingClient.extractSingleFileToSink(archivePath, probe, password) { }
+        return JBindingClient.extractSingleFileToSink(archivePath, probe, password, onBytes = { })
             .isSuccess
     }
 
