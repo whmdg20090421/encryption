@@ -452,7 +452,7 @@ fun FileManagerScreen(
     var pendingVaultExtractionSession by remember { mutableStateOf<com.whmdg.mczj.tools.encryption.services.VaultSession?>(null) }
 
 
-    val isArchiveSource = vm.currentPanel.path is PanelPath.Archive
+    val isArchiveSource = vm.currentPanel.isInArchiveMode
 
     fun requestArchiveExtractionPassword(error: String?) {
         showExtractProgress = false
@@ -462,7 +462,7 @@ fun FileManagerScreen(
     }
 
     fun startDirectoryArchiveExtraction(archivePassword: String = "") {
-        val archivePath = (vm.currentPanel.path as? PanelPath.Archive)?.archivePath ?: run {
+        val archivePath = vm.currentPanel.currentArchiveSession?.archivePath ?: run {
             archiveExtractionResult = "解压失败" to "压缩包会话已失效"
             return
         }
@@ -498,7 +498,7 @@ fun FileManagerScreen(
         archivePassword: String = ""
     ) {
         if (disposeWhenDone) pendingVaultExtractionSession = session
-        val archivePath = (vm.currentPanel.path as? PanelPath.Archive)?.archivePath
+        val archivePath = vm.currentPanel.currentArchiveSession?.archivePath
         if (archivePath == null) {
             if (disposeWhenDone) session.dispose()
             archiveExtractionResult = "解压失败" to "压缩包会话已失效"
@@ -850,8 +850,8 @@ fun FileManagerScreen(
                         val titleText = when {
                             vm.isInArchiveMode -> vm.archiveSession?.let { session ->
                                 val archivePath = session.archivePath
-                                if (vm.currentPath == archivePath) session.archiveName
-                                else "${session.archiveName} / ${vm.currentPath.removePrefix(archivePath).trimStart('/')}"
+                                if (session.currentPath == archivePath) session.archiveName
+                                else "${session.archiveName} / ${session.currentPath.removePrefix(archivePath).trimStart('/')}"
                             } ?: "压缩包"
                             vm.recycleBinPanel == vm.focusedPanel -> "回收站"
                             vm.panels.isCloudMode && vm.focusedPanel == FocusedPanel.LEFT -> {
@@ -1052,7 +1052,7 @@ fun FileManagerScreen(
                         ) {
                             IconButton(
                                 onClick = {
-                                    if (vm.currentPanel.path is PanelPath.Archive) {
+                                    if (vm.currentPanel.isInArchiveMode) {
                                         vm.archiveGoUp()
                                     } else if (vm.isWebDavMode) {
                                         vm.webDavGoBack()
@@ -1060,7 +1060,7 @@ fun FileManagerScreen(
                                         goBackWithScroll()
                                     }
                                 },
-                                enabled = if (vm.isInArchiveMode) !vm.isAtArchiveRoot()
+                                enabled = if (vm.isInArchiveMode) !vm.isAtArchiveRoot() || vm.currentPanel.archiveStack.size > 1
                                     else if (vm.isWebDavMode) vm.webDavCurrentPath != "/"
                                     else vm.currentNavState.canGoBack
                             ) {
@@ -1131,6 +1131,9 @@ fun FileManagerScreen(
                             val canGoUp = if (vm.panels.isCloudMode) {
                                 val cloudPath = vm.panels.cloud?.state?.currentPath ?: "/"
                                 cloudPath != "/"
+                            } else if (vm.currentPanel.isInArchiveMode) {
+                                // 压缩包内：非本层根目录，或嵌套栈深 > 1（可退回父压缩包）时均可返回
+                                !vm.isAtArchiveRoot() || vm.currentPanel.archiveStack.size > 1
                             } else {
                                 vm.currentPanel.path.goUp() != null
                             }
@@ -1139,7 +1142,7 @@ fun FileManagerScreen(
                                 onClick = {
                                     if (vm.panels.isCloudMode) {
                                         vm.panels.cloud?.goUp()
-                                    } else if (vm.currentPanel.path is PanelPath.Archive) {
+                                    } else if (vm.currentPanel.isInArchiveMode) {
                                         vm.archiveGoUp()
                                     } else {
                                         saveScrollAndGoUp()
@@ -1422,7 +1425,7 @@ fun FileManagerScreen(
                                     onFocus = { vm.focusedPanel = FocusedPanel.RIGHT },
                                     onFolderClick = { entry ->
                                         vm.focusedPanel = FocusedPanel.RIGHT
-                                        if (rightPanel.path is PanelPath.Archive) {
+                                        if (rightPanel.isInArchiveMode) {
                                             vm.navigateInArchive(entry)
                                         } else if (vm.recycleBinPanel == vm.focusedPanel) {
                                             vm.navigateInRecycleBin(entry)
@@ -1438,7 +1441,7 @@ fun FileManagerScreen(
                                     },
                                     onFileClick = { entry ->
                                         vm.focusedPanel = FocusedPanel.RIGHT
-                                        if (rightPanel.path is PanelPath.Archive) {
+                                        if (rightPanel.isInArchiveMode) {
                                             vm.openArchiveFile(context, entry)
                                         } else {
                                             vm.openFile(context, entry, isDebugMode)
@@ -1455,7 +1458,7 @@ fun FileManagerScreen(
                                     lazyListState = listStates[1],
                                     onNavigateUp = {
                                         vm.focusedPanel = FocusedPanel.RIGHT
-                                        if (rightPanel.path is PanelPath.Archive) {
+                                        if (rightPanel.isInArchiveMode) {
                                             vm.archiveGoUp()
                                         } else {
                                             saveScrollAndGoUp()
@@ -1464,8 +1467,8 @@ fun FileManagerScreen(
                                     archiveSizeProvider = null,
                                     onVisibleRangeChanged = null,
                                     thumbnailLoader = null,
-                                    archiveContext = if (rightPanel.path is PanelPath.Archive) {
-                                        rightPanel.archiveSession?.let { session ->
+                                    archiveContext = if (rightPanel.isInArchiveMode) {
+                                        rightPanel.currentArchiveSession?.let { session ->
                                             ArchiveContext(
                                                 archivePath = session.archivePath,
                                                 archiveName = session.archiveName,
@@ -1503,7 +1506,7 @@ fun FileManagerScreen(
                                     onFocus = { vm.focusedPanel = side },
                                     onFolderClick = { entry ->
                                         vm.focusedPanel = side
-                                        if (panel.path is PanelPath.Archive) {
+                                        if (panel.isInArchiveMode) {
                                             vm.navigateInArchive(entry)
                                         } else if (vm.recycleBinPanel == vm.focusedPanel) {
                                             vm.navigateInRecycleBin(entry)
@@ -1521,7 +1524,7 @@ fun FileManagerScreen(
                                     },
                                     onFileClick = { entry ->
                                         vm.focusedPanel = side
-                                        if (panel.path is PanelPath.Archive) {
+                                        if (panel.isInArchiveMode) {
                                             vm.openArchiveFile(context, entry)
                                         } else {
                                             DiagnosticLog.beginSession("[$side] 点击文件 '${entry.name}'")
@@ -1540,21 +1543,21 @@ fun FileManagerScreen(
                                     lazyListState = listStates[idx],
                                     onNavigateUp = {
                                         vm.focusedPanel = side
-                                        if (panel.path is PanelPath.Archive) {
+                                        if (panel.isInArchiveMode) {
                                             vm.archiveGoUp()
                                         } else {
                                             saveScrollAndGoUp()
                                         }
                                     },
-                                    archiveSizeProvider = if (panel.path is PanelPath.Archive) { entry ->
+                                    archiveSizeProvider = if (panel.isInArchiveMode) { entry ->
                                         if (entry.compressedSize > 0 || entry.size > 0)
                                             "${compactSize(entry.compressedSize)}(${compactSize(entry.size)})"
                                         else "--"
                                     } else null,
                                     onVisibleRangeChanged = null,
                                     thumbnailLoader = null,
-                                    archiveContext = if (panel.path is PanelPath.Archive) {
-                                        panel.archiveSession?.let { session ->
+                                    archiveContext = if (panel.isInArchiveMode) {
+                                        panel.currentArchiveSession?.let { session ->
                                             ArchiveContext(
                                                 archivePath = session.archivePath,
                                                 archiveName = session.archiveName,

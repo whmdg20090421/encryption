@@ -153,14 +153,14 @@ class FilePaneController(
     /** 将面板重置到主目录并以全新的导航历史重新加载。 */
     fun resetToHome() {
         val panelPath = PanelPath.FileSystem(homePath, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
-        state.archiveSession = null
+        state.archiveStack = emptyList()
         state.navState = PanelNavState(paths = listOf(panelPath), index = 0)
         loadDirectory(homePath, panel = state, panelPath = panelPath)
     }
 
     // ── 回调（由 Coordinator 注入，用于处理需要身份信息的副作用） ──
-    /** 进入压缩包模式时触发（Coordinator 用于保存会话缓存） */
-    var onArchiveSessionEntered: ((ArchiveBrowser.ArchiveSession) -> Unit)? = null
+    /** 进入压缩包模式时触发，携带完整会话栈（Coordinator 用于保存会话缓存） */
+    var onArchiveSessionEntered: ((List<ArchiveBrowser.ArchiveSession>) -> Unit)? = null
     /** 保险箱内容被修改时触发（Coordinator 用于更新 lastModifiedAt） */
     var onVaultContentModified: ((vaultId: Int) -> Unit)? = null
 
@@ -237,9 +237,15 @@ class FilePaneController(
         var isInRecycleBin by mutableStateOf(false)
             internal set
 
-        // ── 压缩包浏览 ──
-        var archiveSession by mutableStateOf<ArchiveBrowser.ArchiveSession?>(null)
+        // ── 压缩包浏览（会话栈，栈顶=当前层，栈底持进入前的真实目录） ──
+        var archiveStack by mutableStateOf<List<ArchiveBrowser.ArchiveSession>>(emptyList())
             internal set
+        /** 栈顶会话（当前所在层），空表示不在压缩包内 */
+        val currentArchiveSession: ArchiveBrowser.ArchiveSession? get() = archiveStack.lastOrNull()
+        /** 是否处于压缩包浏览模式 */
+        val isInArchiveMode: Boolean get() = archiveStack.isNotEmpty()
+        /** 压缩包内当前虚拟路径（供标题显示） */
+        val archiveDisplayPath: String? get() = currentArchiveSession?.currentPath
         var archivePasswordRequest by mutableStateOf<FileEntry?>(null)
             internal set
         var archiveDebugInfo by mutableStateOf<ArchiveBrowser.ArchiveDebugInfo?>(null)
@@ -1210,12 +1216,6 @@ class FilePaneController(
     /** 根据 PanelPath 类型执行导航 */
     private fun navigateToPanelPath(panelPath: PanelPath, panel: VmPanelState, scrollSeed: Pair<Int, Int>? = null) {
         when (panelPath) {
-            is PanelPath.Archive -> {
-                panel.path = panelPath
-                panel.archiveSession?.let { session ->
-                    panel.entries = session.currentEntries
-                }
-            }
             is PanelPath.FileSystem -> {
                 loadDirectory(panelPath.path, panel = panel, panelPath = panelPath, scrollSeed = scrollSeed)
             }
@@ -1913,8 +1913,11 @@ class FilePaneController(
             withContext(Dispatchers.Main) { panel.archiveLoading = true }
             try {
                 val permLevel = permissionLevel
-                val currentPathVal = panel.path.fileSystemPath
-                val currentEntriesVal = panel.entries
+                // 嵌套：从压缩包 A 内打开压缩包 B 时，B 的 originalPath 应是 A 的当前虚拟路径，
+                // 这样退出 B 才能回到 A。非嵌套则取真实目录。
+                val parentSession = panel.currentArchiveSession
+                val currentPathVal = parentSession?.currentPath ?: panel.path.fileSystemPath
+                val currentEntriesVal = parentSession?.currentEntries ?: panel.entries
 
                 // 只有 7z 头部加密时，目录树本身不可读取，打开阶段才需要密码。
                 // 内容加密（以及 ZIP/TAR/RAR 等格式）允许先浏览目录，密码延迟到
@@ -1988,8 +1991,9 @@ class FilePaneController(
         val panel = state
         scope.launch(Dispatchers.IO) {
             val permLevel = permissionLevel
-            val currentPathVal = panel.path.fileSystemPath
-            val currentEntriesVal = panel.entries
+            val parentSession = panel.currentArchiveSession
+            val currentPathVal = parentSession?.currentPath ?: panel.path.fileSystemPath
+            val currentEntriesVal = parentSession?.currentEntries ?: panel.entries
 
             val info = ArchiveBrowser.parseArchiveDebug(
                 context = context,
@@ -2021,71 +2025,64 @@ class FilePaneController(
         panel.archiveDebugInfo = null
     }
 
-    /** 进入压缩包浏览模式（状态更新 + 通知回调） */
+    /** 进入压缩包浏览模式（压栈 + 通知回调）。内层压缩包以父层为 originalPath。 */
     fun enterArchiveMode(session: ArchiveBrowser.ArchiveSession) {
         val panel = state
+        panel.archiveStack = panel.archiveStack + session
         panel.entries = session.currentEntries
-        panel.path = PanelPath.Archive(
-            virtualPath = session.currentPath,
-            archivePath = session.archivePath,
-            originalPath = session.originalPath,
-            isAtArchiveRoot = true
-        )
-        panel.archiveSession = session
-        onArchiveSessionEntered?.invoke(session)
+        onArchiveSessionEntered?.invoke(panel.archiveStack)
     }
 
-    /** 在压缩包内导航到子目录（状态更新，缓存由 Coordinator 处理） */
+    /** 在压缩包内导航到子目录（替换栈顶，缓存由 Coordinator 处理） */
     fun navigateInArchive(entry: FileEntry) {
         val panel = state
-        val session = panel.archiveSession ?: return
+        val session = panel.currentArchiveSession ?: return
         val newSession = ArchiveBrowser.navigateTo(session, entry.name)
         if (newSession == null) {
             panel.loadError = RuntimeException("无法进入压缩包子目录: ${entry.name}")
             return
         }
-        panel.path = PanelPath.Archive(
-            virtualPath = newSession.currentPath,
-            archivePath = newSession.archivePath,
-            originalPath = newSession.originalPath,
-            isAtArchiveRoot = false
-        )
-        panel.archiveSession = newSession
+        panel.archiveStack = panel.archiveStack.dropLast(1) + newSession
         panel.entries = newSession.currentEntries
     }
 
-    /** 压缩包内返回上一级，返回 false 表示已在根目录（状态更新，缓存由 Coordinator 处理） */
+    /**
+     * 压缩包内返回上一级。返回 false 表示当前根本不在压缩包模式。
+     * - 本层有父目录：替换栈顶
+     * - 已到本层根且栈深 > 1：弹栈，回到父压缩包层（条目=父层条目，天然同步）
+     * - 已到本层根且栈深 == 1：真正退出，path/entries 均按 originalPath 重新列出
+     */
     fun archiveGoUp(): Boolean {
         val panel = state
-        val session = panel.archiveSession ?: return false
+        val session = panel.currentArchiveSession ?: return false
         val newSession = ArchiveBrowser.navigateUp(session)
-        if (newSession == null) {
-            exitArchive()
+        if (newSession != null) {
+            panel.archiveStack = panel.archiveStack.dropLast(1) + newSession
+            panel.entries = newSession.currentEntries
             return true
         }
-        panel.path = PanelPath.Archive(
-            virtualPath = newSession.currentPath,
-            archivePath = newSession.archivePath,
-            originalPath = newSession.originalPath,
-            isAtArchiveRoot = ArchiveBrowser.isAtRoot(newSession)
-        )
-        panel.archiveSession = newSession
-        panel.entries = newSession.currentEntries
+        if (panel.archiveStack.size > 1) {
+            // 弹回父压缩包层：栈顶已变为父会话，entries 直接取父会话当前目录
+            panel.archiveStack = panel.archiveStack.dropLast(1)
+            panel.entries = panel.currentArchiveSession?.currentEntries ?: emptyList()
+            return true
+        }
+        exitArchive()
         return true
     }
 
-    /** 退出压缩包浏览模式，恢复原始状态（状态更新，缓存由 Coordinator 处理） */
+    /** 退出压缩包浏览模式：清空会话栈，回到进入前的真实目录并按路径重新列目录（异步）。 */
     fun exitArchive() {
         val panel = state
-        val session = panel.archiveSession ?: return
-        panel.path = PanelPath.FileSystem(session.originalPath, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
-        panel.entries = session.originalEntries.ifEmpty { listDirectory(session.originalPath) }
-        panel.archiveSession = null
+        val bottom = panel.archiveStack.firstOrNull() ?: return
+        panel.archiveStack = emptyList()
+        val targetPath = PanelPath.FileSystem(bottom.originalPath, effectiveRoot = if (isRootEngine()) "/" else safeDefault)
+        loadDirectory(bottom.originalPath, panel = panel, panelPath = targetPath)
     }
 
     /** 当前是否在压缩包根目录 */
     fun isAtArchiveRoot(): Boolean {
-        val session = state.archiveSession ?: return true
+        val session = state.currentArchiveSession ?: return true
         return ArchiveBrowser.isAtRoot(session)
     }
 
@@ -2468,14 +2465,15 @@ class FilePaneController(
         val panel = state
         // 刷新保持当前滚动位置：以当前位置作为重新加载的播种偏移
         val seed = panel.currentScrollIndex to panel.currentScrollOffset
-        when (val p = panel.path) {
-            is PanelPath.Archive -> {
-                panel.setInitialScroll(seed.first, seed.second)
-                panel.archiveSession?.let { session ->
-                    panel.entries = session.currentEntries
-                }
-                panel.listGeneration++
+        if (panel.isInArchiveMode) {
+            panel.setInitialScroll(seed.first, seed.second)
+            panel.currentArchiveSession?.let { session ->
+                panel.entries = session.currentEntries
             }
+            panel.listGeneration++
+            return
+        }
+        when (val p = panel.path) {
             is PanelPath.FileSystem -> {
                 if (panel.isWebDavMode) {
                     loadWebDavEntries(panel, scrollSeed = seed)
@@ -2557,12 +2555,12 @@ class PanelCoordinator(
     private val folderSizeDb: () -> FolderSizeDb
 ) {
     init {
-        // 注入回调：Controller 内部进入压缩包模式时，由 Coordinator 保存会话缓存
-        left.onArchiveSessionEntered = { session ->
-            ArchiveBrowser.saveSessionCache(context, session, PanelId.LEFT.name)
+        // 注入回调：Controller 内部进入压缩包模式时，由 Coordinator 保存会话栈缓存
+        left.onArchiveSessionEntered = { stack ->
+            ArchiveBrowser.saveSessionCache(context, stack, PanelId.LEFT.name)
         }
-        right.onArchiveSessionEntered = { session ->
-            ArchiveBrowser.saveSessionCache(context, session, PanelId.RIGHT.name)
+        right.onArchiveSessionEntered = { stack ->
+            ArchiveBrowser.saveSessionCache(context, stack, PanelId.RIGHT.name)
         }
     }
 
@@ -2622,9 +2620,8 @@ class PanelCoordinator(
         }
 
         // 同步压缩包状态：源不在压缩包模式时，清除目标的压缩包状态
-        if (srcPath !is PanelPath.Archive && dst.path is PanelPath.Archive) {
-            dst.path = PanelPath.FileSystem(dst.path.fileSystemPath)
-            dst.archiveSession = null
+        if (!src.isInArchiveMode && dst.isInArchiveMode) {
+            dst.archiveStack = emptyList()
         }
 
         dst.navState = dst.navState.navigate(srcPath)
@@ -2634,12 +2631,13 @@ class PanelCoordinator(
     fun refreshBoth() {
         for (ctrl in both()) {
             val panel = ctrl.state
-            when (val p = panel.path) {
-                is PanelPath.Archive -> {
-                    panel.archiveSession?.let { session ->
-                        panel.entries = session.currentEntries
-                    }
+            if (panel.isInArchiveMode) {
+                panel.currentArchiveSession?.let { session ->
+                    panel.entries = session.currentEntries
                 }
+                continue
+            }
+            when (val p = panel.path) {
                 is PanelPath.FileSystem -> {
                     if (panel.isWebDavMode) {
                         ctrl.loadWebDavEntries(panel)
@@ -2664,18 +2662,18 @@ class PanelCoordinator(
     /** 在压缩包内导航 + 保存会话缓存 */
     fun navigateInArchive(entry: FileEntry) {
         focused.navigateInArchive(entry)
-        focused.state.archiveSession?.let {
-            ArchiveBrowser.saveSessionCache(context, it, sideOf(focused).name)
-        }
+        ArchiveBrowser.saveSessionCache(context, focused.state.archiveStack, sideOf(focused).name)
     }
 
     /** 压缩包内返回上一级 + 保存会话缓存 */
     fun archiveGoUp(): Boolean {
         val result = focused.archiveGoUp()
         if (result) {
-            val session = focused.state.archiveSession
-            if (session != null) {
-                ArchiveBrowser.saveSessionCache(context, session, sideOf(focused).name)
+            // 栈空表示已完全退出压缩包，此时应清除缓存而非保存
+            if (focused.state.archiveStack.isEmpty()) {
+                ArchiveBrowser.clearSessionCache(context)
+            } else {
+                ArchiveBrowser.saveSessionCache(context, focused.state.archiveStack, sideOf(focused).name)
             }
         }
         return result
@@ -2689,7 +2687,7 @@ class PanelCoordinator(
 
     /** 压缩包是否在根目录 */
     fun isAtArchiveRoot(): Boolean {
-        val session = focused.state.archiveSession ?: return true
+        val session = focused.state.currentArchiveSession ?: return true
         return ArchiveBrowser.isAtRoot(session)
     }
 
@@ -2862,19 +2860,12 @@ class PanelCoordinator(
         if (cachedArchive != null) {
             val (cache, sourcePanel) = cachedArchive
             try {
-                val session = ArchiveBrowser.restoreSession(cache)
+                val stack = ArchiveBrowser.restoreStack(cache)
                 val targetCtrl = if (sourcePanel == "LEFT") left else right
                 val otherCtrl = if (sourcePanel == "LEFT") right else left
                 val otherHome = if (sourcePanel == "LEFT") rHomePath else lHomePath
-                val archivePath = PanelPath.Archive(
-                    virtualPath = session.currentPath,
-                    archivePath = session.archivePath,
-                    originalPath = session.originalPath,
-                    isAtArchiveRoot = ArchiveBrowser.isAtRoot(session)
-                )
-                targetCtrl.state.archiveSession = session
-                targetCtrl.state.path = archivePath
-                targetCtrl.state.entries = session.currentEntries
+                targetCtrl.state.archiveStack = stack
+                targetCtrl.state.entries = stack.last().currentEntries
                 otherCtrl.state.path = otherHome
                 otherCtrl.state.entries = listDirectory(otherHome.fileSystemPath)
                 ArchiveBrowser.clearSessionCache(context)
@@ -2993,8 +2984,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 压缩包浏览（面板级状态已移入 VmPanelState） ──
     /** 向后兼容：当前聚焦面板的压缩包状态 */
-    val isInArchiveMode: Boolean get() = currentPanel.path is PanelPath.Archive
-    val archiveSession: ArchiveBrowser.ArchiveSession? get() = currentPanel.archiveSession
+    val isInArchiveMode: Boolean get() = currentPanel.isInArchiveMode
+    /** 当前聚焦面板的栈顶压缩包会话 */
+    val archiveSession: ArchiveBrowser.ArchiveSession? get() = currentPanel.currentArchiveSession
+    /** 当前聚焦面板的压缩包会话栈 */
+    val archiveStack: List<ArchiveBrowser.ArchiveSession> get() = currentPanel.archiveStack
+    /** 当前聚焦面板的压缩包虚拟路径（标题显示用） */
+    val archiveDisplayPath: String? get() = currentPanel.archiveDisplayPath
     val archivePasswordRequest: FileEntry? get() = currentPanel.archivePasswordRequest
     val archiveDebugInfo: ArchiveBrowser.ArchiveDebugInfo? get() = currentPanel.archiveDebugInfo
     val archiveOpenError: com.whmdg.mczj.tools.ui.MessageDialogData? get() = currentPanel.archiveOpenError
@@ -3481,7 +3477,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 continue
             }
             // 保留压缩包浏览会话
-            if (ctrl.state.path is PanelPath.Archive) continue
+            if (ctrl.state.isInArchiveMode) continue
             // 已在主目录且已加载出内容则无需重载（空列表视为异常，需要重载）
             val current = ctrl.state.path
             if (current is PanelPath.FileSystem && current.path == ctrl.homePath && ctrl.state.entries.isNotEmpty()) continue
@@ -3905,16 +3901,17 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     // ── 压缩包内文件预览 ──
     fun openArchiveFile(context: Context, entry: FileEntry) {
         val ctrl = focusedController
-        val session = ctrl.state.archiveSession ?: return
+        val session = ctrl.state.currentArchiveSession ?: return
         val password = archivePasswordCache[session.archivePath] ?: ""
-        val cacheDir = File(context.cacheDir, "archive_cache")
-        val destFile = File(cacheDir, "${session.archiveName}/${entry.path}")
+        // 嵌套压缩包按整条会话栈派生缓存根，避免内外层同名压缩包 / 同名条目互相覆盖
+        val cacheKey = ArchiveBrowser.nestedCacheKey(ctrl.state.archiveStack)
+        val cacheRoot = File(context.cacheDir, "archive_cache/$cacheKey")
+        val destFile = File(cacheRoot, entry.path)
 
         // 收集压缩包内所有图片文件，用于翻页预览
         val imageEntries = session.currentEntries.filter {
             !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS
         }
-        val cacheRoot = File(context.cacheDir, "archive_cache/${session.archiveName}")
         val imagePaths = imageEntries.map { File(cacheRoot, it.path).absolutePath }
         val imageEntryPaths = imageEntries.map { it.path }
         val startIndex = imageEntries.indexOfFirst { it.path == entry.path }.coerceAtLeast(0)
@@ -3935,8 +3932,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         extractFromArchive(
             archivePath = session.archivePath,
             entryPaths = listOf(entry.path),
-            // 必须解压到 archive_cache/<压缩包名>/ 下，才能与 destFile / imagePaths 的缓存路径一致
-            target = ArchiveExtractionTarget.Directory(File(cacheDir, session.archiveName).absolutePath),
+            // 必须解压到与 destFile / imagePaths 相同的缓存根，才能命中预览
+            target = ArchiveExtractionTarget.Directory(cacheRoot.absolutePath),
             onPasswordRequired = {
                 // 需要密码：先收起进度弹窗，避免与密码弹窗叠加；验证成功后会自动续跑预览
                 ctrl.state.archivePreviewLoading = false
@@ -4413,12 +4410,13 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun refreshPanel(panel: FilePaneController.VmPanelState) {
-        when (val p = panel.path) {
-            is PanelPath.Archive -> {
-                panel.archiveSession?.let { session ->
-                    panel.entries = session.currentEntries
-                }
+        if (panel.isInArchiveMode) {
+            panel.currentArchiveSession?.let { session ->
+                panel.entries = session.currentEntries
             }
+            return
+        }
+        when (val p = panel.path) {
             is PanelPath.FileSystem -> {
                 panel.entries = listDirectory(p.path)
                 loadExtFlagsForDir(p.path, panel = panel)
@@ -4478,7 +4476,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             }
             try {
                 val permLevel = legacySp.getString("target_permission_level", "NORMAL") ?: "NORMAL"
-                val session = sourceSession ?: currentPanel.archiveSession
+                val session = sourceSession ?: currentPanel.currentArchiveSession
             if (session == null) {
                 withContext(Dispatchers.Main) { onComplete(0, 0, "压缩包会话已失效") }
                 if (target is ArchiveExtractionTarget.Vault && target.disposeSessionWhenDone) target.session.dispose()
@@ -4876,8 +4874,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 return true
             }
 
-            val currentPathVal = panel.path.fileSystemPath
-            val currentEntriesVal = panel.entries
+            val parentSession = panel.currentArchiveSession
+            val currentPathVal = parentSession?.currentPath ?: panel.path.fileSystemPath
+            val currentEntriesVal = parentSession?.currentEntries ?: panel.entries
             val result = ArchiveBrowser.openArchive(
                 context = context,
                 archivePath = entry.path,

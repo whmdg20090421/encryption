@@ -41,6 +41,13 @@ object ArchiveBrowser {
     }
 
     /**
+     * 由压缩包会话栈派生唯一缓存键，形如 "outer.zip/inner.zip"。
+     * 嵌套同名压缩包（如 outer.zip 与 inner.zip 里各有一个 inner.zip）据此隔离缓存目录，避免互相覆盖。
+     */
+    fun nestedCacheKey(stack: List<ArchiveSession>): String =
+        stack.joinToString("/") { it.archiveName }
+
+    /**
      * 密码检测结果
      */
     sealed class PasswordCheckResult {
@@ -238,13 +245,19 @@ object ArchiveBrowser {
         val children: List<CacheArchiveNode> = emptyList()
     )
 
+    /** 压缩包会话栈的单层缓存（支持嵌套压缩包） */
     @Serializable
-    data class ArchiveSessionCache(
+    data class CacheLayer(
         val archivePath: String,
         val archiveName: String,
         val root: CacheArchiveNode,
         val currentPath: String,
-        val originalPath: String,
+        val originalPath: String
+    )
+
+    @Serializable
+    data class ArchiveSessionCache(
+        val layers: List<CacheLayer>,
         val sourcePanel: String
     )
 
@@ -261,16 +274,18 @@ object ArchiveBrowser {
         children = cache.children.map { fromCacheNode(it) }.toMutableList()
     )
 
-    fun saveSessionCache(context: Context, session: ArchiveSession, sourcePanel: String) {
+    private fun toCacheLayer(session: ArchiveSession): CacheLayer = CacheLayer(
+        archivePath = session.archivePath,
+        archiveName = session.archiveName,
+        root = toCacheNode(session.root),
+        currentPath = session.currentPath,
+        originalPath = session.originalPath
+    )
+
+    fun saveSessionCache(context: Context, stack: List<ArchiveSession>, sourcePanel: String) {
+        if (stack.isEmpty()) { clearSessionCache(context); return }
         try {
-            val cache = ArchiveSessionCache(
-                archivePath = session.archivePath,
-                archiveName = session.archiveName,
-                root = toCacheNode(session.root),
-                currentPath = session.currentPath,
-                originalPath = session.originalPath,
-                sourcePanel = sourcePanel
-            )
+            val cache = ArchiveSessionCache(layers = stack.map { toCacheLayer(it) }, sourcePanel = sourcePanel)
             File(AppDataPaths.fileManager(context), CACHE_FILE_NAME).writeText(cacheJson.encodeToString(cache))
         } catch (e: Exception) {
             Log.e(TAG, "保存压缩包会话缓存失败", e)
@@ -282,7 +297,8 @@ object ArchiveBrowser {
         if (!file.exists()) return null
         return try {
             val cache = cacheJson.decodeFromString<ArchiveSessionCache>(file.readText())
-            if (!File(cache.archivePath).exists() || cache.root.children.isEmpty()) {
+            val bottom = cache.layers.firstOrNull() ?: run { file.delete(); return null }
+            if (!File(bottom.archivePath).exists() || bottom.root.children.isEmpty()) {
                 file.delete(); return null
             }
             Pair(cache, cache.sourcePanel)
@@ -296,21 +312,25 @@ object ArchiveBrowser {
         try { File(AppDataPaths.fileManager(context), CACHE_FILE_NAME).delete() } catch (_: Exception) {}
     }
 
-    fun restoreSession(cache: ArchiveSessionCache): ArchiveSession {
-        val root = fromCacheNode(cache.root)
-        val node = if (cache.currentPath == cache.archivePath) root
-            else findNode(root, cache.currentPath, cache.archivePath) ?: root
-        val internalPath = cache.currentPath.removePrefix(cache.archivePath).trimStart('/')
+    /** 由缓存层重建会话（不含 currentEntries，由调用方按需填充） */
+    private fun restoreLayer(layer: CacheLayer): ArchiveSession {
+        val root = fromCacheNode(layer.root)
+        val node = if (layer.currentPath == layer.archivePath) root
+            else findNode(root, layer.currentPath, layer.archivePath) ?: root
+        val internalPath = layer.currentPath.removePrefix(layer.archivePath).trimStart('/')
         return ArchiveSession(
-            archivePath = cache.archivePath,
-            archiveName = cache.archiveName,
+            archivePath = layer.archivePath,
+            archiveName = layer.archiveName,
             root = root,
-            currentPath = cache.currentPath,
+            currentPath = layer.currentPath,
             currentEntries = nodeChildrenToEntries(node, internalPath),
-            originalPath = cache.originalPath,
+            originalPath = layer.originalPath,
             originalEntries = emptyList()
         )
     }
+
+    /** 由缓存重建完整会话栈（索引 0 为栈底，末尾为当前层） */
+    fun restoreStack(cache: ArchiveSessionCache): List<ArchiveSession> = cache.layers.map { restoreLayer(it) }
 
     /**
      * 打开压缩包，构建目录树。

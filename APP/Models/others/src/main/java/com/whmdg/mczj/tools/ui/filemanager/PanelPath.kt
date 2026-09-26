@@ -1,7 +1,5 @@
 package com.whmdg.mczj.tools.ui.filemanager
 
-import com.whmdg.mczj.tools.util.ArchiveBrowser
-
 /**
  * 面板当前浏览位置的类型安全表示。
  *
@@ -40,26 +38,6 @@ sealed class PanelPath {
             if (path == effectiveRoot || !path.contains('/')) return null
             val parent = path.substringBeforeLast('/').ifEmpty { "/" }
             return if (parent != path) copy(path = parent) else null
-        }
-    }
-
-    // ── 压缩包内虚拟浏览 ──
-
-    data class Archive(
-        val virtualPath: String,
-        val archivePath: String,
-        val originalPath: String,
-        val isAtArchiveRoot: Boolean
-    ) : PanelPath() {
-        override val displayPath: String get() = virtualPath
-        override val fileSystemPath: String get() = originalPath
-        override val scrollKey: String get() = "archive:$virtualPath"
-        override val isAtRoot: Boolean get() = isAtArchiveRoot
-
-        override fun goUp(): PanelPath? {
-            if (isAtArchiveRoot) return null
-            val parent = virtualPath.substringBeforeLast('/')
-            return copy(virtualPath = parent, isAtArchiveRoot = parent == archivePath)
         }
     }
 
