@@ -182,11 +182,17 @@ object JBindingClient {
         }
     }
 
-    /** 将单个压缩包条目直接写入调用方提供的字节接收器，不创建明文临时文件。 */
+    /**
+     * 将单个压缩包条目直接写入调用方提供的字节接收器，不创建明文临时文件。
+     *
+     * [onProgress] 回调 (已写入字节数, 该条目解压后总字节数)，用于展示真实提取进度；
+     * 总字节数取自压缩包条目的 SIZE 属性，未知时为 0。
+     */
     suspend fun extractSingleFileToSink(
         archivePath: String,
         entryPath: String,
         password: String = "",
+        onProgress: ((done: Long, total: Long) -> Unit)? = null,
         onBytes: (ByteArray) -> Unit
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
@@ -197,6 +203,9 @@ object JBindingClient {
                     path == entryPath || path.replace('\\', '/') == entryPath.replace('\\', '/')
                 } ?: throw RuntimeException("文件不存在: $entryPath")
 
+                val entryTotal = (inArchive.getProperty(targetIndex, PropID.SIZE) as? Long) ?: 0L
+                var written = 0L
+
                 var sinkFailure: Exception? = null
                 var extractResult: ExtractOperationResult? = null
 
@@ -206,7 +215,11 @@ object JBindingClient {
                         return if (extractAskMode == ExtractAskMode.EXTRACT) {
                             ISequentialOutStream { data ->
                                 try {
-                                    if (data.isNotEmpty()) onBytes(data)
+                                    if (data.isNotEmpty()) {
+                                        onBytes(data)
+                                        written += data.size
+                                        onProgress?.invoke(written, entryTotal)
+                                    }
                                 } catch (e: Exception) {
                                     sinkFailure = e
                                     throw e

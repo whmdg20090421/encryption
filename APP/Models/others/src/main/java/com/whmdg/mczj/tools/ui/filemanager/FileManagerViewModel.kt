@@ -250,6 +250,12 @@ class FilePaneController(
             internal set
         var archiveLoading by mutableStateOf(false)
             internal set
+        /** 压缩包内文件预览提取进行中 */
+        var archivePreviewLoading by mutableStateOf(false)
+            internal set
+        /** 预览提取进度（0f..1f） */
+        var archivePreviewProgress by mutableFloatStateOf(0f)
+            internal set
 
         // ── WebDAV ──
         var webDavClient by mutableStateOf<WebDavFileClient?>(null)
@@ -2994,6 +3000,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     val archiveOpenError: com.whmdg.mczj.tools.ui.MessageDialogData? get() = currentPanel.archiveOpenError
     val archiveExtractError: Throwable? get() = currentPanel.archiveExtractError
     val archiveLoading: Boolean get() = currentPanel.archiveLoading
+    val archivePreviewLoading: Boolean get() = currentPanel.archivePreviewLoading
+    val archivePreviewProgress: Float get() = currentPanel.archivePreviewProgress
     /** 压缩包密码缓存：archivePath → password（仅内存，进程退出即清除） */
     internal val archivePasswordCache = mutableMapOf<String, String>()
 
@@ -3922,11 +3930,16 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         // 预览缓存就是本地目录目标，必须经过与复制/解压相同的密码门控。
+        ctrl.state.archivePreviewLoading = true
+        ctrl.state.archivePreviewProgress = 0f
         extractFromArchive(
             archivePath = session.archivePath,
             entryPaths = listOf(entry.path),
-            target = ArchiveExtractionTarget.Directory(cacheDir.absolutePath),
+            // 必须解压到 archive_cache/<压缩包名>/ 下，才能与 destFile / imagePaths 的缓存路径一致
+            target = ArchiveExtractionTarget.Directory(File(cacheDir, session.archiveName).absolutePath),
             onPasswordRequired = {
+                // 需要密码：先收起进度弹窗，避免与密码弹窗叠加；验证成功后会自动续跑预览
+                ctrl.state.archivePreviewLoading = false
                 // 记录待预览条目，密码弹窗验证成功后据此自动续跑预览
                 pendingArchivePreviewEntry = entry
                 ctrl.state.archivePasswordRequest = FileEntry(
@@ -3938,7 +3951,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 )
             },
             onProgress = { _, _, _ -> },
-            onComplete = { successCount, _, error ->
+            onByteProgress = { done, total ->
+                if (total > 0) {
+                    val p = (done.toFloat() / total).coerceIn(0f, 1f)
+                    viewModelScope.launch(Dispatchers.Main) { ctrl.state.archivePreviewProgress = p }
+                }
+            },
+            onComplete = { successCount, totalCount, error ->
+                ctrl.state.archivePreviewLoading = false
                 if (successCount > 0 && destFile.exists()) {
                     openFile(context, entry.copy(path = destFile.absolutePath),
                         overrideImagePaths = imagePaths, archivePath = session.archivePath,
@@ -3946,11 +3966,32 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                         archivePassword = archivePasswordCache[session.archivePath] ?: password,
                         archiveStartIndex = startIndex,
                         archivePermissionLevel = permissionLevel, originPanel = ctrl)
+                } else if (ctrl.extractCancelFlag.get()) {
+                    // 用户取消：删除本次残留的 .part 文件
+                    File(destFile.parentFile, ".${destFile.name}.part").delete()
                 } else {
-                    ctrl.state.archiveExtractError = RuntimeException("预览解压失败: ${error ?: "未知原因"}")
+                    // 优先展示底层报错原文；仅当确实没有任何错误信息时，才用携带上下文的诊断信息兜底
+                    val detail = error ?: buildString {
+                        append("解压完成但未找到目标缓存文件\n")
+                        append("成功提取: $successCount/$totalCount\n")
+                        append("内部条目: ${entry.path}\n")
+                        append("期望缓存路径: ${destFile.absolutePath}\n")
+                        append("该路径不存在: ${!destFile.exists()}")
+                    }
+                    ctrl.state.archiveExtractError = RuntimeException("预览解压失败: $detail")
                 }
             }
         )
+    }
+
+    /** 取消压缩包内文件的预览提取，并清除进度状态。 */
+    fun cancelArchivePreview() {
+        val ctrl = focusedController
+        ctrl.extractCancelFlag.set(true)
+        ctrl.extractJob?.cancel()
+        ctrl.extractJob = null
+        ctrl.state.archivePreviewLoading = false
+        ctrl.state.archivePreviewProgress = 0f
     }
 
     // ── 文件操作 ──
@@ -4419,6 +4460,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         archivePassword: String = "",
         onPasswordRequired: (String?) -> Unit = {},
         onProgress: (current: Int, total: Int, fileName: String) -> Unit,
+        onByteProgress: ((done: Long, total: Long) -> Unit)? = null,
         onComplete: (successCount: Int, totalCount: Int, error: String?) -> Unit
     ) {
         val ctrl = focusedController
@@ -4503,10 +4545,14 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                             output.parentFile?.mkdirs()
                             if (output.exists() || pending.exists()) throw IllegalStateException("目标文件已存在: ${output.path}")
                             pending.outputStream().use { out ->
-                                JBindingClient.extractSingleFileToSink(archivePath, entryPath, password) { bytes ->
-                                    if (ctrl.extractCancelFlag.get()) throw java.io.InterruptedIOException("用户取消")
-                                    out.write(bytes)
-                                }.getOrThrow()
+                                JBindingClient.extractSingleFileToSink(
+                                    archivePath, entryPath, password,
+                                    onBytes = { bytes ->
+                                        if (ctrl.extractCancelFlag.get()) throw java.io.InterruptedIOException("用户取消")
+                                        out.write(bytes)
+                                    },
+                                    onProgress = onByteProgress
+                                ).getOrThrow()
                             }
                             if (!pending.renameTo(output)) throw IllegalStateException("无法提交解压文件: ${output.path}")
                             successCount++

@@ -3398,6 +3398,43 @@ fun FileManagerScreen(
         )
     }
 
+    // ── 压缩包内文件预览提取中弹窗（进度条 + 取消） ──
+    if (vm.archivePreviewLoading) {
+        StandardDialog(
+            onDismissRequest = { },
+            title = { Text("正在提取") },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { vm.archivePreviewProgress },
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "${(vm.archivePreviewProgress * 100).toInt()}%",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Text(
+                        text = "正在从压缩包提取文件，请稍候…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.cancelArchivePreview() }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
     // ── 压缩包打开错误弹窗 ──
     vm.archiveOpenError?.let { errorData ->
         com.whmdg.mczj.tools.ui.MessageDialog(
