@@ -1843,7 +1843,7 @@ class FilePaneController(
      * 启动压缩任务。
      * @param entries 待压缩的文件列表
      * @param outputPath 输出压缩包完整路径
-     * @param format 格式: zip/7z/tar/tar.gz/tar.bz2/tar.xz
+     * @param format 格式: zip/7z/tar/tar.gz/tar.bz2
      * @param level 压缩级别 0-9
      * @param password 密码（空=不加密）
      * @param useAes ZIP 是否使用 AES-256

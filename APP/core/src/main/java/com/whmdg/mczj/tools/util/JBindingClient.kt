@@ -10,11 +10,10 @@ import net.sf.sevenzipjbinding.ExtractOperationResult
 import net.sf.sevenzipjbinding.IArchiveExtractCallback
 import net.sf.sevenzipjbinding.ICryptoGetTextPassword
 import net.sf.sevenzipjbinding.IInArchive
-import net.sf.sevenzipjbinding.IOutCreateArchive7z
-import net.sf.sevenzipjbinding.IOutCreateArchiveZip
 import net.sf.sevenzipjbinding.IOutCreateCallback
-import net.sf.sevenzipjbinding.IOutItem7z
-import net.sf.sevenzipjbinding.IOutItemZip
+import net.sf.sevenzipjbinding.IOutFeatureSetEncryptHeader
+import net.sf.sevenzipjbinding.IOutFeatureSetLevel
+import net.sf.sevenzipjbinding.IOutItemAllFormats
 import net.sf.sevenzipjbinding.ISequentialInStream
 import net.sf.sevenzipjbinding.ISequentialOutStream
 import net.sf.sevenzipjbinding.PropID
@@ -23,7 +22,14 @@ import net.sf.sevenzipjbinding.SevenZipException
 import net.sf.sevenzipjbinding.impl.OutItemFactory
 import net.sf.sevenzipjbinding.impl.RandomAccessFileInStream
 import net.sf.sevenzipjbinding.impl.RandomAccessFileOutStream
+import net.lingala.zip4j.io.outputstream.ZipOutputStream
+import net.lingala.zip4j.model.ZipParameters
+import net.lingala.zip4j.model.enums.AesKeyStrength
+import net.lingala.zip4j.model.enums.CompressionLevel as Zip4jLevel
+import net.lingala.zip4j.model.enums.CompressionMethod as Zip4jMethod
+import net.lingala.zip4j.model.enums.EncryptionMethod
 import java.io.File
+import java.io.FileOutputStream
 import java.io.InterruptedIOException
 import java.io.RandomAccessFile
 import java.util.concurrent.atomic.AtomicBoolean
@@ -293,10 +299,11 @@ object JBindingClient {
         level: Int,
         password: String = "",
         useAes: Boolean = false,
-        encryptNames: Boolean = false
+        encryptNames: Boolean = false,
+        cancelFlag: AtomicBoolean? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            doCompress(sourcePaths, outputPath, format, level, password, useAes, encryptNames, null)
+            doCompress(sourcePaths, outputPath, format, level, password, useAes, encryptNames, cancelFlag, null)
             ""
         }
     }
@@ -393,10 +400,11 @@ object JBindingClient {
         password: String = "",
         useAes: Boolean = false,
         encryptNames: Boolean = false,
+        cancelFlag: AtomicBoolean? = null,
         onLine: (String) -> Unit
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            doCompress(sourcePaths, outputPath, format, level, password, useAes, encryptNames, onLine)
+            doCompress(sourcePaths, outputPath, format, level, password, useAes, encryptNames, cancelFlag, onLine)
             ""
         }
     }
@@ -461,137 +469,235 @@ object JBindingClient {
         password: String,
         useAes: Boolean,
         encryptNames: Boolean,
+        cancelFlag: AtomicBoolean?,
         onLine: ((String) -> Unit)?
     ) {
         val archiveFormat = FORMAT_MAP[format]
             ?: throw IllegalArgumentException("不支持的格式: $format")
 
-        // 收集所有文件
-        val allFiles = mutableListOf<File>()
+        // 收集条目并保留目录结构（相对各自源路径的父目录）
+        val entries = collectEntries(sourcePaths)
+        if (entries.isEmpty()) throw IllegalArgumentException("没有可压缩的文件")
+
+        try {
+            when {
+                // ZIP + AES-256：JBinding 的 Java 层未开放 em 属性，改用 zip4j
+                archiveFormat == ArchiveFormat.ZIP && password.isNotEmpty() && useAes ->
+                    compressZipAes(entries, outputPath, level, password, cancelFlag, onLine)
+
+                archiveFormat == ArchiveFormat.GZIP || archiveFormat == ArchiveFormat.BZIP2 ->
+                    compressTarThenOuter(entries, outputPath, archiveFormat, level, cancelFlag, onLine)
+
+                else ->
+                    compressGeneric(entries, outputPath, archiveFormat, level, password, encryptNames, cancelFlag, onLine)
+            }
+        } catch (e: Throwable) {
+            // 取消/失败时清理半成品输出
+            File(outputPath).delete()
+            throw e
+        }
+    }
+
+    /** 收集源路径下的所有条目（含目录），relativePath 相对各源的父目录，保留目录结构 */
+    private fun collectEntries(sourcePaths: List<String>): List<ArchiveSource> {
+        val entries = mutableListOf<ArchiveSource>()
         for (src in sourcePaths) {
             val file = File(src)
+            if (!file.exists()) continue
+            val base = file.parentFile ?: File("/")
             if (file.isDirectory) {
-                file.walkTopDown().filter { it.isFile }.forEach { allFiles.add(it) }
+                file.walkTopDown().forEach { f ->
+                    val rel = f.relativeTo(base).path.replace('\\', '/')
+                    if (rel.isNotEmpty()) entries.add(ArchiveSource(f, rel))
+                }
             } else {
-                allFiles.add(file)
+                entries.add(ArchiveSource(file, file.name))
             }
         }
-
-        when (archiveFormat) {
-            ArchiveFormat.SEVEN_ZIP -> compress7z(allFiles, outputPath, level, password, useAes, encryptNames, onLine)
-            ArchiveFormat.ZIP -> compressZip(allFiles, outputPath, level, password, onLine)
-            else -> throw IllegalArgumentException("暂不支持创建 $format 格式")
-        }
+        return entries
     }
 
-    private fun compress7z(
-        files: List<File>,
+    /** 通过 JBinding 创建 7z / zip / tar 等（zip 非 AES 场景） */
+    private fun compressGeneric(
+        entries: List<ArchiveSource>,
         outputPath: String,
+        archiveFormat: ArchiveFormat,
         level: Int,
         password: String,
-        useAes: Boolean,
         encryptNames: Boolean,
+        cancelFlag: AtomicBoolean?,
         onLine: ((String) -> Unit)?
     ) {
-        val outArchive: IOutCreateArchive7z = SevenZip.openOutArchive7z()
+        val outArchive = SevenZip.openOutArchive(archiveFormat)
         try {
-            outArchive.setLevel(level)
-            if (password.isNotEmpty() && useAes) {
-                outArchive.setHeaderEncryption(encryptNames)
+            (outArchive as? IOutFeatureSetLevel)?.setLevel(level)
+            // 7z：有密码时由引擎自动 AES-256 内容加密；勾选加密文件名再开头部加密
+            if (password.isNotEmpty() && encryptNames) {
+                (outArchive as? IOutFeatureSetEncryptHeader)?.setHeaderEncryption(true)
             }
 
-            val outFile = RandomAccessFile(File(outputPath), "rw")
+            val outFile = RandomAccessFile(File(outputPath), "rw").apply { setLength(0) }
             val outStream = RandomAccessFileOutStream(outFile)
-
-            outArchive.createArchive(outStream, files.size, object : IOutCreateCallback<IOutItem7z> {
-                private var currentItem = 0
-                private var totalBytes = 0L
-
-                override fun getItemInformation(index: Int, factory: OutItemFactory<IOutItem7z>): IOutItem7z {
-                    val item = factory.createOutItem()
-                    val file = files[index]
-                    item.propertyPath = file.name
-                    item.propertyIsDir = false
-                    item.dataSize = file.length()
-                    return item
-                }
-
-                override fun getStream(index: Int): ISequentialInStream? {
-                    val file = files[index]
-                    if (file.isDirectory) return null
-                    return FileSequentialInStream(file)
-                }
-
-                override fun setTotal(total: Long) { totalBytes = total }
-                override fun setCompleted(complete: Long) {
-                    onLine?.let { callback ->
-                        val percent = if (totalBytes > 0) (complete * 100 / totalBytes).toInt() else 0
-                        callback("  $percent%  ${currentItem + 1}")
-                    }
-                }
-                override fun setOperationResult(operationResultOk: Boolean) {
-                    currentItem++
-                }
-            })
-
-            outStream.close()
-            outFile.close()
+            try {
+                outArchive.createArchive(outStream, entries.size, JBindingCreateCallback(entries, password, cancelFlag, onLine))
+            } finally {
+                outStream.close()
+                outFile.close()
+            }
         } finally {
             outArchive.close()
         }
     }
 
-    private fun compressZip(
-        files: List<File>,
+    /** ZIP + AES-256：使用 zip4j（JBinding Java 层无法创建 AES ZIP） */
+    private fun compressZipAes(
+        entries: List<ArchiveSource>,
         outputPath: String,
         level: Int,
         password: String,
+        cancelFlag: AtomicBoolean?,
         onLine: ((String) -> Unit)?
     ) {
-        val outArchive: IOutCreateArchiveZip = SevenZip.openOutArchiveZip()
-        try {
-            outArchive.setLevel(level)
+        val baseParams = ZipParameters().apply {
+            compressionMethod = if (level == 0) Zip4jMethod.STORE else Zip4jMethod.DEFLATE
+            compressionLevel = Zip4jLevel.values()[level.coerceIn(0, 9)]
+            encryptFiles = true
+            encryptionMethod = EncryptionMethod.AES
+            aesKeyStrength = AesKeyStrength.KEY_STRENGTH_256
+            includeRootFolder = false
+        }
 
-            val outFile = RandomAccessFile(File(outputPath), "rw")
-            val outStream = RandomAccessFileOutStream(outFile)
-
-            outArchive.createArchive(outStream, files.size, object : IOutCreateCallback<IOutItemZip> {
-                private var currentItem = 0
-                private var totalBytes = 0L
-
-                override fun getItemInformation(index: Int, factory: OutItemFactory<IOutItemZip>): IOutItemZip {
-                    val item = factory.createOutItem()
-                    val file = files[index]
-                    item.propertyPath = file.name
-                    item.propertyIsDir = false
-                    item.dataSize = file.length()
-                    return item
-                }
-
-                override fun getStream(index: Int): ISequentialInStream? {
-                    val file = files[index]
-                    if (file.isDirectory) return null
-                    return FileSequentialInStream(file)
-                }
-
-                override fun setTotal(total: Long) { totalBytes = total }
-                override fun setCompleted(complete: Long) {
-                    onLine?.let { callback ->
-                        val percent = if (totalBytes > 0) (complete * 100 / totalBytes).toInt() else 0
-                        callback("  $percent%  ${currentItem + 1}")
+        FileOutputStream(outputPath).use { fos ->
+            ZipOutputStream(fos, password.toCharArray()).use { zos ->
+                entries.forEachIndexed { index, entry ->
+                    if (cancelFlag?.get() == true) throw InterruptedIOException("用户取消")
+                    val name = if (entry.file.isDirectory) {
+                        entry.relativePath.trimEnd('/') + "/"
+                    } else {
+                        entry.relativePath
                     }
+                    val params = ZipParameters(baseParams).apply {
+                        fileNameInZip = name
+                        if (!entry.file.isDirectory) {
+                            lastModifiedFileTime = entry.file.lastModified()
+                            // STORE 模式下必须显式提供原始大小
+                            if (level == 0) entrySize = entry.file.length()
+                        }
+                    }
+                    zos.putNextEntry(params)
+                    if (!entry.file.isDirectory) {
+                        entry.file.inputStream().use { it.copyTo(zos) }
+                    }
+                    zos.closeEntry()
+                    onLine?.invoke("  ${(index + 1) * 100 / entries.size}%  ${index + 1}")
                 }
-                override fun setOperationResult(operationResultOk: Boolean) {
-                    currentItem++
-                }
-            })
-
-            outStream.close()
-            outFile.close()
-        } finally {
-            outArchive.close()
+            }
         }
     }
+
+    /** tar.gz / tar.bz2：先打成临时 tar，再整体用 gzip/bzip2 压缩（单流格式） */
+    private fun compressTarThenOuter(
+        entries: List<ArchiveSource>,
+        outputPath: String,
+        outerFormat: ArchiveFormat,
+        level: Int,
+        cancelFlag: AtomicBoolean?,
+        onLine: ((String) -> Unit)?
+    ) {
+        val tempTar = File.createTempFile("mczj_tar_", ".tar", File(outputPath).parentFile)
+        try {
+            compressGeneric(entries, tempTar.absolutePath, ArchiveFormat.TAR, level, "", false, cancelFlag, null)
+
+            // 内层 tar 在压缩包中的名字：foo.tar.gz → foo.tar
+            val innerName = File(outputPath).name.removeSuffix(".gz").removeSuffix(".bz2")
+
+            val outArchive = SevenZip.openOutArchive(outerFormat)
+            try {
+                (outArchive as? IOutFeatureSetLevel)?.setLevel(level)
+                val outFile = RandomAccessFile(File(outputPath), "rw").apply { setLength(0) }
+                val outStream = RandomAccessFileOutStream(outFile)
+                try {
+                    outArchive.createArchive(
+                        outStream,
+                        1,
+                        JBindingCreateCallback(listOf(ArchiveSource(tempTar, innerName)), "", cancelFlag, onLine)
+                    )
+                } finally {
+                    outStream.close()
+                    outFile.close()
+                }
+            } finally {
+                outArchive.close()
+            }
+        } finally {
+            tempTar.delete()
+        }
+    }
+
+    /** JBinding 创建回调：支持目录结构、真实密码、取消 */
+    private class JBindingCreateCallback(
+        private val entries: List<ArchiveSource>,
+        private val password: String,
+        private val cancelFlag: AtomicBoolean?,
+        private val onLine: ((String) -> Unit)?
+    ) : IOutCreateCallback<IOutItemAllFormats>, ICryptoGetTextPassword {
+
+        private var currentItem = 0
+        private var totalBytes = 0L
+
+        override fun getItemInformation(index: Int, factory: OutItemFactory<IOutItemAllFormats>): IOutItemAllFormats {
+            val item = factory.createOutItem()
+            val entry = entries[index]
+            val isDir = entry.file.isDirectory
+            item.setPropertyPath(entry.relativePath)
+            item.setPropertyIsDir(isDir)
+            item.setDataSize(if (isDir) 0L else entry.file.length())
+            item.setPropertyAttributes(attributesFor(isDir))
+            // tar 使用 POSIX 属性保留权限（对 zip/7z 无副作用）
+            item.setPropertyPosixAttributes(if (isDir) 0x41ED else 0x81A4)
+            return item
+        }
+
+        override fun getStream(index: Int): ISequentialInStream? {
+            val entry = entries[index]
+            if (entry.file.isDirectory) return null
+            // 必须返回可 seek 的流（IInStream），否则 ZIP 压缩会报 E_NOTIMPL。
+            // 引擎不回调 close()，且会先读完整流做 CRC 再 seek 回起点，因此不能提前关闭；
+            // 与解压回调一致，交给 GC 回收底层文件句柄。
+            return RandomAccessFileInStream(RandomAccessFile(entry.file, "r"))
+        }
+
+        override fun setTotal(total: Long) {
+            totalBytes = total
+        }
+
+        override fun setCompleted(complete: Long) {
+            if (cancelFlag?.get() == true) throw InterruptedIOException("用户取消")
+            onLine?.let { callback ->
+                val percent = if (totalBytes > 0) (complete * 100 / totalBytes).toInt() else 0
+                callback("  $percent%  ${currentItem + 1}")
+            }
+        }
+
+        override fun setOperationResult(operationResultOk: Boolean) {
+            if (!operationResultOk) throw SevenZipException("压缩条目失败")
+            currentItem++
+        }
+
+        override fun cryptoGetTextPassword(): String? = password.ifEmpty { null }
+
+        private fun attributesFor(isDir: Boolean): Int {
+            val unixExt = PropID.AttributesBitMask.FILE_ATTRIBUTE_UNIX_EXTENSION
+            return if (isDir) {
+                unixExt or PropID.AttributesBitMask.FILE_ATTRIBUTE_DIRECTORY or (0x41ED shl 16) // drwxr-xr-x
+            } else {
+                unixExt or (0x81A4 shl 16) // -rw-r--r--
+            }
+        }
+    }
+
+    /** 压缩源条目：文件 + 压缩包内相对路径 */
+    private data class ArchiveSource(val file: File, val relativePath: String)
 
     /** 解压所有文件（支持进度回调） */
     private class ExtractAllCallback(
@@ -645,25 +751,11 @@ object JBindingClient {
         override fun cryptoGetTextPassword(): String = password
     }
 
-    /** 文件输入流，用于压缩时读取源文件 */
-    private class FileSequentialInStream(private val file: File) : ISequentialInStream {
-        private val inputStream = file.inputStream()
-
-        override fun read(data: ByteArray): Int {
-            val bytesRead = inputStream.read(data)
-            return if (bytesRead == -1) 0 else bytesRead
-        }
-
-        override fun close() = inputStream.close()
-    }
-
     private val FORMAT_MAP = mapOf(
         "zip" to ArchiveFormat.ZIP,
         "7z" to ArchiveFormat.SEVEN_ZIP,
         "tar" to ArchiveFormat.TAR,
         "tar.gz" to ArchiveFormat.GZIP,
         "tar.bz2" to ArchiveFormat.BZIP2,
-        "gz" to ArchiveFormat.GZIP,
-        "bz2" to ArchiveFormat.BZIP2,
     )
 }

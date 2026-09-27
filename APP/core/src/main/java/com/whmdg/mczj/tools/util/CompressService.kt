@@ -18,10 +18,10 @@ object CompressService {
     data class CompressOptions(
         val sourcePaths: List<String>,
         val outputPath: String,
-        val format: String,           // zip, 7z, tar, tar.gz, tar.bz2, tar.xz
+        val format: String,           // zip, 7z, tar, tar.gz, tar.bz2
         val compressionLevel: Int,    // 0-9 (format dependent)
         val password: String = "",    // 空=不加密
-        val useAes: Boolean = false,  // zip 加密方式
+        val useAes: Boolean = false,  // zip 加密方式（AES-256 走 zip4j）
         val encryptNames: Boolean = false, // 7z 加密文件名（-mhe=on）
     )
 
@@ -69,7 +69,8 @@ object CompressService {
                 level = options.compressionLevel,
                 password = options.password,
                 useAes = options.useAes,
-                encryptNames = options.encryptNames
+                encryptNames = options.encryptNames,
+                cancelFlag = cancelFlag
             ) { line ->
                 if (!cancelFlag.get()) {
                     parseProgressLine(line, totalBytes, totalFiles, callback)
@@ -214,12 +215,11 @@ object CompressService {
         "tar" -> ".tar"
         "tar.gz" -> ".tar.gz"
         "tar.bz2" -> ".tar.bz2"
-        "tar.xz" -> ".tar.xz"
         else -> ".zip"
     }
 
     fun getLevelRange(format: String): IntRange? = when (format) {
-        "zip", "7z", "tar.gz", "tar.xz" -> 0..9
+        "zip", "7z", "tar.gz" -> 0..9
         "tar.bz2" -> 1..9
         "tar" -> null
         else -> 0..9

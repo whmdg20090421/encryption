@@ -4867,10 +4867,10 @@ fun FileManagerScreen(
     // ── 压缩对话框 ──
     if (showCompressDialog && compressEntries.isNotEmpty()) {
         val isDark = isSystemInDarkTheme()
-        val formats = listOf("zip", "7z", "tar", "tar.gz", "tar.bz2", "tar.xz")
+        val formats = listOf("zip", "7z", "tar", "tar.gz", "tar.bz2")
         val suffixMap = mapOf(
             "zip" to ".zip", "7z" to ".7z", "tar" to ".tar",
-            "tar.gz" to ".tar.gz", "tar.bz2" to ".tar.bz2", "tar.xz" to ".tar.xz"
+            "tar.gz" to ".tar.gz", "tar.bz2" to ".tar.bz2"
         )
 
         var selectedFormat by remember { mutableStateOf("zip") }
@@ -5306,18 +5306,31 @@ fun FileManagerScreen(
 
     // ── 压缩错误弹窗 ──
     if (compressError != null) {
+        val err = compressError!!
+        // 只保留有值的行，行与行之间单换行，不产生空行
+        val errorText = buildList {
+            add("异常: ${err.javaClass.simpleName}")
+            add("原因: ${err.message ?: "(无)"}")
+            err.cause?.let { add("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
+        }.filter { it.isNotBlank() }
+            .joinToString("\n")
+            .replace("\r\n", "\n")
+            .replace(Regex("\n{2,}"), "\n")
         StandardDialog(
             onDismissRequest = { compressError = null },
             title = { Text("压缩失败") },
             text = {
                 Text(
-                    buildString {
-                        appendLine("异常: ${compressError!!.javaClass.simpleName}")
-                        appendLine("原因: ${compressError!!.message ?: "(无)"}")
-                        compressError!!.cause?.let { appendLine("内部原因: ${it.javaClass.simpleName}: ${it.message}") }
-                    },
+                    errorText,
                     style = MaterialTheme.typography.bodySmall
                 )
+            },
+            leadingButton = {
+                TextButton(onClick = {
+                    val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cb.setPrimaryClip(android.content.ClipData.newPlainText("压缩失败", errorText))
+                    Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                }) { Text("复制") }
             },
             confirmButton = {
                 TextButton(onClick = { compressError = null }) { Text("确定") }

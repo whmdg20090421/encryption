@@ -40,6 +40,7 @@ internal fun StandardDialog(
     text: (@Composable () -> Unit)? = null,
     confirmButton: (@Composable () -> Unit)? = null,
     dismissButton: (@Composable () -> Unit)? = null,
+    leadingButton: (@Composable () -> Unit)? = null,
 ) {
     Dialog(onDismissRequest = onDismissRequest, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Card(
@@ -53,15 +54,22 @@ internal fun StandardDialog(
             ) {
                 title?.let { Box { it() } }
                 text?.let { Box(modifier = Modifier.weight(1f, fill = false)) { it() } }
-                if (confirmButton != null || dismissButton != null) {
+                if (confirmButton != null || dismissButton != null || leadingButton != null) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
+                        horizontalArrangement = if (leadingButton != null) {
+                            Arrangement.SpaceBetween
+                        } else {
+                            Arrangement.End
+                        },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        dismissButton?.invoke()
-                        Spacer(Modifier.width(8.dp))
-                        confirmButton?.invoke()
+                        leadingButton?.invoke()
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            dismissButton?.invoke()
+                            Spacer(Modifier.width(8.dp))
+                            confirmButton?.invoke()
+                        }
                     }
                 }
             }
