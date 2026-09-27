@@ -561,10 +561,10 @@ object JBindingClient {
         val baseParams = ZipParameters().apply {
             compressionMethod = if (level == 0) Zip4jMethod.STORE else Zip4jMethod.DEFLATE
             compressionLevel = Zip4jLevel.values()[level.coerceIn(0, 9)]
-            encryptFiles = true
+            isEncryptFiles = true
             encryptionMethod = EncryptionMethod.AES
             aesKeyStrength = AesKeyStrength.KEY_STRENGTH_256
-            includeRootFolder = false
+            isIncludeRootFolder = false
         }
 
         FileOutputStream(outputPath).use { fos ->
