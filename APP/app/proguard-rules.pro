@@ -1,6 +1,8 @@
 # ── 全局保留：不混淆、不裁剪，仅配合 shrinkResources 移除未使用资源 ──
+# 例外：BouncyCastle 的 org.bouncycastle.pqc 包（后量子密码学）代码从未被引用，
+# 显式排除以允许 R8 裁剪掉这部分无用代码（约 3.6MB，压缩后约 1.2MB）。
 -dontobfuscate
--keep class ** { *; }
+-keep class !org.bouncycastle.pqc.**,** { *; }
 -keepclassmembers class ** { *; }
 -keepattributes *
 
@@ -23,7 +25,8 @@
 -keepclassmembers @kotlinx.serialization.Serializable class * { *; }
 
 # ── BouncyCastle ──
--keep class org.bouncycastle.** { *; }
+# 仅保留实际用到的 Argon2 密钥派生闭包；pqc（后量子）等未引用包允许 R8 裁剪。
+-keep class !org.bouncycastle.pqc.**,org.bouncycastle.** { *; }
 -dontwarn org.bouncycastle.**
 
 # ── Shizuku ──
