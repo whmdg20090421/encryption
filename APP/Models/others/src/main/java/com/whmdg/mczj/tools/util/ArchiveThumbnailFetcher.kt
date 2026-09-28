@@ -1,5 +1,6 @@
 package com.whmdg.mczj.tools.util
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import coil3.ImageLoader
@@ -24,13 +25,13 @@ data class ArchiveThumbnailRequest(
 class ArchiveThumbnailFetcher(
     private val data: ArchiveThumbnailRequest,
     private val options: Options,
-    private val cacheDir: File
+    private val context: Context
 ) : Fetcher {
     override suspend fun fetch(): FetchResult {
         // 缓存以「压缩包」为单位，键 = 归档绝对路径哈希，与 openArchiveFile 的预览/原图缓存同源，
         // 因此缩略图命中后点击打开可直接复用原图，无需重复解压。
         val cacheFile = File(
-            File(cacheDir, "archive_cache/${ArchiveBrowser.cacheKeyFor(data.archivePath)}"),
+            ArchiveBrowser.cacheRootFor(context, data.archivePath),
             data.entryPath
         )
         val thumbFile = File("${cacheFile.absolutePath}.thumb")
@@ -75,11 +76,11 @@ class ArchiveThumbnailFetcher(
         )
     }
 
-    class Factory(private val cacheDir: File) : Fetcher.Factory<ArchiveThumbnailRequest> {
+    class Factory(private val context: Context) : Fetcher.Factory<ArchiveThumbnailRequest> {
         override fun create(
             data: ArchiveThumbnailRequest,
             options: Options,
             imageLoader: ImageLoader
-        ) = ArchiveThumbnailFetcher(data, options, cacheDir)
+        ) = ArchiveThumbnailFetcher(data, options, context)
     }
 }

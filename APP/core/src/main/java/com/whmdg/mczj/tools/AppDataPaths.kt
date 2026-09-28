@@ -207,12 +207,14 @@ object AppDataPaths {
     }
 
     /**
-     * 统一缓存根目录。
+     * 统一缓存根目录（系统认定的「缓存」区，可被「清除缓存」一键清空）。
      *
      * 所有「源文件 → 明文/衍生缓存」都收拢在此目录下，按类型建二级子目录：
      * ```
-     * {外部数据目录}/cache/
+     * externalCacheDir/          ← 即 .../Android/data/<包名>/cache
      * ├── index.db          ← 统一缓存索引
+     * ├── archive_cache/    ← 压缩包解压预览 / 原图 / 缩略图
+     * ├── image_cache/      ← Coil 图片磁盘缓存
      * ├── 视频/             ← 视频完整缓存 + 缩略图
      * ├── 图片/
      * ├── 音频/
@@ -221,13 +223,21 @@ object AppDataPaths {
      * ```
      * 视频缓存路径 = `视频/{源文件绝对路径去首斜杠}`，缩略图追加 `.thumb`；
      * 源文件绝对路径全局唯一，故缓存路径天然不冲突。
+     *
+     * 注意：本目录必须使用 [Context.getExternalCacheDir]（而非 getExternalFilesDir），
+     * 否则会被系统归入「数据」，「清除缓存」无法清理。
      */
     fun cacheRoot(context: Context): File {
-        val base = context.getExternalFilesDir(null) ?: context.filesDir
-        val dir = File(base, "cache")
+        val dir = context.externalCacheDir ?: context.cacheDir
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
+
+    /** 压缩包缓存子目录名（解压预览 / 原图 / 缩略图）。 */
+    const val CACHE_DIR_ARCHIVE = "archive_cache"
+
+    /** 压缩包缓存根目录：`{统一缓存}/archive_cache/`。 */
+    fun archiveCacheRoot(context: Context): File = cacheDir(context, CACHE_DIR_ARCHIVE)
 
     /** 统一缓存下的类型子目录（视频 / 图片 / 音频 / 文本 / 其他）。 */
     fun cacheDir(context: Context, typeName: String): File {

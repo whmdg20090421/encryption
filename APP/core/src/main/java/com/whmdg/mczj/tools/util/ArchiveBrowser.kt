@@ -43,16 +43,16 @@ object ArchiveBrowser {
     // ── 压缩包缓存目录 & 索引表 ──
     //
     // 布局（以压缩包为单位，键 = 归档绝对路径的 sha256 前 32 位）：
-    //   cache/archive_cache/index.json                 ← 索引表
-    //   cache/archive_cache/<key>/_staging/            ← 内层归档物化区（与条目预览空间隔离）
-    //   cache/archive_cache/<key>/<entryPath>          ← 条目预览 / 原图
-    //   cache/archive_cache/<key>/<entryPath>.thumb    ← 缩略图
+    //   {统一缓存}/archive_cache/index.json            ← 索引表
+    //   {统一缓存}/archive_cache/<key>/_staging/       ← 内层归档物化区（与条目预览空间隔离）
+    //   {统一缓存}/archive_cache/<key>/<entryPath>     ← 条目预览 / 原图
+    //   {统一缓存}/archive_cache/<key>/<entryPath>.thumb ← 缩略图
     //
+    // 统一缓存 = AppDataPaths.cacheRoot()（externalCacheDir），故系统「清除缓存」可一并清理。
     // 为什么用归档绝对路径做键：路径全局唯一，天然隔离「同名不同位置」的压缩包；
     // 嵌套时内层归档的 archivePath 是上层缓存里的物化文件路径，仍是唯一路径，递归自洽。
     // 「物化内层归档」放在 _staging/ 子目录，避免与压缩包内同名条目争用同一路径。
 
-    private const val CACHE_DIR_NAME = "archive_cache"
     private const val INDEX_FILE_NAME = "index.json"
     /** 内层归档物化子目录名（保留名，与条目预览空间隔离） */
     const val STAGING_DIR_NAME = "_staging"
@@ -66,11 +66,11 @@ object ArchiveBrowser {
         return sb.toString()
     }
 
-    /** 压缩包缓存根目录：cache/archive_cache/<key> */
+    /** 压缩包缓存根目录：{统一缓存}/archive_cache/<key> */
     fun cacheRootFor(context: Context, archivePath: String): File =
-        File(File(context.cacheDir, CACHE_DIR_NAME), cacheKeyFor(archivePath))
+        File(AppDataPaths.archiveCacheRoot(context), cacheKeyFor(archivePath))
 
-    /** 内层归档物化目录：cache/archive_cache/<key>/_staging */
+    /** 内层归档物化目录：{统一缓存}/archive_cache/<key>/_staging */
     fun stagingRootFor(context: Context, archivePath: String): File =
         File(cacheRootFor(context, archivePath), STAGING_DIR_NAME)
 
@@ -96,7 +96,7 @@ object ArchiveBrowser {
     private val indexJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     private fun indexFile(context: Context): File =
-        File(File(context.cacheDir, CACHE_DIR_NAME), INDEX_FILE_NAME)
+        File(AppDataPaths.archiveCacheRoot(context), INDEX_FILE_NAME)
 
     private fun readIndex(context: Context): CacheIndex {
         val file = indexFile(context)
@@ -133,7 +133,7 @@ object ArchiveBrowser {
         isStaging: Boolean
     ): File {
         val key = cacheKeyFor(archivePath)
-        val root = File(File(context.cacheDir, CACHE_DIR_NAME), key)
+        val root = File(AppDataPaths.archiveCacheRoot(context), key)
         val file = File(archivePath)
         val size = file.length()
         val mtime = file.lastModified()
@@ -163,7 +163,7 @@ object ArchiveBrowser {
     /** 删除索引中指向缺失目录的孤儿条目 */
     fun pruneIndex(context: Context) {
         val index = readIndex(context)
-        val base = File(context.cacheDir, CACHE_DIR_NAME)
+        val base = AppDataPaths.archiveCacheRoot(context)
         val kept = index.entries.filter { (key, _) -> File(base, key).exists() }
         if (kept.size != index.entries.size) writeIndex(context, CacheIndex(kept))
     }

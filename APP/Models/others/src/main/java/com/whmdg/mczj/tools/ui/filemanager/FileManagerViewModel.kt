@@ -29,7 +29,6 @@ import com.whmdg.mczj.tools.util.ArchiveBrowser
 import com.whmdg.mczj.tools.util.ArchivePasswordBook
 import com.whmdg.mczj.tools.util.JBindingClient
 import com.whmdg.mczj.tools.util.CompressService
-import com.whmdg.mczj.tools.util.CompressPreviewCache
 import com.whmdg.mczj.tools.util.ShellEscape
 import com.whmdg.mczj.tools.util.DiagnosticLog
 import com.whmdg.mczj.tools.util.FileAccessLevel

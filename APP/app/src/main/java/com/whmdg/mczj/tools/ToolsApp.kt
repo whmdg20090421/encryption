@@ -97,8 +97,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
     }
 
     override fun newImageLoader(context: android.content.Context): ImageLoader {
-        val diskCacheDir = context.getExternalFilesDir(null)?.resolve("image_cache")
-            ?: context.cacheDir.resolve("image_cache")
+        val diskCacheDir = java.io.File(AppDataPaths.cacheRoot(context), "image_cache")
         return ImageLoader.Builder(context)
             .diskCache {
                 DiskCache.Builder()
@@ -107,7 +106,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
                     .build()
             }
             .components {
-                add(com.whmdg.mczj.tools.util.ArchiveThumbnailFetcher.Factory(context.cacheDir))
+                add(com.whmdg.mczj.tools.util.ArchiveThumbnailFetcher.Factory(context))
                 add(com.whmdg.mczj.tools.util.VaultThumbnailFetcher.Factory(context))
                 add(com.whmdg.mczj.tools.util.JxlDecoderFactory())
                 add(coil3.svg.SvgDecoder.Factory())
