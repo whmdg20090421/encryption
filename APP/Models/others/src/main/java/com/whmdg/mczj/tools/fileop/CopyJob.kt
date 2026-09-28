@@ -400,13 +400,12 @@ class CopyJob(
             // 保证已 renameTo 落盘密文的 MD5 记录不因退出而丢失。
             flushPendingMd5Batches()
 
+            // 目录大小收尾：本任务对保险箱目录体积的唯一持久化点。
+            // 无论正常完成、出错还是用户取消，都在此一次性写入已成功加密文件的
+            // 增量（accumulator 只累计成功项，失败/取消的残留文件不进入）。
+            persistFolderSizesOnce()
+
             if (cancelFlag.get()) {
-                // 取消时也将已累加的目录大小写入 FolderSizeDb
-                val acc = folderSizeAccumulator
-                val vd = vaultDirForSave
-                if (acc != null && vd != null && acc.isNotEmpty()) {
-                    try { saveFolderSizes(vd, acc) } catch (_: Exception) {}
-                }
                 // 步骤一：用户手动取消（文件描述符失效 + 用户取消为真）
                 // 1. 面板改为"正在取消"
                 manager.updateProgress(FileOpProgress(
@@ -596,8 +595,6 @@ class CopyJob(
                     }
                 }
             }
-            // 写入 FolderSizeDb
-            saveFolderSizes(ctx.targetSession.vaultDir, acc)
             if (trace) EncryptionTraceLog.finish()
         }
     }
@@ -823,6 +820,30 @@ class CopyJob(
             val oldSize = accumulator[normalizedPath] ?: 0L
             accumulator[normalizedPath] = oldSize + fileSize
             dir = dir.parentFile
+        }
+    }
+
+    /**
+     * 将本次任务累计的目录大小增量持久化到 FolderSizeDb，且仅执行一次。
+     *
+     * 本任务是保险箱目录体积的唯一持久化出口（由 [run] 的 finally 调用）：
+     * accumulator 只累计已成功加密落盘的文件，取消/失败的残留文件从未计入，
+     * 因此无论任务正常结束还是被取消，写入的增量都恰好等于真实新增的密文体积。
+     *
+     * 写入后立即清空 accumulator 并释放引用，从结构上保证同一批增量不可能被
+     * 重复累加（[saveFolderSizes] 是 `existing + delta` 的累加语义，重复调用会翻倍）。
+     */
+    private fun persistFolderSizesOnce() {
+        val acc = folderSizeAccumulator ?: return
+        val vaultDir = vaultDirForSave ?: return
+        folderSizeAccumulator = null
+        vaultDirForSave = null
+        if (acc.isEmpty()) return
+        try {
+            saveFolderSizes(vaultDir, acc)
+        } catch (_: Exception) {
+        } finally {
+            acc.clear()
         }
     }
 
