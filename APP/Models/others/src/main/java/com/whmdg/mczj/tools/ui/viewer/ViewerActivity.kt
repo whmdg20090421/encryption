@@ -36,6 +36,9 @@ class ViewerActivity : ComponentActivity() {
         private const val TYPE_IMAGE = "image"
         private const val TYPE_TEXT = "text"
 
+        /** 判定「大图」的内存占用阈值（字节），超过则在退出时主动从内存缓存移除。 */
+        private const val LARGE_IMAGE_THRESHOLD_BYTES = 8L * 1024 * 1024
+
         fun createImageIntent(
             context: Context,
             filePath: String,
@@ -132,6 +135,9 @@ class ViewerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // 释放大图占用的内存缓存：查看器退出后，大图 Bitmap 若滞留内存会持续触发 GC，
+        // 表现为「退出后 CPU 仍高」。此处仅移除体积较大的缓存项，小缩略图保留不动。
+        releaseLargeImageCache()
         // 清理 vault session 和临时文件
         vaultSessionId?.let { id ->
             VaultKeyHolder.get(id)?.let {
@@ -143,5 +149,18 @@ class ViewerActivity : ComponentActivity() {
             }
             VaultKeyHolder.clear(id)
         }
+    }
+
+    /** 移除内存缓存中体积超过 [LARGE_IMAGE_THRESHOLD_BYTES] 的大图，尽快释放内存。 */
+    private fun releaseLargeImageCache() {
+        try {
+            val memoryCache = coil3.SingletonImageLoader.get(this).memoryCache ?: return
+            memoryCache.keys.toList().forEach { key ->
+                val value = memoryCache[key] ?: return@forEach
+                if (value.image.size > LARGE_IMAGE_THRESHOLD_BYTES) {
+                    memoryCache.remove(key)
+                }
+            }
+        } catch (_: Exception) {}
     }
 }
