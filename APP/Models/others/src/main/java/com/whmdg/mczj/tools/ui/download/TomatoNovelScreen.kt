@@ -66,12 +66,9 @@ fun TomatoNovelScreen(
             onReady = {
                 pageState = TomatoPageState.READY
             },
-            onError = { errorCode, message ->
+            onError = { _, message ->
                 pageState = TomatoPageState.ERROR
-                errorMessage = when (errorCode) {
-                    "PORT_IN_USE" -> "端口被占用：$message"
-                    else -> "启动失败：$message"
-                }
+                errorMessage = "启动失败：$message"
             }
         )
     }
@@ -88,7 +85,8 @@ fun TomatoNovelScreen(
             onConfirm = {
                 showExitDialog = false
                 webView?.stopLoading()
-                TomatoDownloader.stopServer()
+                // 不停止后台服务器：保留 libtnd.so 进程，下次进入可直接复用并秒开。
+                // 进程随应用进程结束而终止。
                 onBack()
             }
         )
@@ -164,12 +162,9 @@ fun TomatoNovelScreen(
                         TomatoDownloader.startServer(
                             context = context,
                             onReady = { pageState = TomatoPageState.READY },
-                            onError = { errorCode, message ->
+                            onError = { _, message ->
                                 pageState = TomatoPageState.ERROR
-                                errorMessage = when (errorCode) {
-                                    "PORT_IN_USE" -> "端口被占用：$message"
-                                    else -> "启动失败：$message"
-                                }
+                                errorMessage = "启动失败：$message"
                             }
                         )
                     }) {

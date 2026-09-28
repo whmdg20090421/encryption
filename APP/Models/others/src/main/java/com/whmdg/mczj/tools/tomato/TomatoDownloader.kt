@@ -21,20 +21,64 @@ object TomatoDownloader {
     private const val TAG = "TomatoDownloader"
     private const val BINARY_NAME = "libtnd.so"
     private const val SERVER_HOST = "127.0.0.1"
-    private const val SERVER_PORT = 18423
-    private const val SERVER_URL = "http://$SERVER_HOST:$SERVER_PORT"
+
+    /** 端口随机选取范围（2 万余的偏僻端口段） */
+    private const val PORT_RANGE_START = 20000
+    private const val PORT_RANGE_END = 29999
+
     private const val STARTUP_TIMEOUT_MS = 30_000L
     private const val POLL_INTERVAL_MS = 300L
+
+    /** 当前运行使用的端口（首次启动时解析并持久化） */
+    @Volatile
+    private var serverPort: Int = -1
 
     /** 当前运行的服务器进程 */
     private var serverProcess: Process? = null
 
     /** 服务器是否已启动 */
     val isRunning: Boolean
-        get() = serverProcess != null
+        get() = serverProcess?.isAlive == true
 
     /** 获取服务器 URL */
-    fun getServerUrl(): String = SERVER_URL
+    fun getServerUrl(): String = "http://$SERVER_HOST:$serverPort"
+
+    /**
+     * 解析并持久化本地监听端口。
+     *
+     * - 首次运行（本地无记录）：随机取一个 2 万余段的端口，若被占用则端口 +1
+     *   （范围回绕）直到可用，然后写入本地文件。
+     * - 后续运行：直接读取本地记录；若该端口已被占用，则默认占用者就是本应用的
+     *   TND 服务，直接复用，不再报错。
+     */
+    private fun resolvePort(context: Context): Int {
+        val portFile = AppDataPaths.tomatoNovelTndPortFile(context)
+
+        if (portFile.exists()) {
+            val saved = portFile.readText().trim().toIntOrNull()
+            if (saved != null && saved in PORT_RANGE_START..PORT_RANGE_END) {
+                // 端口被占用时判定为本应用的服务在跑，直接复用
+                return saved
+            }
+        }
+
+        // 首次运行（或记录非法）：随机起点，向后探测可用端口
+        var port = (PORT_RANGE_START..PORT_RANGE_END).random()
+        val start = port
+        while (!isPortAvailable(port)) {
+            port++
+            if (port > PORT_RANGE_END) port = PORT_RANGE_START
+            if (port == start) {
+                // 整个端口段都不可用（极不可能）
+                throw IllegalStateException(
+                    "端口段 $PORT_RANGE_START-$PORT_RANGE_END 全部被占用"
+                )
+            }
+        }
+        portFile.writeText(port.toString())
+        Log.i(TAG, "已选定并保存本地端口: $port")
+        return port
+    }
 
     /**
      * 检查端口是否被占用。
@@ -71,25 +115,30 @@ object TomatoDownloader {
      *
      * @param context Android Context
      * @param onReady 服务器就绪后的回调（在后台线程调用）
-     * @param onError 启动失败的回调（在后台线程调用），errorCode: "PORT_IN_USE" | "STARTUP_FAILED"
+     * @param onError 启动失败的回调（在后台线程调用），errorCode: "STARTUP_FAILED"
      */
     fun startServer(
         context: Context,
         onReady: () -> Unit,
         onError: (errorCode: String, message: String) -> Unit
     ) {
-        if (serverProcess != null) {
+        if (serverProcess?.isAlive == true) {
             Log.w(TAG, "服务器已在运行中")
             onReady()
             return
         }
+        // 进程已退出但引用残留，清理后重新启动
+        serverProcess = null
 
-        // 检查端口是否被占用
-        if (!isPortAvailable(SERVER_PORT)) {
-            Log.w(TAG, "端口 $SERVER_PORT 已被占用")
-            onError("PORT_IN_USE", "端口 $SERVER_PORT 已被占用，请检查是否有其他程序在使用")
+        // 解析本地端口（端口被占用时默认为本应用的服务，直接复用）
+        val port = try {
+            resolvePort(context)
+        } catch (e: Exception) {
+            Log.e(TAG, "解析端口失败", e)
+            onError("STARTUP_FAILED", e.message ?: "无法解析本地端口")
             return
         }
+        serverPort = port
 
         Thread({
             try {
@@ -101,7 +150,9 @@ object TomatoDownloader {
                 // 首次启动时创建数据目录
                 initDataDir(dataDir)
 
+                val bindAddr = "$SERVER_HOST:$port"
                 Log.i(TAG, "启动 TND 服务器: ${binary.absolutePath}")
+                Log.i(TAG, "监听地址: $bindAddr")
                 Log.i(TAG, "数据目录: ${dataDir.absolutePath}")
 
                 val pb = ProcessBuilder(
@@ -113,6 +164,8 @@ object TomatoDownloader {
                     directory(dataDir)
                     environment()["HOME"] = dataDir.absolutePath
                     environment()["TMPDIR"] = context.cacheDir.absolutePath
+                    // 通过环境变量指定监听地址（默认 127.0.0.1:18423）
+                    environment()["TOMATO_WEB_ADDR"] = bindAddr
                 }
 
                 serverProcess = pb.start()
@@ -131,7 +184,8 @@ object TomatoDownloader {
                 }, "tnd-stdout").apply { isDaemon = true }.start()
 
                 // 等待服务器就绪
-                if (waitForServer(SERVER_URL, STARTUP_TIMEOUT_MS)) {
+                val url = "http://$SERVER_HOST:$port"
+                if (waitForServer(url, STARTUP_TIMEOUT_MS)) {
                     Log.i(TAG, "TND 服务器已就绪")
                     onReady()
                 } else {

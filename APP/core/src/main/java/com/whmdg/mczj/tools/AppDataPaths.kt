@@ -171,6 +171,11 @@ object AppDataPaths {
         return dir
     }
 
+    /** 番茄小说 TND 服务器端口记录文件（持久化选定的本地端口） */
+    fun tomatoNovelTndPortFile(context: Context): File {
+        return File(tomatoNovelTnd(context), "端口.txt")
+    }
+
     /** 记账本模块目录 */
     fun accounting(context: Context): File {
         val dir = File(root(context), "记账本")
