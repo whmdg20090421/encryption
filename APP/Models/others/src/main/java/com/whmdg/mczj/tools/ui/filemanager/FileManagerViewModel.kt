@@ -1947,6 +1947,14 @@ class FilePaneController(
                     }
                 }
 
+                // 打开前确保该压缩包已有可用缓存目录（按归档 size/mtime 校验，失效则重建）。
+                // 来自压缩包内部的是上层物化文件，标记 isStaging 以便与同名条目隔离。
+                ArchiveBrowser.ensureCacheRoot(
+                    context,
+                    entry.path,
+                    isStaging = parentSession != null
+                )
+
                 // 不需要密码，直接打开
                 val result = ArchiveBrowser.openArchive(
                     context = context,
@@ -3484,6 +3492,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             ctrl.resetToHome()
         }
         cleanupVaultTempFiles()
+        ArchiveBrowser.pruneIndex(context)
     }
 
     private fun cleanupVaultTempFiles() {
@@ -3903,10 +3912,19 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val ctrl = focusedController
         val session = ctrl.state.currentArchiveSession ?: return
         val password = archivePasswordCache[session.archivePath] ?: ""
-        // 嵌套压缩包按整条会话栈派生缓存根，避免内外层同名压缩包 / 同名条目互相覆盖
-        val cacheKey = ArchiveBrowser.nestedCacheKey(ctrl.state.archiveStack)
-        val cacheRoot = File(context.cacheDir, "archive_cache/$cacheKey")
-        val destFile = File(cacheRoot, entry.path)
+        // 会话已打开，缓存根在 openArchive 时已通过 size/mtime 校验并建立；
+        // 此处只取路径，避免重复校验时误删正在使用的缓存目录。
+        val cacheRoot = ArchiveBrowser.cacheRootFor(context, session.archivePath)
+
+        // 条目本身是压缩包：物化到 _staging/，与预览空间隔离，避免与同名条目争用路径。
+        // 保留 entry.path 的目录结构，使物化路径与 extractFromArchive 的输出路径一致。
+        val isNestedArchive = ArchiveBrowser.isArchiveFile(entry.name)
+        val extractBase = if (isNestedArchive) {
+            ArchiveBrowser.stagingRootFor(context, session.archivePath)
+        } else {
+            cacheRoot
+        }
+        val destFile = File(extractBase, entry.path)
 
         // 收集压缩包内所有图片文件，用于翻页预览
         val imageEntries = session.currentEntries.filter {
@@ -3932,8 +3950,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         extractFromArchive(
             archivePath = session.archivePath,
             entryPaths = listOf(entry.path),
-            // 必须解压到与 destFile / imagePaths 相同的缓存根，才能命中预览
-            target = ArchiveExtractionTarget.Directory(cacheRoot.absolutePath),
+            // 解压输出 = extractBase/entryPath，必须与 destFile 一致才能命中缓存
+            target = ArchiveExtractionTarget.Directory(extractBase.absolutePath),
             onPasswordRequired = {
                 // 需要密码：先收起进度弹窗，避免与密码弹窗叠加；验证成功后会自动续跑预览
                 ctrl.state.archivePreviewLoading = false
@@ -4877,6 +4895,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             val parentSession = panel.currentArchiveSession
             val currentPathVal = parentSession?.currentPath ?: panel.path.fileSystemPath
             val currentEntriesVal = parentSession?.currentEntries ?: panel.entries
+            ArchiveBrowser.ensureCacheRoot(
+                context,
+                entry.path,
+                isStaging = parentSession != null
+            )
             val result = ArchiveBrowser.openArchive(
                 context = context,
                 archivePath = entry.path,

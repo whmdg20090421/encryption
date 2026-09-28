@@ -40,12 +40,133 @@ object ArchiveBrowser {
         return name.substringBeforeLast('.')
     }
 
+    // ── 压缩包缓存目录 & 索引表 ──
+    //
+    // 布局（以压缩包为单位，键 = 归档绝对路径的 sha256 前 32 位）：
+    //   cache/archive_cache/index.json                 ← 索引表
+    //   cache/archive_cache/<key>/_staging/            ← 内层归档物化区（与条目预览空间隔离）
+    //   cache/archive_cache/<key>/<entryPath>          ← 条目预览 / 原图
+    //   cache/archive_cache/<key>/<entryPath>.thumb    ← 缩略图
+    //
+    // 为什么用归档绝对路径做键：路径全局唯一，天然隔离「同名不同位置」的压缩包；
+    // 嵌套时内层归档的 archivePath 是上层缓存里的物化文件路径，仍是唯一路径，递归自洽。
+    // 「物化内层归档」放在 _staging/ 子目录，避免与压缩包内同名条目争用同一路径。
+
+    private const val CACHE_DIR_NAME = "archive_cache"
+    private const val INDEX_FILE_NAME = "index.json"
+    /** 内层归档物化子目录名（保留名，与条目预览空间隔离） */
+    const val STAGING_DIR_NAME = "_staging"
+
+    /** 归档绝对路径 → 缓存目录名（sha256 前 32 位 hex） */
+    fun cacheKeyFor(archivePath: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val hash = digest.digest(archivePath.toByteArray(Charsets.UTF_8))
+        val sb = StringBuilder(32)
+        for (i in 0 until 16) sb.append("%02x".format(hash[i]))
+        return sb.toString()
+    }
+
+    /** 压缩包缓存根目录：cache/archive_cache/<key> */
+    fun cacheRootFor(context: Context, archivePath: String): File =
+        File(File(context.cacheDir, CACHE_DIR_NAME), cacheKeyFor(archivePath))
+
+    /** 内层归档物化目录：cache/archive_cache/<key>/_staging */
+    fun stagingRootFor(context: Context, archivePath: String): File =
+        File(cacheRootFor(context, archivePath), STAGING_DIR_NAME)
+
     /**
-     * 由压缩包会话栈派生唯一缓存键，形如 "outer.zip/inner.zip"。
-     * 嵌套同名压缩包（如 outer.zip 与 inner.zip 里各有一个 inner.zip）据此隔离缓存目录，避免互相覆盖。
+     * 索引表条目：记录一个已缓存压缩包的身份信息。
+     * - [archivePath] 归档绝对路径（人眼可读，用于排查）
+     * - [isStaging] 该归档是否是上层压缩包解出的物化文件（位于 _staging/）
+     * - [size]/[mtime] 归档自身的大小与最后修改时间，用于失效判定
      */
-    fun nestedCacheKey(stack: List<ArchiveSession>): String =
-        stack.joinToString("/") { it.archiveName }
+    @Serializable
+    data class CacheIndexEntry(
+        val archivePath: String,
+        val isStaging: Boolean,
+        val size: Long,
+        val mtime: Long
+    )
+
+    @Serializable
+    data class CacheIndex(
+        val entries: Map<String, CacheIndexEntry> = emptyMap()
+    )
+
+    private val indexJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    private fun indexFile(context: Context): File =
+        File(File(context.cacheDir, CACHE_DIR_NAME), INDEX_FILE_NAME)
+
+    private fun readIndex(context: Context): CacheIndex {
+        val file = indexFile(context)
+        if (!file.exists()) return CacheIndex()
+        return try {
+            indexJson.decodeFromString<CacheIndex>(file.readText())
+        } catch (e: Exception) {
+            Log.e(TAG, "读取压缩包缓存索引失败，重建", e)
+            CacheIndex()
+        }
+    }
+
+    private fun writeIndex(context: Context, index: CacheIndex) {
+        try {
+            val file = indexFile(context)
+            file.parentFile?.mkdirs()
+            file.writeText(indexJson.encodeToString(index))
+        } catch (e: Exception) {
+            Log.e(TAG, "写入压缩包缓存索引失败", e)
+        }
+    }
+
+    /**
+     * 确保 [archivePath] 已有可用缓存目录，返回其缓存根。
+     *
+     * - 索引命中且 size/mtime 与当前归档一致 → 直接复用。
+     * - 未命中或不一致 → 删除该压缩包的旧缓存目录并重建索引条目。
+     *
+     * 注意：[archivePath] 必须指向真实存在的文件；内层归档需先物化到 _staging/。
+     */
+    fun ensureCacheRoot(
+        context: Context,
+        archivePath: String,
+        isStaging: Boolean
+    ): File {
+        val key = cacheKeyFor(archivePath)
+        val root = File(File(context.cacheDir, CACHE_DIR_NAME), key)
+        val file = File(archivePath)
+        val size = file.length()
+        val mtime = file.lastModified()
+
+        val index = readIndex(context)
+        val entry = index.entries[key]
+        val valid = entry != null &&
+            entry.archivePath == archivePath &&
+            entry.size == size &&
+            entry.mtime == mtime &&
+            root.exists()
+
+        if (valid) return root
+
+        // 失效：删除旧目录并重建
+        if (root.exists()) root.deleteRecursively()
+        root.mkdirs()
+        writeIndex(
+            context,
+            CacheIndex(
+                index.entries + (key to CacheIndexEntry(archivePath, isStaging, size, mtime))
+            )
+        )
+        return root
+    }
+
+    /** 删除索引中指向缺失目录的孤儿条目 */
+    fun pruneIndex(context: Context) {
+        val index = readIndex(context)
+        val base = File(context.cacheDir, CACHE_DIR_NAME)
+        val kept = index.entries.filter { (key, _) -> File(base, key).exists() }
+        if (kept.size != index.entries.size) writeIndex(context, CacheIndex(kept))
+    }
 
     /**
      * 密码检测结果
@@ -252,7 +373,10 @@ object ArchiveBrowser {
         val archiveName: String,
         val root: CacheArchiveNode,
         val currentPath: String,
-        val originalPath: String
+        val originalPath: String,
+        /** 归档自身大小与最后修改时间，用于跨进程恢复时判定缓存是否仍然有效 */
+        val size: Long = -1L,
+        val mtime: Long = -1L
     )
 
     @Serializable
@@ -274,13 +398,18 @@ object ArchiveBrowser {
         children = cache.children.map { fromCacheNode(it) }.toMutableList()
     )
 
-    private fun toCacheLayer(session: ArchiveSession): CacheLayer = CacheLayer(
-        archivePath = session.archivePath,
-        archiveName = session.archiveName,
-        root = toCacheNode(session.root),
-        currentPath = session.currentPath,
-        originalPath = session.originalPath
-    )
+    private fun toCacheLayer(session: ArchiveSession): CacheLayer {
+        val file = File(session.archivePath)
+        return CacheLayer(
+            archivePath = session.archivePath,
+            archiveName = session.archiveName,
+            root = toCacheNode(session.root),
+            currentPath = session.currentPath,
+            originalPath = session.originalPath,
+            size = file.length(),
+            mtime = file.lastModified()
+        )
+    }
 
     fun saveSessionCache(context: Context, stack: List<ArchiveSession>, sourcePanel: String) {
         if (stack.isEmpty()) { clearSessionCache(context); return }
@@ -298,7 +427,14 @@ object ArchiveBrowser {
         return try {
             val cache = cacheJson.decodeFromString<ArchiveSessionCache>(file.readText())
             val bottom = cache.layers.firstOrNull() ?: run { file.delete(); return null }
-            if (!File(bottom.archivePath).exists() || bottom.root.children.isEmpty()) {
+            // 逐层校验：每层归档文件必须存在（嵌套层是上层缓存里的物化文件）；
+            // 并且自身 size/mtime 与记录一致，否则整条链失效，丢弃缓存。
+            val chainValid = cache.layers.all { layer ->
+                val f = File(layer.archivePath)
+                f.exists() &&
+                    (layer.size < 0 || (f.length() == layer.size && f.lastModified() == layer.mtime))
+            }
+            if (!chainValid || bottom.root.children.isEmpty()) {
                 file.delete(); return null
             }
             Pair(cache, cache.sourcePanel)

@@ -27,7 +27,12 @@ class ArchiveThumbnailFetcher(
     private val cacheDir: File
 ) : Fetcher {
     override suspend fun fetch(): FetchResult {
-        val cacheFile = File(cacheDir, "archive_cache/${data.archiveName}/${data.entryPath}")
+        // 缓存以「压缩包」为单位，键 = 归档绝对路径哈希，与 openArchiveFile 的预览/原图缓存同源，
+        // 因此缩略图命中后点击打开可直接复用原图，无需重复解压。
+        val cacheFile = File(
+            File(cacheDir, "archive_cache/${ArchiveBrowser.cacheKeyFor(data.archivePath)}"),
+            data.entryPath
+        )
         val thumbFile = File("${cacheFile.absolutePath}.thumb")
 
         // 优先级: 原图 > 缩略图 > 生成
