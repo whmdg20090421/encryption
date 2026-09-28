@@ -2,10 +2,7 @@ package com.whmdg.mczj.tools.fileop.sync
 
 import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
-import com.whmdg.mczj.tools.encryption.data.SyncEntry
 import com.whmdg.mczj.tools.encryption.data.SyncStatus
-import com.whmdg.mczj.tools.encryption.data.UploadStatus
-import com.whmdg.mczj.tools.encryption.data.VaultSyncIndex
 import com.whmdg.mczj.tools.fileop.webdav.WebDavFileClient
 import kotlinx.coroutines.*
 import java.io.File
@@ -15,261 +12,24 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 /**
- * 同步引擎：负责本地保险箱与 WebDAV 云端之间的文件同步。
+ * 同步引擎：负责把本地保险箱文件上传到 WebDAV 云端。
  *
- * - 扫描本地/云端文件，计算差异
- * - 逐文件上传/下载，实时报告进度
+ * - 逐文件上传，带 423/404/网络重试
+ * - 上传前以大小 + 明文内容指纹判定是否可跳过
  * - 失败标记为 PAUSED（不支持断点续传）
  */
 class SyncEngine(
     private val webdavClient: WebDavFileClient,
     private val vaultDir: String,
-    private val onProgress: (SyncTaskState) -> Unit,
-    private val onFileComplete: (relativePath: String, success: Boolean) -> Unit,
     private val logFiles: List<File> = emptyList()
 ) {
-    @Volatile
-    private var isCancelled = false
-
-    /** 排除的系统文件 */
-    private val excludedFiles = setOf(
-        "vault_config.json",
-        "vault_config.backup.json",
-        "vault_sync_index.json",
-        "name_mappings.json",
-        "folder_sizes.json"
-    )
-
-    /**
-     * 启动同步。
-     * 返回更新后的索引。
-     */
-    suspend fun startSync(
-        mode: SyncMode,
-        remoteBasePath: String,
-        index: VaultSyncIndex
-    ): VaultSyncIndex = coroutineScope {
-        var currentIndex = index
-        val fileProgress = mutableMapOf<String, SyncFileProgress>()
-
-        // Phase 1: 扫描
-        onProgress(SyncTaskState(phase = SyncPhase.SCANNING, mode = mode))
-        val localFiles = scanLocalFiles()
-        val remoteFiles = scanRemoteFiles(remoteBasePath)
-
-        // Phase 2: 差异检测
-        val toUpload = mutableListOf<LocalFileInfo>()
-        val toDownload = mutableListOf<RemoteFileInfo>()
-
-        when (mode) {
-            SyncMode.LOCAL_TO_CLOUD -> {
-                for ((relPath, localInfo) in localFiles) {
-                    val entry = currentIndex.entries[relPath]
-                    when {
-                        entry == null -> {
-                            // 新文件 → 需要上传
-                            toUpload.add(localInfo)
-                        }
-                        entry.uploadStatus == UploadStatus.PAUSED -> {
-                            // 上次暂停 → 跳过
-                        }
-                        entry.uploadStatus == UploadStatus.COMPLETED -> {
-                            // 已完成 → 检查是否变化
-                            if (needsReupload(localInfo, entry)) {
-                                toUpload.add(localInfo)
-                            }
-                        }
-                        else -> {
-                            // PENDING / UPLOADING → 需要上传
-                            toUpload.add(localInfo)
-                        }
-                    }
-                }
-            }
-            SyncMode.CLOUD_TO_LOCAL -> {
-                for ((relPath, remoteInfo) in remoteFiles) {
-                    val localInfo = localFiles[relPath]
-                    if (localInfo == null || localInfo.size != remoteInfo.size) {
-                        toDownload.add(remoteInfo)
-                    }
-                }
-            }
-            SyncMode.BIDIRECTIONAL -> {
-                // 上传：本地有云端无，或本地修改
-                for ((relPath, localInfo) in localFiles) {
-                    val remoteInfo = remoteFiles[relPath]
-                    val entry = currentIndex.entries[relPath]
-                    if (remoteInfo == null) {
-                        toUpload.add(localInfo)
-                    } else if (entry == null || entry.uploadStatus != UploadStatus.COMPLETED) {
-                        toUpload.add(localInfo)
-                    } else if (needsReupload(localInfo, entry)) {
-                        toUpload.add(localInfo)
-                    }
-                }
-                // 下载：云端有本地无
-                for ((relPath, remoteInfo) in remoteFiles) {
-                    if (localFiles[relPath] == null) {
-                        toDownload.add(remoteInfo)
-                    }
-                }
-            }
-        }
-
-        val totalFiles = toUpload.size + toDownload.size
-        val totalBytes = toUpload.sumOf { it.size } + toDownload.sumOf { it.size }
-
-        // 初始化所有待处理文件的进度
-        for (info in toUpload) {
-            fileProgress[info.relativePath] = SyncFileProgress(
-                relativePath = info.relativePath,
-                totalBytes = info.size,
-                uploadedBytes = 0,
-                status = UploadStatus.PENDING
-            )
-        }
-        for (info in toDownload) {
-            fileProgress[info.relativePath] = SyncFileProgress(
-                relativePath = info.relativePath,
-                totalBytes = info.size,
-                uploadedBytes = 0,
-                status = UploadStatus.PENDING
-            )
-        }
-
-        onProgress(SyncTaskState(
-            phase = SyncPhase.SYNCING,
-            mode = mode,
-            totalFiles = totalFiles,
-            totalBytes = totalBytes,
-            fileProgress = fileProgress.toMap()
-        ))
-
-        var completedFiles = 0
-        var transferredBytes = 0L
-        var lastTimeMs = System.currentTimeMillis()
-        var lastTransferred = 0L
-
-        // Phase 3: 执行上传
-        for (localInfo in toUpload) {
-            if (isCancelled) break
-            currentCoroutineContext().ensureActive()
-            val relPath = localInfo.relativePath
-
-            // 更新状态为 UPLOADING
-            fileProgress[relPath] = fileProgress[relPath]!!.copy(status = UploadStatus.UPLOADING)
-            currentIndex = updateIndexEntry(currentIndex, relPath, "", localInfo.size, UploadStatus.UPLOADING)
-            onProgress(buildTaskState(mode, SyncPhase.SYNCING, totalFiles, completedFiles, totalBytes, transferredBytes, fileProgress, relPath))
-
-            val remotePath = buildRemotePath(remoteBasePath, relPath)
-            val localFile = File(vaultDir, relPath.trimStart('/'))
-
-            val success = try {
-                // 确保远程目录存在（此旧接口无 SyncDatabase，退化为无缓存的逐级创建）
-                ensureRemoteDir(buildRemotePath(remoteBasePath, ""), relPath, null)
-                webdavClient.uploadFile(localFile, remotePath) { bytesWritten ->
-                    fileProgress[relPath] = fileProgress[relPath]!!.copy(uploadedBytes = bytesWritten)
-                    val nowMs = System.currentTimeMillis()
-                    val dtMs = nowMs - lastTimeMs
-                    if (dtMs > 500) {
-                        val speed = (transferredBytes + bytesWritten - lastTransferred) * 1000 / dtMs
-                        lastTimeMs = nowMs
-                        lastTransferred = transferredBytes + bytesWritten
-                        onProgress(buildTaskState(mode, SyncPhase.SYNCING, totalFiles, completedFiles, totalBytes, transferredBytes + bytesWritten, fileProgress, relPath, speed))
-                    }
-                }
-                true
-            } catch (e: Exception) {
-                false
-            }
-
-            if (success) {
-                fileProgress[relPath] = fileProgress[relPath]!!.copy(
-                    status = UploadStatus.COMPLETED,
-                    uploadedBytes = localInfo.size
-                )
-                currentIndex = updateIndexEntry(currentIndex, relPath, "", localInfo.size, UploadStatus.COMPLETED)
-                completedFiles++
-                transferredBytes += localInfo.size
-                onFileComplete(relPath, true)
-            } else {
-                fileProgress[relPath] = fileProgress[relPath]!!.copy(status = UploadStatus.PAUSED)
-                currentIndex = updateIndexEntry(currentIndex, relPath, "", localInfo.size, UploadStatus.PAUSED)
-                onFileComplete(relPath, false)
-            }
-            onProgress(buildTaskState(mode, SyncPhase.SYNCING, totalFiles, completedFiles, totalBytes, transferredBytes, fileProgress, relPath))
-        }
-
-        // Phase 4: 执行下载
-        for (remoteInfo in toDownload) {
-            if (isCancelled) break
-            currentCoroutineContext().ensureActive()
-            val relPath = remoteInfo.relativePath
-
-            fileProgress[relPath] = fileProgress[relPath]!!.copy(status = UploadStatus.UPLOADING)
-            onProgress(buildTaskState(mode, SyncPhase.SYNCING, totalFiles, completedFiles, totalBytes, transferredBytes, fileProgress, relPath))
-
-            val localFile = File(vaultDir, relPath.trimStart('/'))
-            localFile.parentFile?.mkdirs()
-
-            val success = try {
-                webdavClient.downloadFile(remoteInfo.remotePath, localFile) { bytesRead ->
-                    fileProgress[relPath] = fileProgress[relPath]!!.copy(uploadedBytes = bytesRead)
-                    val nowMs = System.currentTimeMillis()
-                    val dtMs = nowMs - lastTimeMs
-                    if (dtMs > 500) {
-                        val speed = (transferredBytes + bytesRead - lastTransferred) * 1000 / dtMs
-                        lastTimeMs = nowMs
-                        lastTransferred = transferredBytes + bytesRead
-                        onProgress(buildTaskState(mode, SyncPhase.SYNCING, totalFiles, completedFiles, totalBytes, transferredBytes + bytesRead, fileProgress, relPath, speed))
-                    }
-                }
-                true
-            } catch (e: Exception) {
-                false
-            }
-
-            if (success) {
-                fileProgress[relPath] = fileProgress[relPath]!!.copy(
-                    status = UploadStatus.COMPLETED,
-                    uploadedBytes = remoteInfo.size
-                )
-                currentIndex = updateIndexEntry(currentIndex, relPath, "", remoteInfo.size, UploadStatus.COMPLETED)
-                completedFiles++
-                transferredBytes += remoteInfo.size
-                onFileComplete(relPath, true)
-            } else {
-                fileProgress[relPath] = fileProgress[relPath]!!.copy(status = UploadStatus.PAUSED)
-                onFileComplete(relPath, false)
-            }
-            onProgress(buildTaskState(mode, SyncPhase.SYNCING, totalFiles, completedFiles, totalBytes, transferredBytes, fileProgress, relPath))
-        }
-
-        // Phase 5: 完成
-        onProgress(SyncTaskState(
-            phase = SyncPhase.COMPLETED,
-            mode = mode,
-            totalFiles = totalFiles,
-            completedFiles = completedFiles,
-            totalBytes = totalBytes,
-            transferredBytes = transferredBytes,
-            fileProgress = fileProgress.toMap()
-        ))
-
-        currentIndex
-    }
-
-    fun cancel() {
-        isCancelled = true
-    }
-
     /**
      * 上传单个文件（完整流程）。
      *
-     * ① 预检查：确保远程目录存在 → 检查云端文件 → 比较大小 → 比较明文 MD5 → 跳过或上传
+     * ① 预检查：确保远程目录存在 → 检查云端文件 → 比较大小 → 比较明文内容指纹 → 跳过或上传
      * ② 上传（带重试，网络错误重试1次，等待3秒）
      * ③ 验证：比较本地大小 vs 云端大小
-     * ④ 记录：写入云端表（明文 MD5 取自上传前的本地记录）→ 更新本地表为 COMPLETED
+     * ④ 记录：写入云端表（内容指纹取自上传前的本地记录）→ 更新本地表为 COMPLETED
      */
     suspend fun uploadSingleFile(
         relativePath: String,
@@ -315,26 +75,26 @@ class SyncEngine(
             } catch (_: Exception) {}
 
             if (cloudSize == fileSize) {
-                // 大小相同 → 比较本地记录与云端记录的明文 MD5
+                // 大小相同 → 比较本地记录与云端记录的明文内容指纹
                 val localEntry = syncDb.getEntry("local_entries", relativePath)
                 val cloudEntry = syncDb.getEntry("cloud_entries", relativePath)
-                if (localEntry?.md5 != null && localEntry.md5 == cloudEntry?.md5) {
-                    // 明文 MD5 相同 → 同一文件，跳过上传
+                if (localEntry?.contentHash != null && localEntry.contentHash == cloudEntry?.contentHash) {
+                    // 明文内容指纹相同 → 同一文件，跳过上传
                     CloudSyncLogger.logSync("SyncEngine", "跳过上传（文件内容相同）: $relativePath")
                     syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
                     onComplete(true, null, true)
                     return@withContext
                 }
             }
-            // 大小不同或 MD5 不同 → 继续上传
+            // 大小不同或内容指纹不同 → 继续上传
         }
 
         // ② 锁定 → UPLOADING
         syncDb.updateStatus("local_entries", relativePath, SyncStatus.UPLOADING)
         onStatusChange()
 
-        // 上传时使用的明文 MD5 取自本地已记录的导入值
-        val md5 = syncDb.getEntry("local_entries", relativePath)?.md5
+        // 上传时使用的明文内容指纹取自本地已记录的导入值
+        val contentHash = syncDb.getEntry("local_entries", relativePath)?.contentHash
 
         // 确保远程父目录存在（惰性查表缓存，只补建缺失段）
         ensureRemoteDir(remoteBasePath, relativePath, syncDb)
@@ -424,7 +184,7 @@ class SyncEngine(
             path = relativePath,
             size = fileSize,
             lastModified = now,
-            md5 = md5 ?: "",
+            contentHash = contentHash ?: "",
             cloudHash = null,
             status = SyncStatus.COMPLETED,
             lastSyncTime = now,
@@ -435,11 +195,6 @@ class SyncEngine(
         CloudSyncLogger.logSync("SyncEngine", "上传成功: $relativePath (大小: $fileSize)")
         syncDb.updateStatus("local_entries", relativePath, SyncStatus.COMPLETED)
         onComplete(true, null, true)
-    }
-
-    /** 判断文件是否需要重新上传（密文不变，仅以大小判定） */
-    private fun needsReupload(localInfo: LocalFileInfo, entry: SyncEntry): Boolean {
-        return localInfo.size != entry.size
     }
 
     /** 判断异常是否可重试（网络错误、超时、5xx 可重试；401/403/404 不可重试） */
@@ -469,63 +224,6 @@ class SyncEngine(
     }
 
     // ── 内部方法 ──
-
-    private data class LocalFileInfo(
-        val relativePath: String,
-        val size: Long,
-        val lastModified: Long      // 文件修改时间戳
-    )
-
-    private data class RemoteFileInfo(
-        val relativePath: String,
-        val remotePath: String,
-        val size: Long
-    )
-
-    /** 扫描本地保险箱目录（仅收集元数据） */
-    private suspend fun scanLocalFiles(): Map<String, LocalFileInfo> = withContext(Dispatchers.IO) {
-        val result = mutableMapOf<String, LocalFileInfo>()
-        val dir = File(vaultDir)
-        if (!dir.exists()) return@withContext result
-
-        dir.walkTopDown().filter { it.isFile }.forEach { file ->
-            val name = file.name
-            if (name in excludedFiles) return@forEach
-            val relativePath = "/" + file.relativeTo(dir).path.replace('\\', '/')
-            result[relativePath] = LocalFileInfo(
-                relativePath = relativePath,
-                size = file.length(),
-                lastModified = file.lastModified()
-            )
-        }
-        result
-    }
-
-    /** 扫描云端目录（递归） */
-    private suspend fun scanRemoteFiles(remotePath: String): Map<String, RemoteFileInfo> = withContext(Dispatchers.IO) {
-        val result = mutableMapOf<String, RemoteFileInfo>()
-        scanRemoteDir(remotePath, remotePath, result)
-        result
-    }
-
-    private fun scanRemoteDir(basePath: String, currentPath: String, result: MutableMap<String, RemoteFileInfo>) {
-        val children = webdavClient.listChildren(currentPath) ?: return
-        for (child in children) {
-            val childPath = if (currentPath.endsWith("/")) "$currentPath${child.name}" else "$currentPath/${child.name}"
-            if (child.isDirectory) {
-                scanRemoteDir(basePath, childPath, result)
-            } else {
-                val relativePath = childPath.removePrefix(basePath).let {
-                    if (it.startsWith("/")) it else "/$it"
-                }
-                result[relativePath] = RemoteFileInfo(
-                    relativePath = relativePath,
-                    remotePath = childPath,
-                    size = child.size
-                )
-            }
-        }
-    }
 
     /**
      * 惰性确保远程父目录存在（带 cloud_entries 缓存）。
@@ -631,47 +329,6 @@ class SyncEngine(
         val rel = relativePath.trimStart('/')
         return "$base/$rel"
     }
-
-    /** 更新索引中的条目 */
-    private fun updateIndexEntry(
-        index: VaultSyncIndex,
-        relativePath: String,
-        md5: String,
-        size: Long,
-        status: UploadStatus
-    ): VaultSyncIndex {
-        val newEntries = index.entries.toMutableMap()
-        newEntries[relativePath] = SyncEntry(
-            md5 = md5,
-            size = size,
-            uploadStatus = status,
-            lastSyncTime = if (status == UploadStatus.COMPLETED) java.time.Instant.now().toString() else null
-        )
-        return index.copy(entries = newEntries)
-    }
-
-    /** 构建任务状态 */
-    private fun buildTaskState(
-        mode: SyncMode,
-        phase: SyncPhase,
-        totalFiles: Int,
-        completedFiles: Int,
-        totalBytes: Long,
-        transferredBytes: Long,
-        fileProgress: Map<String, SyncFileProgress>,
-        currentFile: String?,
-        speed: Long = 0
-    ) = SyncTaskState(
-        phase = phase,
-        mode = mode,
-        totalFiles = totalFiles,
-        completedFiles = completedFiles,
-        currentFileName = currentFile?.trimStart('/')?.substringAfterLast('/'),
-        totalBytes = totalBytes,
-        transferredBytes = transferredBytes,
-        speed = speed,
-        fileProgress = fileProgress.toMap()
-    )
 
     /** 写入错误日志到所有日志文件 + 云盘日志 */
     private fun logError(action: String, relativePath: String, remotePath: String, error: Exception) {

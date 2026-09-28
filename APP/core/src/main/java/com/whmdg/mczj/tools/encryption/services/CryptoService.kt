@@ -35,7 +35,7 @@ object CryptoService {
                     session.nameMapping.set(mappingKey, mappingValue)
                     session.saveNameMapping(context)
                 }
-                recordPlainMd5(context, session, output, sink.plainMd5())
+                recordContentHash(context, session, output, sink.contentHash())
                 return output
             } catch (e: Exception) {
                 pending.delete()
@@ -147,31 +147,31 @@ object CryptoService {
             onProgress = onProgress,
             cancelFlag = cancelFlag,
             context = context
-        ).let { recordPlainMd5(context, session, it.file, it.plainMd5) }
+        ).let { recordContentHash(context, session, it.file, it.contentHash) }
         if (trace) EncryptionTraceLog.log("CryptoService.encryptIntoVault done: out=${outFile.name}")
         return outFile
     }
 
     /**
-     * 加密导入时把明文 MD5 写入本地同步库（行不存在则建），供云同步的差异判定复用。
-     * 明文 MD5 只在加密这一刻的明文流上顺带算出，之后不再重算。
+     * 加密导入时把明文内容指纹写入本地同步库（行不存在则建），供云同步的差异判定复用。
+     * 内容指纹只在加密这一刻的明文流上顺带算出，之后不再重算。
      *
      * 此处只把记录放入进程内批次缓冲（密文已 renameTo 成功才会走到这里），由
-     * [SyncDatabase.enqueueMd5] 按阈值或任务收尾时批量提交，避免逐文件 fsync。
+     * [SyncDatabase.enqueueContentHash] 按阈值或任务收尾时批量提交，避免逐文件 fsync。
      */
-    private fun recordPlainMd5(
+    private fun recordContentHash(
         context: Context,
         session: VaultSession,
         encryptedFile: File,
-        plainMd5: String
+        contentHash: String
     ) {
         val relPath = "/" + encryptedFile.relativeTo(session.vaultDir).path.replace('\\', '/')
-        SyncDatabase.enqueueMd5(
+        SyncDatabase.enqueueContentHash(
             context = context,
             syncName = session.record.name,
-            record = SyncDatabase.LocalMd5Record(
+            record = SyncDatabase.LocalHashRecord(
                 path = relPath,
-                md5 = plainMd5,
+                contentHash = contentHash,
                 size = encryptedFile.length(),
                 lastModified = java.time.Instant.ofEpochMilli(encryptedFile.lastModified()).toString()
             )

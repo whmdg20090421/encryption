@@ -2219,7 +2219,7 @@ private fun DiffScanDialog(
                             size = currentSize,
                             uploadedSize = 0,
                             lastModified = currentModified,
-                            md5 = null,
+                            contentHash = null,
                             cloudHash = null,
                             status = com.whmdg.mczj.tools.encryption.data.SyncStatus.PENDING,
                             lastSyncTime = null,
@@ -2227,13 +2227,13 @@ private fun DiffScanDialog(
                         ))
                         updatedState.incrementAndGet()
                     } else if (existingEntry.size != currentSize || existingEntry.lastModified != currentModified) {
-                        // 文件变化：重置为 PENDING，清空 MD5 和 uploadedSize
+                        // 文件变化：重置为 PENDING，清空内容指纹和 uploadedSize
                         syncDb.updateEntry("local_entries", relPath) { row ->
                             row.copy(
                                 size = currentSize,
                                 uploadedSize = 0,
                                 lastModified = currentModified,
-                                md5 = null,
+                                contentHash = null,
                                 status = com.whmdg.mczj.tools.encryption.data.SyncStatus.PENDING,
                                 failReason = null
                             )
@@ -2415,7 +2415,7 @@ private fun DiffScanDialog(
                         local != null && cloud == null -> diffCount++  // 本地独有
                         local != null && cloud != null -> {
                             // 都有：检查是否是同一个文件
-                            val isSameFile = local.md5 != null && cloud.md5 != null && local.md5 == cloud.md5
+                            val isSameFile = local.contentHash != null && cloud.contentHash != null && local.contentHash == cloud.contentHash
                             if (!isSameFile) diffCount++  // 冲突
                         }
                     }

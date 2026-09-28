@@ -101,7 +101,7 @@ src/main/java/com/whmdg/mczj/tools/
 │   ├── data/                          # 加密数据层
 │   │   ├── VaultConfig.kt / VaultDb.kt / VaultPaths.kt / VaultRecord.kt
 │   │   ├── CanonicalJson.kt / NameMapping.kt / FolderSizeDb.kt / StorageLocation.kt
-│   │   └── SyncDatabase.kt / VaultSyncIndex.kt  # 同步库 / 保险箱同步索引
+│   │   └── SyncDatabase.kt / SyncStatus.kt  # 同步库 / 同步状态枚举
 │   ├── models/
 │   │   └── EncryptionNode.kt
 │   └── services/

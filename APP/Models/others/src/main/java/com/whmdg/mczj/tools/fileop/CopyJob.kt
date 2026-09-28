@@ -346,12 +346,12 @@ class CopyJob(
     }
 
     /**
-     * 提交本次任务可能产生的明文 MD5 批次缓冲。
+     * 提交本次任务可能产生的明文内容指纹批次缓冲。
      *
-     * 加密引入（ExternalToVault）与跨箱转码（CrossVault）都会写目标保险箱的 MD5；
-     * 跨箱还会读取源保险箱，但源箱不产生新 MD5，故只需 flush 目标箱。
+     * 加密引入（ExternalToVault）与跨箱转码（CrossVault）都会写目标保险箱的内容指纹；
+     * 跨箱还会读取源保险箱，但源箱不产生新指纹，故只需 flush 目标箱。
      */
-    private fun flushPendingMd5Batches() {
+    private fun flushPendingHashBatches() {
         val names = when (val ctx = vaultContext) {
             is VaultOperationContext.ExternalToVault -> listOf(ctx.targetSession.record.name)
             is VaultOperationContext.CrossVault -> listOf(ctx.targetSession.record.name)
@@ -359,7 +359,7 @@ class CopyJob(
         }
         for (name in names) {
             try {
-                com.whmdg.mczj.tools.encryption.data.SyncDatabase.flushMd5Batch(context, name)
+                com.whmdg.mczj.tools.encryption.data.SyncDatabase.flushContentHashBatch(context, name)
             } catch (_: Exception) {
             }
         }
@@ -396,9 +396,9 @@ class CopyJob(
             // 清除线程中断标志，确保后续清理代码能正常执行 shell 命令
             Thread.interrupted()
 
-            // 明文 MD5 批次缓冲收尾：正常完成、出错、用户取消都必须 flush，
-            // 保证已 renameTo 落盘密文的 MD5 记录不因退出而丢失。
-            flushPendingMd5Batches()
+            // 明文内容指纹批次缓冲收尾：正常完成、出错、用户取消都必须 flush，
+            // 保证已 renameTo 落盘密文的指纹记录不因退出而丢失。
+            flushPendingHashBatches()
 
             // 目录大小收尾：本任务对保险箱目录体积的唯一持久化点。
             // 无论正常完成、出错还是用户取消，都在此一次性写入已成功加密文件的

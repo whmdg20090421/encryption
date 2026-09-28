@@ -10,7 +10,6 @@ import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
 import com.whmdg.mczj.tools.encryption.data.SyncStatus
 import com.whmdg.mczj.tools.encryption.data.UploadStatus
-import com.whmdg.mczj.tools.encryption.data.VaultSyncIndex
 import com.whmdg.mczj.tools.fileop.sync.SyncEngine
 import com.whmdg.mczj.tools.fileop.sync.CloudSyncForegroundService
 import com.whmdg.mczj.tools.fileop.sync.SyncOverlayBubble
@@ -66,7 +65,7 @@ class CloudPaneController(
     private val dirCompletion = mutableMapOf<String, CompletableDeferred<Unit>>()
     /** 后台扫描消费协程，全局仅一个。 */
     private var scanJob: Job? = null
-    /** 用户取消过 MD5 补全时置位，本轮不再重复弹框（对齐旧的"只弹一次"语义）。 */
+    /** 用户取消过内容指纹补全时置位，本轮不再重复弹框（对齐旧的"只弹一次"语义）。 */
     private var backfillDeclined = false
 
     /** 云盘面板状态（完全独立，使用 mutableStateOf 驱动 Compose recomposition） */
@@ -123,7 +122,7 @@ class CloudPaneController(
 
     /** 加载/校验进度：在转圈下方展示当前阶段与进度 */
     data class LoadProgress(
-        /** 第一行：当前正在做什么（如"正在计算 MD5"） */
+        /** 第一行：当前正在做什么（如"正在计算内容指纹"） */
         val reason: String,
         /** 第二行：已处理数量 */
         val current: Int = 0,
@@ -171,7 +170,7 @@ class CloudPaneController(
         val localModified: String,
         val cloudSize: Long,
         val cloudModified: String,
-        /** 冲突原因（按判定经过的层级依次列出），如 ["大小不同"] 或 ["最后修改时间不同", "MD5 不同"] */
+        /** 冲突原因（按判定经过的层级依次列出），如 ["大小不同"] 或 ["最后修改时间不同", "SHA-256 不同"] */
         val reasons: List<String> = emptyList()
     )
 
@@ -396,7 +395,7 @@ class CloudPaneController(
                 path = relativePath,
                 size = originalSize,
                 lastModified = Instant.ofEpochMilli(localFile.lastModified()).toString(),
-                md5 = null,
+                contentHash = null,
                 cloudHash = null,
                 status = SyncStatus.PENDING,
                 lastSyncTime = null,
@@ -430,8 +429,6 @@ class CloudPaneController(
             val engine = SyncEngine(
                 webdavClient = webdavClient,
                 vaultDir = vaultDir,
-                onProgress = { _ -> },
-                onFileComplete = { _, _ -> },
                 logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
             // 进度异常检测器
@@ -644,19 +641,19 @@ class CloudPaneController(
                 }
             }
 
-            // ⑥ 检测上传冲突：local.status=PENDING 且 cloud.db 中存在，且明文 MD5 不同
+            // ⑥ 检测上传冲突：local.status=PENDING 且 cloud.db 中存在，且明文 SHA-256 不同
             val conflicts = mutableListOf<ConflictFileInfo>()
-            val skippedByHash = mutableSetOf<String>()  // 明文 MD5 相同自动跳过的文件
+            val skippedByHash = mutableSetOf<String>()  // 明文 SHA-256 相同自动跳过的文件
             withContext(Dispatchers.IO) {
                 for ((_, relPath) in toUpload) {
                     val localEntry = syncDb.getEntry("local_entries", relPath)
                     val cloudEntry = syncDb.getEntry("cloud_entries", relPath)
 
                     if (localEntry != null && localEntry.status == SyncStatus.PENDING && cloudEntry != null) {
-                        val localMd5 = localEntry.md5
-                        val cloudMd5 = cloudEntry.md5
-                        if (localMd5 != null && localMd5 == cloudMd5) {
-                            // 明文 MD5 相同 → 同一文件，标记为已同步
+                        val localContentHash = localEntry.contentHash
+                        val cloudContentHash = cloudEntry.contentHash
+                        if (localContentHash != null && localContentHash == cloudContentHash) {
+                            // 明文 SHA-256 相同 → 同一文件，标记为已同步
                             syncDb.updateEntry("local_entries", relPath) { entry ->
                                 entry.copy(
                                     status = SyncStatus.COMPLETED,
@@ -671,7 +668,7 @@ class CloudPaneController(
                                 localModified = localEntry.lastModified,
                                 cloudSize = cloudEntry.size,
                                 cloudModified = cloudEntry.lastModified,
-                                reasons = listOf("MD5 不同")
+                                reasons = listOf("SHA-256 不同")
                             ))
                         }
                     }
@@ -784,7 +781,7 @@ class CloudPaneController(
                             path = relPath,
                             size = originalSize,
                             lastModified = Instant.ofEpochMilli(file.lastModified()).toString(),
-                            md5 = null,
+                            contentHash = null,
                             cloudHash = null,
                             status = SyncStatus.QUEUED,
                             lastSyncTime = null,
@@ -820,8 +817,6 @@ class CloudPaneController(
             val engine = SyncEngine(
                 webdavClient = webdavClient,
                 vaultDir = vaultDir,
-                onProgress = { _ -> },
-                onFileComplete = { _, _ -> },
                 logFiles = listOfNotNull(internalLogFile, externalLogFile)
             )
 
@@ -1389,8 +1384,8 @@ class CloudPaneController(
                     val hasConflict = localEntry != null && localEntry.status != SyncStatus.COMPLETED
 
                     if (hasConflict && localEntry != null) {
-                        // 冲突原因：明文 MD5 不同
-                        val reasons = listOf("MD5 不同")
+                        // 冲突原因：明文 SHA-256 不同
+                        val reasons = listOf("SHA-256 不同")
                         val overwrite = suspendCancellableCoroutine<Boolean> { cont ->
                             state.downloadConflictDialog = DownloadConflictState(
                                 path = relPath,
@@ -1460,7 +1455,7 @@ class CloudPaneController(
                                 size = actualSize,
                                 uploadedSize = actualSize,
                                 lastModified = actualModified,
-                                md5 = cloudEntry.md5,
+                                contentHash = cloudEntry.contentHash,
                                 cloudHash = cloudEntry.cloudHash,
                                 status = SyncStatus.COMPLETED,
                                 lastSyncTime = Instant.now().toString(),
@@ -1753,44 +1748,6 @@ class CloudPaneController(
                 onComplete?.invoke()
             }
         }
-    }
-
-    /** 启动批量同步（保留旧接口，暂未使用） */
-    fun startSync(mode: SyncMode) {
-        syncJob?.cancel()
-        syncJob = scope.launch {
-            val timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-            val logFileName = "${vaultName}_batch_${timestamp}.log"
-            val internalLogDir = com.whmdg.mczj.tools.AppDataPaths.cloudSyncLogs(context)
-            val internalLogFile = File(internalLogDir, logFileName)
-            val externalLogDir = context.getExternalFilesDir(null)?.let { File(it, "Android_tools/云盘") }
-            val externalLogFile = externalLogDir?.let { File(it, logFileName) }
-            val engine = SyncEngine(
-                webdavClient = webdavClient,
-                vaultDir = vaultDir,
-                onProgress = { taskState ->
-                    state.syncTask = taskState
-                },
-                onFileComplete = { relativePath, success ->
-                    if (success) navigateTo(state.currentPath)
-                },
-                logFiles = listOfNotNull(internalLogFile, externalLogFile)
-            )
-            try {
-                engine.startSync(
-                    mode = mode,
-                    remoteBasePath = remoteBasePath,
-                    index = VaultSyncIndex()
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {}
-        }
-    }
-
-    fun pauseSync() {
-        syncJob?.cancel()
-        state.syncTask = state.syncTask.copy(phase = SyncPhase.IDLE)
     }
 
     // ── 进度弹窗控制 ──
@@ -2238,7 +2195,7 @@ class CloudPaneController(
                 path = file.path,
                 size = originalSize,
                 lastModified = java.time.Instant.ofEpochMilli(localFile.lastModified()).toString(),
-                md5 = null,
+                contentHash = null,
                 cloudHash = null,
                 status = com.whmdg.mczj.tools.encryption.data.SyncStatus.COMPLETED,
                 lastSyncTime = java.time.Instant.now().toString(),
@@ -2410,7 +2367,7 @@ class CloudPaneController(
                 val currentSize = child.length()
                 when {
                     existing == null -> needBackfill.add(childRel to child)
-                    existing.md5.isNullOrEmpty() -> needBackfill.add(childRel to child)
+                    existing.contentHash.isNullOrEmpty() -> needBackfill.add(childRel to child)
                     existing.size != currentSize -> {
                         val currentLastModified = Instant.ofEpochMilli(child.lastModified()).toString()
                         syncDb.updateSize("local_entries", childRel, currentSize, currentLastModified)
@@ -2433,7 +2390,7 @@ class CloudPaneController(
             }
         }
 
-        // 现场补齐缺失的明文 MD5（沿用旧的阻塞式弹框，会话随后复用）
+        // 现场补齐缺失的明文 SHA-256（沿用旧的阻塞式弹框，会话随后复用）
         if (needBackfill.isNotEmpty() && !backfillDeclined) {
             backfillMissing(needBackfill)
         }
@@ -2473,7 +2430,7 @@ class CloudPaneController(
     }
 
     /**
-     * 补全缺失的明文 MD5：请求密码 → 校验并取得临时会话 → 纯内存流式解密逐个计算。
+     * 补全缺失的明文 SHA-256：请求密码 → 校验并取得临时会话 → 纯内存流式解密逐个计算。
      * 用户取消或密码始终错误时不写任何记录（保持"表中有记录"的原有语义）。
      *
      * 会话（钥匙）跟随面板生命周期存活：本轮扫描不销毁，便于后续扫描直接复用；
@@ -2488,12 +2445,12 @@ class CloudPaneController(
         }
         for ((relativePath, file) in targets) {
             try {
-                val md5 = withContext(Dispatchers.IO) {
-                    FileCodec.md5OfPlaintext(file, session.dek, session.record.customEncryption)
+                val contentHash = withContext(Dispatchers.IO) {
+                    FileCodec.hashOfPlaintext(file, session.dek, session.record.customEncryption)
                 }
-                syncDb.upsertLocalMd5(
+                syncDb.upsertLocalContentHash(
                     path = relativePath,
-                    md5 = md5,
+                    contentHash = contentHash,
                     size = file.length(),
                     lastModified = Instant.ofEpochMilli(file.lastModified()).toString()
                 )
@@ -2700,10 +2657,10 @@ class CloudPaneController(
                         // 剩余部分归入 yellow（uploading），不计入 red
                     }
                     else -> {
-                        // 状态非已完成时，再核对明文 MD5：与云端一致则视为已同步（只判断，不写库）
+                        // 状态非已完成时，再核对明文 SHA-256：与云端一致则视为已同步（只判断，不写库）
                         val cloudEntry = syncDb.getEntry("cloud_entries", childPath)
-                        val md5 = dbEntry?.md5
-                        if (!md5.isNullOrEmpty() && md5 == cloudEntry?.md5) {
+                        val contentHash = dbEntry?.contentHash
+                        if (!contentHash.isNullOrEmpty() && contentHash == cloudEntry?.contentHash) {
                             uploadedSize += fileSize
                         } else {
                             redSize += fileSize
@@ -2758,10 +2715,10 @@ class CloudPaneController(
                              name in localNames
 
             if (isConflict && localEntry != null) {
-                // 冲突文件：明文 MD5 相同 → 同一文件，直接合并为 COMPLETED
-                val localMd5 = localEntry.md5
-                val cloudMd5 = cloudEntry.md5
-                if (localMd5 != null && localMd5 == cloudMd5) {
+                // 冲突文件：明文 SHA-256 相同 → 同一文件，直接合并为 COMPLETED
+                val localContentHash = localEntry.contentHash
+                val cloudContentHash = cloudEntry.contentHash
+                if (localContentHash != null && localContentHash == cloudContentHash) {
                     syncDb.updateEntry("local_entries", childRelativePath) { row ->
                         row.copy(
                             status = SyncStatus.COMPLETED,
@@ -2783,7 +2740,7 @@ class CloudPaneController(
                 }
             }
 
-            // 云端-only 或冲突（MD5 不同）时，添加云端条目
+            // 云端-only 或冲突（SHA-256 不同）时，添加云端条目
             // 冲突时：本地条目在 listLocalFiles 中已添加（显示在前），云端条目在此添加（显示在后）
             if (name !in localNames || isConflict) {
                 entries.add(CloudFileEntry(

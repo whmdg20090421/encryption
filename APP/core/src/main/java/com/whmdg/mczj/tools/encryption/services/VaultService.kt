@@ -347,7 +347,7 @@ class VaultService(private val context: Context) {
      */
     private fun cleanSyncDatabase(vaultName: String) {
         try {
-            SyncDatabase.discardMd5Batch(vaultName)
+            SyncDatabase.discardContentHashBatch(vaultName)
             SyncDatabase.closeInstance(context, vaultName)
             val syncDir = File(AppDataPaths.encryption(context), "云盘同步/$vaultName")
             if (syncDir.exists()) syncDir.deleteRecursively()

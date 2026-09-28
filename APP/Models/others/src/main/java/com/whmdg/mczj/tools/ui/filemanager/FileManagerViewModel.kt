@@ -4482,11 +4482,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         ctrl.extractCancelFlag.set(false)
         ctrl.extractJob?.cancel()
         ctrl.extractJob = viewModelScope.launch(Dispatchers.IO) {
-            // 解压到保险箱时会产生明文 MD5 批次缓冲，退出前（成功/取消/出错）必须提交
-            fun flushVaultMd5IfNeeded() {
+            // 解压到保险箱时会产生明文内容指纹批次缓冲，退出前（成功/取消/出错）必须提交
+            fun flushVaultHashIfNeeded() {
                 if (target is ArchiveExtractionTarget.Vault) {
                     try {
-                        com.whmdg.mczj.tools.encryption.data.SyncDatabase.flushMd5Batch(context, target.session.record.name)
+                        com.whmdg.mczj.tools.encryption.data.SyncDatabase.flushContentHashBatch(context, target.session.record.name)
                     } catch (_: Exception) {
                     }
                 }
@@ -4617,7 +4617,7 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 commitArchivePassword(password)
             }
             Log.d("FileManagerVM", "extractFromArchive 完成: 成功=$successCount/${allFiles.size}, lastError=$lastError")
-            flushVaultMd5IfNeeded()
+            flushVaultHashIfNeeded()
             if (target is ArchiveExtractionTarget.Vault && target.disposeSessionWhenDone) target.session.dispose()
             withContext(Dispatchers.Main) {
                 when (target) {
@@ -4627,11 +4627,11 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                 onComplete(successCount, allFiles.size, lastError)
             }
             } catch (e: kotlinx.coroutines.CancellationException) {
-                flushVaultMd5IfNeeded()
+                flushVaultHashIfNeeded()
                 if (target is ArchiveExtractionTarget.Vault && target.disposeSessionWhenDone) target.session.dispose()
                 withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) { onComplete(0, 0, "用户取消") }
             } catch (e: Exception) {
-                flushVaultMd5IfNeeded()
+                flushVaultHashIfNeeded()
                 if (target is ArchiveExtractionTarget.Vault && target.disposeSessionWhenDone) target.session.dispose()
                 withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) {
                     onComplete(0, 0, formatArchiveExtractionError(e))

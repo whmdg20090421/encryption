@@ -20,7 +20,7 @@ class SyncDatabase private constructor(
 ) : SQLiteOpenHelper(context, dbFile.absolutePath, null, DB_VERSION) {
 
     companion object {
-        private const val DB_VERSION = 5
+        private const val DB_VERSION = 6
         private const val TAG = "SyncDatabase"
 
         private val instances = mutableMapOf<String, SyncDatabase>()
@@ -68,67 +68,67 @@ class SyncDatabase private constructor(
         }
 
         /**
-         * 明文 MD5 落库的进程内批次缓冲。
+         * 明文内容指纹落库的进程内批次缓冲。
          *
          * 逐文件写库会产生大量独立 fsync，是小文件加密场景的主要瓶颈。本缓冲把记录攒够
-         * [MD5_FLUSH_THRESHOLD] 条或显式 [flushMd5Batch] 时，用一笔事务批量提交。
+         * [HASH_FLUSH_THRESHOLD] 条或显式 [flushContentHashBatch] 时，用一笔事务批量提交。
          *
          * 边界纪律（与调用方契约定死）：
-         * - 只有密文 `renameTo` 成功后才允许 [enqueueMd5]，因此缓冲里永远不含
+         * - 只有密文 `renameTo` 成功后才允许 [enqueueContentHash]，因此缓冲里永远不含
          *   "加密到一半被清理"的残留记录；
-         * - 用户取消 / 任务结束 / 进程退出前，调用方必须在 `finally` 中 [flushMd5Batch]，
-         *   保证已落盘密文的 MD5 不丢；
+         * - 用户取消 / 任务结束 / 进程退出前，调用方必须在 `finally` 中 [flushContentHashBatch]，
+         *   保证已落盘密文的指纹不丢；
          * - 进程被杀时未 flush 的批次随加密线程一起消亡，与逐条写入的崩溃窗口等价，
          *   缺口由下次扫描重建，密文始终是权威数据。
          */
-        private const val MD5_FLUSH_THRESHOLD = 64
+        private const val HASH_FLUSH_THRESHOLD = 64
 
-        private val md5BatchLock = Any()
-        private val md5Pending = HashMap<String, ArrayList<LocalMd5Record>>()
+        private val hashBatchLock = Any()
+        private val hashPending = HashMap<String, ArrayList<LocalHashRecord>>()
 
-        /** 记录一个"已成功落盘"密文的明文 MD5；达到阈值时自动提交该保险箱的一批。 */
-        fun enqueueMd5(context: Context, syncName: String, record: LocalMd5Record) {
-            val toFlush: List<LocalMd5Record>?
-            synchronized(md5BatchLock) {
-                val list = md5Pending.getOrPut(syncName) { ArrayList(MD5_FLUSH_THRESHOLD) }
+        /** 记录一个"已成功落盘"密文的明文内容指纹；达到阈值时自动提交该保险箱的一批。 */
+        fun enqueueContentHash(context: Context, syncName: String, record: LocalHashRecord) {
+            val toFlush: List<LocalHashRecord>?
+            synchronized(hashBatchLock) {
+                val list = hashPending.getOrPut(syncName) { ArrayList(HASH_FLUSH_THRESHOLD) }
                 list.add(record)
-                toFlush = if (list.size >= MD5_FLUSH_THRESHOLD) {
+                toFlush = if (list.size >= HASH_FLUSH_THRESHOLD) {
                     val snapshot = ArrayList(list)
                     list.clear()
                     snapshot
                 } else null
             }
-            if (toFlush != null) submitMd5Batch(context, syncName, toFlush)
+            if (toFlush != null) submitHashBatch(context, syncName, toFlush)
         }
 
         /** 强制提交某保险箱的当前缓冲。取消、任务结束前必须调用。 */
-        fun flushMd5Batch(context: Context, syncName: String) {
-            val snapshot: List<LocalMd5Record>?
-            synchronized(md5BatchLock) {
-                val list = md5Pending[syncName]
+        fun flushContentHashBatch(context: Context, syncName: String) {
+            val snapshot: List<LocalHashRecord>?
+            synchronized(hashBatchLock) {
+                val list = hashPending[syncName]
                 snapshot = if (list.isNullOrEmpty()) null else ArrayList(list).also { list.clear() }
             }
-            if (snapshot != null) submitMd5Batch(context, syncName, snapshot)
+            if (snapshot != null) submitHashBatch(context, syncName, snapshot)
         }
 
         /**
-         * 丢弃某保险箱尚未提交的 MD5 缓冲（不写库）。
+         * 丢弃某保险箱尚未提交的内容指纹缓冲（不写库）。
          * 删除保险箱时必须调用，避免残留缓冲在下次同名建库时把旧数据写回。
          */
-        fun discardMd5Batch(syncName: String) {
-            synchronized(md5BatchLock) {
-                md5Pending.remove(syncName)
+        fun discardContentHashBatch(syncName: String) {
+            synchronized(hashBatchLock) {
+                hashPending.remove(syncName)
             }
         }
 
-        private fun submitMd5Batch(context: Context, syncName: String, records: List<LocalMd5Record>) {
+        private fun submitHashBatch(context: Context, syncName: String, records: List<LocalHashRecord>) {
             if (records.isEmpty()) return
             try {
-                getInstance(context, syncName).upsertLocalMd5Batch(records)
+                getInstance(context, syncName).upsertLocalHashBatch(records)
             } catch (e: Exception) {
                 // 密文已落盘，元数据写失败不应回滚业务；缺口由下次扫描重建
                 com.whmdg.mczj.tools.util.DiagnosticLog.log(
-                    TAG, "批量写入 ${records.size} 条明文 MD5 失败，本批次丢弃: ${e.message}"
+                    TAG, "批量写入 ${records.size} 条明文内容指纹失败，本批次丢弃: ${e.message}"
                 )
             }
         }
@@ -141,7 +141,7 @@ class SyncDatabase private constructor(
                 size          INTEGER NOT NULL,
                 uploaded_size INTEGER NOT NULL DEFAULT 0,
                 last_modified TEXT NOT NULL,
-                md5           TEXT,
+                content_hash  TEXT,
                 cloud_hash    TEXT,
                 status        TEXT NOT NULL DEFAULT 'PENDING',
                 last_sync_time TEXT,
@@ -155,7 +155,7 @@ class SyncDatabase private constructor(
                 size          INTEGER NOT NULL,
                 uploaded_size INTEGER NOT NULL DEFAULT 0,
                 last_modified TEXT NOT NULL,
-                md5           TEXT NOT NULL,
+                content_hash  TEXT NOT NULL,
                 cloud_hash    TEXT,
                 status        TEXT NOT NULL DEFAULT 'PENDING',
                 last_sync_time TEXT,
@@ -188,32 +188,14 @@ class SyncDatabase private constructor(
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        if (oldVersion < 2) {
-            db.execSQL("ALTER TABLE local_entries ADD COLUMN uploaded_size INTEGER NOT NULL DEFAULT 0")
-            db.execSQL("UPDATE local_entries SET uploaded_size = size WHERE status = 'COMPLETED'")
-        }
-        if (oldVersion < 3) {
-            db.execSQL("ALTER TABLE cloud_entries ADD COLUMN uploaded_size INTEGER NOT NULL DEFAULT 0")
-            db.execSQL("UPDATE cloud_entries SET uploaded_size = size WHERE status = 'COMPLETED'")
-        }
-        if (oldVersion < 4) {
-            db.execSQL("""
-                CREATE TABLE sync_stats (
-                    id                INTEGER PRIMARY KEY CHECK(id = 1),
-                    local_file_count  INTEGER NOT NULL DEFAULT 0,
-                    cloud_file_count  INTEGER NOT NULL DEFAULT 0,
-                    local_size        INTEGER NOT NULL DEFAULT 0,
-                    cloud_size        INTEGER NOT NULL DEFAULT 0,
-                    diff_count        INTEGER NOT NULL DEFAULT 0,
-                    last_update       TEXT
-                )
-            """.trimIndent())
-            db.execSQL("INSERT INTO sync_stats (id) VALUES (1)")
-        }
-        if (oldVersion < 5) {
-            // 目录条目：path 以 '/' 结尾，dir_created 标记该目录是否已在云端创建。
-            // 旧数据中不存在目录行，升级后首次遇到目录时按未创建（默认 0）处理即可。
-            db.execSQL("ALTER TABLE cloud_entries ADD COLUMN dir_created INTEGER NOT NULL DEFAULT 0")
+        // v6：内容指纹列由 md5 更名为 content_hash，且算法由 MD5 改为 SHA-256。
+        // 旧记录中的指纹是旧算法产物，无法复用，因此直接弃库重建（云端快照为权威数据，
+        // 本地缺口由下次扫描重建）。旧的增量 ALTER 分支已无存在意义，一并移除。
+        if (oldVersion < 6) {
+            db.execSQL("DROP TABLE IF EXISTS local_entries")
+            db.execSQL("DROP TABLE IF EXISTS cloud_entries")
+            db.execSQL("DROP TABLE IF EXISTS sync_stats")
+            onCreate(db)
         }
     }
 
@@ -247,13 +229,13 @@ class SyncDatabase private constructor(
     fun setDirCreated(path: String, created: Boolean) {
         val db = writableDatabase
         val dirPath = if (path.endsWith("/")) path else "$path/"
-        // 行不存在则插入一条目录条目（size=0、md5 为空、status=COMPLETED），存在则只更新 dir_created
+        // 行不存在则插入一条目录条目（size=0、content_hash 为空、status=COMPLETED），存在则只更新 dir_created
         val insertDir = ContentValues().apply {
             put("path", dirPath)
             put("size", 0L)
             put("uploaded_size", 0L)
             put("last_modified", java.time.Instant.now().toString())
-            put("md5", "")
+            put("content_hash", "")
             put("status", SyncStatus.COMPLETED.name)
             put("dir_created", if (created) 1 else 0)
         }
@@ -358,34 +340,34 @@ class SyncDatabase private constructor(
     }
 
     /**
-     * 仅写入本地条目的明文 MD5（加密导入时调用）。
+     * 仅写入本地条目的明文内容指纹（加密导入时调用）。
      *
-     * 行不存在则插入（status=PENDING），已存在则只更新 md5，不动其他字段，
+     * 行不存在则插入（status=PENDING），已存在则只更新 content_hash，不动其他字段，
      * 避免与扫描写行产生竞态把已有状态覆盖。
      */
-    fun upsertLocalMd5(path: String, md5: String, size: Long, lastModified: String) {
+    fun upsertLocalContentHash(path: String, contentHash: String, size: Long, lastModified: String) {
         val db = writableDatabase
         val values = ContentValues().apply {
             put("path", path)
             put("size", size)
             put("uploaded_size", 0L)
             put("last_modified", lastModified)
-            put("md5", md5)
+            put("content_hash", contentHash)
             put("status", SyncStatus.PENDING.name)
         }
         db.insertWithOnConflict("local_entries", null, values, SQLiteDatabase.CONFLICT_IGNORE)
-        db.update("local_entries", ContentValues().apply { put("md5", md5) }, "path = ?", arrayOf(path))
+        db.update("local_entries", ContentValues().apply { put("content_hash", contentHash) }, "path = ?", arrayOf(path))
     }
 
     /**
-     * 批量写入明文 MD5：整个批次放在一笔事务里提交，把逐文件的 fsync 摊销到一次。
+     * 批量写入明文内容指纹：整个批次放在一笔事务里提交，把逐文件的 fsync 摊销到一次。
      *
-     * 语义与逐条 [upsertLocalMd5] 完全一致，仅改变提交粒度。调用方须保证传入的每条记录
+     * 语义与逐条 [upsertLocalContentHash] 完全一致，仅改变提交粒度。调用方须保证传入的每条记录
      * 都对应一个"已成功落盘"的密文文件（密文 renameTo 成功后才产生记录）。
      *
-     * 云端已有同路径记录且明文 MD5 一致时，直接置为 COMPLETED（与逐条写入时的后置比对等价）。
+     * 云端已有同路径记录且内容指纹一致时，直接置为 COMPLETED（与逐条写入时的后置比对等价）。
      */
-    fun upsertLocalMd5Batch(records: List<LocalMd5Record>) {
+    fun upsertLocalHashBatch(records: List<LocalHashRecord>) {
         if (records.isEmpty()) return
         val db = writableDatabase
         db.beginTransaction()
@@ -396,14 +378,14 @@ class SyncDatabase private constructor(
                     put("size", r.size)
                     put("uploaded_size", 0L)
                     put("last_modified", r.lastModified)
-                    put("md5", r.md5)
+                    put("content_hash", r.contentHash)
                     put("status", SyncStatus.PENDING.name)
                 }
                 db.insertWithOnConflict("local_entries", null, values, SQLiteDatabase.CONFLICT_IGNORE)
-                db.update("local_entries", ContentValues().apply { put("md5", r.md5) }, "path = ?", arrayOf(r.path))
+                db.update("local_entries", ContentValues().apply { put("content_hash", r.contentHash) }, "path = ?", arrayOf(r.path))
 
-                val cloud = queryCloudMd5Locked(db, r.path)
-                if (!cloud.isNullOrEmpty() && cloud == r.md5) {
+                val cloud = queryCloudContentHashLocked(db, r.path)
+                if (!cloud.isNullOrEmpty() && cloud == r.contentHash) {
                     db.execSQL(
                         "UPDATE local_entries SET status = ?, uploaded_size = size, last_sync_time = ? WHERE path = ?",
                         arrayOf(SyncStatus.COMPLETED.name, java.time.Instant.now().toString(), r.path)
@@ -416,17 +398,17 @@ class SyncDatabase private constructor(
         }
     }
 
-    /** 事务内查询云端条目的明文 MD5（复用同一连接，避免嵌套获取只读连接）。 */
-    private fun queryCloudMd5Locked(db: SQLiteDatabase, path: String): String? {
-        db.query("cloud_entries", arrayOf("md5"), "path = ?", arrayOf(path), null, null, null).use { cursor ->
+    /** 事务内查询云端条目的明文内容指纹（复用同一连接，避免嵌套获取只读连接）。 */
+    private fun queryCloudContentHashLocked(db: SQLiteDatabase, path: String): String? {
+        db.query("cloud_entries", arrayOf("content_hash"), "path = ?", arrayOf(path), null, null, null).use { cursor ->
             return if (cursor.moveToFirst()) cursor.getString(0) else null
         }
     }
 
-    /** 待写入的一批本地明文 MD5 记录。 */
-    data class LocalMd5Record(
+    /** 待写入的一批本地明文内容指纹记录。 */
+    data class LocalHashRecord(
         val path: String,
-        val md5: String,
+        val contentHash: String,
         val size: Long,
         val lastModified: String
     )
@@ -468,7 +450,7 @@ class SyncDatabase private constructor(
                     size          INTEGER NOT NULL,
                     uploaded_size INTEGER NOT NULL DEFAULT 0,
                     last_modified TEXT NOT NULL,
-                    md5           TEXT NOT NULL,
+                    content_hash  TEXT NOT NULL,
                     cloud_hash    TEXT,
                     status        TEXT NOT NULL DEFAULT 'PENDING',
                     last_sync_time TEXT,
@@ -611,7 +593,7 @@ class SyncDatabase private constructor(
             put("size", updated.size)
             put("uploaded_size", updated.uploadedSize)
             put("last_modified", updated.lastModified)
-            updated.md5?.let { put("md5", it) }
+            updated.contentHash?.let { put("content_hash", it) }
             updated.cloudHash?.let { put("cloud_hash", it) }
             put("status", updated.status.name)
             updated.lastSyncTime?.let { put("last_sync_time", it) }
@@ -734,7 +716,7 @@ class SyncDatabase private constructor(
             size = cursor.getLong(cursor.getColumnIndexOrThrow("size")),
             uploadedSize = if (sizeIdx >= 0) cursor.getLong(sizeIdx) else 0L,
             lastModified = cursor.getString(cursor.getColumnIndexOrThrow("last_modified")),
-            md5 = cursor.getString(cursor.getColumnIndexOrThrow("md5")),
+            contentHash = cursor.getString(cursor.getColumnIndexOrThrow("content_hash")),
             cloudHash = cursor.getString(cursor.getColumnIndexOrThrow("cloud_hash")),
             status = SyncStatus.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("status"))),
             lastSyncTime = cursor.getString(cursor.getColumnIndexOrThrow("last_sync_time")),
@@ -749,7 +731,7 @@ class SyncDatabase private constructor(
             put("size", entry.size)
             put("uploaded_size", entry.uploadedSize)
             put("last_modified", entry.lastModified)
-            put("md5", entry.md5)
+            put("content_hash", entry.contentHash)
             put("cloud_hash", entry.cloudHash)
             put("status", entry.status.name)
             put("last_sync_time", entry.lastSyncTime)
@@ -830,7 +812,7 @@ data class SyncEntryRow(
     val size: Long,
     val uploadedSize: Long = 0,  // 已上传字节数（仅 local_entries 使用）
     val lastModified: String,    // ISO8601
-    val md5: String?,            // 明文 MD5；本地表在加密导入时写入，云端表在上传成功后从本地复制
+    val contentHash: String?,    // 明文内容指纹；本地表在加密导入时写入，云端表在上传成功后从本地复制
     val cloudHash: String?,      // 云端返回的内部编码（唯一性）
     val status: SyncStatus,
     val lastSyncTime: String?,   // ISO8601
