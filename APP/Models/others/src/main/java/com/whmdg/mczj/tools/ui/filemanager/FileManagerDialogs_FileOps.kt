@@ -2,17 +2,22 @@ package com.whmdg.mczj.tools.ui.filemanager
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -652,16 +657,25 @@ internal fun AddQuickAccessDialog(
 }
 
 // ── 使用应用打开：3×3 / 3×4 格子选择面板 ──
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 internal fun OpenWithDialog(
     showAppsPage: Boolean,
     appList: List<FileManagerViewModel.OpenWithApp>,
+    defaultMethod: com.whmdg.mczj.tools.ui.components.OpenMethod?,
+    allowSetDefault: Boolean,
     onDismiss: () -> Unit,
     onShowApps: () -> Unit,
     onBackToBuiltIn: () -> Unit,
-    onBuiltIn: (FileManagerViewModel.BuiltInOpenMethod) -> Unit,
-    onLaunchApp: (FileManagerViewModel.OpenWithApp) -> Unit
+    onBuiltIn: (com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod) -> Unit,
+    onLaunchApp: (FileManagerViewModel.OpenWithApp) -> Unit,
+    onSetDefaultBuiltIn: (com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod) -> Unit,
+    onSetDefaultApp: (FileManagerViewModel.OpenWithApp) -> Unit,
+    onClearDefault: () -> Unit
 ) {
+    // 待确认的默认设置动作；非空时弹确认框
+    var pendingConfirm by remember { mutableStateOf<DefaultConfirm?>(null) }
+
     StandardDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -675,33 +689,102 @@ internal fun OpenWithDialog(
             if (showAppsPage) {
                 AppsGrid(
                     appList = appList,
+                    defaultMethod = defaultMethod,
+                    allowSetDefault = allowSetDefault,
                     onBack = onBackToBuiltIn,
-                    onLaunchApp = onLaunchApp
+                    onLaunchApp = onLaunchApp,
+                    onLongPress = { app, isDefault ->
+                        pendingConfirm = DefaultConfirm(
+                            isDefault = isDefault,
+                            label = app.label,
+                            onConfirm = { if (isDefault) onClearDefault() else onSetDefaultApp(app) }
+                        )
+                    }
                 )
             } else {
-                BuiltInGrid(onBuiltIn = onBuiltIn, onShowApps = onShowApps)
+                BuiltInGrid(
+                    defaultMethod = defaultMethod,
+                    allowSetDefault = allowSetDefault,
+                    onBuiltIn = onBuiltIn,
+                    onShowApps = onShowApps,
+                    onLongPress = { method, label, isDefault ->
+                        pendingConfirm = DefaultConfirm(
+                            isDefault = isDefault,
+                            label = label,
+                            onConfirm = { if (isDefault) onClearDefault() else onSetDefaultBuiltIn(method) }
+                        )
+                    }
+                )
             }
         }
     )
+
+    pendingConfirm?.let { confirm ->
+        val suffix = confirm.label
+        StandardDialog(
+            onDismissRequest = { pendingConfirm = null },
+            title = { Text(if (confirm.isDefault) "取消默认打开方式" else "设为默认打开方式") },
+            text = {
+                Text(
+                    if (confirm.isDefault)
+                        "确定取消「$suffix」的默认打开方式吗？取消后，下次点击该类型文件将重新弹出选择器。"
+                    else
+                        "确定将「$suffix」设为该类型文件的默认打开方式吗？设置后，下次点击将直接使用它打开。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val action = confirm.onConfirm
+                    pendingConfirm = null
+                    action()
+                }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingConfirm = null }) { Text("取消") }
+            }
+        )
+    }
 }
+
+/** 待确认的默认打开方式变更。 */
+private data class DefaultConfirm(
+    val isDefault: Boolean,
+    val label: String,
+    val onConfirm: () -> Unit
+)
 
 /** 第一页：应用内打开方式（3×3 布局） */
 @Composable
 private fun BuiltInGrid(
-    onBuiltIn: (FileManagerViewModel.BuiltInOpenMethod) -> Unit,
-    onShowApps: () -> Unit
+    defaultMethod: com.whmdg.mczj.tools.ui.components.OpenMethod?,
+    allowSetDefault: Boolean,
+    onBuiltIn: (com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod) -> Unit,
+    onShowApps: () -> Unit,
+    onLongPress: (method: com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod, label: String, isDefault: Boolean) -> Unit
 ) {
+    val builtInDefault = (defaultMethod as? com.whmdg.mczj.tools.ui.components.OpenMethod.BuiltIn)?.method
+    fun cell(
+        label: String,
+        icon: ImageVector,
+        method: com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod
+    ): OpenWithCell = OpenWithCell(
+        label = label,
+        icon = icon,
+        isDefault = allowSetDefault && builtInDefault == method,
+        onClick = { onBuiltIn(method) },
+        onLongClick = if (allowSetDefault) {
+            { onLongPress(method, label, builtInDefault == method) }
+        } else null
+    )
+
     val cells: List<OpenWithCell?> = listOf(
-        OpenWithCell("文档编辑", Icons.Default.Description) {
-            onBuiltIn(FileManagerViewModel.BuiltInOpenMethod.DOCUMENT)
-        },
-        OpenWithCell("图片", Icons.Default.Image) {
-            onBuiltIn(FileManagerViewModel.BuiltInOpenMethod.IMAGE)
-        },
-        OpenWithCell("压缩包", Icons.Default.Archive) {
-            onBuiltIn(FileManagerViewModel.BuiltInOpenMethod.ARCHIVE)
-        },
-        null, null, null, null, null,
+        cell("文档编辑", Icons.Default.Description, com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod.DOCUMENT),
+        cell("图片", Icons.Default.Image, com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod.IMAGE),
+        cell("音频", Icons.Default.MusicNote, com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod.AUDIO),
+        cell("视频", Icons.Default.Movie, com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod.VIDEO),
+        cell("压缩包", Icons.Default.Archive, com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod.ARCHIVE),
+        cell("安装包", Icons.Default.Android, com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod.APK),
+        null, null,
         OpenWithCell("其他应用", Icons.Default.MoreHoriz, onClick = onShowApps)
     )
     OpenWithGrid(cells = cells)
@@ -711,8 +794,11 @@ private fun BuiltInGrid(
 @Composable
 private fun AppsGrid(
     appList: List<FileManagerViewModel.OpenWithApp>,
+    defaultMethod: com.whmdg.mczj.tools.ui.components.OpenMethod?,
+    allowSetDefault: Boolean,
     onBack: () -> Unit,
-    onLaunchApp: (FileManagerViewModel.OpenWithApp) -> Unit
+    onLaunchApp: (FileManagerViewModel.OpenWithApp) -> Unit,
+    onLongPress: (app: FileManagerViewModel.OpenWithApp, isDefault: Boolean) -> Unit
 ) {
     if (appList.isEmpty()) {
         Column(
@@ -730,10 +816,24 @@ private fun AppsGrid(
         return
     }
 
+    val extDefault = defaultMethod as? com.whmdg.mczj.tools.ui.components.OpenMethod.External
     val cells: List<OpenWithCell?> = buildList {
         add(OpenWithCell("返回", Icons.AutoMirrored.Filled.ArrowBack, onClick = onBack))
         for (app in appList) {
-            add(OpenWithCell(app.label, null, onClick = { onLaunchApp(app) }, appPackage = app.packageName))
+            val isDefault = allowSetDefault && extDefault != null &&
+                extDefault.packageName == app.packageName && extDefault.activityName == app.activityName
+            add(
+                OpenWithCell(
+                    label = app.label,
+                    icon = null,
+                    appPackage = app.packageName,
+                    isDefault = isDefault,
+                    onClick = { onLaunchApp(app) },
+                    onLongClick = if (allowSetDefault) {
+                        { onLongPress(app, isDefault) }
+                    } else null
+                )
+            )
         }
     }
     OpenWithGrid(cells = cells)
@@ -744,10 +844,13 @@ private data class OpenWithCell(
     val label: String,
     val icon: ImageVector?,
     val appPackage: String? = null,
-    val onClick: () -> Unit
+    val isDefault: Boolean = false,
+    val onClick: () -> Unit,
+    val onLongClick: (() -> Unit)? = null
 )
 
 /** 通用格子网格：3 列，图标（正方形）+ 文字，整页可纵向滑动 */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun OpenWithGrid(cells: List<OpenWithCell?>) {
     val context = LocalContext.current
@@ -762,10 +865,11 @@ private fun OpenWithGrid(cells: List<OpenWithCell?>) {
                 Spacer(Modifier.aspectRatio(1f))
             } else {
                 Surface(
-                    onClick = cell.onClick,
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .combinedClickable(onClick = cell.onClick, onLongClick = cell.onLongClick)
                 ) {
                     Column(
                         modifier = Modifier
@@ -803,6 +907,16 @@ private fun OpenWithGrid(cells: List<OpenWithCell?>) {
                                     modifier = Modifier.fillMaxSize(0.7f)
                                 )
                             }
+                            if (cell.isDefault) {
+                                Icon(
+                                    Icons.Default.Star,
+                                    contentDescription = "默认",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .fillMaxSize(0.32f)
+                                )
+                            }
                         }
                         Text(
                             text = cell.label,
@@ -818,3 +932,4 @@ private fun OpenWithGrid(cells: List<OpenWithCell?>) {
         }
     }
 }
+

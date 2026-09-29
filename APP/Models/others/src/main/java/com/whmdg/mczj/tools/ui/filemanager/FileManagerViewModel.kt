@@ -64,6 +64,9 @@ import com.whmdg.mczj.tools.encryption.services.VaultViewContext
 import com.whmdg.mczj.tools.encryption.services.VaultDecryptCache
 import com.whmdg.mczj.tools.encryption.services.VaultCacheType
 import com.whmdg.mczj.tools.ui.components.extractExtension
+import com.whmdg.mczj.tools.ui.components.BuiltInOpenMethod
+import com.whmdg.mczj.tools.ui.components.DefaultOpenMethodStore
+import com.whmdg.mczj.tools.ui.components.OpenMethod
 import com.whmdg.mczj.tools.ui.viewer.ViewerActivity
 import com.whmdg.mczj.tools.ui.viewer.AudioPlayerActivity
 import com.whmdg.mczj.tools.ui.viewer.VideoPlayerActivity
@@ -3195,6 +3198,8 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     var openWithShowApps by mutableStateOf(false)
     /** 第二页可打开该文件的第三方应用列表 */
     var openWithAppList by mutableStateOf(listOf<OpenWithApp>())
+    /** 选择面板是否允许长按设/取消默认（.apks 为 false） */
+    var openWithAllowSetDefault by mutableStateOf(true)
     /** 保险箱大文件（视频/压缩包/APK 等）打开前的解密确认；非空时由 UI 弹窗询问 */
     var pendingVaultDecryptEntry by mutableStateOf<FileEntry?>(null)
     var sevenZipInfo by mutableStateOf<ArchiveBrowser.SevenZipInfo?>(null)
@@ -4291,14 +4296,10 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         DiagnosticLog.log("OpenFile", "请求打开: ${entry.path}")
+        // .apks 为安装包集合，不受「默认打开方式」配置管理：单击始终弹其特有弹窗
         if (entry.name.endsWith(".apks", ignoreCase = true)) {
             DiagnosticLog.log("OpenFile", ".apks 文件，弹出选择弹窗: ${entry.name}")
             pendingApksEntry = entry
-            return
-        }
-        if (com.whmdg.mczj.tools.ui.components.isApkFileName(entry.name)) {
-            DiagnosticLog.log("OpenFile", "APK 文件，弹出信息弹窗: ${entry.name}")
-            pendingApkEntry = entry
             return
         }
         if (entry.name.endsWith(".apex", ignoreCase = true)) {
@@ -4306,139 +4307,49 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             Toast.makeText(context, "APEX 文件无法直接打开", Toast.LENGTH_SHORT).show()
             return
         }
-        if (ArchiveBrowser.isArchiveFile(entry.name)) {
-            if (isDebug) {
-                DiagnosticLog.log("OpenFile", "压缩包文件（Debug 模式），解析信息: ${entry.name}")
-                debugOpenArchive(entry)
-            } else {
-                DiagnosticLog.log("OpenFile", "压缩包文件，进入浏览模式: ${entry.name}")
-                openArchive(entry)
-            }
-            return
-        }
-        val ext = entry.name.substringAfterLast('.', "").lowercase()
-        if (ext in com.whmdg.mczj.tools.ui.components.TEXT_EXTENSIONS) {
-            DiagnosticLog.log("OpenFile", "内置编辑器打开: ${entry.name}")
-            context.startActivity(ViewerActivity.createTextIntent(context, entry.path))
-            return
-        }
-        if (ext in com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS || ext == "thumb") {
-            DiagnosticLog.log("OpenFile", "内置查看器打开: ${entry.name}")
 
-            var imagePaths = overrideImagePaths
-
-            if (vaultSessionId != null) {
-                // 保险箱模式：面板条目的 name 已是明文名、path 仍是加密源路径，
-                // 直接沿用面板顺序构建图片缓存路径列表与「缓存路径 → 加密源路径」映射
-                val ctx = VaultKeyHolder.get(vaultSessionId)
-                if (ctx != null) {
-                    val imageFiles = mutableListOf<String>()
-                    val newImageEntryMap = mutableMapOf<String, String>()
-
-                    for (panelEntry in ctrl.state.entries) {
-                        if (panelEntry.isDirectory) continue
-                        val fileExt = extractExtension(panelEntry.name)
-
-                        if (fileExt in com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS || fileExt == "thumb") {
-                            val cachePath = VaultDecryptCache.typedPathFor(
-                                context = context,
-                                vaultDir = ctx.vaultDir,
-                                encryptedPath = panelEntry.path,
-                                type = VaultCacheType.IMAGE
-                            )
-                            imageFiles.add(cachePath)
-                            newImageEntryMap[cachePath] = panelEntry.path
-                        }
-                    }
-
-                    imagePaths = imageFiles
-
-                    // 更新 VaultKeyHolder 中的映射
-                    VaultKeyHolder.put(vaultSessionId, ctx.copy(vaultImageEntries = newImageEntryMap))
-                }
-            } else if (overrideImagePaths.isNullOrEmpty()) {
-                // 普通模式：从当前面板读取
-                imagePaths = currentPanel.entries
-                    .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS }
-                    .map { it.path }
-            }
-
-            if (imagePaths.isNullOrEmpty()) {
-                Toast.makeText(context, "未找到图片文件", Toast.LENGTH_SHORT).show()
-                return
-            }
-
-            val startIndex = if (archivePath != null) archiveStartIndex
-            else imagePaths.indexOf(entry.path).coerceAtLeast(0)
-
-            context.startActivity(ViewerActivity.createImageIntent(context, entry.path, imagePaths, startIndex,
-                totalCount = imagePaths.size,
-                vaultSessionId = vaultSessionId,
-                archivePath = archivePath, archiveName = archiveName,
-                archiveEntryPaths = archiveEntryPaths, archivePassword = archivePassword,
-                archivePermissionLevel = archivePermissionLevel))
-            return
-        }
-        if (ext in com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS) {
-            // 构建同目录音频播放列表：保持当前面板的实际排序，不递归子目录。
-            if (vaultSessionId != null) {
-                // 保险箱模式：面板条目的 name 已是明文名、path 仍是加密源路径，
-                // 直接沿用面板顺序构建明文缓存路径列表与按需解密映射
-                val ctx = VaultKeyHolder.get(vaultSessionId)
-                if (ctx != null) {
-                    val audioPaths = mutableListOf<String>()
-                    val newAudioEntryMap = mutableMapOf<String, String>()
-                    for (panelEntry in ctrl.state.entries) {
-                        if (panelEntry.isDirectory) continue
-                        val fileExt = extractExtension(panelEntry.name)
-                        if (fileExt in com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS) {
-                            val cachePath = VaultDecryptCache.typedPathFor(
-                                context = context,
-                                vaultDir = ctx.vaultDir,
-                                encryptedPath = panelEntry.path,
-                                type = VaultCacheType.AUDIO
-                            )
-                            audioPaths.add(cachePath)
-                            newAudioEntryMap[cachePath] = panelEntry.path
-                        }
-                    }
-
-                    VaultKeyHolder.put(vaultSessionId, ctx.copy(vaultAudioEntries = newAudioEntryMap))
-
-                    val startIndex = audioPaths.indexOf(entry.path)
-                    DiagnosticLog.log("OpenFile", "保险箱音频播放器打开: ${entry.name} index=$startIndex total=${audioPaths.size}")
-                    context.startActivity(
-                        AudioPlayerActivity.createAudioIntent(
-                            context, entry.path, audioPaths, startIndex, vaultSessionId
-                        )
-                    )
-                    return
+        // 查询该后缀的默认打开方式；有则直接用，无则弹选择器
+        val key = com.whmdg.mczj.tools.ui.components.DefaultOpenMethodStore.keyFor(entry.name)
+        val method = com.whmdg.mczj.tools.ui.components.DefaultOpenMethodStore.get(context, key)
+        if (method != null) {
+            when (method) {
+                is OpenMethod.BuiltIn -> openByBuiltIn(
+                    context, entry, method.method,
+                    vaultSessionId = vaultSessionId, originPanel = ctrl,
+                    overrideImagePaths = overrideImagePaths,
+                    archivePath = archivePath, archiveName = archiveName,
+                    archiveEntryPaths = archiveEntryPaths, archivePassword = archivePassword,
+                    archiveStartIndex = archiveStartIndex, archivePermissionLevel = archivePermissionLevel,
+                    isDebug = isDebug
+                )
+                is OpenMethod.External -> {
+                    if (launchExternalByDefault(context, entry, method)) return
+                    // 外部应用失效（被卸载等）：清除该后缀默认，回退到选择器
+                    DiagnosticLog.log("OpenFile", "外部默认应用失效，清除默认: $key")
+                    com.whmdg.mczj.tools.ui.components.DefaultOpenMethodStore.remove(context, key)
+                    showOpenWithPicker(entry, allowSetDefault = true)
                 }
             }
-            val audioPaths = ctrl.state.entries
-                .filter { !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS }
-                .map { it.path }
-            val startIndex = audioPaths.indexOf(entry.path)
-            DiagnosticLog.log("OpenFile", "音频播放器打开: ${entry.name} index=$startIndex total=${audioPaths.size}")
-            context.startActivity(
-                AudioPlayerActivity.createAudioIntent(context, entry.path, audioPaths, startIndex)
-            )
             return
         }
-        if (ext in com.whmdg.mczj.tools.ui.components.VIDEO_EXTENSIONS) {
-            DiagnosticLog.log("OpenFile", "内置播放器打开: ${entry.name}")
-            context.startActivity(VideoPlayerActivity.createVideoIntent(context, entry.path))
-            return
-        }
-        // 未知类型：弹出「使用应用打开」选择面板（第一页应用内打开，第二页第三方应用）
-        DiagnosticLog.log("OpenFile", "未知类型，弹出选择面板: ${entry.name}")
+        // 无默认：弹出「使用应用打开」选择面板（第一页应用内打开，第二页第三方应用）
+        DiagnosticLog.log("OpenFile", "无默认打开方式，弹出选择面板: ${entry.name}")
+        showOpenWithPicker(entry, allowSetDefault = true)
+    }
+
+    /** 弹出「使用应用打开」选择面板。[allowSetDefault] 为 false 时（如 .apks）禁用设为默认。 */
+    private fun showOpenWithPicker(entry: FileEntry, allowSetDefault: Boolean) {
         pendingOpenWithEntry = entry
         openWithShowApps = false
         openWithAppList = emptyList()
+        openWithAllowSetDefault = allowSetDefault
     }
 
-    /** 选择面板中「应用内打开」的方式 */
-    enum class BuiltInOpenMethod { DOCUMENT, IMAGE, ARCHIVE }
+    /** 长按菜单「选择打开方式」入口：忽略默认打开项，直接弹选择器。.apks 不参与默认设置。 */
+    fun openWithPicker(entry: FileEntry) {
+        val allowSetDefault = !entry.name.endsWith(".apks", ignoreCase = true)
+        showOpenWithPicker(entry, allowSetDefault = allowSetDefault)
+    }
 
     /** 选择面板中一个可打开该文件的第三方应用 */
     data class OpenWithApp(
@@ -4447,32 +4358,166 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val label: String
     )
 
-    /** 第一页：使用应用内方式打开当前文件（任意文件都可作为文本读取） */
-    fun openBuiltIn(context: Context, entry: FileEntry, method: BuiltInOpenMethod) {
+    /**
+     * 应用内方式打开文件（默认派发与选择器共用）。
+     * 会按 [method] 复用内置查看器；参数用于保险箱 / 压缩包场景。
+     */
+    private fun openByBuiltIn(
+        context: Context,
+        entry: FileEntry,
+        method: BuiltInOpenMethod,
+        vaultSessionId: String? = null,
+        originPanel: FilePaneController? = null,
+        overrideImagePaths: List<String>? = null,
+        archivePath: String? = null,
+        archiveName: String? = null,
+        archiveEntryPaths: List<String> = emptyList(),
+        archivePassword: String = "",
+        archiveStartIndex: Int = 0,
+        archivePermissionLevel: String = "NORMAL",
+        isDebug: Boolean = false
+    ) {
         DiagnosticLog.log("OpenWith", "应用内打开 method=$method file=${entry.name}")
         try {
             when (method) {
                 BuiltInOpenMethod.DOCUMENT ->
                     context.startActivity(ViewerActivity.createTextIntent(context, entry.path))
+
                 BuiltInOpenMethod.IMAGE -> {
-                    val imagePaths = currentPanel.entries
-                        .filter {
-                            !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in
-                                com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS
+                    val panel = originPanel ?: focusedController
+                    var imagePaths = overrideImagePaths
+                    if (vaultSessionId != null) {
+                        val ctx = VaultKeyHolder.get(vaultSessionId)
+                        if (ctx != null) {
+                            val imageFiles = mutableListOf<String>()
+                            val newImageEntryMap = mutableMapOf<String, String>()
+                            for (panelEntry in panel.state.entries) {
+                                if (panelEntry.isDirectory) continue
+                                val fileExt = extractExtension(panelEntry.name)
+                                if (fileExt in com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS || fileExt == "thumb") {
+                                    val cachePath = VaultDecryptCache.typedPathFor(
+                                        context = context,
+                                        vaultDir = ctx.vaultDir,
+                                        encryptedPath = panelEntry.path,
+                                        type = VaultCacheType.IMAGE
+                                    )
+                                    imageFiles.add(cachePath)
+                                    newImageEntryMap[cachePath] = panelEntry.path
+                                }
+                            }
+                            imagePaths = imageFiles
+                            VaultKeyHolder.put(vaultSessionId, ctx.copy(vaultImageEntries = newImageEntryMap))
                         }
-                        .map { it.path }
-                    val startIndex = imagePaths.indexOf(entry.path).coerceAtLeast(0)
+                    } else if (imagePaths.isNullOrEmpty()) {
+                        imagePaths = panel.state.entries
+                            .filter {
+                                !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in
+                                    com.whmdg.mczj.tools.ui.components.IMAGE_EXTENSIONS
+                            }
+                            .map { it.path }
+                    }
+                    if (imagePaths.isNullOrEmpty()) {
+                        Toast.makeText(context, "未找到图片文件", Toast.LENGTH_SHORT).show()
+                        return
+                    }
+                    val startIndex = if (archivePath != null) archiveStartIndex
+                    else imagePaths.indexOf(entry.path).coerceAtLeast(0)
                     context.startActivity(
                         ViewerActivity.createImageIntent(
-                            context, entry.path, imagePaths, startIndex, totalCount = imagePaths.size
+                            context, entry.path, imagePaths, startIndex,
+                            totalCount = imagePaths.size,
+                            vaultSessionId = vaultSessionId,
+                            archivePath = archivePath, archiveName = archiveName,
+                            archiveEntryPaths = archiveEntryPaths, archivePassword = archivePassword,
+                            archivePermissionLevel = archivePermissionLevel
                         )
                     )
                 }
-                BuiltInOpenMethod.ARCHIVE -> openArchive(entry)
+
+                BuiltInOpenMethod.AUDIO -> {
+                    val panel = originPanel ?: focusedController
+                    if (vaultSessionId != null) {
+                        val ctx = VaultKeyHolder.get(vaultSessionId)
+                        if (ctx != null) {
+                            val audioPaths = mutableListOf<String>()
+                            val newAudioEntryMap = mutableMapOf<String, String>()
+                            for (panelEntry in panel.state.entries) {
+                                if (panelEntry.isDirectory) continue
+                                val fileExt = extractExtension(panelEntry.name)
+                                if (fileExt in com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS) {
+                                    val cachePath = VaultDecryptCache.typedPathFor(
+                                        context = context,
+                                        vaultDir = ctx.vaultDir,
+                                        encryptedPath = panelEntry.path,
+                                        type = VaultCacheType.AUDIO
+                                    )
+                                    audioPaths.add(cachePath)
+                                    newAudioEntryMap[cachePath] = panelEntry.path
+                                }
+                            }
+                            VaultKeyHolder.put(vaultSessionId, ctx.copy(vaultAudioEntries = newAudioEntryMap))
+                            val startIndex = audioPaths.indexOf(entry.path)
+                            context.startActivity(
+                                AudioPlayerActivity.createAudioIntent(
+                                    context, entry.path, audioPaths, startIndex, vaultSessionId
+                                )
+                            )
+                            return
+                        }
+                    }
+                    val audioPaths = panel.state.entries
+                        .filter {
+                            !it.isDirectory && it.name.substringAfterLast('.', "").lowercase() in
+                                com.whmdg.mczj.tools.ui.components.AUDIO_EXTENSIONS
+                        }
+                        .map { it.path }
+                    val startIndex = audioPaths.indexOf(entry.path)
+                    context.startActivity(
+                        AudioPlayerActivity.createAudioIntent(context, entry.path, audioPaths, startIndex)
+                    )
+                }
+
+                BuiltInOpenMethod.VIDEO ->
+                    context.startActivity(VideoPlayerActivity.createVideoIntent(context, entry.path))
+
+                BuiltInOpenMethod.ARCHIVE -> {
+                    if (isDebug) debugOpenArchive(entry) else openArchive(entry)
+                }
+
+                BuiltInOpenMethod.APK ->
+                    pendingApkEntry = entry
             }
         } catch (e: Exception) {
             DiagnosticLog.log("OpenWith", "应用内打开失败: ${e.javaClass.simpleName}: ${e.message}")
             Toast.makeText(context, "无法打开文件: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** 选择器第一页：使用应用内方式打开当前文件（任意文件都可作为文本读取）。 */
+    fun openBuiltIn(context: Context, entry: FileEntry, method: BuiltInOpenMethod) {
+        openByBuiltIn(context, entry, method)
+    }
+
+    /** 以外部应用作为默认打开方式启动；返回 false 表示应用不可用。 */
+    private fun launchExternalByDefault(context: Context, entry: FileEntry, method: OpenMethod.External): Boolean {
+        return try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", File(entry.path)
+            )
+            val extension = entry.name.substringAfterLast('.', "").lowercase()
+            val mimeType = android.webkit.MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(extension) ?: "*/*"
+            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                setClassName(method.packageName, method.activityName)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            DiagnosticLog.log("OpenWith", "默认外部应用打开失败: ${e.javaClass.simpleName}: ${e.message}")
+            false
         }
     }
 
@@ -4527,6 +4572,44 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
             DiagnosticLog.log("OpenWith", "第三方打开失败: ${e.javaClass.simpleName}: ${e.message}")
             Toast.makeText(context, "无法打开文件: ${e.message}", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    // ── 默认打开方式配置 ──
+
+    /** 查询某后缀当前的默认打开方式（用于选择器打五角星）。 */
+    fun defaultOpenMethodOf(fileName: String): OpenMethod? {
+        val key = DefaultOpenMethodStore.keyFor(fileName)
+        return DefaultOpenMethodStore.get(getApplication(), key)
+    }
+
+    /** 将一个内置方式设为该后缀的默认打开方式，并关闭选择器（不执行打开）。 */
+    fun setDefaultBuiltIn(entry: FileEntry, method: BuiltInOpenMethod) {
+        val key = DefaultOpenMethodStore.keyFor(entry.name)
+        DefaultOpenMethodStore.set(getApplication(), key, OpenMethod.BuiltIn(method))
+        DiagnosticLog.log("OpenWith", "设置默认打开方式: $key -> $method")
+        pendingOpenWithEntry = null
+        openWithShowApps = false
+    }
+
+    /** 将一个第三方应用设为该后缀的默认打开方式，并关闭选择器（不执行打开）。 */
+    fun setDefaultExternal(entry: FileEntry, app: OpenWithApp) {
+        val key = DefaultOpenMethodStore.keyFor(entry.name)
+        DefaultOpenMethodStore.set(
+            getApplication(), key,
+            OpenMethod.External(app.packageName, app.activityName, app.label)
+        )
+        DiagnosticLog.log("OpenWith", "设置默认打开方式: $key -> ${app.packageName}/${app.activityName}")
+        pendingOpenWithEntry = null
+        openWithShowApps = false
+    }
+
+    /** 取消该后缀的默认打开方式，并关闭选择器（不执行打开）。 */
+    fun clearDefaultOpenMethod(entry: FileEntry) {
+        val key = DefaultOpenMethodStore.keyFor(entry.name)
+        DefaultOpenMethodStore.remove(getApplication(), key)
+        DiagnosticLog.log("OpenWith", "取消默认打开方式: $key")
+        pendingOpenWithEntry = null
+        openWithShowApps = false
     }
 
 

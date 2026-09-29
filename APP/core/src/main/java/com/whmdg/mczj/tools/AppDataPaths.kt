@@ -350,6 +350,9 @@ object AppDataPaths {
     /** 文件管理器快捷访问 SharedPreferences */
     const val PREFS_QUICK_ACCESS = "quick_access_prefs"
 
+    /** 「后缀 → 默认打开方式」配置 Key（存于 PREFS_FILE_MANAGER） */
+    const val PREF_KEY_DEFAULT_OPEN_METHODS = "default_open_methods"
+
     /** 安全设置 SharedPreferences（已废弃，统一使用 PREFS_LEGACY_SPECIAL_PERMISSIONS） */
     const val PREFS_SECURITY = "special_permissions"
 

@@ -77,6 +77,7 @@ class ToolsApp : Application(), SingletonImageLoader.Factory {
         migrateWebViewData()
         AppIconHelper.init(this)
         WebView.setDataDirectorySuffix("app")
+        com.whmdg.mczj.tools.ui.components.DefaultOpenMethodStore.ensureInitialized(this)
 
         // OCR 悬浮窗：监听应用前后台切换
         androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(

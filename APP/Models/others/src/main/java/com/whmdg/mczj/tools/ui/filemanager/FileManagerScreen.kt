@@ -3002,6 +3002,41 @@ fun FileManagerScreen(
                                     }
                                 }
                             }
+
+                            // ── 第五行：选择打开方式（仅单个文件可用） ──
+                            val canOpenWith = !isMultiSelect && selectedEntry?.isDirectory == false
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // 左列：选择打开方式
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable(enabled = canOpenWith) {
+                                            val target = selectedEntry ?: return@clickable
+                                            selectedEntry = null
+                                            vm.openWithPicker(target)
+                                        }
+                                        .padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isToRight) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text("选择打开方式", style = MaterialTheme.typography.bodyLarge, color = if (canOpenWith) Color.Unspecified else disabledColor)
+                                            Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (canOpenWith) MaterialTheme.colorScheme.onSurface else disabledIconColor)
+                                        }
+                                    } else {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (canOpenWith) MaterialTheme.colorScheme.onSurface else disabledIconColor)
+                                            Text("选择打开方式", style = MaterialTheme.typography.bodyLarge, color = if (canOpenWith) Color.Unspecified else disabledColor)
+                                        }
+                                    }
+                                }
+                                VerticalDivider(modifier = Modifier.height(24.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f))
+                                // 右列：留空
+                                Box(modifier = Modifier.weight(1f))
+                            }
                             } // else (非回收站模式)
                         }
                     }
@@ -3233,6 +3268,8 @@ fun FileManagerScreen(
         OpenWithDialog(
             showAppsPage = vm.openWithShowApps,
             appList = vm.openWithAppList,
+            defaultMethod = vm.defaultOpenMethodOf(entry.name),
+            allowSetDefault = vm.openWithAllowSetDefault,
             onDismiss = { vm.pendingOpenWithEntry = null; vm.openWithShowApps = false },
             onShowApps = {
                 vm.openWithAppList = vm.queryOpenWithApps(context, entry)
@@ -3248,7 +3285,10 @@ fun FileManagerScreen(
                 vm.pendingOpenWithEntry = null
                 vm.openWithShowApps = false
                 vm.launchOpenWithApp(context, entry, app)
-            }
+            },
+            onSetDefaultBuiltIn = { method -> vm.setDefaultBuiltIn(entry, method) },
+            onSetDefaultApp = { app -> vm.setDefaultExternal(entry, app) },
+            onClearDefault = { vm.clearDefaultOpenMethod(entry) }
         )
     }
 
