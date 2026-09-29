@@ -2307,9 +2307,10 @@ fun FileManagerScreen(
                                     Column {
                                         // ── 本地存储 + 快捷访问 ──
                                         val barColor = if (isSystemInDarkTheme()) Color(0xFF00838F) else Color(0xFF00BCD4)
+                                        val cardColor = MaterialTheme.colorScheme.surfaceVariant
                                         Card(
                                             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 3.dp),
-                                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                            colors = CardDefaults.cardColors(containerColor = cardColor)
                                         ) {
                                             Column(modifier = Modifier.padding(vertical = 4.dp)) {
                                                 // 内部储存
@@ -2356,13 +2357,14 @@ fun FileManagerScreen(
                                                 // 自定义快捷访问
                                                 quickAccessList.forEach { entry ->
                                                     HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
-                                                    SwipeToDeleteShortcut(
-                                                        onDelete = {
-                                                            quickAccessList = quickAccessList.filter { it != entry }
-                                                            saveQuickAccess()
-                                                        },
-                                                        onClick = { vm.navigateToWithScroll(entry.path); showDrawer = false }
-                                                    ) {
+                                                        SwipeToDeleteShortcut(
+                                                            onDelete = {
+                                                                quickAccessList = quickAccessList.filter { it != entry }
+                                                                saveQuickAccess()
+                                                            },
+                                                            onClick = { vm.navigateToWithScroll(entry.path); showDrawer = false },
+                                                            containerColor = cardColor
+                                                        ) {
                                                         Icon(Icons.Default.SubdirectoryArrowRight, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                                         Spacer(Modifier.width(8.dp))
                                                         Text(entry.name, style = MaterialTheme.typography.bodyMedium)
@@ -2371,13 +2373,14 @@ fun FileManagerScreen(
                                                 // WebDAV 快捷访问
                                                 webDavServers.forEach { server ->
                                                     HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
-                                                    SwipeToDeleteShortcut(
-                                                        onDelete = {
-                                                            WebDavServerStore.remove(context, server.id)
-                                                            webDavServers = webDavServers.filter { it.id != server.id }
-                                                        },
-                                                        onClick = { vm.navigateToWebDav(server); showDrawer = false }
-                                                    ) {
+                                                        SwipeToDeleteShortcut(
+                                                            onDelete = {
+                                                                WebDavServerStore.remove(context, server.id)
+                                                                webDavServers = webDavServers.filter { it.id != server.id }
+                                                            },
+                                                            onClick = { vm.navigateToWebDav(server); showDrawer = false },
+                                                            containerColor = cardColor
+                                                        ) {
                                                         Icon(Icons.Default.Cloud, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
                                                         Spacer(Modifier.width(8.dp))
                                                         Text(server.name.ifEmpty { server.getDefaultName() }, style = MaterialTheme.typography.bodyMedium)
@@ -7408,38 +7411,51 @@ private fun SyncStatusBar(
 private fun SwipeToDeleteShortcut(
     onDelete: () -> Unit,
     onClick: () -> Unit,
+    containerColor: Color = Color.Transparent,
     content: @Composable RowScope.() -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val offsetX = remember { androidx.compose.animation.core.Animatable(0f) }
-    val deleteButtonWidth = 80.dp
-    val maxOffset = with(androidx.compose.ui.platform.LocalDensity.current) { deleteButtonWidth.toPx() }
+    var rowHeightPx by remember { mutableStateOf(0) }
+    val maxOffset = rowHeightPx.toFloat()
     val threshold = maxOffset * 0.7f
+    val density = androidx.compose.ui.platform.LocalDensity.current
 
     Box(modifier = Modifier.fillMaxWidth()) {
-        // 底层：红色删除按钮
+        // 底层：红色删除背景铺满
         Box(
             modifier = Modifier
-                .width(deleteButtonWidth)
                 .matchParentSize()
                 .background(Color(0xFFE53935))
-                .clickable { onDelete() },
-            contentAlignment = Alignment.Center
+                .clickable { onDelete() }
+        )
+        // 底层：删除方块固定在右侧，边长 = 行高，图标居中于方块内
+        Box(
+            modifier = Modifier.matchParentSize(),
+            contentAlignment = Alignment.CenterEnd
         ) {
-            Icon(
-                Icons.Default.Delete,
-                contentDescription = "删除",
-                tint = Color.White,
-                modifier = Modifier.size(24.dp)
-            )
+            Box(
+                modifier = Modifier
+                    .width(with(density) { maxOffset.toDp() })
+                    .fillMaxHeight(),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "删除",
+                    tint = Color.White,
+                    modifier = Modifier.fillMaxSize(0.4f)
+                )
+            }
         }
 
         // 顶层：可滑动的内容
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .onGloballyPositioned { rowHeightPx = it.size.height }
                 .offset { IntOffset(offsetX.value.roundToInt(), 0) }
-                .background(MaterialTheme.colorScheme.surface)
+                .background(containerColor)
                 .clickable(enabled = offsetX.value < 5f) { onClick() }
                 .pointerInput(Unit) {
                     detectHorizontalDragGestures(
