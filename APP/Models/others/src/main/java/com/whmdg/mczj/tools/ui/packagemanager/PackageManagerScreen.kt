@@ -1,10 +1,7 @@
 package com.whmdg.mczj.tools.ui.packagemanager
 
-import android.widget.Toast
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,17 +18,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.graphics.drawable.toBitmap
+import com.whmdg.mczj.tools.ui.components.AppInfoDialog
+import com.whmdg.mczj.tools.ui.components.AppInfoRowData
 import com.whmdg.mczj.tools.ui.filemanager.StandardDialog
-import com.whmdg.mczj.tools.ui.theme.DialogWidthFraction
 import com.whmdg.mczj.tools.util.FormatUtils
 import kotlinx.coroutines.launch
 
@@ -235,7 +228,7 @@ private fun AppPackageCard(app: AppPackageInfo, onClick: () -> Unit) {
     }
 }
 
-/** 应用详情弹窗：面板风格与 ApkInfoDialog 保持一致 */
+/** 应用详情弹窗：复用 core 的 AppInfoDialog 外壳，与 ApkInfoDialog 保持一致 */
 @Composable
 private fun AppPackageInfoDialog(app: AppPackageInfo, onDismiss: () -> Unit) {
     val context = LocalContext.current
@@ -247,147 +240,34 @@ private fun AppPackageInfoDialog(app: AppPackageInfo, onDismiss: () -> Unit) {
         if (detail == null) loadFailed = true
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Card(
-            modifier = Modifier.fillMaxWidth(DialogWidthFraction),
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            )
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // ── 头部：图标 + 名称 + 版本名 ──
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    val iconBitmap = app.icon?.toBitmap(96, 96)
-                    if (iconBitmap != null) {
-                        Image(
-                            painter = BitmapPainter(iconBitmap.asImageBitmap()),
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(56.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                        )
-                    }
-                    Column {
-                        Text(
-                            text = app.appName,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = app.versionName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+    val rows = detail?.let { d ->
+        listOf(
+            AppInfoRowData("包名", app.packageName),
+            AppInfoRowData("版本号 (Code)", d.versionCode.toString()),
+            AppInfoRowData("安装包大小", FormatUtils.formatBytes(app.totalSize)),
+            AppInfoRowData("签名状态", d.signatureStatus),
+            AppInfoRowData("加固状态", d.hardeningStatus),
+            AppInfoRowData("内部数据目录", d.internalDataDir),
+            AppInfoRowData("外部数据目录", d.externalDataDir),
+            AppInfoRowData("APK 路径", d.apkPath),
+            AppInfoRowData("UID", d.uid.toString())
+        )
+    }
 
-                HorizontalDivider(
-                    thickness = 0.5.dp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-                )
-
-                val d = detail
-                if (d == null) {
-                    Box(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (loadFailed) {
-                            Text(
-                                text = "无法解析该应用信息",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        } else {
-                            CircularProgressIndicator()
-                        }
-                    }
-                } else {
-                    // ── 信息列表（每行可长按复制）──
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        AppPackageInfoRow("包名", app.packageName)
-                        AppPackageInfoRow("版本号 (Code)", d.versionCode.toString())
-                        AppPackageInfoRow("安装包大小", FormatUtils.formatBytes(app.totalSize))
-                        AppPackageInfoRow("签名状态", d.signatureStatus)
-                        AppPackageInfoRow("加固状态", d.hardeningStatus)
-                        AppPackageInfoRow("内部数据目录", d.internalDataDir)
-                        AppPackageInfoRow("外部数据目录", d.externalDataDir)
-                        AppPackageInfoRow("APK 路径", d.apkPath)
-                        AppPackageInfoRow("UID", d.uid.toString())
-                    }
-                }
-
-                HorizontalDivider(
-                    thickness = 0.5.dp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)
-                )
-
-                // ── 底部按钮（暂为禁用占位）──
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    TextButton(onClick = {}, enabled = false) {
-                        Text("更多")
-                    }
-                    TextButton(onClick = {}, enabled = false) {
-                        Text("提取安装包")
-                    }
-                }
+    AppInfoDialog(
+        icon = app.icon,
+        appName = app.appName,
+        versionName = app.versionName,
+        rows = rows,
+        onDismiss = onDismiss,
+        loadFailed = loadFailed,
+        buttons = {
+            TextButton(onClick = {}, enabled = false) {
+                Text("更多")
+            }
+            TextButton(onClick = {}, enabled = false) {
+                Text("提取安装包")
             }
         }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun AppPackageInfoRow(label: String, value: String) {
-    val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                onClick = {},
-                onLongClick = {
-                    clipboard.setText(AnnotatedString(value))
-                    Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-                }
-            )
-            .padding(vertical = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(96.dp)
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-    }
+    )
 }
