@@ -12,27 +12,26 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /** 已安装应用的展示信息 */
-data class InstalledApp(
+data class AppPackageInfo(
     val appName: String,
     val packageName: String,
     val icon: Drawable?,
     val versionName: String,
-    val apkSize: Long,
-    val splitSize: Long,
+    val totalSize: Long,
     val isSystemApp: Boolean
 )
 
 /** 已安装应用列表数据源 */
-object InstalledAppProvider {
+object AppPackageInfoProvider {
 
     /**
      * 加载已安装应用列表。
      *
      * @param onlySystem true 仅系统应用，false 仅用户应用
      */
-    suspend fun loadApps(context: Context, onlySystem: Boolean): List<InstalledApp> = withContext(Dispatchers.IO) {
+    suspend fun loadApps(context: Context, onlySystem: Boolean): List<AppPackageInfo> = withContext(Dispatchers.IO) {
         val pm = context.packageManager
-        val result = mutableListOf<InstalledApp>()
+        val result = mutableListOf<AppPackageInfo>()
 
         val installed = try {
             pm.getInstalledApplications(PackageManager.GET_META_DATA)
@@ -54,13 +53,12 @@ object InstalledAppProvider {
                     ?.sumOf { File(it).length() }
                     ?: 0L
 
-                result += InstalledApp(
+                result += AppPackageInfo(
                     appName = appName,
                     packageName = appInfo.packageName,
                     icon = icon,
                     versionName = packageInfo.versionName ?: "",
-                    apkSize = baseSize,
-                    splitSize = splitSize,
+                    totalSize = baseSize + splitSize,
                     isSystemApp = isSystem
                 )
             } catch (_: Exception) {

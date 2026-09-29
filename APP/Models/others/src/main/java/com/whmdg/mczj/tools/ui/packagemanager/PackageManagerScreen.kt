@@ -10,6 +10,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -22,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import com.whmdg.mczj.tools.ui.filemanager.StandardDialog
 import com.whmdg.mczj.tools.util.FormatUtils
+import kotlinx.coroutines.launch
 
 /** 用户应用少于该数量时，判定为应用列表读取被系统拦截 */
 private const val USER_APP_BLOCKED_THRESHOLD = 10
@@ -30,27 +32,31 @@ private const val USER_APP_BLOCKED_THRESHOLD = 10
 @Composable
 fun PackageManagerScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     var selectedTab by remember { mutableIntStateOf(0) }
-    var apps by remember { mutableStateOf<List<InstalledApp>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    // null 表示该标签尚未加载；非 null 即为已缓存的列表
+    var userApps by remember { mutableStateOf<List<AppPackageInfo>?>(null) }
+    var systemApps by remember { mutableStateOf<List<AppPackageInfo>?>(null) }
+    var isRefreshing by remember { mutableStateOf(false) }
     var showBlockedDialog by remember { mutableStateOf(false) }
 
     val onlySystem = selectedTab == 1
+    val currentApps = if (onlySystem) systemApps else userApps
+    val isLoading = currentApps == null
 
-    suspend fun reload() {
-        loading = true
-        apps = InstalledAppProvider.loadApps(context, onlySystem)
-        loading = false
-    }
-
+    // 首次进入当前标签且无缓存时才加载；切换标签命中缓存则直接复用
     LaunchedEffect(selectedTab) {
-        reload()
+        if (currentApps == null) {
+            val loaded = AppPackageInfoProvider.loadApps(context, onlySystem)
+            if (onlySystem) systemApps = loaded else userApps = loaded
+        }
     }
 
-    // 每次加载完用户应用后判定，数量异常则提示
-    LaunchedEffect(apps, selectedTab) {
-        if (!onlySystem && !loading && apps.size < USER_APP_BLOCKED_THRESHOLD) {
+    // 每次用户应用列表变化后判定，数量异常则提示
+    LaunchedEffect(userApps) {
+        val list = userApps ?: return@LaunchedEffect
+        if (list.size < USER_APP_BLOCKED_THRESHOLD) {
             showBlockedDialog = true
         }
     }
@@ -89,7 +95,7 @@ fun PackageManagerScreen(onBack: () -> Unit) {
                 )
             }
 
-            if (loading) {
+            if (isLoading) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
@@ -97,13 +103,26 @@ fun PackageManagerScreen(onBack: () -> Unit) {
                     CircularProgressIndicator()
                 }
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                PullToRefreshBox(
+                    isRefreshing = isRefreshing,
+                    onRefresh = {
+                        scope.launch {
+                            isRefreshing = true
+                            val loaded = AppPackageInfoProvider.loadApps(context, onlySystem)
+                            if (onlySystem) systemApps = loaded else userApps = loaded
+                            isRefreshing = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
                 ) {
-                    items(apps, key = { it.packageName }) { app ->
-                        InstalledAppCard(app)
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(currentApps ?: emptyList(), key = { it.packageName }) { app ->
+                            AppPackageCard(app)
+                        }
                     }
                 }
             }
@@ -121,7 +140,7 @@ fun PackageManagerScreen(onBack: () -> Unit) {
             },
             text = {
                 Text(
-                    text = "当前仅读取到 ${apps.size} 个用户应用，可能被系统的应用列表隐私管控拦截。请前往系统设置为本应用开启「获取应用列表」权限后重试。",
+                    text = "当前仅读取到 ${userApps?.size ?: 0} 个用户应用，可能被系统的应用列表隐私管控拦截。请前往系统设置为本应用开启「获取应用列表」权限后重试。",
                     style = MaterialTheme.typography.bodyMedium
                 )
             },
@@ -129,7 +148,7 @@ fun PackageManagerScreen(onBack: () -> Unit) {
                 TextButton(onClick = {
                     showBlockedDialog = false
                     try {
-                        context.startActivity(InstalledAppProvider.buildAppSettingsIntent(context))
+                        context.startActivity(AppPackageInfoProvider.buildAppSettingsIntent(context))
                     } catch (_: Exception) {}
                 }) {
                     Text("前往设置")
@@ -145,7 +164,7 @@ fun PackageManagerScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun InstalledAppCard(app: InstalledApp) {
+private fun AppPackageCard(app: AppPackageInfo) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -173,7 +192,7 @@ private fun InstalledAppCard(app: InstalledApp) {
 
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
                     text = app.appName,
@@ -181,25 +200,12 @@ private fun InstalledAppCard(app: InstalledApp) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = app.versionName,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = FormatUtils.formatBytes(app.apkSize),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (app.splitSize > 0) {
-                        Text(
-                            text = "拆分 +${FormatUtils.formatBytes(app.splitSize)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                val sizeText = FormatUtils.formatBytes(app.totalSize)
+                Text(
+                    text = "${app.versionName}  $sizeText",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Text(
                     text = app.packageName,
                     style = MaterialTheme.typography.bodySmall,
