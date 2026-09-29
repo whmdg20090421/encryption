@@ -326,7 +326,7 @@ class SyncDatabase private constructor(
 
     fun upsertEntry(table: String, entry: SyncEntryRow) {
         val db = writableDatabase
-        db.insertWithOnConflict(table, null, rowToValues(entry), SQLiteDatabase.CONFLICT_REPLACE)
+        db.insertWithOnConflict(table, null, rowToValues(entry, table), SQLiteDatabase.CONFLICT_REPLACE)
     }
 
     /**
@@ -399,7 +399,7 @@ class SyncDatabase private constructor(
         db.beginTransaction()
         try {
             for (entry in entries) {
-                db.insertWithOnConflict(table, null, rowToValues(entry), SQLiteDatabase.CONFLICT_REPLACE)
+                db.insertWithOnConflict(table, null, rowToValues(entry, table), SQLiteDatabase.CONFLICT_REPLACE)
             }
             db.setTransactionSuccessful()
         } finally {
@@ -550,7 +550,7 @@ class SyncDatabase private constructor(
             snapshot.beginTransaction()
             try {
                 for (entry in entries) {
-                    snapshot.insertWithOnConflict("cloud_entries", null, rowToValues(entry), SQLiteDatabase.CONFLICT_REPLACE)
+                    snapshot.insertWithOnConflict("cloud_entries", null, rowToValues(entry, TABLE_CLOUD), SQLiteDatabase.CONFLICT_REPLACE)
                 }
                 snapshot.setTransactionSuccessful()
             } finally {
@@ -568,7 +568,7 @@ class SyncDatabase private constructor(
         try {
             db.delete(table, null, null)
             for (entry in entries) {
-                db.insertWithOnConflict(table, null, rowToValues(entry), SQLiteDatabase.CONFLICT_REPLACE)
+                db.insertWithOnConflict(table, null, rowToValues(entry, table), SQLiteDatabase.CONFLICT_REPLACE)
             }
             db.setTransactionSuccessful()
         } finally {
@@ -814,7 +814,13 @@ class SyncDatabase private constructor(
         )
     }
 
-    private fun rowToValues(entry: SyncEntryRow): ContentValues {
+    /**
+     * 序列化条目为 ContentValues。
+     *
+     * `dir_created` 仅存在于 cloud_entries（目录是否已在云端创建），
+     * 写入 local_entries 时必须剔除，否则触发 "no column named dir_created"。
+     */
+    private fun rowToValues(entry: SyncEntryRow, table: String = TABLE_CLOUD): ContentValues {
         return ContentValues().apply {
             put("path", entry.path)
             put("size", entry.size)
@@ -825,7 +831,7 @@ class SyncDatabase private constructor(
             put("status", entry.status.name)
             put("last_sync_time", entry.lastSyncTime)
             put("fail_reason", entry.failReason)
-            put("dir_created", if (entry.dirCreated) 1 else 0)
+            if (table == TABLE_CLOUD) put("dir_created", if (entry.dirCreated) 1 else 0)
             put("original_name", entry.originalName)
         }
     }
