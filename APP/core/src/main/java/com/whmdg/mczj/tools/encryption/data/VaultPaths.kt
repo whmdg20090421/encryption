@@ -91,7 +91,6 @@ object VaultPaths {
      * 因此删除保险箱时必须一并清理，否则要等到下次创建同名保险箱才会被覆盖。
      * 包含：
      *  - `.vault_private_backup/vault_config_<pathHash>.json`
-     *  - `.vault_private_backup/namemap_<pathHash>.json`
      *  - `云盘/db元数据/<vaultName>_meta.json`
      *  - `云盘/锁文件/vault_<vaultId>.lock`
      *
@@ -112,7 +111,6 @@ object VaultPaths {
 
         val priv = appPrivateBackupDir(context)
         deleteQuietly(File(priv, "vault_config_$hash.json"))
-        deleteQuietly(File(priv, "namemap_$hash.json"))
 
         deleteQuietly(File(AppDataPaths.cloudDbMeta(context), "${vaultName}_meta.json"))
         deleteQuietly(File(AppDataPaths.cloudSyncLocks(context), "vault_$vaultId.lock"))

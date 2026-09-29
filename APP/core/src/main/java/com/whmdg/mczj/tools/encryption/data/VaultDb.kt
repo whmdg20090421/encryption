@@ -1,15 +1,13 @@
 package com.whmdg.mczj.tools.encryption.data
 
 import android.content.Context
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
 
 @Serializable
 data class VaultDb(
-    val vaults: MutableList<VaultRecord> = mutableListOf(),
-    @SerialName("name_mappings") val nameMappings: MutableMap<String, String> = mutableMapOf()
+    val vaults: MutableList<VaultRecord> = mutableListOf()
 ) {
     companion object {
         private val json = Json {
@@ -89,8 +87,4 @@ data class VaultDb(
     }
 
     fun isNameTaken(name: String): Boolean = vaults.any { it.name == name }
-
-    fun addNameMapping(hash: String, hexValue: String) {
-        nameMappings[hash] = hexValue
-    }
 }

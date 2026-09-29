@@ -188,8 +188,7 @@ data class VaultContext(
     val vaultName: String,
     val dek: ByteArray,
     val customEncryption: Boolean,
-    val encryptFilename: Boolean = false,
-    val nameMapping: com.whmdg.mczj.tools.encryption.data.NameMapping = com.whmdg.mczj.tools.encryption.data.NameMapping.empty()
+    val encryptFilename: Boolean = false
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -1483,8 +1482,7 @@ fun FileManagerScreen(
                                                 vaultName = session.record.name,
                                                 dek = session.dek,
                                                 customEncryption = session.record.customEncryption,
-                                                encryptFilename = session.record.encryptFilename,
-                                                nameMapping = session.nameMapping
+                                                encryptFilename = session.record.encryptFilename
                                             )
                                         }
                                     } else null,
@@ -1572,8 +1570,7 @@ fun FileManagerScreen(
                                                 vaultName = session.record.name,
                                                 dek = session.dek,
                                                 customEncryption = session.record.customEncryption,
-                                                encryptFilename = session.record.encryptFilename,
-                                                nameMapping = session.nameMapping
+                                                encryptFilename = session.record.encryptFilename
                                             )
                                         }
                                     } else null,
@@ -6151,16 +6148,8 @@ private fun FileEntryRow(
                         modifier = Modifier.weight(1f).fillMaxHeight(),
                         contentAlignment = Alignment.Center
                     ) {
-                        val originalName = if (vaultContext != null && vaultContext.encryptFilename && entry.name.endsWith(".whm")) {
-                            com.whmdg.mczj.tools.encryption.core.FilenameCodec.decrypt(
-                                encryptedName = entry.name.removeSuffix(".whm"),
-                                dek = vaultContext.dek,
-                                aad = if (vaultContext.customEncryption) com.whmdg.mczj.tools.encryption.core.FileConstants.aadCustomObf else null,
-                                lookupMapping = { hash -> vaultContext.nameMapping.get(hash) }
-                            )
-                        } else {
-                            entry.name
-                        }
+                        // entry.name 在目录加载时已由 resolveVaultName 还原为原始名，此处直接使用
+                        val originalName = entry.name
                         val iconFileName = if (vaultContext != null) originalName.removeSuffix(".whm") else originalName
                         val ext = extractExtension(iconFileName)
                         val category = categorizeFile(ext)

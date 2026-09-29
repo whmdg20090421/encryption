@@ -20,7 +20,7 @@ class SyncDatabase private constructor(
 ) : SQLiteOpenHelper(context, dbFile.absolutePath, null, DB_VERSION) {
 
     companion object {
-        private const val DB_VERSION = 6
+        private const val DB_VERSION = 7
         private const val TAG = "SyncDatabase"
 
         private val instances = mutableMapOf<String, SyncDatabase>()
@@ -145,7 +145,8 @@ class SyncDatabase private constructor(
                 cloud_hash    TEXT,
                 status        TEXT NOT NULL DEFAULT 'PENDING',
                 last_sync_time TEXT,
-                fail_reason   TEXT
+                fail_reason   TEXT,
+                original_name TEXT
             )
         """.trimIndent())
 
@@ -160,7 +161,8 @@ class SyncDatabase private constructor(
                 status        TEXT NOT NULL DEFAULT 'PENDING',
                 last_sync_time TEXT,
                 fail_reason   TEXT,
-                dir_created   INTEGER NOT NULL DEFAULT 0
+                dir_created   INTEGER NOT NULL DEFAULT 0,
+                original_name TEXT
             )
         """.trimIndent())
 
@@ -189,9 +191,10 @@ class SyncDatabase private constructor(
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         // v6：内容指纹列由 md5 更名为 content_hash，且算法由 MD5 改为 SHA-256。
-        // 旧记录中的指纹是旧算法产物，无法复用，因此直接弃库重建（云端快照为权威数据，
-        // 本地缺口由下次扫描重建）。旧的增量 ALTER 分支已无存在意义，一并移除。
-        if (oldVersion < 6) {
+        // v7：新增 original_name 列（文件名加密改为 AES-ECB 后，原始名权威来源落库）。
+        // 旧记录中的指纹是旧算法产物、且旧库不含原始名，无法复用，因此直接弃库重建
+        //（云端快照为权威数据，本地缺口由下次扫描重建）。
+        if (oldVersion < 7) {
             db.execSQL("DROP TABLE IF EXISTS local_entries")
             db.execSQL("DROP TABLE IF EXISTS cloud_entries")
             db.execSQL("DROP TABLE IF EXISTS sync_stats")
@@ -326,6 +329,71 @@ class SyncDatabase private constructor(
         db.insertWithOnConflict(table, null, rowToValues(entry), SQLiteDatabase.CONFLICT_REPLACE)
     }
 
+    /**
+     * 写入条目，但 [SyncEntryRow.originalName] 为空时保留库中已有值。
+     *
+     * 扫描 / 云端对比等"只更新文件状态、不掌握原始名"的路径必须用它，
+     * 否则 CONFLICT_REPLACE 会用 NULL 覆盖掉加密时写入的 `original_name`。
+     */
+    fun upsertEntryPreservingOriginalName(table: String, entry: SyncEntryRow) {
+        val merged = if (entry.originalName == null) {
+            entry.copy(originalName = getEntry(table, entry.path)?.originalName)
+        } else {
+            entry
+        }
+        upsertEntry(table, merged)
+    }
+
+    /** 写入 / 更新单个条目的原始文件名（path 必须已存在或由调用方补齐其余字段）。 */
+    fun setOriginalName(table: String, path: String, originalName: String?) {
+        val db = writableDatabase
+        db.update(table, ContentValues().apply { put("original_name", originalName) }, "path = ?", arrayOf(path))
+    }
+
+    /**
+     * 为某条本地文件记录写入原始名：行已存在则只更新 `original_name`（不动上传状态），
+     * 不存在则插入一条 PENDING 行（内容指纹留空，由后续扫描补全）。
+     *
+     * 用于「加密文件名」开关迁移：把磁盘上已存在的明文文件改写为密文名时，
+     * 这些文件可能尚未被扫描入同步库，需在此补齐显示名。
+     */
+    fun upsertLocalOriginalName(
+        path: String,
+        size: Long,
+        lastModified: String,
+        originalName: String
+    ) {
+        val db = writableDatabase
+        val insert = ContentValues().apply {
+            put("path", path)
+            put("size", size)
+            put("uploaded_size", 0L)
+            put("last_modified", lastModified)
+            put("content_hash", null as String?)
+            put("status", SyncStatus.PENDING.name)
+            put("original_name", originalName)
+        }
+        db.insertWithOnConflict("local_entries", null, insert, SQLiteDatabase.CONFLICT_IGNORE)
+        db.update(
+            "local_entries",
+            ContentValues().apply { put("original_name", originalName) },
+            "path = ?", arrayOf(path)
+        )
+    }
+
+    /**
+     * 批量取某个目录下直接子条目的 `路径 → 原始名` 映射（仅含 non-null 原始名）。
+     * 供文件管理器一次查询完成整目录文件名还原，避免逐文件查库。
+     */
+    fun getOriginalNamesByParent(table: String, parentPath: String): Map<String, String> {
+        val result = HashMap<String, String>()
+        for (row in getEntriesByParent(table, parentPath)) {
+            val name = row.originalName
+            if (!name.isNullOrEmpty()) result[row.path] = name
+        }
+        return result
+    }
+
     fun upsertEntries(table: String, entries: List<SyncEntryRow>) {
         val db = writableDatabase
         db.beginTransaction()
@@ -345,7 +413,7 @@ class SyncDatabase private constructor(
      * 行不存在则插入（status=PENDING），已存在则只更新 content_hash，不动其他字段，
      * 避免与扫描写行产生竞态把已有状态覆盖。
      */
-    fun upsertLocalContentHash(path: String, contentHash: String, size: Long, lastModified: String) {
+    fun upsertLocalContentHash(path: String, contentHash: String, size: Long, lastModified: String, originalName: String? = null) {
         val db = writableDatabase
         val values = ContentValues().apply {
             put("path", path)
@@ -354,9 +422,17 @@ class SyncDatabase private constructor(
             put("last_modified", lastModified)
             put("content_hash", contentHash)
             put("status", SyncStatus.PENDING.name)
+            put("original_name", originalName)
         }
         db.insertWithOnConflict("local_entries", null, values, SQLiteDatabase.CONFLICT_IGNORE)
-        db.update("local_entries", ContentValues().apply { put("content_hash", contentHash) }, "path = ?", arrayOf(path))
+        db.update(
+            "local_entries",
+            ContentValues().apply {
+                put("content_hash", contentHash)
+                if (originalName != null) put("original_name", originalName)
+            },
+            "path = ?", arrayOf(path)
+        )
     }
 
     /**
@@ -380,9 +456,17 @@ class SyncDatabase private constructor(
                     put("last_modified", r.lastModified)
                     put("content_hash", r.contentHash)
                     put("status", SyncStatus.PENDING.name)
+                    put("original_name", r.originalName)
                 }
                 db.insertWithOnConflict("local_entries", null, values, SQLiteDatabase.CONFLICT_IGNORE)
-                db.update("local_entries", ContentValues().apply { put("content_hash", r.contentHash) }, "path = ?", arrayOf(r.path))
+                db.update(
+                    "local_entries",
+                    ContentValues().apply {
+                        put("content_hash", r.contentHash)
+                        put("original_name", r.originalName)
+                    },
+                    "path = ?", arrayOf(r.path)
+                )
 
                 val cloud = queryCloudContentHashLocked(db, r.path)
                 if (!cloud.isNullOrEmpty() && cloud == r.contentHash) {
@@ -410,7 +494,9 @@ class SyncDatabase private constructor(
         val path: String,
         val contentHash: String,
         val size: Long,
-        val lastModified: String
+        val lastModified: String,
+        /** 该密文对应的原始文件名（文件名加密时必填）。 */
+        val originalName: String? = null
     )
 
     /**
@@ -455,7 +541,8 @@ class SyncDatabase private constructor(
                     status        TEXT NOT NULL DEFAULT 'PENDING',
                     last_sync_time TEXT,
                     fail_reason   TEXT,
-                    dir_created   INTEGER NOT NULL DEFAULT 0
+                    dir_created   INTEGER NOT NULL DEFAULT 0,
+                    original_name TEXT
                 )
             """.trimIndent())
             snapshot.execSQL("CREATE INDEX idx_cloud_status ON cloud_entries(status)")
@@ -711,6 +798,7 @@ class SyncDatabase private constructor(
     private fun cursorToRow(cursor: android.database.Cursor): SyncEntryRow {
         val sizeIdx = cursor.getColumnIndex("uploaded_size")
         val dirIdx = cursor.getColumnIndex("dir_created")
+        val origIdx = cursor.getColumnIndex("original_name")
         return SyncEntryRow(
             path = cursor.getString(cursor.getColumnIndexOrThrow("path")),
             size = cursor.getLong(cursor.getColumnIndexOrThrow("size")),
@@ -721,7 +809,8 @@ class SyncDatabase private constructor(
             status = SyncStatus.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("status"))),
             lastSyncTime = cursor.getString(cursor.getColumnIndexOrThrow("last_sync_time")),
             failReason = cursor.getString(cursor.getColumnIndexOrThrow("fail_reason")),
-            dirCreated = if (dirIdx >= 0) cursor.getInt(dirIdx) != 0 else false
+            dirCreated = if (dirIdx >= 0) cursor.getInt(dirIdx) != 0 else false,
+            originalName = if (origIdx >= 0) cursor.getString(origIdx) else null
         )
     }
 
@@ -737,6 +826,7 @@ class SyncDatabase private constructor(
             put("last_sync_time", entry.lastSyncTime)
             put("fail_reason", entry.failReason)
             put("dir_created", if (entry.dirCreated) 1 else 0)
+            put("original_name", entry.originalName)
         }
     }
 
@@ -817,5 +907,7 @@ data class SyncEntryRow(
     val status: SyncStatus,
     val lastSyncTime: String?,   // ISO8601
     val failReason: String?,
-    val dirCreated: Boolean = false  // 仅 cloud_entries 的目录条目使用：该目录是否已在云端创建
+    val dirCreated: Boolean = false,  // 仅 cloud_entries 的目录条目使用：该目录是否已在云端创建
+    /** 磁盘密文名对应的原始文件名；文件名为 AES-ECB 加密名时的权威还原来源。目录条目为 null。 */
+    val originalName: String? = null
 )

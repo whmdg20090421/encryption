@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.whmdg.mczj.tools.encryption.core.FileCodec
+import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import com.whmdg.mczj.tools.encryption.data.SyncEntryRow
@@ -50,8 +51,31 @@ class CloudPaneController(
     // 旧实例的文件描述符已失效，需重建（支持 init 前的云端索引恢复）。
     private val syncDb: SyncDatabase get() = SyncDatabase.getInstance(context, vaultName)
 
-    // 补全同步记录时临时持有的会话（钥匙）。仅在本轮扫描内复用，扫描结束即清零销毁。
+    // 补全同步记录 / 还原文件名时临时持有的会话（钥匙）。仅在本轮扫描内复用，扫描结束即清零销毁。
     private var backfillSession: com.whmdg.mczj.tools.encryption.services.VaultSession? = null
+
+    // 从加密保险箱环境进入时注入的会话（已持有 DEK），无需再向用户要密码。
+    // 注意：不在 dispose 时销毁——该会话的所有权属于加密保险箱，云盘面板只是借用。
+    private val injectedSession: com.whmdg.mczj.tools.encryption.services.VaultSession? =
+        vaultSession?.takeIf { it.record.id == vaultId }
+
+    /**
+     * 该保险箱是否启用了文件名加密。直接从 `vault_config.json` 读取（HMAC 校验，无需密码），
+     * 用于避免对明文文件名的保险箱误弹密码框。读取失败按 false 处理（不加密）。
+     */
+    private val vaultEncryptsFilename: Boolean by lazy {
+        try {
+            com.whmdg.mczj.tools.encryption.data.VaultConfig
+                .readWithFallback(context, File(vaultDir))
+                .configFlags.encryptFilename
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** 面板当前是否有可用的密钥环境（注入会话或已请求到临时会话）。 */
+    private fun activeSession(): com.whmdg.mczj.tools.encryption.services.VaultSession? =
+        injectedSession ?: backfillSession
 
     // ── 目录级校验队列 ──
     // 以"文件夹"为单位做本地校验：每次只校验一个目录的直接子项，
@@ -67,6 +91,8 @@ class CloudPaneController(
     private var scanJob: Job? = null
     /** 用户取消过内容指纹补全时置位，本轮不再重复弹框（对齐旧的"只弹一次"语义）。 */
     private var backfillDeclined = false
+    /** 用户取消过"还原文件名"的密码请求时置位，本轮不再重复弹框。 */
+    private var nameResolveDeclined = false
 
     /** 云盘面板状态（完全独立，使用 mutableStateOf 驱动 Compose recomposition） */
     class CloudPanelState {
@@ -219,7 +245,6 @@ class CloudPaneController(
         "vault_config.json",
         "vault_config.backup.json",
         "vault_sync_index.json",
-        "name_mappings.json",
         "folder_sizes.json"
     )
 
@@ -388,10 +413,10 @@ class CloudPaneController(
             }
         }
 
-        // 录入本地表（如果是新文件）
+        // 录入本地表（如果是新文件）；保留已有 original_name，避免扫描覆盖显示名
         if (existingEntry == null) {
             val originalSize = localFile.length()
-            syncDb.upsertEntry("local_entries", SyncEntryRow(
+            syncDb.upsertEntryPreservingOriginalName("local_entries", SyncEntryRow(
                 path = relativePath,
                 size = originalSize,
                 lastModified = Instant.ofEpochMilli(localFile.lastModified()).toString(),
@@ -1375,7 +1400,8 @@ class CloudPaneController(
                 for (cloudEntry in cloudFiles) {
                     currentCoroutineContext().ensureActive()
                     val relPath = cloudEntry.path
-                    val fileName = relPath.substringAfterLast('/')
+                    val fileName = cloudEntry.originalName?.takeIf { it.isNotEmpty() }
+                        ?: relPath.substringAfterLast('/')
 
                     // 冲突检测：本地存在同名且未同步（PENDING）→ 红蓝双条
                     val localEntry = withContext(Dispatchers.IO) {
@@ -1459,7 +1485,8 @@ class CloudPaneController(
                                 cloudHash = cloudEntry.cloudHash,
                                 status = SyncStatus.COMPLETED,
                                 lastSyncTime = Instant.now().toString(),
-                                failReason = null
+                                failReason = null,
+                                originalName = cloudEntry.originalName
                             ))
                         }
                         completedFiles++
@@ -2191,6 +2218,7 @@ class CloudPaneController(
             }
             // 更新 local_entries（使用加密后的实际文件大小）
             val originalSize = localFile.length()
+            val cloudRow = syncDb.getEntry("cloud_entries", file.path)
             syncDb.upsertEntry("local_entries", com.whmdg.mczj.tools.encryption.data.SyncEntryRow(
                 path = file.path,
                 size = originalSize,
@@ -2199,7 +2227,8 @@ class CloudPaneController(
                 cloudHash = null,
                 status = com.whmdg.mczj.tools.encryption.data.SyncStatus.COMPLETED,
                 lastSyncTime = java.time.Instant.now().toString(),
-                failReason = null
+                failReason = null,
+                originalName = cloudRow?.originalName
             ))
         }
     }
@@ -2242,6 +2271,7 @@ class CloudPaneController(
         }
         state.isValidating = false
         backfillDeclined = false
+        nameResolveDeclined = false
         validatedToastShown = false
     }
 
@@ -2462,14 +2492,15 @@ class CloudPaneController(
 
     /**
      * 阻塞式请求保险箱密码并换取临时会话。
-     * 先去重缓存的会话；无则弹密码框，校验成功返回会话（缓存复用），失败允许重试，取消返回 null。
+     * 先复用已注入/已缓存的会话；无则弹密码框，校验成功返回会话（缓存复用），失败允许重试，取消返回 null。
      */
     private suspend fun requestBackfillSession(missingCount: Int): com.whmdg.mczj.tools.encryption.services.VaultSession? {
-        backfillSession?.let { return it }
+        activeSession()?.let { return it }
+        // missingCount 仅用于旧文案；统一文案后不再区分用途
 
         val resumed = java.util.concurrent.atomic.AtomicBoolean(false)
         val session = suspendCancellableCoroutine<com.whmdg.mczj.tools.encryption.services.VaultSession?> { cont ->
-            val message = "检测到 $missingCount 个本地文件缺少同步记录，需要密码来计算明文校验值。密码仅本次使用，不会保存。"
+            val message = "云盘列表需要保险箱密钥（用于还原文件名 / 校验本地文件）。请输入密码，密码仅本次使用，不会保存。"
             state.passwordDialog = PasswordDialogState(
                 message = message,
                 onSubmit = { password ->
@@ -2503,13 +2534,61 @@ class CloudPaneController(
         return session
     }
 
+    /**
+     * 解析磁盘密文名对应的原始名（云盘列表还原显示名专用）。
+     *
+     * 无密钥环境时主动向用户索要密码换取临时会话；返回 [NameResolution.name] 为原始名，
+     * [NameResolution.writeBackRelPath] 非空表示来自"逆解兜底"、需回写 local_entries。
+     */
+    private suspend fun resolveOriginalName(
+        encryptedName: String,
+        childRelativePath: String
+    ): NameResolution {
+        // 目录条目 / 非文件名加密模式：无需还原（明文模式直接去掉 .whm 后缀）
+        if (!vaultEncryptsFilename) {
+            return NameResolution(encryptedName.removeSuffix(".whm"), null)
+        }
+        // 用户已取消过本轮密码请求：不再重复弹框，直接显示密文名
+        if (nameResolveDeclined) return NameResolution(encryptedName, null)
+
+        val session = activeSession() ?: requestBackfillSession(1) ?: run {
+            nameResolveDeclined = true
+            return NameResolution(encryptedName, null)
+        }
+
+        val decrypted = FilenameCodec.decryptName(encryptedName, session.dek)
+        if (decrypted == FilenameCodec.FALLBACK_NAME) return NameResolution(encryptedName, null)
+        return NameResolution(decrypted, childRelativePath)
+    }
+
+    /** 文件名还原结果：原始名 + 需要回写 local_entries 的相对路径（null 表示无需回写）。 */
+    private data class NameResolution(val name: String, val writeBackRelPath: String?)
+
+    /**
+     * 把"逆解得到"的原始名回写 local_entries.original_name。
+     * 行已存在则只更新该列（不动上传状态）；不存在则补建一条 PENDING 行
+     * （新设备未扫描前也能立即持久化显示名，后续扫描再补内容指纹）。
+     */
+    private fun writeBackOriginalName(relPath: String, originalName: String) {
+        try {
+            val file = File(vaultDir, relPath.trimStart('/'))
+            syncDb.upsertLocalOriginalName(
+                path = relPath,
+                size = if (file.isFile) file.length() else 0L,
+                lastModified = Instant.ofEpochMilli(file.lastModified()).toString(),
+                originalName = originalName
+            )
+        } catch (_: Exception) {
+        }
+    }
+
 
     /**
      * 列出本地保险箱目录，合并云端-only 条目。
      * 文件夹大小累加整棵子树（与 updateSingleEntry / refreshParentAggregates 保持同一口径）。
      * 返回的列表已排序：文件夹在前，文件在后，自然排序。
      */
-    private fun listLocalFiles(relativePath: String): List<CloudFileEntry> {
+    private suspend fun listLocalFiles(relativePath: String): List<CloudFileEntry> {
         val dir = File(vaultDir, relativePath.trimStart('/'))
         val entries = mutableListOf<CloudFileEntry>()
         val localNames = mutableSetOf<String>()
@@ -2562,6 +2641,15 @@ class CloudPaneController(
                 // 文件：从 DB 查同步状态，优先用内存实时进度，回退到 DB 持久化进度
                 val dbEntry = syncDb.getEntry("local_entries", childRelativePath)
                 var status = dbEntry?.status ?: SyncStatus.PENDING
+                // 显示名：优先用 DB 中的原始名；miss 时查库逆解（无密钥环境则主动索要密码），并回写
+                val displayName = dbEntry?.originalName?.takeIf { it.isNotEmpty() }
+                    ?: run {
+                        val res = resolveOriginalName(file.name, childRelativePath)
+                        if (res.writeBackRelPath != null) {
+                            writeBackOriginalName(res.writeBackRelPath, res.name)
+                        }
+                        res.name
+                    }
 
                 // 优先使用 DB 中的原始文件大小，避免读取加密文件的膨胀大小
                 val fileSize = dbEntry?.size ?: file.length()
@@ -2593,7 +2681,7 @@ class CloudPaneController(
                     else -> fileSize
                 }
                 entries.add(CloudFileEntry(
-                    name = file.name,
+                    name = displayName,
                     relativePath = childRelativePath,
                     isDirectory = false,
                     totalSize = fileSize,
@@ -2744,7 +2832,7 @@ class CloudPaneController(
             // 冲突时：本地条目在 listLocalFiles 中已添加（显示在前），云端条目在此添加（显示在后）
             if (name !in localNames || isConflict) {
                 entries.add(CloudFileEntry(
-                    name = name,
+                    name = cloudEntry.originalName?.takeIf { it.isNotEmpty() } ?: name,
                     relativePath = childRelativePath,
                     isDirectory = false,
                     totalSize = cloudEntry.size,

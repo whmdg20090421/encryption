@@ -2178,7 +2178,6 @@ private fun DiffScanDialog(
             "vault_config.json",
             "vault_config.backup.json",
             "vault_sync_index.json",
-            "name_mappings.json",
             "folder_sizes.json"
         )
 
@@ -2213,8 +2212,10 @@ private fun DiffScanDialog(
                     val existingEntry = syncDb.getEntry("local_entries", relPath)
 
                     if (existingEntry == null) {
-                        // 新文件：插入 PENDING
-                        syncDb.upsertEntry("local_entries", com.whmdg.mczj.tools.encryption.data.SyncEntryRow(
+                        // 新文件：插入 PENDING。原始名优先取本地已有值，本地无则从云端条目继承
+                        // （跨设备经文件夹渠道同步回来的密文，本地首扫只能靠云端 DB 还原显示名）。
+                        val inheritedName = syncDb.getEntry("cloud_entries", relPath)?.originalName
+                        syncDb.upsertEntryPreservingOriginalName("local_entries", com.whmdg.mczj.tools.encryption.data.SyncEntryRow(
                             path = relPath,
                             size = currentSize,
                             uploadedSize = 0,
@@ -2223,11 +2224,12 @@ private fun DiffScanDialog(
                             cloudHash = null,
                             status = com.whmdg.mczj.tools.encryption.data.SyncStatus.PENDING,
                             lastSyncTime = null,
-                            failReason = null
+                            failReason = null,
+                            originalName = inheritedName
                         ))
                         updatedState.incrementAndGet()
                     } else if (existingEntry.size != currentSize || existingEntry.lastModified != currentModified) {
-                        // 文件变化：重置为 PENDING，清空内容指纹和 uploadedSize
+                        // 文件变化：重置为 PENDING，清空内容指纹和 uploadedSize（保留 original_name）
                         syncDb.updateEntry("local_entries", relPath) { row ->
                             row.copy(
                                 size = currentSize,

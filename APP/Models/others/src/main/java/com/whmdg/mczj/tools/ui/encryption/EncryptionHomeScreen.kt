@@ -46,9 +46,6 @@ import com.whmdg.mczj.tools.util.SizeTreeNode
 import com.whmdg.mczj.tools.encryption.data.VaultConfig
 import com.whmdg.mczj.tools.encryption.data.VaultPaths
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
-import com.whmdg.mczj.tools.encryption.data.NameMapping
-import com.whmdg.mczj.tools.encryption.core.FileConstants
-import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import com.whmdg.mczj.tools.encryption.services.VaultService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
 import java.io.File
@@ -542,14 +539,17 @@ fun VaultsListTab(
     var activeVaultForMenu by remember { mutableStateOf<VaultRecord?>(null) }
     var activeVaultForDelete by remember { mutableStateOf<VaultRecord?>(null) }
     var activeVaultForSettings by remember { mutableStateOf<VaultRecord?>(null) }
+    // 设置弹窗内「加密文件名」的暂存目标值，点确认后才生效
+    var settingsTargetEncryptFilename by remember { mutableStateOf(false) }
     var showEncryptFilenameWarning by remember { mutableStateOf<Pair<VaultRecord, Boolean>?>(null) }
-    var showPasswordDialogForSettings by remember { mutableStateOf<VaultRecord?>(null) }
+    var showPasswordDialogForSettings by remember { mutableStateOf<Pair<VaultRecord, Boolean>?>(null) }
     var settingsPasswordInput by remember { mutableStateOf("") }
     var settingsPasswordVisible by remember { mutableStateOf(false) }
-    var pendingSettingsVault by remember { mutableStateOf<Pair<VaultRecord, String>?>(null) }
+    var pendingSettingsVault by remember { mutableStateOf<Triple<VaultRecord, String, Boolean>?>(null) }
     var isRestoringFilenames by remember { mutableStateOf(false) }
     var restoreProgress by remember { mutableIntStateOf(0) }
     var restoreTotal by remember { mutableIntStateOf(0) }
+    var restoringToEncrypted by remember { mutableStateOf(false) }
     var showRestoreComplete by remember { mutableStateOf(false) }
     var pendingVaultDelete by remember { mutableStateOf<Pair<VaultRecord, Boolean>?>(null) }
     var isDeletingVault by remember { mutableStateOf(false) }
@@ -747,10 +747,11 @@ fun VaultsListTab(
         )
     }
 
-    // 异步执行恢复文件名（需要打开保险箱获取 DEK）
+    // 异步执行文件名迁移（开启或关闭加密文件名，均需打开保险箱获取 DEK）
     LaunchedEffect(pendingSettingsVault) {
-        val (vault, pwd) = pendingSettingsVault ?: return@LaunchedEffect
+        val (vault, pwd, target) = pendingSettingsVault ?: return@LaunchedEffect
         isRestoringFilenames = true
+        restoringToEncrypted = target
         restoreProgress = 0
         restoreTotal = 0
 
@@ -758,69 +759,19 @@ fun VaultsListTab(
             val session = withContext(Dispatchers.IO) {
                 vaultService.open(vault.id, pwd)
             }
-
-            val vaultDir = session.vaultDir
-            val dek = session.dek
-            val customEncryption = session.record.customEncryption
-
-            // 加载文件名映射表（用于解密哈希映射的长文件名）
+            // 迁移入口内部加载/保存映射表并逐文件改名
             withContext(Dispatchers.IO) {
-                session.loadNameMapping(context)
-            }
-            val nameMapping = session.nameMapping
-
-            // 获取所有 .whm 文件（递归遍历子目录）
-            val whmFiles = withContext(Dispatchers.IO) {
-                vaultDir.walkTopDown().filter { it.isFile && it.name.endsWith(".whm") }.toList()
-            }
-            restoreTotal = whmFiles.size
-
-            if (restoreTotal > 0) {
-                withContext(Dispatchers.IO) {
-                    whmFiles.forEachIndexed { index, encryptedFile ->
-                        try {
-                            // 解密文件名
-                            val originalName = com.whmdg.mczj.tools.encryption.core.FilenameCodec.decrypt(
-                                encryptedName = encryptedFile.name,
-                                dek = dek,
-                                aad = if (customEncryption) com.whmdg.mczj.tools.encryption.core.FileConstants.aadCustomObf else null,
-                                lookupMapping = { nameMapping.get(it) }
-                            )
-
-                            // 重命名文件（去掉 .whm 后缀，保持原目录位置）
-                            val targetName = if (originalName.endsWith(".whm")) {
-                                originalName.substring(0, originalName.length - 4)
-                            } else {
-                                originalName
-                            }
-                            val targetFile = File(encryptedFile.parentFile, targetName)
-                            if (!targetFile.exists()) {
-                                encryptedFile.renameTo(targetFile)
-                            }
-                        } catch (e: Exception) {
-                            // 单个文件失败不影响其他文件
-                        }
-                        restoreProgress = index + 1
-                    }
+                vaultService.applyEncryptFilename(session, target) { done, total ->
+                    restoreProgress = done
+                    restoreTotal = total
                 }
             }
-
-            // 清理 name_mappings.json
-            withContext(Dispatchers.IO) {
-                val nameMappingFile = File(vaultDir, "name_mappings.json")
-                if (nameMappingFile.exists()) {
-                    nameMappingFile.delete()
-                }
-            }
-
-            // 更新设置
-            vaultService.updateEncryptFilename(vault.id, false)
             session.dispose()
 
             withContext(Dispatchers.Main) {
                 isRestoringFilenames = false
                 showRestoreComplete = true
-                activeVaultForSettings = vault.copy(encryptFilename = false)
+                activeVaultForSettings = vault.copy(encryptFilename = target)
             }
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {
@@ -1336,6 +1287,7 @@ fun VaultsListTab(
                         leadingContent = { Icon(Icons.Default.Settings, contentDescription = null) },
                         modifier = Modifier.clickable {
                             activeVaultForMenu = null
+                            settingsTargetEncryptFilename = vault.encryptFilename
                             activeVaultForSettings = vault
                         }
                     )
@@ -1569,6 +1521,7 @@ fun VaultsListTab(
 
     // Active Vault Settings Dialog
     activeVaultForSettings?.let { vault ->
+        val pendingValue = settingsTargetEncryptFilename
         AlertDialog(
             onDismissRequest = { activeVaultForSettings = null },
             title = { Text("设置「${vault.name}」") },
@@ -1576,30 +1529,33 @@ fun VaultsListTab(
                 Column {
                     ListItem(
                         headlineContent = { Text("加密文件名") },
-                        supportingContent = { Text("开启后原始文件名将被加密为 hex/哈希") },
+                        supportingContent = { Text("开启后原始文件名将被加密为 Base64URL 密文") },
                         trailingContent = {
                             Switch(
-                                checked = vault.encryptFilename,
-                                onCheckedChange = { newValue ->
-                                    // 关闭加密文件名时需要恢复文件名
-                                    if (vault.encryptFilename && !newValue) {
-                                        showEncryptFilenameWarning = vault to newValue
-                                    } else {
-                                        // 开启加密文件名（直接允许）
-                                        try {
-                                            vaultService.updateEncryptFilename(vault.id, newValue)
-                                            activeVaultForSettings = vault.copy(encryptFilename = newValue)
-                                        } catch (e: Exception) {
-                                            vaultListError = e
-                                        }
-                                    }
-                                }
+                                checked = pendingValue,
+                                // 仅暂存选择，点底部「确认」后才进入密码校验并执行迁移
+                                onCheckedChange = { settingsTargetEncryptFilename = it }
                             )
                         }
                     )
                 }
             },
-            confirmButton = {}
+            confirmButton = {
+                Button(
+                    onClick = {
+                        activeVaultForSettings = null
+                        showEncryptFilenameWarning = vault to pendingValue
+                    },
+                    enabled = pendingValue != vault.encryptFilename
+                ) {
+                    Text("确认")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { activeVaultForSettings = null }) {
+                    Text("取消")
+                }
+            }
         )
     }
 
@@ -1607,16 +1563,22 @@ fun VaultsListTab(
     showEncryptFilenameWarning?.let { (vault, newValue) ->
         AlertDialog(
             onDismissRequest = { showEncryptFilenameWarning = null },
-            title = { Text("关闭加密文件名？") },
+            title = { Text(if (newValue) "开启加密文件名？" else "关闭加密文件名？") },
             text = {
-                Text("关闭此选项后，保险箱内所有加密的文件名将被恢复为原始名称。此操作需要输入密码，期间请勿退出应用。")
+                Text(
+                    if (newValue) {
+                        "开启此选项后，保险箱内所有文件的文件名将被加密为 Base64URL 密文。此操作需要输入密码，期间请勿退出应用。"
+                    } else {
+                        "关闭此选项后，保险箱内所有加密的文件名将被恢复为原始名称。此操作需要输入密码，期间请勿退出应用。"
+                    }
+                )
             },
             confirmButton = {
                 Button(
                     onClick = {
                         showEncryptFilenameWarning = null
-                        // 需要输入密码来获取 DEK 以解密文件名
-                        showPasswordDialogForSettings = vault
+                        // 需要输入密码来获取 DEK 以迁移文件名
+                        showPasswordDialogForSettings = vault to newValue
                     }
                 ) {
                     Text("继续")
@@ -1631,10 +1593,10 @@ fun VaultsListTab(
     }
 
     // Password Dialog for Settings
-    showPasswordDialogForSettings?.let { vault ->
+    showPasswordDialogForSettings?.let { (vault, newValue) ->
         AlertDialog(
             onDismissRequest = { showPasswordDialogForSettings = null },
-            title = { Text("输入密码以恢复文件名") },
+            title = { Text(if (newValue) "输入密码以加密文件名" else "输入密码以恢复文件名") },
             text = {
                 OutlinedTextField(
                     value = settingsPasswordInput,
@@ -1650,11 +1612,11 @@ fun VaultsListTab(
                         val pwd = settingsPasswordInput
                         showPasswordDialogForSettings = null
                         settingsPasswordInput = ""
-                        pendingSettingsVault = vault to pwd
+                        pendingSettingsVault = Triple(vault, pwd, newValue)
                     },
                     enabled = settingsPasswordInput.isNotEmpty()
                 ) {
-                    Text("开始恢复")
+                    Text(if (newValue) "开始加密" else "开始恢复")
                 }
             },
             dismissButton = {
@@ -1669,7 +1631,7 @@ fun VaultsListTab(
     if (isRestoringFilenames) {
         AlertDialog(
             onDismissRequest = {},
-            title = { Text("正在恢复文件名") },
+            title = { Text(if (restoringToEncrypted) "正在加密文件名" else "正在恢复文件名") },
             text = {
                 Column {
                     LinearProgressIndicator(
@@ -1715,7 +1677,7 @@ fun VaultsListTab(
         AlertDialog(
             onDismissRequest = { showRestoreComplete = false },
             title = { Text("完成") },
-            text = { Text("文件名称已恢复") },
+            text = { Text(if (restoringToEncrypted) "文件名称已加密" else "文件名称已恢复") },
             confirmButton = {
                 Button(onClick = { showRestoreComplete = false }) {
                     Text("确定")

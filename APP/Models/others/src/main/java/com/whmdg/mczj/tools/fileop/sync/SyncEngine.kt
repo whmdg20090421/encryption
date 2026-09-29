@@ -180,6 +180,12 @@ class SyncEngine(
         // PUT 返回 201 即代表服务端已按 Content-Length 完整接收（覆盖式原子写），
         // 不再额外 PROPFIND 校验大小；大小取本地值，修改时间取上传时刻。
         val now = java.time.Instant.now().toString()
+        // 原始名从本地行继承（文件名加密的显示名权威来源），随云端表导出以支持跨设备还原
+        val originalName = try {
+            syncDb.getEntry("local_entries", relativePath)?.originalName
+        } catch (_: Exception) {
+            null
+        }
         syncDb.upsertEntry("cloud_entries", SyncEntryRow(
             path = relativePath,
             size = fileSize,
@@ -188,7 +194,8 @@ class SyncEngine(
             cloudHash = null,
             status = SyncStatus.COMPLETED,
             lastSyncTime = now,
-            failReason = null
+            failReason = null,
+            originalName = originalName
         ))
 
         // ④ 更新本地表 → COMPLETED（解锁）

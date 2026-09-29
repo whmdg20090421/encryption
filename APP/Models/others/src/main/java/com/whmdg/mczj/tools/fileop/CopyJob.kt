@@ -5,7 +5,6 @@ import com.whmdg.mczj.tools.AppDataPaths
 import com.whmdg.mczj.tools.encryption.data.FolderSizeDb
 import com.whmdg.mczj.tools.encryption.data.FolderSizeInfo
 import com.whmdg.mczj.tools.encryption.core.FilenameCodec
-import com.whmdg.mczj.tools.encryption.core.FileConstants
 import com.whmdg.mczj.tools.encryption.core.EncryptionTraceLog
 import com.whmdg.mczj.tools.encryption.services.CryptoService
 import com.whmdg.mczj.tools.encryption.services.VaultSession
@@ -629,22 +628,13 @@ class CopyJob(
             return false
         }
 
-        val outName = if (session.record.encryptFilename) {
-            val enc = FilenameCodec.encrypt(
-                filename = srcFile.name,
-                dek = session.dek,
-                aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null
-            )
-            val key = enc.mappingKey
-            val value = enc.mappingValue
-            if (key != null && value != null) {
-                session.nameMapping.set(key, value)
-                session.saveNameMapping(context)
-            }
-            enc.encoded
+        val encrypting = session.record.encryptFilename
+        val outName = if (encrypting) {
+            FilenameCodec.encryptName(srcFile.name, session.dek)
         } else {
             "${srcFile.name}.whm"
         }
+        val originalName = if (encrypting) srcFile.name else null
         val outDir = if (item.subDir.isEmpty()) session.vaultDir else File(session.vaultDir, item.subDir)
         val pendingOut = File(outDir, outName).absolutePath
         synchronized(pendingVaultTargets) { pendingVaultTargets.add(pendingOut) }
@@ -652,7 +642,7 @@ class CopyJob(
         setChannelName(channelId, srcFile.name)
         publishEncryptProgress(totalSize, processedFiles.get())
 
-        val encrypted = encryptWithRetry(session, srcFile, item.subDir, outName, totalSize, processedFiles, channelId)
+        val encrypted = encryptWithRetry(session, srcFile, item.subDir, outName, totalSize, processedFiles, channelId, originalName)
 
         synchronized(pendingVaultTargets) { pendingVaultTargets.remove(pendingOut) }
         vaultBytesAdded.addAndGet(encrypted.length())
@@ -675,7 +665,8 @@ class CopyJob(
         outName: String,
         totalSize: Long,
         processedFiles: AtomicInteger,
-        channelId: Int
+        channelId: Int,
+        originalName: String?
     ): File = runVaultFileWithRetry(
         srcFile = srcFile,
         errorLabel = "加密失败",
@@ -690,7 +681,8 @@ class CopyJob(
                 onProgress(encryptedBytes)
                 publishEncryptProgress(totalSize, processedFiles.get())
             },
-            cancelFlag = cancelFlag
+            cancelFlag = cancelFlag,
+            originalName = originalName
         )
     }
 
@@ -958,7 +950,7 @@ class CopyJob(
         channelId = channelId,
         publishProgress = { publishDecryptProgress(totalSize, processedFiles.get()) }
     ) { _ ->
-        CryptoService.decryptOutOfVault(session, srcFile, outputDir)
+        CryptoService.decryptOutOfVault(context, session, srcFile, outputDir)
     }
 
     /** 发布解密总进度：currentBytes 为所有通道 (已提交 + 在途) 之和。 */
@@ -1078,7 +1070,7 @@ class CopyJob(
         val tempFile = File(tempDir, srcFile.nameWithoutExtension + "_plain.tmp")
         try {
             // 1. 解密（临时文件名由 FileCodec 内部决定，我们只关心写出路径）
-            CryptoService.decryptOutOfVault(sourceSession, srcFile, tempDir, overwrite = true)
+            CryptoService.decryptOutOfVault(context, sourceSession, srcFile, tempDir, overwrite = true)
             // 找到刚解密的文件（CryptoService 会用原始文件名）
             val decryptedFile = tempDir.listFiles()
                 ?.filter { it.isFile && it.name != tempFile.name }
@@ -1326,11 +1318,7 @@ class CopyJob(
         subDir: String
     ): Boolean {
         val outName = if (session.record.encryptFilename) {
-            FilenameCodec.encrypt(
-                filename = srcFile.name,
-                dek = session.dek,
-                aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null
-            ).encoded
+            FilenameCodec.encryptName(srcFile.name, session.dek)
         } else {
             "${srcFile.name}.whm"
         }

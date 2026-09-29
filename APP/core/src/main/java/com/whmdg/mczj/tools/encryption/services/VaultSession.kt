@@ -1,7 +1,6 @@
 package com.whmdg.mczj.tools.encryption.services
 
 import android.content.Context
-import com.whmdg.mczj.tools.encryption.data.NameMapping
 import com.whmdg.mczj.tools.encryption.data.VaultConfig
 import com.whmdg.mczj.tools.encryption.data.VaultRecord
 import java.io.File
@@ -15,19 +14,6 @@ class VaultSession(
     val config: VaultConfig,
     val dek: ByteArray
 ) {
-    private var _names: NameMapping = NameMapping.empty()
-
-    val nameMapping: NameMapping
-        get() = _names
-
-    fun loadNameMapping(context: Context) {
-        _names = NameMapping.load(context, vaultDir)
-    }
-
-    fun saveNameMapping(context: Context) {
-        _names.save(context, vaultDir)
-    }
-
     /**
      * 销毁会话：清零 DEK。
      */

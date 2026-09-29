@@ -4,8 +4,8 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## 文档版本
 
-**基准哈希**：`39d8b82e`（以实际 HEAD 为准）
-**更新日期**：2026-09-22
+**基准哈希**：`0f938d1e`（以实际 HEAD 为准）
+**更新日期**：2026-09-29
 
 > 更新 AGENTS.md 前，先执行 `git diff <基准哈希>..HEAD -- '*.kt' '*.kts' '*.py' '*.sh' '*.yml'` 查看自上次记录以来的所有代码变更，确保文档与代码同步。更新后替换基准哈希为新的 HEAD。
 
@@ -94,14 +94,14 @@ src/main/java/com/whmdg/mczj/tools/
 │   └── NoPermissionScreen.kt
 ├── encryption/                        # 加密模块
 │   ├── core/                          # 密码学原语
-│   │   ├── AesGcm.kt / Argon2id.kt / Pbkdf2.kt / KeyDerivation.kt
+│   │   ├── AesGcm.kt / AesEcb256.kt / Argon2id.kt / Pbkdf2.kt / KeyDerivation.kt
 │   │   ├── FileCodec.kt / FileConstants.kt / FilenameCodec.kt
 │   │   ├── HexCodec.kt / SecureRandom.kt / NailObfuscation.kt
 │   │   └── EncryptionTraceLog.kt      # 加密性能追踪日志
 │   ├── data/                          # 加密数据层
 │   │   ├── VaultConfig.kt / VaultDb.kt / VaultPaths.kt / VaultRecord.kt
-│   │   ├── CanonicalJson.kt / NameMapping.kt / FolderSizeDb.kt / StorageLocation.kt
-│   │   └── SyncDatabase.kt / SyncStatus.kt  # 同步库 / 同步状态枚举
+│   │   ├── CanonicalJson.kt / FolderSizeDb.kt / StorageLocation.kt
+│   │   └── SyncDatabase.kt / SyncStatus.kt  # 同步库（含 original_name）/ 同步状态枚举
 │   ├── models/
 │   │   └── EncryptionNode.kt
 │   └── services/
@@ -525,7 +525,8 @@ GitHub Actions workflow `.github/workflows/build.yml`:
 
 ### 文件命名
 - 普通模式：`原文件名.whm`
-- 加密文件名模式：`<iv+ciphertext hex>.whm`（长则 zlib 压缩，超长则 SHA-256 哈希 + 映射表）
+- 加密文件名模式：`Base64URL(AES-256-ECB(DEK, 原名UTF-8)).whm`（单层，无 zlib 降级；原名 UTF-8 上限 175 字节，超长直接报错）
+- 原始名权威来源：`vault_sync.db` 的 `original_name` 列（`local_entries` + `cloud_entries` 两表），随云端 DB 导出以便跨设备还原；查库未命中才用 DEK 逆解文件名
 
 ### Argon2id 默认参数
 | 档位 | timeCost | memoryCostKb | parallelism |
@@ -569,6 +570,6 @@ Native 层（`crash_handler.c`）注册信号处理器捕获 SIGSEGV/SIGABRT 等
 
 ## 已知注意点
 
-- `VaultOpenScreen` 的文件过滤目前排除了 `name_mapping.json.bak`，但实际写入的是 `name_mappings.json`（复数），无实际影响但需注意命名一致性
+- 文件名加密采用 AES-256-ECB（确定性、无认证），原始名 UTF-8 上限 175 字节，超长直接报错；`original_name` 是显示名唯一权威来源，DB 丢失则只能显示密文名或逆解结果
 - `importVaultWithPassword()` 硬编码 `StorageLocation.EXTERNAL`，从 SAF URI 导入时路径解析依赖 `content://` → 绝对路径的转换，部分机型可能不准确
 - `LaunchedEffect(Unit)` 中的 `Looper.loop()` 全局异常捕获仅在加密流程中生效，设计较激进，需注意主线程异常逃逸风险

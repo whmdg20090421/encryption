@@ -31,7 +31,7 @@ data class Argon2Params(
 
 @Serializable
 data class ConfigFlags(
-    @SerialName("encrypt_filename") val encryptFilename: Boolean = false,
+    @SerialName("encrypt_filename") val encryptFilename: Boolean = true,
     @SerialName("custom_encryption") val customEncryption: Boolean = false
 )
 

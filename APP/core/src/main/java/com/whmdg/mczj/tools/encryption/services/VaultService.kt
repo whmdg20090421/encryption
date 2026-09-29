@@ -13,6 +13,7 @@ import com.whmdg.mczj.tools.auth.SecurityEnforcer
 import com.whmdg.mczj.tools.security.SpecialPermissionVerifier
 import com.whmdg.mczj.tools.encryption.core.AesGcm256
 import com.whmdg.mczj.tools.encryption.core.FileCodec
+import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import com.whmdg.mczj.tools.encryption.core.HexCodec
 import com.whmdg.mczj.tools.encryption.core.KeyDerivation
 import com.whmdg.mczj.tools.encryption.core.SecureRandom
@@ -238,9 +239,7 @@ class VaultService(private val context: Context) {
         /** 保险箱目录内属于元数据、不计入文件数的文件。 */
         private val VAULT_METADATA_FILES = setOf(
             "vault_config.json",
-            "vault_config.backup.json",
-            "name_mappings.json",
-            "name_mappings.json.bak"
+            "vault_config.backup.json"
         )
     }
 
@@ -355,15 +354,99 @@ class VaultService(private val context: Context) {
     }
 
     /**
-     * 更新保险箱的 encryptFilename 设置。
+     * 切换保险箱的「加密文件名」设置，并把箱内已存在文件的文件名迁移到目标状态。
+     *
+     * 正向（plaintext → encrypted）：把 `原名.whm` 重命名为 `FilenameCodec.encryptName`
+     * 产出的 `<Base64URL>.whm`，并把原始名写入同步库 `original_name`（显示名权威来源）。
+     * 反向（encrypted → plaintext）：先查同步库（未命中再逆解文件名）还原原名，改回
+     * `原名.whm` 并清除 `original_name`。
+     *
+     * 保险箱内文件名状态是统一的（要么全加密要么全明文），迁移方向由 [target] 决定，
+     * 不按文件猜测形态。
+     *
+     * 只有全部迁移成功后才落标志（[VaultRecord] 与 `VaultConfig`），中断时标志保持旧值，
+     * 下次可重入。
+     *
+     * @param session 已解锁的保险箱会话（提供 DEK）
+     * @param onProgress 进度回调 (done, total)
      * @return 更新后的 VaultRecord
      */
-    fun updateEncryptFilename(id: Int, encryptFilename: Boolean): VaultRecord {
+    fun applyEncryptFilename(
+        session: VaultSession,
+        target: Boolean,
+        onProgress: (Int, Int) -> Unit = { _, _ -> }
+    ): VaultRecord {
+        val id = session.record.id
         val rec = _db.vaults.find { it.id == id }
             ?: throw IllegalArgumentException("保险箱不存在: id=$id")
-        val updated = rec.copy(encryptFilename = encryptFilename)
+        if (rec.encryptFilename == target) return rec
+
+        val vaultDir = session.vaultDir
+        val dek = session.dek
+        val syncDb = SyncDatabase.getInstance(context, session.record.name)
+
+        val whmFiles = vaultDir.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".whm") }
+            .toList()
+        val total = whmFiles.size
+        onProgress(0, total)
+
+        fun relPathOf(file: File): String =
+            "/" + file.relativeTo(vaultDir).path.replace('\\', '/')
+
+        if (target) {
+            // 正向：明文名 → 加密名。保险箱内状态统一，当前必为全明文。
+            // 逐文件改名并即时写库（行不存在则补建 PENDING），保证中断时已改名的文件仍可还原。
+            whmFiles.forEachIndexed { index, file ->
+                val plainName = file.name.removeSuffix(".whm")
+                val targetFile = File(file.parentFile, FilenameCodec.encryptName(plainName, dek))
+                if (targetFile != file) {
+                    if (!file.renameTo(targetFile)) {
+                        throw IllegalStateException("文件名加密失败: ${file.name}")
+                    }
+                }
+                syncDb.upsertLocalOriginalName(
+                    path = relPathOf(targetFile),
+                    size = targetFile.length(),
+                    lastModified = java.time.Instant.ofEpochMilli(targetFile.lastModified()).toString(),
+                    originalName = plainName
+                )
+                onProgress(index + 1, total)
+            }
+        } else {
+            // 反向：加密名 → 明文名。优先查同步库，未命中再逆解文件名。
+            whmFiles.forEachIndexed { index, file ->
+                val encryptedRelPath = relPathOf(file)
+                val dbName = try {
+                    syncDb.getEntry("local_entries", encryptedRelPath)?.originalName
+                } catch (_: Exception) {
+                    null
+                }
+                val originalName = dbName?.takeIf { it.isNotEmpty() }
+                    ?: FilenameCodec.decryptName(file.name, dek)
+                val targetName = originalName.removeSuffix(".whm")
+                val targetFile = File(file.parentFile, targetName)
+                if (targetFile != file && !targetFile.exists()) {
+                    if (!file.renameTo(targetFile)) {
+                        throw IllegalStateException("文件名恢复失败: ${file.name}")
+                    }
+                }
+                // 明文模式不再需要 original_name；旧加密路径行一并清理
+                try {
+                    syncDb.deleteEntry("local_entries", encryptedRelPath)
+                } catch (_: Exception) {}
+                onProgress(index + 1, total)
+            }
+        }
+
+        // 迁移成功：同时更新内存记录与磁盘 config，两者保持一致
+        val updated = rec.copy(encryptFilename = target)
         _db.replaceVault(updated)
         _db.save(context)
+        session.config
+            .copy(configFlags = session.config.configFlags.copy(encryptFilename = target))
+            .saveWithBackup(context, vaultDir)
+        markModified(id)
         syncVaults()
         return updated
     }
@@ -580,7 +663,7 @@ class VaultService(private val context: Context) {
     }
 
     private val excludedFiles = setOf(
-        "vault_config.json", "vault_config.backup.json", "name_mappings.json", "folder_sizes.json"
+        "vault_config.json", "vault_config.backup.json", "folder_sizes.json"
     )
 
     /**

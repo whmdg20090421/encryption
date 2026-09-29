@@ -2,7 +2,6 @@ package com.whmdg.mczj.tools.encryption.services
 
 import android.content.Context
 import com.whmdg.mczj.tools.encryption.core.FileCodec
-import com.whmdg.mczj.tools.encryption.core.FileConstants
 import com.whmdg.mczj.tools.encryption.core.EncryptionTraceLog
 import com.whmdg.mczj.tools.encryption.core.FilenameCodec
 import com.whmdg.mczj.tools.encryption.data.SyncDatabase
@@ -20,8 +19,7 @@ object CryptoService {
         private val session: VaultSession,
         private val output: File,
         private val pending: File,
-        private val mappingKey: String?,
-        private val mappingValue: String?,
+        private val originalName: String?,
         val sink: FileCodec.EncryptingSink
     ) {
         fun finish(): File {
@@ -31,11 +29,7 @@ object CryptoService {
                     pending.delete()
                     throw IllegalStateException("无法提交加密文件: ${output.path}")
                 }
-                if (mappingKey != null && mappingValue != null) {
-                    session.nameMapping.set(mappingKey, mappingValue)
-                    session.saveNameMapping(context)
-                }
-                recordContentHash(context, session, output, sink.contentHash())
+                recordContentHash(context, session, output, sink.contentHash(), originalName)
                 return output
             } catch (e: Exception) {
                 pending.delete()
@@ -57,14 +51,12 @@ object CryptoService {
         onProgress: (Long) -> Unit = {},
         cancelFlag: AtomicBoolean? = null
     ): VaultStreamWrite {
-        val encodedName = if (session.record.encryptFilename) {
-            FilenameCodec.encrypt(
-                filename = sourceName,
-                dek = session.dek,
-                aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null
-            )
-        } else null
-        val outName = encodedName?.encoded ?: "$sourceName.whm"
+        val encryptName = session.record.encryptFilename
+        val outName = if (encryptName) {
+            FilenameCodec.encryptName(sourceName, session.dek)
+        } else {
+            "$sourceName.whm"
+        }
         val targetDir = if (subDir.isEmpty()) session.vaultDir else File(session.vaultDir, subDir)
         val output = File(targetDir, outName)
         val pending = File(targetDir, ".${outName}.part")
@@ -78,7 +70,7 @@ object CryptoService {
             onProgress = onProgress,
             cancelFlag = cancelFlag
         )
-        return VaultStreamWrite(context, session, output, pending, encodedName?.mappingKey, encodedName?.mappingValue, sink)
+        return VaultStreamWrite(context, session, output, pending, if (encryptName) sourceName else null, sink)
     }
 
     /**
@@ -93,30 +85,27 @@ object CryptoService {
         onProgress: (Long, Long) -> Unit = { _, _ -> },
         cancelFlag: AtomicBoolean? = null
     ): File {
-        val outName = if (session.record.encryptFilename) {
-            val enc = FilenameCodec.encrypt(
-                filename = srcFile.name,
-                dek = session.dek,
-                aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null
-            )
-            if (enc.mappingKey != null && enc.mappingValue != null) {
-                session.nameMapping.set(enc.mappingKey, enc.mappingValue)
-                session.saveNameMapping(context)
+        val originalName = if (session.record.encryptFilename) {
+            require(srcFile.name.toByteArray(Charsets.UTF_8).size <= FilenameCodec.MAX_PLAINTEXT_BYTES) {
+                "文件名过长，无法加密：${srcFile.name}"
             }
-            enc.encoded
+            srcFile.name
+        } else null
+        val outName = if (session.record.encryptFilename) {
+            FilenameCodec.encryptName(srcFile.name, session.dek)
         } else {
             "${srcFile.name}.whm"
         }
         return encryptIntoVaultWithName(
-            context, session, srcFile, subDir, outName, overwrite, onProgress, cancelFlag
+            context, session, srcFile, subDir, outName, overwrite, onProgress, cancelFlag, originalName
         )
     }
 
     /**
      * 与 [encryptIntoVault] 相同，但复用调用方已计算好的输出文件名，避免重复的
-     * [FilenameCodec.encrypt] 计算与 mapping 写入。
+     * [FilenameCodec.encryptName] 计算。
      *
-     * 调用方负责在传入前完成 mapping 注册。
+     * @param originalName 文件名加密时对应的原始名（写入同步库），明文模式为 null。
      */
     fun encryptIntoVaultWithName(
         context: Context,
@@ -126,7 +115,8 @@ object CryptoService {
         outName: String,
         overwrite: Boolean = false,
         onProgress: (Long, Long) -> Unit = { _, _ -> },
-        cancelFlag: AtomicBoolean? = null
+        cancelFlag: AtomicBoolean? = null,
+        originalName: String? = null
     ): File {
         val trace = EncryptionTraceLog.enabled(context)
         if (trace) EncryptionTraceLog.log("CryptoService.encryptIntoVault: src=${srcFile.name} size=${srcFile.length()} subDir=$subDir name=$outName custom=${session.record.customEncryption}")
@@ -147,7 +137,7 @@ object CryptoService {
             onProgress = onProgress,
             cancelFlag = cancelFlag,
             context = context
-        ).let { recordContentHash(context, session, it.file, it.contentHash) }
+        ).let { recordContentHash(context, session, it.file, it.contentHash, originalName) }
         if (trace) EncryptionTraceLog.log("CryptoService.encryptIntoVault done: out=${outFile.name}")
         return outFile
     }
@@ -156,6 +146,8 @@ object CryptoService {
      * 加密导入时把明文内容指纹写入本地同步库（行不存在则建），供云同步的差异判定复用。
      * 内容指纹只在加密这一刻的明文流上顺带算出，之后不再重算。
      *
+     * 若文件名加密，同时把密文对应的原始名写入 `original_name`——这是显示名的权威来源。
+     *
      * 此处只把记录放入进程内批次缓冲（密文已 renameTo 成功才会走到这里），由
      * [SyncDatabase.enqueueContentHash] 按阈值或任务收尾时批量提交，避免逐文件 fsync。
      */
@@ -163,7 +155,8 @@ object CryptoService {
         context: Context,
         session: VaultSession,
         encryptedFile: File,
-        contentHash: String
+        contentHash: String,
+        originalName: String?
     ) {
         val relPath = "/" + encryptedFile.relativeTo(session.vaultDir).path.replace('\\', '/')
         SyncDatabase.enqueueContentHash(
@@ -173,7 +166,8 @@ object CryptoService {
                 path = relPath,
                 contentHash = contentHash,
                 size = encryptedFile.length(),
-                lastModified = java.time.Instant.ofEpochMilli(encryptedFile.lastModified()).toString()
+                lastModified = java.time.Instant.ofEpochMilli(encryptedFile.lastModified()).toString(),
+                originalName = originalName
             )
         )
     }
@@ -182,6 +176,7 @@ object CryptoService {
      * 把 [encryptedFile] 解密到 [outputDir]，返回输出的明文文件路径。
      */
     fun decryptOutOfVault(
+        context: Context,
         session: VaultSession,
         encryptedFile: File,
         outputDir: File,
@@ -193,21 +188,10 @@ object CryptoService {
         }
 
         val encName = encryptedFile.name
-        var realName = "unnamed_recovered"
-        
-        if (session.record.encryptFilename) {
-            realName = FilenameCodec.decrypt(
-                encryptedName = encName,
-                dek = session.dek,
-                aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null,
-                lookupMapping = { session.nameMapping.get(it) }
-            )
+        val realName: String = if (session.record.encryptFilename) {
+            resolveOriginalName(context, session, encryptedFile) ?: "unnamed_recovered"
         } else {
-            realName = if (encName.endsWith(".whm")) {
-                encName.substring(0, encName.length - 4)
-            } else {
-                encName
-            }
+            if (encName.endsWith(".whm")) encName.substring(0, encName.length - 4) else encName
         }
 
         val outFile = File(outputDir, realName)
@@ -223,6 +207,22 @@ object CryptoService {
             onProgress = onProgress
         )
         return outFile
+    }
+
+    /**
+     * 解析密文文件的原始名：优先查同步库 `original_name`（权威、快），未命中才逆解文件名。
+     */
+    private fun resolveOriginalName(context: Context, session: VaultSession, encryptedFile: File): String? {
+        val relPath = "/" + encryptedFile.relativeTo(session.vaultDir).path.replace('\\', '/')
+        val fromDb = try {
+            SyncDatabase.getInstance(context, session.record.name)
+                .getEntry("local_entries", relPath)?.originalName
+        } catch (_: Exception) {
+            null
+        }
+        if (!fromDb.isNullOrEmpty()) return fromDb
+        val decrypted = FilenameCodec.decryptName(encryptedFile.name, session.dek)
+        return decrypted.takeIf { it != FilenameCodec.FALLBACK_NAME }
     }
 
     /**

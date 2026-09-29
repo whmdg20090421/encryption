@@ -56,7 +56,7 @@ import java.util.Locale
 import kotlinx.serialization.Serializable
 import com.whmdg.mczj.tools.encryption.services.VaultSession
 import com.whmdg.mczj.tools.encryption.core.FilenameCodec
-import com.whmdg.mczj.tools.encryption.core.FileConstants
+import com.whmdg.mczj.tools.encryption.data.SyncDatabase
 import com.whmdg.mczj.tools.encryption.services.CryptoService
 import com.whmdg.mczj.tools.encryption.services.VaultKeyHolder
 import com.whmdg.mczj.tools.encryption.services.VaultViewContext
@@ -574,6 +574,9 @@ class FilePaneController(
             // 检查版本号
             if (myVersion != panel.loadVersion) return@launch
 
+            // 整目录一次性取原始名映射（仅加密模式）；miss 由 resolveVaultName 逆解并回写同步库
+            val originalNameMap = vaultSession?.let { vaultOriginalNameMap(normalized, it) } ?: emptyMap()
+
             val snapshot = mutableListOf<FileEntry>()
             for (raw in lsOutput.lines()) {
                 val line = raw.trimEnd('\r')
@@ -588,7 +591,8 @@ class FilePaneController(
                 if (isVaultMode) {
                     val session = vaultSession
                     if (session != null && !isDir) {
-                        entry = entry.copy(name = decryptVaultFileName(name, session))
+                        val resolved = resolveVaultName(name, childPath, session, originalNameMap)
+                        entry = entry.copy(name = resolved.name)
                     }
                 }
                 snapshot.add(entry)
@@ -776,16 +780,27 @@ class FilePaneController(
                 return@launch
             }
 
-            // vault 模式：与 loadDirectoryAsync 对齐——过滤系统配置文件，并将非目录条目的磁盘名（.whm / <hex>.whm）解密为明文名
+            // vault 模式：与 loadDirectoryAsync 对齐——过滤系统配置文件，并将非目录条目的磁盘名（.whm / <密文>.whm）解密为明文名
             val vaultEntries = if (isVaultMode) {
                 val session = vaultSession
                 if (session == null) entries
-                else entries
-                    .filter { it.name !in VAULT_CONFIG_FILE_NAMES }
-                    .map { entry ->
-                        if (entry.isDirectory) entry
-                        else entry.copy(name = decryptVaultFileName(entry.name, session))
-                    }
+                else {
+                    val originalNameMap = vaultOriginalNameMap(targetPath, session)
+                    val writeBacks = mutableListOf<Pair<String, String>>()
+                    val mapped = entries
+                        .filter { it.name !in VAULT_CONFIG_FILE_NAMES }
+                        .map { entry ->
+                            if (entry.isDirectory) entry
+                            else {
+                                val resolved = resolveVaultName(entry.name, entry.path, session, originalNameMap)
+                                resolved.writeBackTarget?.let { writeBacks.add(it to resolved.name) }
+                                entry.copy(name = resolved.name)
+                            }
+                        }
+                    // 逆解兜底的原始名回写 local_entries，后续直接查库命中
+                    writeBacks.forEach { (rel, name) -> writeBackOriginalName(session, rel, name) }
+                    mapped
+                }
             } else entries
 
             val sorted = sortEntries(vaultEntries)
@@ -1027,18 +1042,22 @@ class FilePaneController(
 
         var entries = listWithLs(path, showHiddenFiles(), useRoot = isRootEngine(), effectiveRoot = effectiveRoot)
 
-        // vault 模式：过滤配置文件 + 文件名解密
+        // vault 模式：过滤配置文件 + 文件名解密（逆解兜底结果回写 local_entries）
         if (isVaultMode) {
             val session = vaultSession!!
+            val originalNameMap = vaultOriginalNameMap(path, session)
+            val writeBacks = mutableListOf<Pair<String, String>>()
             entries = entries.filter { entry -> entry.name !in VAULT_CONFIG_FILE_NAMES }
                 .map { entry ->
                 if (entry.isDirectory) {
                     entry
                 } else {
-                    val displayName = decryptVaultFileName(entry.name, session)
-                    entry.copy(name = displayName)
+                    val resolved = resolveVaultName(entry.name, entry.path, session, originalNameMap)
+                    resolved.writeBackTarget?.let { writeBacks.add(it to resolved.name) }
+                    entry.copy(name = resolved.name)
                 }
             }
+            writeBacks.forEach { (rel, name) -> writeBackOriginalName(session, rel, name) }
         }
 
         // 填充创建时间（API 26+ 使用 NIO）
@@ -1085,23 +1104,82 @@ class FilePaneController(
         return entries
     }
 
-    internal fun decryptVaultFileName(encryptedName: String, session: VaultSession): String {
-        var raw = encryptedName
-        if (raw.endsWith(".whm")) {
-            raw = raw.substring(0, raw.length - 4)
-        }
+    /**
+     * 解析保险箱内文件的显示名（已持有 DEK 的加密保险箱环境专用）。
+     *
+     * 返回的 [VaultNameResolution.name] 为原始名；[VaultNameResolution.writeBackTarget]
+     * 非空表示该名字来自"逆解兜底"、需由调用方写入 `local_entries.original_name`，
+     * 以便后续直接查库命中而不必每次逆解。
+     */
+    data class VaultNameResolution(val name: String, val writeBackTarget: String?)
+
+    internal fun resolveVaultName(
+        encryptedName: String,
+        childPath: String,
+        session: VaultSession,
+        originalNameMap: Map<String, String>
+    ): VaultNameResolution {
         if (!session.record.encryptFilename) {
-            return raw
+            return VaultNameResolution(encryptedName, null)
+        }
+        originalNameMap[encryptedName]?.let { if (it.isNotEmpty()) return VaultNameResolution(it, null) }
+        val decrypted = FilenameCodec.decryptName(encryptedName, session.dek)
+        return if (decrypted == FilenameCodec.FALLBACK_NAME) {
+            VaultNameResolution(decrypted, null)
+        } else {
+            // 回写目标用相对 vaultDir 的路径（与同步库主键口径一致）
+            val rel = try {
+                "/" + File(childPath).relativeTo(session.vaultDir).path.replace('\\', '/')
+            } catch (_: Exception) {
+                null
+            }
+            VaultNameResolution(decrypted, rel)
+        }
+    }
+
+    /**
+     * 把"逆解得到"的原始名写回 `local_entries.original_name`。
+     * 行已存在则只更新该列（不动上传状态）；不存在则补建一条 PENDING 行
+     * （新设备未扫描前也能立即持久化显示名，后续扫描再补内容指纹）。
+     */
+    private fun writeBackOriginalName(session: VaultSession, relPath: String, originalName: String) {
+        try {
+            val file = File(session.vaultDir, relPath.trimStart('/'))
+            SyncDatabase.getInstance(context, session.record.name).upsertLocalOriginalName(
+                path = relPath,
+                size = if (file.isFile) file.length() else 0L,
+                lastModified = java.time.Instant.ofEpochMilli(file.lastModified()).toString(),
+                originalName = originalName
+            )
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * 构造某目录下 `磁盘文件名 → 原始名` 映射（仅加密模式）。
+     * 供整目录一次性还原文件名，避免逐文件查库。
+     */
+    internal fun vaultOriginalNameMap(dirPath: String, session: VaultSession): Map<String, String> {
+        if (!session.record.encryptFilename) return emptyMap()
+        val parent = try {
+            val dir = File(dirPath)
+            val rel = dir.relativeTo(session.vaultDir).path.replace('\\', '/')
+            if (rel.isEmpty()) "/" else "/$rel/"
+        } catch (_: Exception) {
+            return emptyMap()
         }
         return try {
-            FilenameCodec.decrypt(
-                encryptedName = "${raw}.whm",
-                dek = session.dek,
-                aad = if (session.record.customEncryption) FileConstants.aadCustomObf else null,
-                lookupMapping = { session.nameMapping.get(it) }
-            )
-        } catch (e: Exception) {
-            raw
+            SyncDatabase.getInstance(context, session.record.name)
+                .getOriginalNamesByParent("local_entries", parent)
+                // getEntriesByParent 用范围查询会含子孙，此处只保留直接子条目（末段无 '/'）
+                .filterKeys { key ->
+                    val remainder = key.removePrefix(parent)
+                    remainder.isNotEmpty() && !remainder.contains('/')
+                }
+                .entries
+                .associate { (path, name) -> path.substringAfterLast('/') to name }
+        } catch (_: Exception) {
+            emptyMap()
         }
     }
 
@@ -1394,8 +1472,14 @@ class FilePaneController(
 
     /**
      * 重命名文件或文件夹。成功返回 null，失败返回错误信息。
+     *
+     * 保险箱文件模式下 `entry.name` 是还原出的原始名、`entry.path` 是磁盘密文路径，
+     * 因此重命名需把新原始名重新加密为密文名，改名并同步更新同步库的 `original_name`。
      */
     fun renameEntry(entry: FileEntry, newName: String): String? {
+        if (isVaultMode && !entry.isDirectory) {
+            return renameVaultFile(entry, newName)
+        }
         val source = File(entry.path)
         val parent = source.parentFile ?: return "无法获取父目录"
         val dest = File(parent, newName)
@@ -1420,6 +1504,76 @@ class FilePaneController(
                 null
             } else "重命名失败"
         } catch (e: Exception) { e.message ?: "重命名失败" }
+    }
+
+    /**
+     * 保险箱文件重命名：把新原始名加密为新密文名后改名，并同步更新同步库记录。
+     * 同步库里以相对路径为主键，故需将旧行的原始名迁移到新路径的行。
+     */
+    private fun renameVaultFile(entry: FileEntry, newName: String): String? {
+        val session = vaultSession ?: return "保险箱会话已失效"
+        val source = File(entry.path)
+        val parent = source.parentFile ?: return "无法获取父目录"
+
+        if (newName == entry.name) return null
+        if (newName.isBlank()) return "文件名不能为空"
+
+        val targetDiskName = if (session.record.encryptFilename) {
+            try {
+                FilenameCodec.encryptName(newName, session.dek)
+            } catch (e: IllegalArgumentException) {
+                return e.message ?: "文件名过长"
+            }
+        } else {
+            "$newName.whm"
+        }
+        val dest = File(parent, targetDiskName)
+        if (dest.exists() && dest.absolutePath != source.absolutePath) return "已存在同名文件"
+
+        val syncDb = try {
+            SyncDatabase.getInstance(context, session.record.name)
+        } catch (_: Exception) {
+            null
+        }
+        val oldRelPath = "/" + source.relativeTo(session.vaultDir).path.replace('\\', '/')
+        val newRelPath = "/" + dest.relativeTo(session.vaultDir).path.replace('\\', '/')
+
+        val renamed = try {
+            source.renameTo(dest)
+        } catch (e: Exception) {
+            false
+        }
+        if (!renamed) return "重命名失败"
+
+        if (syncDb != null && session.record.encryptFilename) {
+            try {
+                val oldEntry = syncDb.getEntry("local_entries", oldRelPath)
+                if (oldEntry != null) {
+                    syncDb.deleteEntry("local_entries", oldRelPath)
+                    // 路径变化后云端旧路径已不存在，重置为 PENDING 触发重新上传
+                    syncDb.upsertEntry("local_entries", oldEntry.copy(
+                        path = newRelPath,
+                        originalName = newName,
+                        status = com.whmdg.mczj.tools.encryption.data.SyncStatus.PENDING,
+                        uploadedSize = 0
+                    ))
+                } else {
+                    syncDb.upsertLocalOriginalName(
+                        path = newRelPath,
+                        size = if (dest.isFile) dest.length() else 0L,
+                        lastModified = java.time.Instant.ofEpochMilli(dest.lastModified()).toString(),
+                        originalName = newName
+                    )
+                }
+            } catch (_: Exception) {}
+        } else if (syncDb != null) {
+            // 明文模式：删除旧行、新行由后续扫描重建
+            try {
+                syncDb.deleteEntry("local_entries", oldRelPath)
+            } catch (_: Exception) {}
+        }
+        onVaultContentModified?.invoke(session.record.id)
+        return null
     }
 
     /**
@@ -2510,7 +2664,6 @@ class FilePaneController(
         private val VAULT_CONFIG_FILE_NAMES = setOf(
             "vault_config.json",
             "vault_config.backup.json",
-            "name_mappings.json",
             "folder_sizes.json"
         )
 
@@ -2703,7 +2856,6 @@ class PanelCoordinator(
     /** 为指定面板初始化 vault 模式 */
     fun initVaultMode(session: VaultSession, panel: PanelId = PanelId.LEFT) {
         val ctrl = this[panel]
-        session.loadNameMapping(context)
         ctrl.vaultSession = session
         val vaultPath = session.vaultDir.absolutePath
         ctrl.state.path = PanelPath.Vault(vaultPath, vaultPath)
@@ -3335,7 +3487,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
     private fun listDirChildrenViaShell(dirPath: String): List<FileEntry>? = focusedController.listDirChildrenViaShell(dirPath)
     private fun listWithFile(path: String, showHidden: Boolean, effectiveRoot: String): List<FileEntry> = focusedController.listWithFile(path, showHidden, effectiveRoot)
     private fun listWithLs(path: String, showHidden: Boolean, useRoot: Boolean, effectiveRoot: String): List<FileEntry> = focusedController.listWithLs(path, showHidden, useRoot, effectiveRoot)
-    private fun decryptVaultFileName(encryptedName: String, session: VaultSession): String = focusedController.decryptVaultFileName(encryptedName, session)
     fun loadExtFlagsForDir(dirPath: String, panel: FilePaneController.VmPanelState = currentPanel) = focusedController.loadExtFlagsForDir(dirPath, panel)
     // ── 便捷属性（getter，跟随 focusedPanel 自动切换） ──
     val currentPath: String get() {
@@ -3517,7 +3668,6 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
         val systemFiles = setOf(
             "vault_config.json",
             "vault_config.backup.json",
-            "name_mappings.json",
             "folder_sizes.json"
         )
         if (entry.name in systemFiles) {
@@ -3592,8 +3742,9 @@ class FileManagerViewModel(app: Application) : AndroidViewModel(app) {
                             vaultImageEntries = emptyMap()  // 由 openFile 构建
                         ))
 
-                        // 调用 openFile，让文件管理器判断怎么打开
-                        openFile(context, entry.copy(path = destPath, name = File(destPath).name),
+                        // 调用 openFile，让文件管理器判断怎么打开。
+                        // path 指向解密缓存，name 保留原始名（缓存文件名无扩展名，不可用作显示名）。
+                        openFile(context, entry.copy(path = destPath, name = entry.name),
                             vaultSessionId = sessionId, originPanel = ctrl)
                     }
                 },

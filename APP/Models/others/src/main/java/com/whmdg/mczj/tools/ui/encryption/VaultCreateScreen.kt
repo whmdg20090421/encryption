@@ -59,7 +59,7 @@ fun VaultCreateScreen(
     var pwd1 by remember { mutableStateOf("") }
     var pwd2 by remember { mutableStateOf("") }
 
-    var encryptFilename by remember { mutableStateOf(false) }
+    var encryptFilename by remember { mutableStateOf(true) }
     var customEncryption by remember { mutableStateOf(false) }
     var algorithm by remember { mutableStateOf("AES-256-GCM") }
 
@@ -298,7 +298,7 @@ fun VaultCreateScreen(
             item {
                 ListItem(
                     headlineContent = { Text("加密文件名") },
-                    supportingContent = { Text("原始文件名将被 AES-GCM 加密为 hex/哈希") },
+                    supportingContent = { Text("原始文件名将被 AES-256 加密为 Base64URL 密文") },
                     trailingContent = {
                         Switch(checked = encryptFilename, onCheckedChange = { encryptFilename = it })
                     }
