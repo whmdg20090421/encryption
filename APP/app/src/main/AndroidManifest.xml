@@ -131,6 +131,13 @@
             android:label="查看器"
             android:theme="@style/Theme.工具箱" />
 
+        <!-- 应用管理 Activity（查看已安装应用列表） -->
+        <activity
+            android:name=".ui.packagemanager.PackageManagerActivity"
+            android:exported="false"
+            android:label="安装包管理"
+            android:theme="@style/Theme.工具箱" />
+
         <!-- 视频播放器 Activity（与 ViewerActivity 并列） -->
         <activity
             android:name=".ui.viewer.VideoPlayerActivity"

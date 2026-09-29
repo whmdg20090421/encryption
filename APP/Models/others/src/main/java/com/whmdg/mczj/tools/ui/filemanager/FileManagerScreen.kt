@@ -2421,6 +2421,19 @@ fun FileManagerScreen(
                                                 showDrawer = false
                                             }
                                         )
+                                        DrawerMenuItem(
+                                            icon = Icons.Default.Android,
+                                            label = "安装包管理",
+                                            onClick = {
+                                                showDrawer = false
+                                                try {
+                                                    context.startActivity(
+                                                        android.content.Intent(context, com.whmdg.mczj.tools.ui.packagemanager.PackageManagerActivity::class.java)
+                                                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    )
+                                                } catch (_: Exception) {}
+                                            }
+                                        )
                                     }
                                 }
                                 HorizontalDivider()
