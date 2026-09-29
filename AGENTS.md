@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## 文档版本
 
-**基准哈希**：`0f938d1e`（以实际 HEAD 为准）
+**基准哈希**：`730aeb0b`（以实际 HEAD 为准）
 **更新日期**：2026-09-29
 
 > 更新 AGENTS.md 前，先执行 `git diff <基准哈希>..HEAD -- '*.kt' '*.kts' '*.py' '*.sh' '*.yml'` 查看自上次记录以来的所有代码变更，确保文档与代码同步。更新后替换基准哈希为新的 HEAD。
@@ -213,6 +213,11 @@ src/main/java/com/whmdg/mczj/tools/
     ├── wifi/                          # WiFi 传输模块
     │   ├── WifiModuleScreen.kt        # Compose 导航容器
     │   └── WifiScreen.kt             # WiFi 扫描与分析主界面
+    ├── packagemanager/                # 安装包管理（独立 Activity，查看已安装应用）
+    │   ├── PackageManagerActivity.kt # 独立 Activity，读取 theme_prefs，工具箱Theme
+    │   ├── PackageManagerScreen.kt   # 用户/系统应用双 Tab（缓存 + 下拉刷新）+ 详情弹窗（长按复制行）
+    │   ├── AppPackageInfo.kt         # 列表模型 + 详情模型 + Provider（签名方案检测 / 外部目录探测）
+    │   └── AppHardeningDetector.kt   # 加固厂商特征表（照搬 ApkCheckPack，Zip 层特征，40+ 厂商）
     └── hook/                          # Hook 管理模块
         ├── HookRoute.kt              # sealed class: Home / Detail(packageName) / UsageTime
         ├── HookModuleScreen.kt       # Compose 导航容器
